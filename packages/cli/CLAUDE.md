@@ -120,7 +120,8 @@ arguments and reports.
   committed snapshot.
 - Every diagnostic is fixed text, a top-level field and zod's code at most, never what the owner wrote; the
   key is cut out of every error and line regardless.
-- stdout carries the snapshot's path; what to add to the contract and to `implement()` goes to stderr.
+- stdout carries the snapshot's path; what to add to `defineApp`'s `imports` and to each calling endpoint's `connect`
+  goes to stderr.
 
 ## The `app` area
 

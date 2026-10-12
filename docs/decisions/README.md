@@ -20,6 +20,10 @@ a commit message suffices.
   the proxy is the only enforcement point; then [0023](0023-one-session-per-host.md) for the
   browser-bound session handoff, and [0050](0050-approved-access.md) for how access changes are
   approved and published.
+- **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
+  handlers beside their endpoints on a paved road, and every step off it (raw SQL, `unscoped`, connectors, link
+  issuing, database code) declared; [0017](0017-service-owned-postgres-migrations.md) for migrations and the
+  application's database roles, the privilege boundary under raw SQL.
 - **Zerops delivery:** [0003](0003-no-deploy-runner-on-zerops.md) (Control drives Zerops over HTTP),
   [0029](0029-github-app-sources.md) (GitHub App sources, multiple connections),
   [0044](0044-zerops-delivery-ownership-and-recovery.md) (release binding, recovery, one lease).
@@ -39,7 +43,7 @@ a commit message suffices.
 | [0005](0005-compile-app-config-to-static-manifest.md)                   | Compile app config to a static manifest; the control plane never executes app code      |
 | [0006](0006-zerops-project-topology-is-a-registry-field.md)             | Zerops project topology is a registry field, defaulting to project-per-environment      |
 | [0011](0011-static-provider-bundles.md)                                 | Compose one static provider bundle per installation; the provider owns its deploy       |
-| [0012](0012-fabrika-app-runtime.md)                                     | An application declares one contract and implements it with @fabrika/app                |
+| [0012](0012-fabrika-app-runtime.md)                                     | One contract built with the staged kit, served by `serve`; steps off the road declared  |
 | [0013](0013-explicit-runtime-adapter-entrypoints.md)                    | Expose runtime adapters through explicit package entrypoints                            |
 | [0014](0014-provider-owned-deployment-namespaces.md)                    | Model deployment namespaces as provider-owned placement boundaries                      |
 | [0015](0015-repository-operations-are-the-sql-portability-seam.md)      | Make repository operations the SQL portability seam                                     |
@@ -66,4 +70,4 @@ a commit message suffices.
 | [0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)   | Upload immutable installation and namespace proxy sources                               |
 | [0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)         | Bind Cloudflare delivery to the recorded application commit                             |
 | [0049](0049-author-applications-through-mcp-in-control.md)              | Author applications through an MCP endpoint in Control over Git workspaces              |
-| [0050](0050-approved-access.md)                                         | Publish only approved access; a human approves widenings on protected environments      |
+| [0050](0050-approved-access.md)                                         | Publish only approved access; a human approves widenings, declared deviations included  |

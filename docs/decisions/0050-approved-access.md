@@ -2,7 +2,7 @@
 id: 0050
 title: Publish only approved access
 status: accepted
-date: 2026-10-08
+date: 2026-10-12
 ---
 
 # 0050 — Publish only approved access
@@ -13,6 +13,12 @@ An application declares its access surface in one contract and its table policie
 ([ADR-0012](0012-fabrika-app-runtime.md)). The proxy enforces the contract per endpoint
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), and IAM holds the roles. Both read what
 Control publishes.
+
+Handlers are arbitrary TypeScript on a paved road scoped by the endpoint's capability. A step off that road — raw
+SQL, a table read without its scope, a connector call, share-link issuing, database code in a migration — is
+allowed, because refusing it only teaches the agent to work around the refusal. It is declared instead: in the
+contract, or by the migration file itself ([ADR-0017](0017-service-owned-postgres-migrations.md)). A declaration is
+worth something only when the person who approves the deploy sees it.
 
 The person who drives a coding agent often does not read the diff. The agent is competent but
 optimizes for "it works". When a request is refused, it loosens whatever refused it: an endpoint's
@@ -36,8 +42,10 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 
 - The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
   every file under `db/migrations/` is listed.
-- The snapshot digest covers the canonical contract and the migration list, not the checker version. It
-  keeps the trailing `null` that once stood for artifact access, so a digest an approval recorded stays valid.
+- The snapshot digest covers the canonical contract (each site's declared reach included) and the migration list,
+  and the database code only when there is some; not the checker version. It keeps the trailing `null` that once
+  stood for artifact access, and the contract's `declared` section is absent for a contract that is not built with
+  the staged kit, so a digest an approval recorded stays valid.
 - **Fabrika deploys an application only with a contract.** A commit without `fabrika.contract.ts` fails its
   run before any provider is called (`ContractMissing`), on every environment, protected or not, and publishes
   nothing; the approved contract stays published. A run snapshot stored without a contract is refused the
@@ -71,16 +79,30 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 
 ### 1. A deploy run holds the snapshot
 
-Right after a run's commit is pinned, Control reads the contract, its schema modules,
-`src/db/tables.ts` and the migration list with checksums at that commit. It parses them with the static
-reader of [ADR-0005](0005-compile-app-config-to-static-manifest.md). The run stores the result as its
-**snapshot**:
+Right after a run's commit is pinned, Control reads the application's shell — the contract and the modules it
+imports, `src/db/tables.ts` — and the migration files at that commit. It parses the shell with the static reader of
+[ADR-0005](0005-compile-app-config-to-static-manifest.md), each module as its shell slice: the handlers are removed
+first, so Control never fetches, parses or runs a module that only a handler imports. It classifies the migration
+files with the classifier the runner applies them with ([ADR-0017](0017-service-owned-postgres-migrations.md)). The
+run stores the result as its **snapshot**:
 
-- the parsed contract and table policies;
+- the parsed contract and table policies, with each site's **declared reach** (`ContractArtifact.declared`): the
+  `sql` mode, the `unscoped` tables and their modes, the `connect` imports and the `issues` mount of each endpoint,
+  job and webhook that declares any;
 - the migration list with checksums;
+- the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
+  policy, `DO` block and expression that calls database code, by file, kind and object;
 - the checker version;
 - the baseline the candidate was compared with;
 - the approval, when one was needed.
+
+The declared reach and the database code are the snapshot's **deviations**: the steps off the paved road. Nothing
+else of the handler code reaches the snapshot; the checker's structure hints stay checker output.
+
+A migration file the classifier refuses (an escape from the schema, the transaction or the platform) fails the
+read, as the runner would refuse it, except a file the environment's published snapshot holds with the same
+checksum: the runner skips an applied file, so a stricter classifier cannot lock an application out. The read is
+bounded: 256 shell files, and 16 Mi characters of migration text, which the classifier reads at once.
 
 Uploads carry no proxy table and no IAM schema. A snapshot comes only from the commit.
 
@@ -130,11 +152,12 @@ covers:
 
 - endpoint callers, access forms, input domains and output shapes;
 - containment, roles and their actions, membership rules;
-- table and column policies;
+- table and column policies, with the actions each column is read and written with;
 - anonymous kinds, link mounts and link-reachable file collections;
 - job and webhook actions, connector exports and imports;
 - CSP extensions;
-- migrations: any new or changed file.
+- each site's declared reach;
+- migrations: any new or changed file, and the database code they declare.
 
 The rule has three outcomes:
 
@@ -152,6 +175,32 @@ they become denied. Otherwise Control classifies the removal as a widening, and 
 **A removed column read policy widens access.** Without its own read policy, a column falls back to the
 table's read action. Removing a column's read policy is therefore a widening, and it waits. Removing a
 whole table or a whole column stays a removal.
+
+**What a table action grants.** The diff compares table policies by what their actions reach in the data layer:
+
+- **A capability reads its own target.** A `Ref` of any action the table names — its read, insert, update and
+  delete actions, and a column's own write action — reads its row and the rows of its subtree. Every column that
+  declares a read action other than exactly the capability's is left out, of the statement and of the row type
+  alike. A `Within` lists by the table's read action. So giving a table an action, or changing one, widens: that
+  action's holders now read the rows it reaches.
+- **A column read action** (`columns: { c: { read } }`) is the only action that reads, filters and sorts that
+  column. A new one narrows; a removed one widens (above).
+- **A column write action** (`columns: { c: { write } }`) lets a capability of that action update exactly its
+  columns through the target's `update`; the table's update action no longer updates them. A new or a changed
+  column write action widens. A removed one narrows. A column moved from the table's update list under its own write
+  action gives a removal line and a widening line.
+
+**Steps off the paved road widen with closer review.** A site is keyed by its identity — the endpoint id, or the
+job — and each effect of its declaration is compared on its own, so a handler body that moves with the same
+declaration is unchanged. A new `sql` mode, a new `unscoped` table, `read` → `write` in either, a new connector and
+a new link mount to issue each widen; a removal and `write` → `read` narrow. Database code is keyed by file, kind and
+object: new code widens, code in a file whose text changed widens again (the diff cannot tell what changed in it),
+and removed code narrows. A contract that leaves the staged kit, whose sites' reach is then no longer declared,
+widens. A dimension that opts its member directory into labels (`directory: 'labels'`), so every `members.list`
+holder there reads each member's email-derived label, widens too. Each of these widening lines carries
+`review: 'closer'`: the approval page marks it "needs closer review",
+because the approver must read the code behind the line, not only the line. A diff that cannot classify a change
+also marks it for closer review. On an unprotected environment the run publishes at once, with the same lines.
 
 **An endpoint's input and output are compared by the values they admit.** A change that can only admit
 fewer values narrows: an enum that loses a value, a lowered maximum, a raised minimum, an added pattern, a
@@ -200,7 +249,9 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
 - **The approval records the candidate digest and the baseline digest.** It approves one change against
   one baseline.
 - **Runs record their actor**, including runs created through MCP. MCP's `get_deployment` reports a
-  parked run with the approval link.
+  parked run with the approval link, and names the run's closer-review lines (`deviations`), parked or not.
+- **The environment page lists the published snapshot's deviations**, protected or not, so the steps off the road
+  an environment runs with stay visible after their approval.
 
 **Invariant: only a human user principal approves an access change.** No credential that an agent or a
 workload can hold completes an approval.
@@ -214,9 +265,14 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
   reads the plain-language lines and approves.
-- A removal and a code-only change deploy without a prompt, unless the removal uncovers a broader
-  endpoint or removes a column read policy. Unprotected environments, including
-  staging and MCP authoring targets by default, do not wait.
+- A removal deploys without a prompt, unless it uncovers a broader endpoint or removes a column read policy. A
+  change of handler code that leaves the shell and the migrations as they were deploys without a prompt too. A
+  change that declares a new step off the road, or widens one, waits like any other widening. Unprotected
+  environments, including staging and MCP authoring targets by default, do not wait.
+- A deviation is not a refusal. The approver sees each one marked for closer review; what an admitted statement can
+  then do in Postgres is bounded by the application's role family
+  ([ADR-0017](0017-service-owned-postgres-migrations.md)), not by the approval and not by the classifiers' name
+  rules, which are defense in depth.
 - The first deploy to a protected environment always waits: against the empty snapshot, every item is
   an addition.
 - An agent cannot unprotect an environment to avoid the prompt: the flag change needs the same human
@@ -245,6 +301,13 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
   candidate, the baseline and the approval together, and `published_run_id` points at one row.
 - **Approve every deploy, or every change.** Rejected: a prompt for a code-only change teaches people
   to approve without reading.
+- **Refuse every step off the paved road.** Rejected: an agent that is refused loads every row, or works around the
+  framework where nothing declares it. A declared step is allowed, bound to its site at runtime, and shown.
+- **Detect steps off the road in handler code.** Rejected: Control would have to read and parse handler modules,
+  and a syntactic detector is evaded by destructuring, helper modules and `ctx[k]`. The declaration in the shell is
+  what the runtime enforces, so it is what the snapshot holds.
+- **Put the checker's structure hints into the snapshot.** Rejected: a file in the wrong layer reaches no data, and
+  every such hint would cost an approval.
 - **Recognize harmless additions automatically.** Deferred: it needs a reachability classifier. v1
   gives it up and treats every addition as a widening.
 - **Protect every environment by default.** Rejected: staging and MCP authoring targets must apply at

@@ -16,7 +16,7 @@ behaviour.
 - [`installing-on-zerops.md`](installing-on-zerops.md) — the operator's procedure from an empty
   Zerops account to a serving application: prerequisites, the command order, and a check per step.
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` serving
-  surfaces (`implement`, `serveService`), typed RPC, and authorization boundary.
+  surfaces (the staged kit and `serve`, `serveService`), typed RPC, and authorization boundary.
 - [`application-architecture.md`](application-architecture.md) — where an application's code goes: the layers, the
   slice, what each file holds, the import table, and what `fabrika-check` refuses or only hints.
 - [`mcp-authoring.md`](mcp-authoring.md) — edit an application from Claude or ChatGPT through Control's `/mcp`: the OAuth flow, the tools, how an operator enables it, and its limits.

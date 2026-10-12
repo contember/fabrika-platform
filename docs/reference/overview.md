@@ -90,7 +90,7 @@ App at all.
 | `@fabrika/auth-core`           | Shared authz kernel: policy model, contract artifact, endpoint matcher, token, RPC.           |
 | `@fabrika/auth`                | The published app-facing SDK. Verifies the proxy-injected token; enforces nothing.            |
 | `@fabrika/jwks`                | The one JWKS-backed token verifier the SDK and the proxy both wrap (ADR-0040).                |
-| `@fabrika/app`                 | Contract runtime (`implement`), service dispatcher, typed RPC, client, runtime adapters.      |
+| `@fabrika/app`                 | Contract kit and runtime (`serve`), service dispatcher, typed RPC, client, runtime adapters.  |
 | `@fabrika/iam`                 | The IAM service itself: human authentication, identity, keys, policies, and audit.            |
 | `@fabrika/iam-contract`        | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                   |
 | `@fabrika/email`               | Portable outbound email contract and fetch-based provider adapters.                           |
@@ -171,8 +171,8 @@ from provider envelopes or DNS names.
 ## Application runtime
 
 `@fabrika/app` is the server framework for Fabrika applications. An application
-declares `fabrika.contract.ts` and serves it through `implement`
-(`@fabrika/app/implement`). The package root holds the typed RPC library, the
+declares `fabrika.contract.ts` with the staged kit, its handlers beside their endpoints, and serves it through
+`serve` (`@fabrika/app/implement`). The package root holds the typed RPC library, the
 structural error responses, the typed browser RPC client, and the `FetchService`
 type that the runtime adapters serve.
 
@@ -191,7 +191,7 @@ migration wiring are documented in
 
 The proxy and the application perform different checks. The proxy decides from
 the endpoint table before a request reaches the private app service. An
-application writes no authentication code: `implement` serves its contract, and
+application writes no authentication code: `serve` serves its contract, and
 the generated entrypoint's `boot` verifies the injected token and checks the
 caller kind, the requirement, admission and the access form of each endpoint. Control
 and Operations call `iam.authenticate(request)` in their row handlers, which
@@ -361,7 +361,7 @@ enforcement:
   coordinate is known only once request data is validated. Every
   `.require(action, scope)`, every `can()` call, control's per-route
   `authorize`, and a contract application's caller-kind, requirement and access-form
-  checks (`implement`, ADR-0012) are this layer.
+  checks (`boot`, ADR-0012) are this layer.
 - **Admission** — the confused-deputy guards in front of ambient credentials: the
   proxy's `Sec-Fetch-Site` check on a session's request that is not a `GET`, and its
   `Content-Type` check, on every endpoint table — the console's three JSON mounts and
@@ -386,7 +386,7 @@ token, client address, endpoint, delegation grant, proxy secret), the request id
 response header policy (the file treatment for a download) — and endpoint rows are never compiled into
 route matchers. Endpoint tables are decided once, in TypeScript, against the
 manifest. Before any endpoint is selected, the proxy refuses a non-canonical raw path with 400 and a request without a
-forwarded method; `implement` and `serveService` refuse the same paths.
+forwarded method; a contract application's `boot` and `serveService` refuse the same paths.
 
 Nothing downstream of the proxy enforces. An application reads the proxy-injected
 `X-Fabrika-Token`, verifies it locally against IAM's JWKS, and builds its

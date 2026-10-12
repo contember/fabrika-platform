@@ -121,7 +121,7 @@ bun test               # app-environment · canonical-path · contract-canonical
   is no fall-through, and parameters come back raw. Segments match raw and case-sensitively, a
   trailing `/` literally, a non-root `*` only after its slash. The caller, requirement and admission
   checks of the proxy's decision (`@fabrika/proxy-core`) and of the framework run on the endpoint it
-  selects. The proxy, `implement` and `serveService` all select with it, so a request reaches the
+  selects. The proxy, a contract application's `boot` and `serveService` all select with it, so a request reaches the
   endpoint whose rules the proxy applied (ADR-0022 rule 3).
 - **`planEndpoint` takes only a `compileEndpointTable` result.** Compiling runs `assertNoAmbiguity`
   — an invalid path or reserved prefix, a duplicate id, a parameter named `__proto__`,

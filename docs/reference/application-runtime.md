@@ -1,10 +1,90 @@
 # Application runtime
 
 `@fabrika/app` is the first-party server framework for applications deployed by
-Fabrika. An application declares one contract with the staged kit and serves it through `serve`.
+Fabrika. An application declares one contract with the staged kit and serves it through `serve`
+([ADR-0012](../decisions/0012-fabrika-app-runtime.md)).
 The package also holds typed RPC, structural error handling, object-level
 authorization, a typed browser client, and the dispatcher of the installation's own
 services.
+
+## An application in the staged kit
+
+Every application is built in the same six steps, each typed by the ones before it. Where each file lives and what
+it may import is the [application architecture](application-architecture.md).
+
+```ts
+// src/vocabulary.ts — the authorization vocabulary
+export const vocabulary = defineVocabulary({
+	app: 'notes',
+	dimensions: { workspace: {}, note: { in: 'workspace' } },
+	actions: {
+		'notes.read': 'Read notes',
+		'notes.write': 'Write notes',
+		'notes.delete': 'Delete notes',
+	},
+	roles: { editor: { grants: ['notes.read', 'notes.write', 'notes.delete'] } },
+})
+
+// src/db/tables.ts — the table policies; containment is derived from the vocabulary
+export const tables = defineTables(vocabulary, columns)({
+	notes: {
+		scope: { dimension: 'note' },
+		actions: {
+			read: 'notes.read',
+			insert: 'notes.write',
+			update: 'notes.write',
+			delete: 'notes.delete',
+		},
+		insert: ['title', 'trashed'],
+		update: ['title', 'trashed'],
+		version: 'version',
+	},
+})
+
+// src/app-kit.ts — the kit
+export const app = defineApp(vocabulary, tables)
+
+// src/notes/endpoints.ts — endpoints with their handlers beside them
+export const notes = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({
+		output: NoteList,
+		access: { action: 'notes.read', over: 'workspace' },
+	})
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.within.notes.list()).items.map((row) =>
+				fromRow(Note, row)
+			),
+		})),
+	remove: r.mutation({
+		input: Versioned,
+		output: Done,
+		access: { action: 'notes.delete', on: 'note', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.target.remove({ expectVersion: input.expectVersion })
+			return { id: ctx.target.value }
+		}),
+}))
+
+// fabrika.contract.ts — the mounts that compose the groups
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { notes }),
+	health: c.health('/healthz'),
+}))
+
+// src/app.ts — the composition entry the generated entrypoint and `fabrika job run` load
+export default serve(contract, { database: scoped(tables) })
+```
+
+- `defineVocabulary`, `defineApp` (`@fabrika/app/contract`) and `defineTables` (`@fabrika/db/tables`) build the
+  shell; `fromRow` comes from `@fabrika/app`, `serve` from `@fabrika/app/implement`, `scoped` from `@fabrika/db`, and
+  `columns` from the generated `src/db/schema.generated.ts`.
+- `ctx.target` is the capability (a `Ref`) the access form minted; its id is `ctx.target.value`. `ctx.db.target` is
+  the data handle bound to it ([The staged kit's data handles](#the-staged-kits-data-handles-ctxdb)).
+- A handler that needs more than the handles give declares it on its endpoint — `sql`, `unscoped`, `connect` or
+  `issues` — and the approver sees the declaration. Jobs (`app.cron`), webhooks (`app.webhook`), share links
+  (`app.link`) and exports (`app.export`) take their handlers the same way.
+- The shell is literal: the reader and Control read each module as its slice, without the `.handle(…)` bodies.
 
 ## Serving surfaces
 
@@ -104,10 +184,12 @@ the browser call surface from it. No code generation is required.
 
 `@fabrika/app/contract` is the browser-safe declaration of an application's whole
 access surface ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)).
-`defineContract(vocabulary, (c) => surface)` types it: actions come from the
+`app.contract((c) => surface)` of the kit types it: actions come from the
 vocabulary, roles list exact actions, every procedure declares `access`, RPC mounts
 have no public or link caller, `from` names a string field of the input, and loose
-objects do not type-check. `compileContract(contract, tables)` validates what the
+objects do not type-check. The kit's builders produce the same plain declarations as
+`defineContract(vocabulary, (c) => surface)`, which stays the framework's own form:
+`serve` refuses a contract no kit built. `compileContract(contract, tables)` validates what the
 types cannot, applies every default, generates the endpoint rows and returns the
 normalized `ContractArtifact` of `@fabrika/auth-core`; `parseContractArtifact` reads
 one back from JSON. Both refuse a `*` in an action and a role named after one of IAM's
@@ -140,37 +222,9 @@ manifest that still declares `gates`.
 
 ## Serving a contract
 
-`@fabrika/app/implement` serves a contract. Its handlers sit beside their endpoints
-([application architecture](application-architecture.md)), so `src/app.ts` only composes:
-
-```ts
-// src/notes/endpoints.ts
-export const notes = app.group({ callers: ['human'] }, (r) => ({
-	list: r.query({
-		output: NoteList,
-		access: { action: 'notes.read', over: 'workspace' },
-	})
-		.handle(async ({ ctx }) => ({
-			items: (await ctx.db.within.notes.list()).items.map((row) =>
-				fromRow(Note, row)
-			),
-		})),
-	remove: r.mutation({
-		input: Versioned,
-		output: Done,
-		access: { action: 'notes.delete', on: 'note', from: 'id' },
-	})
-		.handle(async ({ input, ctx }) => {
-			await ctx.db.target.remove({ expectVersion: input.expectVersion })
-			return { id: ctx.target.value }
-		}),
-}))
-
-// src/app.ts
-export default serve(contract, { database: scoped(tables) })
-```
-
-The kit types each handler by its endpoint: a returned field the output does not declare, a handle its access form
+`@fabrika/app/implement` serves a contract with `serve(contract, { database, deps })`. Its handlers sit beside
+their endpoints ([An application in the staged kit](#an-application-in-the-staged-kit)), so `src/app.ts` only
+composes. The kit types each handler by its endpoint: a returned field the output does not declare, a handle its access form
 does not give and a write in a query are type errors. `serve` refuses an endpoint, job or webhook without `.handle(…)`.
 `defineDeps(build)` declares dependencies, which `build` makes at each boot from the application's own variables; a
 handler reads them with `get()`. `scoped(tables)` of `@fabrika/db` has no connection, no locator and no handle of its
@@ -341,12 +395,21 @@ and an export run in a `READ ONLY` transaction and refuse every write and lock b
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.
 
-- **`ctx.sql(Row)\`…\``** exists only on a site that declares`sql`(a job:`tx.sql`, inside`ctx.transaction`). Every` ${…}` is a bound parameter: the tag reads the template's static text with a `$n`placeholder for each value, so a
-  value never becomes SQL, and a value inside a literal, a quoted name or a comment is refused. Before anything is
-  sent the text is refused for more than one statement; any statement but`SELECT`,`WITH`,`VALUES`and`TABLE`, plus`INSERT`,`UPDATE`and`DELETE`on a`'write'`site (so DDL, transaction control,`SET`,`COPY`,`LISTEN`/`NOTIFY`,`LOCK`,`CALL`,`DO`and`MERGE`); a nested statement of another kind and`SELECT … INTO`; a qualified name outside the
-  application's schema; any`fabrika__`or`pg__ `name; a call outside the reviewed built-ins of`@fabrika/platform-node/sql`(a function the migrations declare is not one: ctx.sql does not know them). A`'read'`site also refuses a write anywhere in the statement and a locking clause; a query's transaction is`READ ONLY`under it. Values bind as scalars, a`Date`as ISO text, a list of strings or numbers as a Postgres array (`= any(${ids})`).
-  Each row is parsed like`fromRow`(snake_case → camelCase,`Date`→ ISO) and then by`Row`; Postgres sends`bigint`and`numeric`as text, so`count(*)`needs`::int`(or`z.coerce.number()`), and the error says so. The name rules
-  are defense in depth: the runtime role (`run_<id>`, DML only) bounds what an admitted statement does.
+- **`` ctx.sql(Row)`…` ``** exists only on a site that declares `sql` (a job: `tx.sql`, inside `ctx.transaction`).
+  Every `${…}` is a bound parameter: the tag reads the template's static text with a `$n` placeholder for each value,
+  so a value never becomes SQL, and a value inside a literal, a quoted name or a comment is refused. Before anything
+  is sent the text is refused for more than one statement; any statement but `SELECT`, `WITH`, `VALUES` and `TABLE`,
+  plus `INSERT`, `UPDATE` and `DELETE` on a `'write'` site (so DDL, transaction control, `SET`, `COPY`,
+  `LISTEN`/`NOTIFY`, `LOCK`, `CALL`, `DO` and `MERGE`); a nested statement of another kind and `SELECT … INTO`; a
+  qualified name outside the application's schema; any `fabrika_*` or `pg_*` name; a call outside the reviewed
+  built-ins of `@fabrika/platform-node/sql` (a function the migrations declare is not one: `ctx.sql` does not know
+  them). A `'read'` site also refuses a write anywhere in the statement and a locking clause; a query's transaction
+  is `READ ONLY` under it. Values bind as scalars, a `Date` as ISO text, a list of strings or numbers as a Postgres
+  array (`= any(${ids})`). Each row is parsed like `fromRow` (snake_case → camelCase, `Date` → ISO) and then by
+  `Row`; Postgres sends `bigint` and `numeric` as text, so `count(*)` needs `::int` (or `z.coerce.number()`), and the
+  error says so. The name rules are defense in depth; the runtime role (`run_<id>`, DML only) is the privilege
+  boundary that bounds what an admitted statement does
+  ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)).
 
 - **A webhook delivery is one transaction.** The delivery key is recorded first, outside it; a handler that throws
   rolls its transaction back and forgets the key, so GitHub's redelivery runs it again from nothing. A process that
@@ -428,7 +491,7 @@ returned chain changes nothing the data layer sees. An application that loads
 `capability.ts` by URL, or boots a second runtime with IAM keys of its own, mints
 only what the served runtime's stores refuse. This hardening stops mistakes and makes
 a bypass conspicuous; application code stays trusted in-process
-([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §7 says what it does not stop).
+([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §8 says what it does not stop).
 
 ## Membership, share links and the anonymous kinds
 
@@ -480,16 +543,33 @@ request the schema cannot express); an IAM that cannot be asked is 503.
 
 ## Jobs
 
-A `c.cron` job of the contract gets one handler under `handlers.jobs`:
+An `app.cron` job takes its handler beside it, and the contract mounts it under `jobs`:
 
 ```ts
-jobs: {
-	purge: async ({ ctx }) => {
-		for (const note of await notes.expired(ctx.within('notes.read', 'workspace'))) {
-			await notes.remove(await ctx.ref('notes.delete', 'note', note.id))
-		}
-	},
-},
+// src/notes/endpoints.ts
+export const purge = app.cron('0 3 * * *', {
+	actions: ['notes.read', 'notes.delete'],
+	scope: 'app',
+	timeout: '5m',
+	retries: 2,
+})
+	.handle(async ({ ctx }) => {
+		const trashed = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes
+			.list({ where: [['trashed', '=', true]] })
+		await ctx.transaction(async (tx) => {
+			for (const note of trashed.items) {
+				await tx.db.on(await ctx.ref('notes.delete', 'note', note.id)).remove({
+					expectVersion: note.version,
+				})
+			}
+		})
+	})
+
+// fabrika.contract.ts
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { notes }),
+	jobs: { purge },
+}))
 ```
 
 Each crontab entry runs `fabrika job run <name>` in the application's container
@@ -554,22 +634,23 @@ An application reads another's data through a connector: the owner exports queri
 them. v1 is read-only.
 
 ```ts
-// the owner's contract
-exports: {
-	products: c.export({ version: 1, consumers: ['shop'], audience: 'any consumer user', procedures: {
-		get: c.query({ input: BySku, output: z.nullable(Product), access: { action: 'catalog.product.read', over: 'catalog' } }),
-	} }),
-},
-// the owner's handlers
-handlers: () => ({ exports: { products: { get: ({ input }) => products.get(input.sku) } } }),
+// the owner: an export with its handlers, mounted by the contract under `exports: { products }`
+export const products = app.export({
+	version: 1,
+	consumers: ['shop'],
+	audience: 'any consumer user',
+	procedures: (e) => ({
+		get: e.query({ input: BySku, output: z.nullable(Product), access: { action: 'catalog.product.read', over: 'catalog' } })
+			.handle(async ({ input, ctx }) => {
+				const [row] = (await ctx.db.within.products.list({ where: [['sku', '=', input.sku]], limit: 1 })).items
+				return row === undefined ? null : fromRow(Product, row)
+			}),
+	}),
+})
 
 // the consumer: `fabrika connect add catalog/products@1 --consumer=shop --env=prod`
-// writes fabrika/connect/catalog.products.v1.ts with catalogProductsV1 and its digest
-imports: {
-	catalog: { app: 'catalog', export: 'products', version: 1, digest: catalogProductsV1Digest,
-		procedures: ['get'], usedBy: ['api.products.show'], timeoutMs: 3000 },
-},
-// the consumer's kit (src/app-kit.ts) and the endpoint that calls it
+// writes fabrika/connect/catalog.products.v1.ts with catalogProductsV1 and its digest;
+// the kit (src/app-kit.ts) imports it, and the endpoint that calls it declares `connect`
 const app = defineApp(vocabulary, tables, { imports: { catalog: { snapshot: catalogProductsV1, procedures: ['get'] } } })
 show: r.query({ input: BySku, output: Shown, access: { action: 'shop.view', over: 'shop' }, connect: ['catalog'] })
 	.handle(async ({ input, ctx }) => {
@@ -598,7 +679,8 @@ The consumer side:
   `FABRIKA_CONNECT_<IMPORT>_URL` and the key from `FABRIKA_CONNECT_<IMPORT>_KEY` (`catalog` →
   `CATALOG`, `productCatalog` → `PRODUCT_CATALOG`). Both are framework variables, so no application
   module reads them, and nobody sets them: Control writes them when it deploys the consumer.
-- `ctx.connect.<import>.<procedure>` exists only in the handlers `usedBy` names, and only for the
+- `ctx.connect.<import>.<procedure>` exists only on the endpoints that declare the import in `connect` (the
+  contract's `imports` section records them as its `usedBy`), and only for the
   request that received it: a method kept and called later, from another request or from an export
   handler is `denied` and sends nothing. A call validates its
   input against the snapshot and resolves to `ok`, `denied`, `invalid_input`, `unavailable`, `timeout`

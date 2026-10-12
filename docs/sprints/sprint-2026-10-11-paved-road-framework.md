@@ -89,8 +89,8 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
 - ⚠ `test:examples` runs only `examples/zerops-app` — root `package.json:14`. WU11 adds `examples/crm`.
 - ⚠ Decision 4 (raw SQL is legitimate) contradicts: the `raw-sql` rule — `packages/check/src/rules/runtime.ts:259-379`,
   `packages/check/CLAUDE.md:86`; "Do not add a method that takes SQL" — `packages/db/CLAUDE.md:179-181`; the skill's
-  refusal list — `packages/app/skill/SKILL.md:137-139`; backlog 104 "Never add a raw handle, a `sql` escape" —
-  `docs/backlog/104-the-query-builder-cannot-express-common-reports.md:36`. WU6, WU9, WU10.
+  refusal list — `packages/app/skill/SKILL.md:137-139`; backlog 104 "Never add a raw handle, a `sql` escape"
+  (deleted by WU9; ADR-0012 Alternatives). WU6, WU9, WU10.
 - ⚠ Decision 3 (a capability reads its own target) contradicts "A write action does not include the read action" —
   `packages/db/CLAUDE.md:162-163`. WU3, WU9.
 - ⚠ Decision 3 (handlers colocated) contradicts "the contract is a literal … no call of the application's own
@@ -149,7 +149,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			rows: await ctx.sql(
 				PipelineRow,
-			)`select stage, count(*) as deals from deals where org_id = ${ctx.target.id} group by stage`,
+			)`select stage, count(*) as deals from deals where org_id = ${ctx.target.value} group by stage`,
 		})),
 }))
 ```
@@ -952,3 +952,11 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   shows). A leak scans every value of the other row's chain (an outer dimension's value leaks too). `serve` refuses a
   contract no kit built, a copy included (`kitOriginOf`), and a tableless kit's `sql` is a type error
   (`kit-mistakes/24`). `architecture-app`'s `stage` is an enum, so its `{ stage: 'won' }` seed stays valid.
+- **WU9 — the ADRs follow the code.** ADR-0012 and ADR-0050 are rewritten in place for WU0–WU8 and WU12, and for
+  WU13a's column write actions and WU13b's member directory (labels only with the dimension's `directory: 'labels'`,
+  a closer-review widening) as they stand in review. ADR-0012 gains §7 (the paved road and the declared steps off
+  it); its old §7 is §8, and `application-runtime.md`'s pointer follows. Backlog 104 is deleted (raw SQL replaces
+  declared report kinds; ADR-0012 Alternatives). Outside the listed touch points, stale `implement` and
+  `ctx.target.id` claims are fixed in `overview.md`, `docs/reference/README.md`, `application-architecture.md` (also
+  its `c.spa` form) and `packages/{auth-core,cli}/CLAUDE.md`. Left for WU10: `packages/app/skill/SKILL.md` and
+  `examples/zerops-app/AGENTS.md` still say `implement` (lines 30, 93, 112) and list raw SQL as refused (line 143).

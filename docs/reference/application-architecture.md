@@ -157,7 +157,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			rows: await ctx.sql(
 				PipelineRow,
 			)`select d.stage, count(*)::int as deals from deals d
-				join companies c on c.id = d.company_id where c.org_id = ${ctx.target.id} group by d.stage`,
+				join companies c on c.id = d.company_id where c.org_id = ${ctx.target.value} group by d.stage`,
 		})),
 }))
 ```
@@ -170,7 +170,7 @@ import { deals } from './src/deals/endpoints'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', { companies, deals }),
-	site: c.spa('/', { callers: ['human'] }),
+	site: c.spa('/', { dir: 'dist/web', access: { member: true } }),
 	health: c.health('/healthz'),
 }))
 ```
