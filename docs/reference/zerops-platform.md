@@ -165,12 +165,18 @@ over prose. The endpoints fabrika's Zerops provider uses, all confirmed there:
 | Create a project from an import        | `POST /client/{id}/project/import`                                   | same shapes                                                                                      |
 | Trigger build+deploy                   | `PUT /service-stack/{id}/trigger-pipeline`                           | `{ buildFromGit?, zeropsYaml?, zeropsSetup?, startWithoutCode?, userData?, … }` → `{ process? }` |
 | Poll a version                         | `GET /app-version/{id}`                                              | `{ id, status, sequence, serviceStackId, build{…} }`                                             |
-| List versions                          | `GET /service-stack/{id}/app-version`                                | `{ list[], totalCount }`, `limit`/`offset`/`statuses`                                            |
+| List versions                          | `GET /service-stack/{id}/app-version`                                | `{ list[], total }`, `limit`/`offset`/`statuses`                                                 |
 | Cancel a build                         | `PUT /app-version/{id}/cancel-build`                                 | → `{ success }`                                                                                  |
 | Read a service's env vars              | `GET /service-stack/{id}/env`                                        | → `{ items[] }`, each `{ id, key, content, type, sensitive }`                                    |
 | Write a service-level env var          | `POST /service-stack/{id}/user-data`, `PUT`/`DELETE /user-data/{id}` | `{ key, content }` — `PUT` needs BOTH fields                                                     |
 | Project-level env vars                 | `POST /project/{id}/env`, `PUT /project-env/{id}`                    | `{ key, content, sensitive }` — **fabrika never calls these** (ADR-0004)                         |
 | Log access                             | `GET /project/{id}/log`                                              | `{ accessToken, expiration, url, urlPlain, urlInfo, urlUi }`                                     |
+
+Paged lists (`/client/{id}/project`, `/project/{id}/service-stack`, `/service-stack/{id}/app-version`,
+`/service-stack/{id}/user-data`) answer `{ list, count, total, limit, offset }`. Until at least
+2026-08-21 they answered `{ list, totalCount }`; on 2026-10-12 every one of them answered `total`
+and no `totalCount`, which stopped `platform install` at its first service listing. The client
+pages by `total`.
 
 `app-version.status` is a closed enum: `UPLOADING`, `WAITING_TO_BUILD`, `BUILDING`,
 `BUILD_FAILED`, `BUILD_VALIDATION_FAILED`, `WAITING_TO_DEPLOY`, `DEPLOYING`,

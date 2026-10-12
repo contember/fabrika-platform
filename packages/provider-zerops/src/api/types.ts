@@ -365,7 +365,7 @@ export interface ZeropsApi {
 
 	/**
 	 * The newest application version of a service. VERIFIED: `GET /service-stack/{id}/app-version`
-	 * (`{ list, totalCount }`, `limit`/`offset`/`statuses` query params).
+	 * (`{ list, total }`, `limit`/`offset`/`statuses` query params).
 	 *
 	 * UNVERIFIED BEHAVIOUR: the list's ORDER. The driver does not rely on it — it picks the highest
 	 * `sequence`, which the schema documents as monotonic per service.
@@ -423,7 +423,7 @@ export interface ZeropsApi {
 
 	/**
 	 * Every project under a client. VERIFIED: `GET /client/{id}/project`.
-	 * The implementation follows the response's `totalCount` with explicit `limit`/`offset` pages.
+	 * The implementation follows the response's `total` with explicit `limit`/`offset` pages.
 	 */
 	listProjects(input: { clientId: string; signal: AbortSignal }): Promise<ZeropsProject[]>
 
@@ -435,7 +435,7 @@ export interface ZeropsApi {
 
 	/**
 	 * Every service stack under a project. VERIFIED: `GET /project/{id}/service-stack`.
-	 * The implementation follows the response's `totalCount` with explicit `limit`/`offset` pages.
+	 * The implementation follows the response's `total` with explicit `limit`/`offset` pages.
 	 */
 	listProjectServices(input: { projectId: string; signal: AbortSignal }): Promise<ZeropsService[]>
 

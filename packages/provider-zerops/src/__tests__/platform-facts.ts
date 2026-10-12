@@ -508,7 +508,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		id: 'user-data-list-is-a-200-list',
 		section: SECTION_CORRECTIONS,
 		// SUPERSEDES the 2026-08-03 and 2026-08-05 measurements, which recorded an unconditional
-		// `400 serviceStackNotFound` here. Measured 2026-08-21: 200 with `{ list, totalCount }` on a service
+		// `400 serviceStackNotFound` here. Measured 2026-08-21: 200 with `{ list, total }` on a service
 		// with code and without. The client still reads `/env` — that is where the record ids it writes with
 		// come from, and this endpoint's paging terms were never verified.
 		request: { method: 'GET', path: '/service-stack/{serviceId}/user-data' },

@@ -8,7 +8,7 @@ const jsonResponse = (body: unknown, status = 200): Response =>
 const signal = (): AbortSignal => new AbortController().signal
 
 describe('Zerops API discovery', () => {
-	test('lists every client project by following totalCount pages', async () => {
+	test('lists every client project by following total pages', async () => {
 		const urls: string[] = []
 		const fetchImpl: FetchLike = async (url) => {
 			urls.push(url)
@@ -18,12 +18,12 @@ describe('Zerops API discovery', () => {
 						{ id: 'project-1', name: 'apps-prod', mode: 'SERIOUS', status: 'ACTIVE' },
 						{ id: 'project-2', name: 'apps-stage', mode: 'LIGHT', status: 'STOPPED' },
 					],
-					totalCount: 3,
+					total: 3,
 				})
 			}
 			return jsonResponse({
 				list: [{ id: 'project-3', name: 'billing-prod', mode: 'SERIOUS', status: 'CREATING' }],
-				totalCount: 3,
+				total: 3,
 			})
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
@@ -132,12 +132,12 @@ describe('Zerops API discovery', () => {
 							autoscalingProfileId: 'oltp-production',
 						},
 					],
-					totalCount: 2,
+					total: 2,
 				})
 			}
 			return jsonResponse({
 				list: [{ id: 'service-2', name: 'postgres', projectId: 'project-1', base: 'postgresql:ha@18', status: 'CREATING' }],
-				totalCount: 2,
+				total: 2,
 			})
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
@@ -254,7 +254,7 @@ describe('Zerops API discovery', () => {
 		const api = createZeropsApi({
 			token: 'secret',
 			baseUrl: 'https://zerops.test',
-			fetchImpl: async () => jsonResponse({ totalCount: 0 }),
+			fetchImpl: async () => jsonResponse({ total: 0 }),
 		})
 
 		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
@@ -366,18 +366,18 @@ describe('Zerops API discovery', () => {
 		expect(cancelled).toBe(true)
 	})
 
-	test('fails when pagination ends before the documented totalCount', async () => {
+	test('fails when pagination ends before the documented total', async () => {
 		let calls = 0
 		const fetchImpl: FetchLike = async () => {
 			calls++
 			return calls === 1
-				? jsonResponse({ list: [{ id: 'project-1', name: 'apps-prod' }], totalCount: 2 })
-				: jsonResponse({ list: [], totalCount: 2 })
+				? jsonResponse({ list: [{ id: 'project-1', name: 'apps-prod' }], total: 2 })
+				: jsonResponse({ list: [], total: 2 })
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
 		await expect(api.listProjects({ clientId: 'client-1', signal: signal() })).rejects.toThrow(
-			'zerops: list projects ended before totalCount',
+			'zerops: list projects ended before total',
 		)
 	})
 })

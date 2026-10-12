@@ -242,7 +242,7 @@ class ZeropsEmulator {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
 			}
 			const list = this.state.appVersions.filter((item) => item.serviceStackId === serviceId)
-			return json({ list: this.page(list, url), totalCount: list.length })
+			return json({ list: this.page(list, url), total: list.length })
 		}
 
 		// The precondition is real: the platform answers 400 `serviceStackIsNotHttp` until the service has
@@ -311,7 +311,7 @@ class ZeropsEmulator {
 		if (listProjects !== null && request.method === 'GET') {
 			const clientId = decodeURIComponent(listProjects[1] ?? '')
 			const list = this.state.projects.filter((item) => item.clientId === clientId)
-			return json({ list: this.page(list, url), totalCount: list.length })
+			return json({ list: this.page(list, url), total: list.length })
 		}
 
 		// Mints a LABEL, not a credential — see `fakeIntegrationTokenValue`. The grants are recorded and
@@ -366,7 +366,7 @@ class ZeropsEmulator {
 				return error(404, 'PROJECT_NOT_FOUND', 'project not found')
 			}
 			const list = this.state.services.filter((item) => item.projectId === projectId).map((item) => this.serviceResponse(item))
-			return json({ list: this.page(list, url), totalCount: list.length })
+			return json({ list: this.page(list, url), total: list.length })
 		}
 
 		// SUPERSEDED 2026-08-21: this endpoint used to answer `400 serviceStackNotFound` on every service,
@@ -379,7 +379,7 @@ class ZeropsEmulator {
 				return serviceStackNotFound()
 			}
 			const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId && item.type !== 'ENV')
-			return json({ list: this.page(list, url), totalCount: list.length })
+			return json({ list: this.page(list, url), total: list.length })
 		}
 
 		const serviceEnvList = path.match(/^\/service-stack\/([^/]+)\/env$/)
