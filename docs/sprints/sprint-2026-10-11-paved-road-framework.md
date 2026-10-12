@@ -1401,8 +1401,7 @@ ADR-0022 or ADR-0050.
   holds `package.json` to the template's dependencies and the file table to `fileTableSql`, and on Postgres migrates
   them to `src/__tests__/skill-app/catalog.json`, from which the generated schema is rendered (equal to real
   codegen). Materialized, the application passes the whole loop on main + WU13b: tsc clean, `fabrika-check` 0
-  refusals and 0 hints, 62 tests (generated included), the SPA build. `AWAITING_WU13B` tolerates the member
-  directory's two files until WU13b is on main.
+  refusals and 0 hints, 62 tests (generated included), the SPA build. After the rebase onto WU13b the test needs no allowance.
 - **WU10 — what the trial app taught the skill.** An edit endpoint with only optional fields fails its generated
   cases (the sample sends none, and an empty update is a 500), so the skill's edit takes its fields as required. A
   webhook's generated `bind` needs a fixture. Share links, `creates` and member management still fail the generated
