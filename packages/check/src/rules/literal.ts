@@ -184,6 +184,18 @@ const memberProblem = (link: Link | undefined, allowed: ReadonlySet<string>, whe
 const calledProblem = (link: Link | undefined, previous: Link): Problem | undefined =>
 	link?.kind === 'call' ? undefined : { node: previous.node, message: 'a schema builder that is not called', allowed: ALLOWED_SCHEMA }
 
+/** `.<method>(…)` links from `start`, each a supported schema method, each called. */
+const schemaMethodsProblem = (root: AstNode, links: readonly Link[], start: number): Problem | undefined => {
+	for (let index = start; index < links.length; index += 2) {
+		const method = links[index]
+		const problem = memberProblem(method, ZOD_METHODS, 'a schema method', root)
+		if (problem !== undefined || method === undefined) return problem
+		const called = calledProblem(links[index + 1], method)
+		if (called !== undefined) return called
+	}
+	return undefined
+}
+
 const zodChainProblem = (root: AstNode, links: readonly Link[]): Problem | undefined => {
 	const first = links[0]
 	let next = 2
@@ -200,14 +212,7 @@ const zodChainProblem = (root: AstNode, links: readonly Link[]): Problem | undef
 		const called = calledProblem(links[1], first)
 		if (called !== undefined) return called
 	}
-	for (let index = next; index < links.length; index += 2) {
-		const method = links[index]
-		const problem = memberProblem(method, ZOD_METHODS, 'a schema method', root)
-		if (problem !== undefined || method === undefined) return problem
-		const called = calledProblem(links[index + 1], method)
-		if (called !== undefined) return called
-	}
-	return stringOrderProblem(links, next)
+	return schemaMethodsProblem(root, links, next) ?? stringOrderProblem(links, next)
 }
 
 const STRING_FACTORIES = new Set(['string', 'uuid', 'email', 'url', 'iso'])
@@ -399,12 +404,32 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		return 'value'
 	}
 
+	/**
+	 * `Status.optional()`: a schema method on a const of this module or an imported one. Whether the const holds a schema
+	 * is the reader's to decide; here it is a name the literal rule follows like any other.
+	 */
+	const isSchemaModifier = (name: string, links: readonly Link[]): boolean =>
+		(index.consts.has(name) || index.imports.has(name)) && links[0]?.kind === 'member' && links[0].name !== undefined
+
 	const checkCall = (node: AstNode, scope: Scope, dependencies: string[]): void => {
 		const { root, links } = decompose(node)
 		const rootName = identifierName(root)
 		const kind = rootName === undefined
 			? undefined
 			: (scope.get(rootName) ?? builders.get(rootName) ?? (isKitName(graph, module, rootName) ? 'kit' : undefined))
+		if (kind === undefined && rootName !== undefined && isSchemaModifier(rootName, links)) {
+			const problem = schemaMethodsProblem(root, links, 0)
+			if (problem !== undefined) return fail(problem.node, problem.message, problem.allowed)
+			checkIdentifier(root, scope, dependencies)
+			links.forEach((link) => {
+				if (link.kind !== 'call') return
+				if (link.node['optional'] === true) fail(link.node, 'optional call', 'a plain call')
+				for (const argument of children(link.node, 'arguments')) {
+					if (argument !== null) checkArgument(argument, scope, dependencies, 'value')
+				}
+			})
+			return
+		}
 		if (kind === undefined) {
 			return fail(
 				node,
@@ -603,6 +628,13 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 		return literal
 	}
 
+	/** A const whose own initializer was refused: the refusal stands at the offending expression, not again at each import. */
+	const refusedInPlace = (binding: Binding): boolean => {
+		if (binding.kind !== 'const' && binding.kind !== 'default') return false
+		const info = summaries.get(binding.module.file)?.consts.get(binding.kind === 'const' ? binding.name : 'default')
+		return info !== undefined && !info.clean
+	}
+
 	for (const summary of summaries.values()) {
 		for (const name of summary.consts.keys()) {
 			isLiteral(name === 'default' ? graph.exported(summary.module, 'default') : graph.binding(summary.module, name))
@@ -641,7 +673,7 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 			}
 			const binding = graph.binding(summary.module, imported.local)
 			if (binding.kind === 'unresolved') summary.report(imported.node, 'literal', binding.reason, 'a named import of a const the module exports')
-			else if (!isLiteral(binding)) {
+			else if (!isLiteral(binding) && !refusedInPlace(binding)) {
 				summary.report(
 					imported.node,
 					'literal',

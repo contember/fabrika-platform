@@ -11,6 +11,7 @@ import {
 	stringField,
 	templateText,
 	unwrap,
+	walk,
 } from '../ast'
 import type { Report } from '../finding'
 import { unwrapValue } from '../graph'
@@ -22,6 +23,40 @@ export interface SourceContext {
 	readonly report: Report
 	/** The generated entrypoint is the one module that reads the framework's variables. */
 	readonly isGeneratedEntry: boolean
+	/** The names the module binds to an imported `sql` (`rawSqlBindings`): a parameter of that name is not one of them. */
+	readonly rawSql: ReadonlySet<string>
+}
+
+/**
+ * The local names a module binds to a value named `sql` it loads: `import { sql as q } from 'kysely'` and
+ * `const { sql } = await import('bun')`. The raw-sql rule refuses a driver's tag by this origin, so a query function
+ * may take the declared `ctx.sql` tag as a parameter of any name.
+ */
+export const rawSqlBindings = (program: AstNode): ReadonlySet<string> => {
+	const names = new Set<string>()
+	walk(program, (node) => {
+		if (node.type === 'ImportDeclaration' && stringField(node, 'importKind') !== 'type') {
+			for (const item of children(node, 'specifiers')) {
+				const imported = item === null ? undefined : child(item, 'imported')
+				const local = item === null || stringField(item, 'importKind') === 'type' ? undefined : identifierName(child(item, 'local'))
+				if (local !== undefined && (identifierName(imported) ?? staticString(imported)) === 'sql') names.add(local)
+			}
+		} else if (node.type === 'VariableDeclarator' && isLoad(child(node, 'init'))) {
+			const pattern = child(node, 'id')
+			for (const property of pattern?.type === 'ObjectPattern' ? children(pattern, 'properties') : []) {
+				const local = property?.type === 'Property' && staticKey(property, 'key') === 'sql' ? identifierName(child(property, 'value')) : undefined
+				if (local !== undefined) names.add(local)
+			}
+		}
+	})
+	return names
+}
+
+/** `import(x)`, `await import(x)` or `require(x)`. */
+const isLoad = (init: AstNode | undefined): boolean => {
+	const value = init === undefined ? undefined : unwrap(init)
+	const load = value?.type === 'AwaitExpression' ? child(value, 'argument') : value
+	return load !== undefined && loadedSpecifier(load) !== undefined
 }
 
 const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self'])
@@ -258,7 +293,10 @@ const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: Source
 	checkFetch(node, path, context)
 	checkConsole(node, path, ancestors, context)
 	checkPrototypeCall(node, path, context)
-	if (pathIs(path, 'sql')) context.report(node, 'raw-sql', 'sql(…) builds raw SQL', ALLOWED_QUERY)
+	const [name] = path
+	if (path.length === 1 && name !== undefined && context.rawSql.has(name)) {
+		context.report(node, 'raw-sql', `${name}(…) builds raw SQL`, ALLOWED_QUERY)
+	}
 }
 
 const checkMember = (node: AstNode, parent: AstNode | undefined, context: SourceContext): void => {
@@ -291,9 +329,14 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 			)
 		}
 	}
-	const suffix = memberPath(node) ?? memberSuffix(node)
-	if (suffix.length >= 2 && suffix[suffix.length - 2] === 'sql' && RAW_SQL_HELPERS.has(suffix[suffix.length - 1] ?? '')) {
-		context.report(node, 'raw-sql', `sql.${suffix[suffix.length - 1]} builds raw SQL`, ALLOWED_QUERY)
+	const fullPath = memberPath(node)
+	const suffix = fullPath ?? memberSuffix(node)
+	const helper = suffix[suffix.length - 1] ?? ''
+	const receiver = suffix[suffix.length - 2] ?? ''
+	// `<x>.sql.raw` by name; a bare `sql.raw` (or an alias's `q.raw`) by the origin of its root.
+	const rawHelper = fullPath?.length === 2 ? context.rawSql.has(receiver) : receiver === 'sql'
+	if (suffix.length >= 2 && RAW_SQL_HELPERS.has(helper) && rawHelper) {
+		context.report(node, 'raw-sql', `${receiver}.${helper} builds raw SQL`, ALLOWED_QUERY)
 	}
 	if (property === 'innerHTML' || property === 'outerHTML' || property === 'insertAdjacentHTML') {
 		context.report(node, 'unsafe-html', `${property} injects markup that runs as the signed-in user`, ALLOWED_MARKUP)
@@ -409,8 +452,12 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 			return checkPrototypeWrite(node, context)
 		case 'TaggedTemplateExpression': {
 			const tag = child(node, 'tag')
-			const suffix = tag === undefined ? [] : (memberPath(tag) ?? memberSuffix(tag))
-			if (suffix[suffix.length - 1] === 'sql') context.report(node, 'raw-sql', 'an sql`…` template is raw SQL', ALLOWED_QUERY)
+			const path = tag === undefined ? undefined : memberPath(tag)
+			const suffix = tag === undefined ? [] : (path ?? memberSuffix(tag))
+			const [root] = suffix
+			// A member `.sql` tag by name; a bare tag by its origin, so a parameter that holds the declared ctx.sql is not one.
+			const raw = path?.length === 1 ? root !== undefined && context.rawSql.has(root) : suffix[suffix.length - 1] === 'sql'
+			if (raw) context.report(node, 'raw-sql', 'an sql`…` template is raw SQL', ALLOWED_QUERY)
 			return
 		}
 		case 'ImportSpecifier': {

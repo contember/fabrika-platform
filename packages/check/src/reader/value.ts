@@ -305,9 +305,36 @@ export class ValueReader {
 				this.#problems.add(located, 'defineTables in the contract graph', 'table policies only in src/db/tables.ts')
 				return null
 			default:
+				if (this.#isConstName(located.module, rootName) && links[0]?.kind === 'member') {
+					return this.#schemaMethods(located, root, links, scope)
+				}
 				this.#problems.add(located, 'call of a function that is not c.*, z.* or defineContract', 'the value the function returns, written as a literal')
 				return null
 		}
+	}
+
+	/** Whether `name` is a top-level const of `module` or an import of one: a schema it holds takes methods. */
+	#isConstName(module: ParsedModule, name: string): boolean {
+		const index = this.#graph.index(module)
+		return index.consts.has(name) || index.imports.has(name)
+	}
+
+	/** `Status.optional()`: the methods applied to the schema a literal const holds, as zod applies them at runtime. */
+	#schemaMethods(located: Located, root: AstNode, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const steps = this.#steps(located, links, 0)
+		if (steps === null) {
+			return null
+		}
+		const receiver = this.#identifier({ module: located.module, node: root }, scope)
+		if (receiver === null) {
+			return null
+		}
+		if (receiver.kind !== 'schema') {
+			const name = identifierName(root) ?? ''
+			this.#problems.add(located, `'${name}' is not a schema, so it takes no .${steps[0]?.name ?? ''}()`, 'a method on a z schema')
+			return null
+		}
+		return this.#applySteps(located, steps, scope, receiver, false)
 	}
 
 	#kitCall(located: Located, kit: Kit, links: readonly Link[], scope: Scope): LiteralValue | null {
@@ -420,8 +447,14 @@ export class ValueReader {
 	/** `z.<factory>(…)` or `z.iso.<format>(…)`, then `.<method>(…)` links, each applied to a real zod schema. */
 	#zodChain(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
 		const isIso = links[0]?.kind === 'member' && links[0].name === 'iso'
-		const steps: { readonly name: string; readonly call: AstNode }[] = []
-		for (let index = isIso ? 1 : 0; index < links.length; index += 2) {
+		const steps = this.#steps(located, links, isIso ? 1 : 0)
+		return steps === null ? null : this.#applySteps(located, steps, scope, null, isIso)
+	}
+
+	/** The `.<name>(…)` pairs of a chain from `start`. */
+	#steps(located: Located, links: readonly Link[], start: number): readonly SchemaStep[] | null {
+		const steps: SchemaStep[] = []
+		for (let index = start; index < links.length; index += 2) {
 			const member = links[index]
 			const call = links[index + 1]
 			if (member?.kind !== 'member' || member.name === undefined || call?.kind !== 'call') {
@@ -430,20 +463,32 @@ export class ValueReader {
 			}
 			steps.push({ name: member.name, call: call.node })
 		}
-		let schema: z.ZodType | undefined
-		let size: SchemaSize = { nodes: 0, depth: 0 }
-		for (const [position, step] of steps.entries()) {
+		return steps
+	}
+
+	/** Each step applied in turn: the first a factory unless the chain starts from a `receiver` schema. */
+	#applySteps(
+		located: Located,
+		steps: readonly SchemaStep[],
+		scope: Scope,
+		receiver: Extract<LiteralValue, { kind: 'schema' }> | null,
+		isIso: boolean,
+	): LiteralValue | null {
+		let schema: z.ZodType | undefined = receiver?.schema
+		let size: SchemaSize = receiver === null ? { nodes: 0, depth: 0 } : { nodes: receiver.nodes, depth: receiver.depth }
+		for (const step of steps) {
 			const at = { module: located.module, node: step.call }
 			const args = this.#arguments(located.module, step.call, scope, () => null)
 			if (args === null) {
 				return null
 			}
-			size = stepSize(position === 0 ? null : step.name, size, schemaParts(args))
+			const factory = schema === undefined
+			size = stepSize(factory ? null : step.name, size, schemaParts(args))
 			if (size.nodes > CONTRACT_LIMITS.schemaNodes || size.depth > CONTRACT_LIMITS.schemaDepth) {
 				this.#problems.add(at, `the schema expands to ${size.nodes} nodes nested ${size.depth} deep`, schemaLimits())
 				return null
 			}
-			const built = buildSchema(position === 0 ? { factory: step.name, iso: isIso } : { method: step.name, receiver: schema }, args)
+			const built = buildSchema(factory ? { factory: step.name, iso: isIso } : { method: step.name, receiver: schema }, args)
 			if (!built.ok) {
 				this.#problems.add(at, built.message, built.allowed)
 				return null
@@ -477,6 +522,11 @@ export class ValueReader {
 		const imported = this.#graph.index(module).imports.get(name)
 		return imported === undefined ? undefined : BUILDER_IMPORTS[imported.specifier]?.[imported.imported]
 	}
+}
+
+interface SchemaStep {
+	readonly name: string
+	readonly call: AstNode
 }
 
 interface SchemaSize {

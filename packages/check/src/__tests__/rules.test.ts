@@ -155,10 +155,37 @@ const cases: readonly RuleCase[] = [
 		bad: {
 			'src/db/stores/notes.ts':
 				"import { sql } from '@fabrika/db'\n\nexport const all = sql`select * from notes`\nexport const raw = sql.raw('drop table notes')\n",
+			// The driver's tag by its origin, whatever its local name.
+			'src/db/stores/aliases.ts': [
+				"import { sql as q } from 'kysely'",
+				'',
+				'export const all = q`select * from notes`',
+				"export const raw = q.raw('drop table notes')",
+				"const { sql: driver } = await import('bun')",
+				'export const loaded = driver`select 1`',
+				"export const called = driver('notes')",
+				'',
+			].join('\n'),
 		},
-		expected: ['src/db/stores/notes.ts:1:10', 'src/db/stores/notes.ts:3:20', 'src/db/stores/notes.ts:4:20'],
+		expected: [
+			'src/db/stores/aliases.ts:1:10',
+			'src/db/stores/aliases.ts:3:20',
+			'src/db/stores/aliases.ts:4:20',
+			'src/db/stores/aliases.ts:6:23',
+			'src/db/stores/aliases.ts:7:23',
+			'src/db/stores/notes.ts:1:10',
+			'src/db/stores/notes.ts:3:20',
+			'src/db/stores/notes.ts:4:20',
+		],
 		good: {
 			'src/db/stores/notes.ts': "export const sqlName = 'notes'\nexport const list = (store: { list(): string[] }) => store.list()\n",
+			// A query function takes the declared ctx.sql tag as its parameter, whatever the parameter's name.
+			'src/deals/queries.ts': [
+				'type Tag = (row: unknown) => (text: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>',
+				'declare const Row: unknown',
+				'export const pipeline = (sql: Tag, orgId: string) => sql(Row)`select stage from deals where org_id = ${orgId}`',
+				'',
+			].join('\n'),
 			'src/deals/endpoints.ts': [
 				'type Tag = (row: unknown) => (text: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>',
 				'declare const r: { query(options: object): { handle(handler: (args: { ctx: { sql: Tag } }) => unknown): unknown } }',
@@ -602,6 +629,32 @@ describe('every rule has a refused and an allowed fixture', () => {
 			expect(await check(item.good)).toEqual([])
 		})
 	}
+})
+
+describe('literal: a schema method on an imported literal schema', () => {
+	const withStatus = (schemas: string, input: string): Readonly<Record<string, string>> => ({
+		...CLEAN_APPLICATION,
+		'src/schemas/notes.ts': `${CLEAN_SCHEMAS}export const Status = z.enum(['open', 'done'])\n${schemas}`,
+		'fabrika.contract.ts': CLEAN_CONTRACT
+			.replace("import { CreateNote, Note } from './src/schemas/notes'", "import { CreateNote, Filter, Note } from './src/schemas/notes'")
+			.replace('input: z.strictObject({ id: z.uuid() })', `input: ${input}`),
+	})
+
+	test('allowed: .optional(), .nullable() and .array() of a schema const of another module', async () => {
+		const files = withStatus(
+			'export const Filter = z.strictObject({ status: Status.optional(), any: Status.nullable().array() })\n',
+			'z.strictObject({ id: z.uuid(), filter: Filter.optional() })',
+		)
+		expect(await check(files)).toEqual([])
+	})
+
+	test('refused at the offending call only, not again at the import of the const that holds it', async () => {
+		const files = withStatus(
+			'export const Filter = z.strictObject({ status: Status.transform((value) => value) })\n',
+			'z.strictObject({ id: z.uuid(), filter: Filter })',
+		)
+		expect(locations(await check(files), 'literal')).toEqual(['src/schemas/notes.ts:6:48'])
+	})
 })
 
 describe('sql-undeclared', () => {

@@ -27,7 +27,7 @@ import { checkLiteralGraph } from './rules/literal'
 import { checkMigrationNames } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
-import { checkRuntimeNode } from './rules/runtime'
+import { checkRuntimeNode, rawSqlBindings } from './rules/runtime'
 import { checkStructureNode, checkStructureReferences, structurePlace } from './rules/structure'
 import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
@@ -77,7 +77,7 @@ const checkSourceModule = async (
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
-	const context = { report, isGeneratedEntry }
+	const context = { report, isGeneratedEntry, rawSql: rawSqlBindings(module.program) }
 	const trusted = trustedBindings(module.file, module.program, mappings)
 	const place = structurePlace(module.file, isGeneratedEntry)
 	walk(module.program, (node, ancestors) => {

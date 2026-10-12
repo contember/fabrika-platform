@@ -32,7 +32,8 @@ const refused: readonly DirectForm[] = [
 				"import { CreateNote, Note } from './src/schemas/notes'\nimport { Checked, Trimmed } from './src/schemas/extra'\nexport const extra = [Checked, Trimmed]",
 			),
 		},
-		expected: ['fabrika.contract.ts:4:10', 'fabrika.contract.ts:4:19', 'src/schemas/extra.ts:3:24', 'src/schemas/extra.ts:4:24'],
+		// Each refusal stands where the schema is written, not again at the import of its const.
+		expected: ['src/schemas/extra.ts:3:24', 'src/schemas/extra.ts:4:24'],
 	},
 	{
 		name: 'string checks whose order changes what they admit',
@@ -51,10 +52,6 @@ const refused: readonly DirectForm[] = [
 			),
 		},
 		expected: [
-			'fabrika.contract.ts:4:10',
-			'fabrika.contract.ts:4:19',
-			'fabrika.contract.ts:4:31',
-			'fabrika.contract.ts:4:41',
 			'src/schemas/extra.ts:3:25',
 			'src/schemas/extra.ts:4:24',
 			'src/schemas/extra.ts:5:24',
@@ -75,7 +72,7 @@ const refused: readonly DirectForm[] = [
 				+ "export const contract = defineContract({ app: 'notes' }, surface)\n",
 			'src/surface.ts': "export const surface = (c: { health(path: string): unknown }) => ({ health: c.health('/healthz') })\n",
 		},
-		expected: ['fabrika.contract.ts:2:10', 'fabrika.contract.ts:4:58', 'src/surface.ts:1:24'],
+		expected: ['fabrika.contract.ts:4:58', 'src/surface.ts:1:24'],
 	},
 	{
 		name: 'z.object and a schema operation that computes a value',

@@ -178,6 +178,43 @@ export const Note = z.strictObject({
 	})
 })
 
+describe('a schema method on a literal schema const', () => {
+	const SCHEMAS_WITH_STATUS = `${SCHEMAS}export const Status = z.enum(['open', 'done'])\n`
+	const INPUT = 'z.strictObject({ id: z.uuid(), status: Status.optional(), any: Status.nullable().array() })'
+	const withStatus = (input: string): string =>
+		edited("import { Note } from './src/schemas'", "import { Note, Status } from './src/schemas'", edited('z.strictObject({ id: z.uuid() })', input))
+
+	test('reads as zod applies it at runtime: .optional(), .nullable() and .array() of an imported schema', () => {
+		const Status = z.enum(['open', 'done'])
+		const Note = z.strictObject({ id: z.uuid(), title: z.string() })
+		const runtime = defineContract({
+			app: 'notes',
+			dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+			actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes' },
+			roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+		}, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				get: c.query({
+					input: z.strictObject({ id: z.uuid(), status: Status.optional(), any: Status.nullable().array() }),
+					output: Note,
+					access: { action: 'notes.read', on: 'note', from: 'id' },
+				}),
+			}),
+			health: c.health('/healthz'),
+		}))
+		expect(readContractSource(application(withStatus(INPUT), SCHEMAS_WITH_STATUS), {})).toEqual(compileContract(runtime, {}))
+	})
+
+	test('a method outside the subset is refused at its call, and a method on a value that is no schema at the call', () => {
+		expect(refusal(application(withStatus('z.strictObject({ id: z.uuid(), status: Status.transform((value) => value) })'), SCHEMAS_WITH_STATUS)))
+			.toEqual(["fabrika.contract.ts:12:64 literal '.transform()' makes the schema unserializable"])
+		const limits = `${SCHEMAS}export const Status = { max: 3 }\n`
+		expect(refusal(application(withStatus('z.strictObject({ id: z.uuid(), status: Status.optional() })'), limits))).toEqual([
+			"fabrika.contract.ts:12:64 contract 'Status' is not a schema, so it takes no .optional()",
+		])
+	})
+})
+
 describe('a contract the reader reads but that does not compile fails with the runtime problems', () => {
 	test('an option a builder sets itself, a typo in an action, and an option that changes a format', () => {
 		const contract = edited(
