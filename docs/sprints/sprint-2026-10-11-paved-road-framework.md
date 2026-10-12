@@ -811,3 +811,13 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU11 review round 2.** `TRIAL.md`: every group deletes its removed endpoints' `seeds` and `members` entries (C's
   `members['api.tasks.create']` made `test-scaffold` and the checker fail with `endpoint-fixture`), and E keeps
   `src/orgs/logic.ts`, which the deals and tasks slices import. Checked on WU22 for C (139 tests) and E (143).
+- **WU11 part 3 — the fresh-agent trial (integrator).** Six fresh agents saw only the skill and a copy of
+  `examples/crm` without one group: Opus on B, C, E; GPT on A, B, D. Against the cap of 3 tsc + checker runs in total:
+  gpt-a 3 (1 failing), gpt-b 3 (1), opus-c 2 (0) pass; opus-b 4 (0), gpt-d 6 (0), opus-e 7 (4) do not. A judge found
+  no hand-edited generated file, no new role, grant, action or deviation, and the reference tests pass on five; gpt-b
+  left out the owner hand-over, because no endpoint below the org could check membership (→ WU22, now merged). The
+  cap fails on reruns after test edits (opus-b, gpt-d) and on opus-e probing types through tsc for "the caller's orgs",
+  which the skill does not teach. Skill gaps for WU10b: the `over` dimension (four trials chose `over: 'org'`, which
+  `classifyAccess` reports as a false widening), `ctx.within.values` and the all-orgs case, `aggregate`'s `sum` and the
+  safe-integer limit, a job re-reading its row under `getForUpdate`, the test kit's origin (`https://crm.test`), an
+  undeclared route answering 403, the formatter in the loop, a test caller with a global grant or a disabled member.
