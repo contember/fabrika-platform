@@ -68,6 +68,11 @@ them.
   what CIDR to hand to `--trusted-proxies`. **Only (a) AND (b)-drops together make the
   range safe to configure**; (a) alone with a preserved prefix means a caller can
   still choose its own bucket, which is the case the limit must not be built on.
+  A form's `rate.perClient` bucket keys on the same value: `clientBucket`
+  (`packages/app/src/implement/form-admission.ts:87`) reads only the proxy's
+  `X-Fabrika-Client-Ip`, which is `{http.vars.client_ip}`. On Zerops every visitor
+  therefore shares one per-client bucket today, and the form's `rate.perForm`
+  ceiling is what bounds an intake. The answer settles both limiters.
 - `GET /service-stack/{id}/app-version` list order. The client picks max `sequence`
   rather than trusting order; confirm `sequence` really is monotonic.
 
