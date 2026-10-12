@@ -5,8 +5,8 @@ framework, the installation services' service contracts, typed RPC, structural e
 the runtime adapters, and a typed browser client.
 
 [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md) makes the contract the
-target: an application declares `fabrika.contract.ts` and serves it through
-`implement` (`@fabrika/app/implement`), booted by the generated entrypoint that
+target: an application declares `fabrika.contract.ts` with the staged kit and serves it through
+`serve` (`@fabrika/app/implement`), booted by the generated entrypoint that
 `fabrika app build` writes (`@fabrika/app/build`). The installation's own services
 (IAM, Control, Operations) declare service contracts and serve them with `serveService`
 (`@fabrika/app/service`). The runtime adapters (`@fabrika/app/bun`, `@fabrika/app/cloudflare`) serve a
@@ -26,7 +26,9 @@ bun test src/__tests__/kit-scale.test.ts        # 200 kit endpoints in 10 group 
 bun test src/__tests__/orm-dispatch.test.ts     # ctx.db through boot: the invocation's transaction, handle binding (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/orm-types.test.ts        # the data mistakes of a kit handler, compiled by tsc
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
-bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/scoped-database.test.ts  # a handler tree over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own target, seeds, link holder, runJob (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
@@ -86,7 +88,7 @@ src/
     snapshot-source.ts  snapshotSource: the vendored snapshot module fabrika connect writes
     schema-from-shape.ts  schemaFromShape and declaredPath: what a connector validates with and reports
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
-    implement.ts      implement, ContractDatabase, ContractImplementation
+    implement.ts      ContractImplementation; implement, the framework tests' handler tree (not exported)
     serve.ts          serve(contract, { database, deps }) and defineDeps: serving a kit contract
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
     invocation.ts     siteHandler (serve's tree leaf), the declaration's parse, Invocation, ctx.db by access form
@@ -103,7 +105,7 @@ src/
     environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
     connect.ts        Connector, wireImports, connectContext (ctx.connect per request), connectVariables
     bounded.ts        readBoundedBytes: a body under a byte budget and a deadline
-  files/              c.files: served by implement, never imported by an application
+  files/              c.files: served by boot, never imported by an application
     collections.ts    the upload, download and remove endpoints, the file locator, the sweep
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
@@ -120,9 +122,9 @@ src/
 - The proxy's endpoint decision decides whether a request reaches the app; the proxy is
   the only enforcement point. `.require()` and the contract's requirement check are
   **authorization** in the vocabulary of `docs/reference/overview.md`; the same-origin
-  check of `implement` is **admission**. Neither is the enforcement decision. Never add
+  check of `boot` is **admission**. Neither is the enforcement decision. Never add
   one here.
-- `implement` and `serveService` answer 400 for a non-canonical raw path
+- `boot` and `serveService` answer 400 for a non-canonical raw path
   (`isCanonicalPath` from `@fabrika/auth-core`) and select only through `planEndpoint`,
   the planner the proxy selects with. A trailing `/` is significant, so `/a/` and `/a`
   are different paths. Never add a second router or normalize a path.
@@ -135,7 +137,7 @@ src/
 - The `FetchService` owns request behavior. Runtime adapters only supply lifecycle
   capabilities and must not fork routing or RPC semantics.
 - Applications get no middleware, raw routes, `authenticate` or custom server.
-  `implement` has no slot for them, and `@fabrika/app/service` is for the installation's
+  `serve` has no slot for them, and `@fabrika/app/service` is for the installation's
   own services only. `serveService` is never a way to serve a contract.
 - The package root is runtime-neutral. Provider lifecycle APIs are exported only
   from `@fabrika/app/cloudflare` and `@fabrika/app/bun`. `@fabrika/app/implement`
@@ -223,7 +225,7 @@ src/
   `IamMembership`. The framework writes no grant and mints no credential.
 - A webhook bound to a dimension generates `POST /api/webhooks.<name>.bind` and `.unbind`
   (`WEBHOOKS_PREFIX`), for a holder of that dimension's `members.manage`; their shapes
-  (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `implement` parses with
+  (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `boot` parses with
   (`webhook.ts`) must describe each other (`membership-shapes.test.ts`).
 
 ## The staged kit
@@ -290,6 +292,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   `siteHandler` leaf or a plain function `implement` bound alike: `ctx.links` only for the mount it `issues`,
   `ctx.connect` only for its `connect`. Only a `siteHandler` leaf gets `ctx.db`. A `defineContract` contract keeps its
   reach by its imports' `usedBy` and its link mounts (`kit-reach.test.ts`).
+- **A kit without tables** is `defineApp(vocabulary)` (`NoTablesIndex`; on Cloudflare, which has no data layer):
+  `serve(contract, { database: null })`, and only then `null` (`isTableless`, `handled.ts`); its procedures are served
+  without `ctx.db` (`servedWithoutData` in `boot.ts`), and a site that declares `sql` does not boot.
+- **`implement` is not on the application surface.** `@fabrika/app/implement` exports `serve`; the mirrored handler
+  tree (`implement/implement.ts`) is the framework's own test entry, imported by relative path. Never re-export it.
 - **`serve(contract, { database, deps })` adapts the kit to `boot`**: it walks the contract and builds the handler tree
   `implement` would (RPC and link mounts by path, webhooks by name, `jobs.<name>`, `exports.<name>.<path>`); each
   entry is a `siteHandler(handler, declared)` leaf, its handler run with the boot's dependencies. It refuses (`ContractError`) every endpoint,
@@ -376,7 +383,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   resolution still carries the chain that was checked. Never hand out the stored
   chain itself (`capability-chain.test.ts`).
 - **`@fabrika/db` is bound by `boot`, once.** An application passes `scoped(tables)`
-  as `implement({ database })`. `boot` binds only an object `scoped` created
+  as `serve(contract, { database })`. `boot` binds only an object `scoped` created
   (`@fabrika/db/framework`'s `bindScopedDatabase`), with the adapter's connection and
   the runtime's authority, and keeps the locator the bind answers for `on` and `in`. The
   application never receives the connection or the locator; a copy or a wrapper of
@@ -465,8 +472,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A webhook handler is at-least-once.** The key is recorded before the handler runs, outside any transaction of the
   handler, and forgotten when it throws, so GitHub's redelivery runs a failed delivery again. The handler gets the key
   as `ctx.delivery.key`; idempotent writes key on it. A staged-kit delivery's writes are one invocation transaction,
-  rolled back before the key is forgotten, so the redelivery starts from nothing; an `implement` handler's stores own
-  their transactions. Never move the record into the handler's transaction: a concurrent copy of the delivery would
+  rolled back before the key is forgotten, so the redelivery starts from nothing (a framework test's `implement` tree
+  has no invocation transaction). Never move the record into the handler's transaction: a concurrent copy of the delivery would
   wait on it, and a failure would roll the record back with the work.
 - **A staged-kit site runs in its invocation's transaction** (`invocation.ts`). `serve` puts each site
   into the handler tree as `siteHandler(handler, declared)`; `boot` parses the leaf's declaration (a query's `'write'`, a
@@ -521,7 +528,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   (`ConnectContext`) and at runtime (`wireImports`). Its methods are built per request
   (`connectContext`) and bound to that `RequestFrame`: one kept past its request, called from another
   request, from an export's request or from an endpoint the import does not name answers `denied` and
-  sends nothing. `implement({ connect })` takes the vendored snapshot
+  sends nothing. The kit's imports (`defineApp(vocabulary, tables, { imports })`) carry the vendored snapshot
   of each import; `boot` refuses one whose app, export or version differ, whose digest is not the
   import's, whose schemas no longer describe to its own digest (edited), or that lacks an imported
   procedure, and an import without `FABRIKA_CONNECT_<IMPORT>_URL` (an http(s) origin, no credentials)
@@ -629,12 +636,17 @@ vocabulary (`packages/db/CLAUDE.md`).
   `policyIsolationKit` defines a probe contract over the application's vocabulary whose
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
-  application. `endpointAccessKit` boots the application's own implementation through
+  application. `endpointAccessKit` boots the application's own `serve(…)` through
   `testKit`, once, because the application's layer binds once per process, with in-memory object
-  storage: `kit.file` seeds one file per scope through the real upload endpoint. A subpath of its
+  storage: `kit.file` seeds one file per scope through the real upload endpoint. Its cases are `denied` (exact 404/403),
+  `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
+  across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
+  holder, reaches its own object); each takes the author's seed, the state `seedWorlds` writes into both rows. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
   kit does not. Its API is what `fabrika db test-scaffold` writes against: a change
-  regenerates `packages/cli`'s fixture tests.
+  regenerates `packages/cli`'s fixture tests, `examples/zerops-app`'s and `packages/check`'s `architecture-app`.
+- **`testKit(…).runJob(name)` runs a cron job once** through `boot`'s own job runner (`application.jobs.run`): its
+  lease, its key's signed actions, its fenced writes. A `link` test caller binds its key with `{ link: { mount, chain } }`.
 - **The generated tests catch mistakes; the data layer is the enforcement.** They catch what an
   application's author, usually an agent, gets wrong. A deliberately hostile author runs in the
   same process and can always subvert them. Never rely on them for a guarantee `@fabrika/db` or

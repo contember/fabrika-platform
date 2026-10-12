@@ -51,6 +51,24 @@ export interface KitTypes {
 	readonly imports: KitImports
 }
 
+/**
+ * The index of a kit without tables, `defineApp(vocabulary)`: an application that holds no data of its own (on
+ * Cloudflare, which has no data layer yet). Its handlers have no `ctx.db` and no `ctx.sql`.
+ */
+export interface NoTablesIndex {
+	readonly '~noTables': true
+	readonly tables: Record<never, never>
+	readonly owner: Record<never, never>
+	readonly children: Record<never, never>
+	readonly listed: Record<never, never>
+	readonly listedChildren: Record<never, never>
+	readonly references: never
+}
+
+/** `ctx.db` of a site: its handles, or, in a kit without tables, a message that there are none. */
+type DataOf<Ix, Handles> = Ix extends NoTablesIndex ? Unavailable<'this application declares no tables: defineApp(vocabulary, tables) gives ctx.db'>
+	: Handles
+
 export type ImportOf<K extends KitTypes> = keyof K['imports'] & string
 
 /** `sql: 'read' | 'write'`: `ctx.sql` exists only on a site that declares it; `'read'` runs read-only. */
@@ -193,7 +211,7 @@ export type EndpointContext<
 	& LinksContext<Acc, Of<D, 'issues'>>
 	& ConnectContext<K, Of<D, 'connect'>>
 	& SqlContext<Of<D, 'sql'>>
-	& { readonly db: EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>> }
+	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
 
 /** A link procedure acts on the one object its key is bound to. */
 export type LinkContext<
@@ -206,14 +224,16 @@ export type LinkContext<
 	& RequestContext<PrincipalOf<'link'>>
 	& { readonly target: Ref<LD, A> }
 	& SqlContext<Of<D, 'sql'>>
-	& { readonly db: EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>> }
+	& {
+		readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>>>
+	}
 
 /** An export procedure runs read-only, for a consumer application: its capability and data, nothing that writes. */
 export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', unknown, never, never>> =
 	& RequestContext<ServicePrincipal | AppPrincipal>
 	& CapabilityContext<Acc>
 	& SqlContext<Of<D, 'sql'>>
-	& { readonly db: EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>> }
+	& { readonly db: DataOf<K['index'], EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>>> }
 
 /**
  * A capability a job or webhook minted or received, of one of its declared actions `Acts`, bound to the same handles

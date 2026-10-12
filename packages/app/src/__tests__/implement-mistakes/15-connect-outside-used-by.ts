@@ -1,4 +1,4 @@
-import { implement } from '@fabrika/app/implement'
+import { implement } from '../../implement/implement'
 import { contract } from '../fixtures/connect-shop/fabrika.contract'
 import { catalogProductsV1 } from '../fixtures/connect-shop/fabrika/connect/catalog.products.v1'
 

@@ -107,7 +107,7 @@ describe('fabrika connect add', () => {
 		const { out, notes } = await run(root, 'add', target, fake.fetch)
 		expect(out).toBe(`${file}\n`)
 		expect(readFileSync(join(root, file), 'utf8')).toBe(snapshotSource(served))
-		expect(notes).toContain("import { catalogProductsV1Digest } from './fabrika/connect/catalog.products.v1'")
+		expect(notes).toContain("import { catalogProductsV1 } from '../fabrika/connect/catalog.products.v1'")
 		const [request] = fake.requests
 		expect(request?.url).toBe(`${ORIGIN}/api/rpc`)
 		expect(request?.method).toBe('POST')

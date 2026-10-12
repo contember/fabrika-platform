@@ -13,6 +13,7 @@ import type { Ref } from '../capability'
 import { Database } from '../database'
 import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
 import { defineTables } from '../policy'
+import { defineStore } from '../store'
 import type { TypedColumnList } from '../vocabulary-tables'
 import { TestAuthority } from './fixtures/authority'
 import { call } from './fixtures/harness'
@@ -390,7 +391,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 			'tenant_items: tenant_id is both the tenant containment column and the version',
 		)
 		const honest = connected(define(extra), { database, capabilities: alice }).database
-		const top = honest.defineStore('tops', (t) => ({ create: (ref: Ref<'top', 'write'>) => t.insert(ref, {}) }))
+		const top = defineStore(honest, 'tops', (t) => ({ create: (ref: Ref<'top', 'write'>) => t.insert(ref, {}) }))
 		expect(await top.create(alice.ref('top', 'write', 'authorized-top'))).toEqual({ id: 'authorized-top' })
 		const [stored] = await admin((sql) => sql.unsafe(`select id, created_by from ${schema}.tops`))
 		expect(stored).toEqual({ id: 'authorized-top', created_by: 'user:alice' })
@@ -398,7 +399,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 
 	test('with Set.has, Array.includes and Object.prototype.hasOwnProperty patched, a scope write and a restricted read are still refused', async () => {
 		const id = await createNote('w1', 'pinned', null)
-		const raw = stores.defineStore('notes', (t) => ({ t })).t
+		const raw = defineStore(stores.database, 'notes', (t) => ({ t })).t
 		const patches = { setHas: true, includes: true, hasOwnProperty: true } as const
 		const move = () => call(raw, 'update', note('notes.write', id, 'w1'), { workspace_id: 'w2', organization_id: 'o2' }, { expectVersion: 1 })
 		const moved = await patchedChecks(patches, () => failure(move))
@@ -413,7 +414,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 
 	test('a caller array with its own map cannot select, filter or aggregate a restricted column', async () => {
 		const { id } = await stores.notes.create(into('w1'), { title: 'guarded', body: null, internal: 'only for admins' })
-		const raw = stores.defineStore('notes', (t) => ({ t })).t
+		const raw = defineStore(stores.database, 'notes', (t) => ({ t })).t
 		const own = <T>(items: T[]): T[] => Object.defineProperty(items, 'map', { value: () => ['internal'] })
 		const columns: 'title'[] = own(['title'])
 		await expect(raw.select(read(['w1']), (q) => q.columns(columns))).rejects.toBeInstanceOf(QueryRefusedError)
@@ -426,7 +427,8 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 	})
 
 	test('a version column that is not INTEGER is refused at the first mutation, and nothing is written', async () => {
-		const ledger = connected(defineTables(extraVocabulary, extraColumns)(extra), { database, capabilities: alice }).database.defineStore(
+		const ledger = defineStore(
+			connected(defineTables(extraVocabulary, extraColumns)(extra), { database, capabilities: alice }).database,
 			'ledgers',
 			(t) => ({
 				open: (ref: Ref<'ledger', 'write'>) => t.insert(ref, {}),

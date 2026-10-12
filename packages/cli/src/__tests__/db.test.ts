@@ -138,14 +138,14 @@ describe('fabrika db test-scaffold', () => {
 
 	test('an endpoint change makes the endpoint access test stale', async () => {
 		const root = isolationApp()
-		const contract = join(root, 'fabrika.contract.ts')
-		writeFileSync(
-			contract,
-			readFileSync(contract, 'utf8').replace(
-				"access: { action: 'notes.read', over: 'workspace' } }),\n\t\t\tcreate",
-				'access: { member: true } }),\n\t\t\tcreate',
-			),
+		const endpoints = join(root, 'src', 'notes', 'endpoints.ts')
+		const source = readFileSync(endpoints, 'utf8')
+		const changed = source.replace(
+			"output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })",
+			"output: Note, access: { action: 'notes.write', on: 'note', from: 'id' } })",
 		)
+		expect(changed).not.toBe(source)
+		writeFileSync(endpoints, changed)
 		expect(withoutAllowed(await findingsOf(root))).toEqual([
 			`${ENDPOINTS}:1:1 generated-test-hash this file is not the generated test the scaffold writes here`,
 		])
@@ -166,10 +166,10 @@ describe('fabrika db test-scaffold', () => {
 
 	test('an input the scaffold cannot sample needs a fixture; with one, the fixture is the case input', async () => {
 		const root = isolationApp()
-		const contract = join(root, 'fabrika.contract.ts')
+		const schemas = join(root, 'src', 'schemas.ts')
 		writeFileSync(
-			contract,
-			readFileSync(contract, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
+			schemas,
+			readFileSync(schemas, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
 		)
 		expect(await failure(run(root, 'test-scaffold'))).toContain(
 			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture api.notes.rename: the scaffold cannot write an input its schema admits',
@@ -320,42 +320,53 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		writeFileSync(bunfig, '[test]\npreload = ["./skip-everything.ts"]\nroot = "nowhere"\n')
 		try {
 			const output = await run(ISOLATION_APP, 'test-isolation', [], { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
-			expect(output).toBe('58 generated cases passed\n')
+			expect(output).toBe('59 generated cases passed\n')
 		} finally {
 			rmSync(bunfig, { force: true })
 			rmSync(preload, { force: true })
 		}
 	})
 
-	/** Runs `work` with the fixture's `src/app.ts` replaced by `edit` of it, then puts the original back. */
-	const withApplication = async (edit: (source: string) => string, work: () => Promise<void>): Promise<void> => {
-		const path = join(ISOLATION_APP, 'src', 'app.ts')
-		const original = readFileSync(path, 'utf8')
-		writeFileSync(path, edit(original))
+	/**
+	 * Runs `work` with the fixture's `src/app.ts` replaced by `edit` of it, and, when `leaky`, its note handler serving the
+	 * first caller's note to everyone after it (the cache the endpoint tests must catch); then puts the originals back.
+	 * The cache is a module only the handler imports, since the shell module holds literals only.
+	 */
+	const withApplication = async (edit: (source: string) => string, work: () => Promise<void>, leaky = true): Promise<void> => {
+		const app = join(ISOLATION_APP, 'src', 'app.ts')
+		const endpoints = join(ISOLATION_APP, 'src', 'notes', 'endpoints.ts')
+		const memo = join(ISOLATION_APP, 'src', 'notes', 'memo.ts')
+		const originals = { app: readFileSync(app, 'utf8'), endpoints: readFileSync(endpoints, 'utf8') }
+		writeFileSync(app, edit(originals.app))
+		if (leaky) {
+			writeFileSync(
+				memo,
+				'let cached: { id: string; title: string } | undefined\n\nexport const remembered = (note: { id: string; title: string }) => (cached ??= note)\n',
+			)
+			writeFileSync(
+				endpoints,
+				`import { remembered } from './memo'\n${
+					originals.endpoints.replace('const note = await ctx.db.target.get()', 'const note = remembered(await ctx.db.target.get())')
+				}`,
+			)
+		}
 		try {
 			await work()
 		} finally {
-			writeFileSync(path, original)
+			writeFileSync(app, originals.app)
+			writeFileSync(endpoints, originals.endpoints)
+			rmSync(memo, { force: true })
 		}
 	}
 	const testIsolation = (argv: readonly string[] = []) =>
 		run(ISOLATION_APP, 'test-isolation', argv, { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
-	/** The note handler serves the first caller's note to everyone after it: the cache the endpoint tests must catch. */
-	const leakyGet = (source: string): string =>
-		source.replace(
-			'const note = await notes.get(ctx.target)',
-			'const note = (cached ??= await notes.get(ctx.target))',
-		).replace('export default implement(', 'let cached: { id: string; title: string } | undefined\n\nexport default implement(')
-
 	test('a mock of bun:test in application code neither silences the generated cases nor passes the checker', async () => {
 		const mocked = (source: string): string =>
-			`import { mock } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: () => {}, describe: (_: string, body: () => void) => body(), expect: () => ({}), afterAll: () => {} }))\n${
-				leakyGet(source)
-			}`
+			`import { mock } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: () => {}, describe: (_: string, body: () => void) => body(), expect: () => ({}), afterAll: () => {} }))\n${source}`
 		await withApplication(mocked, async () => {
 			expect((await checkApplication({ root: ISOLATION_APP })).map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/app.ts mock-module')
 			const failed = await failure(testIsolation())
-			expect(failed).toContain('db test-isolation: 57 of 58 generated cases passed')
+			expect(failed).toContain('db test-isolation: 58 of 59 generated cases passed')
 			expect(failed).toContain(`${ENDPOINTS}: api.notes.get: the answer to one scope holds nothing of the scope answered before it (failed)`)
 		})
 	})
@@ -363,9 +374,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	test('the startup run prints no output of the tests, so a credential a dependency writes stays out of the log', async () => {
 		const password = decodeURIComponent(new URL(url).password)
 		const diagnostic = (source: string): string =>
-			`${
-				leakyGet(source)
-			}\nconsole.error(\`DIAGNOSTIC connect failed for \${decodeURIComponent(new URL(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '').password)}\`)\n`
+			`${source}\nconsole.error(\`DIAGNOSTIC connect failed for \${decodeURIComponent(new URL(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '').password)}\`)\n`
 		await withApplication(diagnostic, async () => {
 			const failed = await failure(testIsolation())
 			expect(failed).not.toContain('DIAGNOSTIC')
@@ -383,8 +392,8 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 				JSON.stringify(seen)
 			}, JSON.stringify({ environ: readEnvironment('/proc/self/environ', 'latin1'), url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '' }))\n`
 		await withApplication(recording, async () => {
-			expect(await testIsolation()).toBe('58 generated cases passed\n')
-		})
+			expect(await testIsolation()).toBe('59 generated cases passed\n')
+		}, false)
 		const recorded = z.object({ environ: z.string(), url: z.string() }).parse(JSON.parse(readFileSync(seen, 'utf8')))
 		const password = decodeURIComponent(new URL(url).password)
 		expect(recorded.environ).not.toContain(url)
@@ -399,18 +408,18 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	})
 
 	test('a fixture the endpoint schema refuses fails its cases', async () => {
-		const files = ['fabrika.contract.ts', ENDPOINTS, 'src/__tests__/endpoint-access.fixtures.ts'].map((path) => join(ISOLATION_APP, path))
+		const files = ['src/schemas.ts', ENDPOINTS, 'src/__tests__/endpoint-access.fixtures.ts'].map((path) => join(ISOLATION_APP, path))
 		const originals = files.map((path) => (existsSync(path) ? readFileSync(path, 'utf8') : null))
 		try {
-			const contract = files[0] ?? ''
+			const schemas = files[0] ?? ''
 			writeFileSync(
-				contract,
-				readFileSync(contract, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
+				schemas,
+				readFileSync(schemas, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
 			)
 			writeFileSync(files[2] ?? '', "export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'not a T number' } }\n")
 			await run(ISOLATION_APP, 'test-scaffold')
 			const failed = await failure(testIsolation())
-			expect(failed).toContain('db test-isolation: 56 of 58 generated cases passed')
+			expect(failed).toContain('db test-isolation: 56 of 59 generated cases passed')
 			expect(failed).toContain(`${ENDPOINTS}: api.notes.rename: the note of another scope is 404 (failed)`)
 		} finally {
 			files.forEach((path, index) => {
@@ -422,8 +431,8 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	})
 
 	test('--verbose prints the test output locally', async () => {
-		expect(await testIsolation(['--verbose'])).toContain('58 generated cases passed')
-		expect(await testIsolation(['--verbose'])).toContain('58 pass')
+		expect(await testIsolation(['--verbose'])).toContain('59 generated cases passed')
+		expect(await testIsolation(['--verbose'])).toContain('59 pass')
 	})
 
 	test('the isolation fixture’s schema module is what codegen writes for its migrations', async () => {

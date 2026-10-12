@@ -34,6 +34,7 @@ import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
+import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import { resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
 import { endpointProxy } from './proxy'
 
@@ -84,7 +85,15 @@ export interface TestKit<C extends AnyContract> {
 	browser(caller?: TestCaller): RpcFetch
 	/** The test IAM as the proxy calls it: it mints for the credentials `testCaller` issued and serves their key set. */
 	readonly iam: IamGateway
+	/**
+	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
+	 * its key, its writes fenced. Needs the application's data layer on Postgres.
+	 */
+	runJob(name: JobName<C>, options?: JobRunOptions): Promise<JobRunResult>
 }
+
+/** The names of the contract's cron jobs. */
+export type JobName<C> = C extends { readonly surface: { readonly jobs: infer J } } ? keyof J & string : never
 
 const defaultAssets: SpaAssets = {
 	serve: () => Promise.resolve(new Response('<!doctype html><title></title>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })),
@@ -207,11 +216,17 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		if (consumer === '') {
 			throw new Error("an app caller names the consuming application: testCaller(grants, { kind: 'app', app: '<id>' })")
 		}
+		if (callerOptions.link !== undefined && kind !== 'link') {
+			throw new Error("only a link holder's key is bound to an object: testCaller(grants, { kind: 'link', link: { mount, chain } })")
+		}
 		const caller: TestCaller = Object.freeze({
 			kind,
 			app: consumer,
 			id: callerOptions.id ?? `${kind}-${issued}`,
 			label: kind === 'link' ? null : (callerOptions.label ?? `${kind}-${issued}@${name}.test`),
+			link: callerOptions.link === undefined
+				? null
+				: Object.freeze({ mount: callerOptions.link.mount, chain: Object.freeze(callerOptions.link.chain.map((scope) => Object.freeze({ ...scope }))) }),
 			perms: Object.freeze(resolveGrants(app.contract, grants)),
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,
@@ -233,6 +248,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 			subject: caller.id,
 			...(caller.kind === 'link' ? {} : { type: caller.kind === 'human' ? 'user' : caller.kind === 'app' ? 'app' : 'service' }),
 			...(caller.app === null ? {} : { workload: caller.app }),
+			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
 			permissions: [...caller.perms],
 			issuedAt: now,
@@ -312,5 +328,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		}
 	}
 
-	return Object.freeze({ origin, appId, artifact, testCaller, fetch: kitFetch, browser, iam })
+	const runJob = (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => application.jobs.run(name, runOptions)
+
+	return Object.freeze({ origin, appId, artifact, testCaller, fetch: kitFetch, browser, iam, runJob })
 }

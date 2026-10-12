@@ -3,12 +3,13 @@
 
 import { HttpError } from '@fabrika/app'
 import { compileContract, defineContract } from '@fabrika/app/contract'
-import { boot, implement, type Ref } from '@fabrika/app/implement'
+import { boot, type Ref } from '@fabrika/app/implement'
 import { ENDPOINT_HEADER, requirementDigest } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { createCapabilityIssuer } from '../implement/capability'
+import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
 import {

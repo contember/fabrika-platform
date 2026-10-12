@@ -22,7 +22,7 @@ Usage:
 Run from the application root. Both read the export the owner's environment <env> approved for the consumer from
 Control (${URL_VARIABLE} or --url), with a machine key that holds deploy.read on the consumer, read from
 ${KEY_VARIABLE} in the environment only. The origin is https; plain http only for localhost. \`add\` refuses an
-existing snapshot and prints what to add to fabrika.contract.ts and to implement(); \`pull\` refuses a missing one
+existing snapshot and prints what to add to src/app-kit.ts and to the endpoints that call it; \`pull\` refuses a missing one
 and says whether the digest changed. The platform writes each import's address and key when it deploys the consumer.
 `
 
@@ -178,10 +178,10 @@ function contractHint(description: ExportDescription): string[] {
 	const module = `./${names.file.replace(/\.ts$/, '')}`
 	const procedures = Object.keys(description.procedures).map((path) => `'${path}'`).join(', ')
 	return [
-		`Add to fabrika.contract.ts:`,
-		`  import { ${names.digest} } from '${module}'`,
-		`  imports: { <name>: { app: '${description.app}', export: '${description.export}', version: ${description.version}, digest: ${names.digest}, procedures: [${procedures}], usedBy: [<endpoint ids>] } }`,
-		`and to implement() in src/app.ts: connect: { <name>: ${names.snapshot} }, imported from '.${module}'`,
+		`Add to defineApp in src/app-kit.ts:`,
+		`  import { ${names.snapshot} } from '.${module}'`,
+		`  defineApp(vocabulary, tables, { imports: { <name>: { snapshot: ${names.snapshot}, procedures: [${procedures}] } } })`,
+		`and to each endpoint that calls it: connect: ['<name>'], then ctx.connect.<name>.<procedure>(input) in its handler.`,
 		`The platform writes the owner's address and the key when it deploys this application; nothing is set by hand.`,
 	]
 }

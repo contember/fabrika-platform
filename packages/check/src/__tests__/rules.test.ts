@@ -723,7 +723,7 @@ describe('generated tests', () => {
 		for (
 			const line of [
 				"expect(await kit.denied('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 404 })",
-				"expect(await kit.leaked('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 200, leaked: [] })",
+				"expect(await kit.leaked('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ answered: true, leaked: [] })",
 				"expect(await kit.file('attachments', 'upload', 'other')).toEqual({ status: 404 })",
 				"expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })",
 				"expect(await kit.file('attachments', 'remove', 'reader')).toEqual({ status: 403 })",

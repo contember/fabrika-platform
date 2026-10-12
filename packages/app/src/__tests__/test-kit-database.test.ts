@@ -3,11 +3,12 @@
 // FABRIKA_TEST_POSTGRES_URL is unset; the file gets its own application schema `app_<id>`.
 
 import { createClient, RpcError } from '@fabrika/app/client'
-import { implement } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { applicationSchema, Database, type Ref, scoped, type Within } from '@fabrika/db'
+import { defineStore } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { implement } from '../implement/implement'
 import { contract } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { tables } from './fixtures/scoped-notes/src/db/tables'
@@ -28,7 +29,7 @@ const schema = applicationSchema(`kit-${Bun.randomUUIDv7().replaceAll('-', '').s
  */
 function kitNotesApp() {
 	const layer = scoped(tables)
-	const notes = layer.defineStore('notes', (t) => ({
+	const notes = defineStore(layer, 'notes', (t) => ({
 		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
 		get: (note: Ref<'note', 'notes.read'>) => t.get(note),
 		create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),

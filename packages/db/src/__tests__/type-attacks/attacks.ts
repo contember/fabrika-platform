@@ -4,7 +4,7 @@
 import { type ColumnType, type Generated, sql } from 'kysely'
 import type { Ref, Within } from '../../capability'
 import { defineTables } from '../../policy'
-import { scoped } from '../../store'
+import { defineChildStore, defineStore, scoped } from '../../store'
 import type { TypedColumnList } from '../../vocabulary-tables'
 import { columns } from '../fixtures/schema'
 import { tables, vocabulary } from '../fixtures/tables'
@@ -19,11 +19,10 @@ declare const workspaceAdmin: Ref<'workspace', 'workspaces.admin'>
 declare const organizationCreate: Ref<'organization', 'organizations.create'>
 
 const database = scoped(tables)
-const { defineStore, defineChildStore } = database
-const notes = defineStore('notes', (t) => t)
-const comments = defineChildStore('note_comments', (t) => t)
-const workspaces = defineStore('workspaces', (t) => t)
-const organizations = defineStore('organizations', (t) => t)
+const notes = defineStore(database, 'notes', (t) => t)
+const comments = defineChildStore(database, 'note_comments', (t) => t)
+const workspaces = defineStore(database, 'workspaces', (t) => t)
+const organizations = defineStore(database, 'organizations', (t) => t)
 
 // attack: the locator from the application-facing object, which reads existence without a capability
 database.locate('note', 'n2')
@@ -137,16 +136,16 @@ comments.move(noteRead, workspaceWrite)
 comments.remove(workspaceWrite, 'c1')
 
 // attack: a child table through defineStore
-defineStore('note_comments', (t) => t)
+defineStore(database, 'note_comments', (t) => t)
 
 // attack: a dimension table through defineChildStore
-defineChildStore('notes', (t) => t)
+defineChildStore(database, 'notes', (t) => t)
 
 // attack: a reference table has no store
-defineStore('countries', (t) => t)
+defineStore(database, 'countries', (t) => t)
 
 // attack: secrets has no container, so a workspace Within cannot list it
-defineStore('secrets', (t) => t.select(read, (q) => q))
+defineStore(database, 'secrets', (t) => t.select(read, (q) => q))
 
 // attack: a table without a policy
 defineTables(vocabulary, columns)({ workspaces: { scope: { dimension: 'workspace', key: 'id' }, actions: { read: 'notes.read' } } })

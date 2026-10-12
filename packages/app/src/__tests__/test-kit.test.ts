@@ -4,11 +4,11 @@
 
 import { createClient, RpcError } from '@fabrika/app/client'
 import { defineContract } from '@fabrika/app/contract'
-import { implement } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
 import type { NoteRow } from './fixtures/implement/stores'

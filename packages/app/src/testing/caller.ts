@@ -26,12 +26,24 @@ export interface TestCallerOptions {
 	readonly label?: string
 	/** The consuming application's id, for an `app` caller. */
 	readonly app?: string
+	/**
+	 * What a `link` caller's key is bound to: the link mount, and the object first, then each value containing it. A link
+	 * caller without one holds a key bound to nothing, which no procedure admits.
+	 */
+	readonly link?: TestLink
+}
+
+export interface TestLink {
+	readonly mount: string
+	readonly chain: readonly TestScope[]
 }
 
 export interface TestCaller {
 	readonly kind: TestCallerKind
 	/** The consuming application of an `app` caller, `null` for every other kind. */
 	readonly app: string | null
+	/** The link mount and chain a `link` caller's key is bound to; `null` for every other kind. */
+	readonly link: TestLink | null
 	/** The principal id, or the share key's credential id for a link. */
 	readonly id: string
 	readonly label: string | null

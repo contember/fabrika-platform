@@ -9,6 +9,7 @@ import { QueryRefusedError } from '../errors'
 import { fileTableSql } from '../file-table-sql'
 import type { FileCollectionTable, PendingFile } from '../file-tables'
 import { fileTablesOf } from '../framework'
+import { defineStore } from '../store'
 import { TestAuthority } from './fixtures/authority'
 import { recordingLayer } from './fixtures/harness'
 import { migration } from './fixtures/schema'
@@ -80,7 +81,7 @@ beforeAll(async () => {
 	database = Database.postgres({ url: url ?? '', schema, max: 2 })
 	const layer = connected(tables, { database, capabilities: alice }).database
 	files = fileTablesOf(layer).collection(SPEC)
-	const notes = layer.defineStore('notes', (t) => ({
+	const notes = defineStore(layer, 'notes', (t) => ({
 		createdBetween: (within: Within<'workspace', 'notes.read'>, from: Date, to: Date) =>
 			t.select(within, (q) => q.columns(['id']).where('created_at', '>=', from).where('created_at', '<', to).orderBy('id')),
 	}))
@@ -103,7 +104,7 @@ describe('a bound Date', () => {
 
 	test('is bound as its ISO 8601 UTC text', async () => {
 		const layer = recordingLayer()
-		const notes = layer.stores.defineStore('notes', (t) => ({
+		const notes = defineStore(layer.stores.database, 'notes', (t) => ({
 			since: (within: Within<'workspace', 'notes.read'>, from: Date) => t.select(within, (q) => q.columns(['id']).where('created_at', '>=', from)),
 		}))
 		const outcome = await layer.attempt(() => notes.since(layer.within('notes.read'), AT))
@@ -113,7 +114,7 @@ describe('a bound Date', () => {
 
 	test('an invalid Date is refused before any statement is sent', async () => {
 		const layer = recordingLayer()
-		const notes = layer.stores.defineStore('notes', (t) => ({
+		const notes = defineStore(layer.stores.database, 'notes', (t) => ({
 			since: (within: Within<'workspace', 'notes.read'>, from: Date) => t.select(within, (q) => q.columns(['id']).where('created_at', '>=', from)),
 		}))
 		const fromStore = await layer.attempt(() => notes.since(layer.within('notes.read'), new Date(Number.NaN)))

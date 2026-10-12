@@ -1,7 +1,7 @@
 import type { Ref, Within } from '../../capability'
 import { bindScopedDatabase, type Locator } from '../../framework'
 import type { Tables } from '../../policy'
-import { type DataLayerRuntime, scoped, type ScopedDatabase } from '../../store'
+import { type DataLayerRuntime, defineChildStore, defineStore, scoped, type ScopedDatabase } from '../../store'
 import { tables } from './tables'
 
 /** `scoped(tables)` already bound, as `boot` leaves it, with the locator only the framework holds. */
@@ -18,14 +18,13 @@ export interface Page {
 /** The application's stores, as `src/db/stores/*.ts` would define them. */
 export function defineStores(runtime: DataLayerRuntime) {
 	const { database, locate } = connected(tables, runtime)
-	const { defineStore, defineChildStore } = database
 
-	const organizations = defineStore('organizations', (t) => ({
+	const organizations = defineStore(database, 'organizations', (t) => ({
 		list: (within: Within<'organization', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'name']).orderBy('id')),
 		create: (created: Ref<'organization', 'organizations.create'>, name: string) => t.insert(created, { name }),
 	}))
 
-	const workspaces = defineStore('workspaces', (t) => ({
+	const workspaces = defineStore(database, 'workspaces', (t) => ({
 		list: (within: Within<'organization', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'name']).orderBy('name')),
 		get: (workspace: Ref<'workspace', 'notes.read'>) => t.get(workspace),
 		create: (organization: Ref<'organization', 'workspaces.create'>, name: string) => t.insert(organization, { name }),
@@ -33,7 +32,7 @@ export function defineStores(runtime: DataLayerRuntime) {
 		move: (workspace: Ref<'workspace', 'workspaces.admin'>, to: Ref<'organization', 'workspaces.create'>) => t.move(workspace, to),
 	}))
 
-	const notes = defineStore('notes', (t) => ({
+	const notes = defineStore(database, 'notes', (t) => ({
 		list: (within: Within<'workspace', 'notes.read'>, page: Page) =>
 			t.select(within, (q) => q.columns(['id', 'title']).orderBy('id').limit(page.limit).offset(page.offset)),
 		search: (within: Within<'workspace', 'notes.read'>, text: string) =>
@@ -58,7 +57,7 @@ export function defineStores(runtime: DataLayerRuntime) {
 		move: (note: Ref<'note', 'notes.delete'>, to: Ref<'workspace', 'notes.write'>) => t.move(note, to),
 	}))
 
-	const comments = defineChildStore('note_comments', (t) => ({
+	const comments = defineChildStore(database, 'note_comments', (t) => ({
 		ofNote: (note: Ref<'note', 'notes.read'>) => t.select(note, (q) => q.columns(['id', 'body']).orderBy('id')),
 		inWorkspaces: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'note_id', 'workspace_id']).orderBy('id')),
 		countPerNote: (within: Within<'workspace', 'notes.read'>) => t.aggregate(within, { groupBy: ['note_id'], count: true }),
@@ -68,5 +67,5 @@ export function defineStores(runtime: DataLayerRuntime) {
 		remove: (note: Ref<'note', 'notes.write'>, id: string) => t.remove(note, id),
 	}))
 
-	return { organizations, workspaces, notes, comments, defineStore, defineChildStore, locate }
+	return { organizations, workspaces, notes, comments, database, locate }
 }

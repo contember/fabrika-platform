@@ -1,10 +1,11 @@
-import { implement } from '@fabrika/app/implement'
 import { type Ref, scoped } from '@fabrika/db'
+import { defineStore } from '@fabrika/db/testing'
+import { implement } from '../../implement/implement'
 import { contract } from '../fixtures/multi-tenant/fabrika.contract'
 import { tables } from '../fixtures/multi-tenant/src/db/tables'
 
 const database = scoped(tables)
-const store = database.defineStore('notes', (t) => ({
+const store = defineStore(database, 'notes', (t) => ({
 	get: (note: Ref<'note', 'notes.read'>) => t.get(note),
 	create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),
 }))

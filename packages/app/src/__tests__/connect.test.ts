@@ -225,7 +225,7 @@ describe('boot refuses an import it cannot serve', () => {
 		const withSnapshot = (snapshot: ConnectSnapshot | null) =>
 			problems(() => bootApp({ ...shopApp, connect: snapshot === null ? {} : { catalog: snapshot } }, { environment: framework(wired) }))
 		expect(withSnapshot(null)).toEqual([
-			"import 'catalog' has no snapshot; pass implement({ connect: { catalog: <the snapshot in fabrika/connect/> } })",
+			"import 'catalog' has no snapshot; pass it in defineApp(vocabulary, tables, { imports: { catalog: { snapshot, procedures } } }), from fabrika/connect/",
 		])
 		expect(withSnapshot({ ...catalogProductsV1, version: 2 })).toEqual([
 			"import 'catalog' imports catalog/products@1, and its snapshot is catalog/products@2",

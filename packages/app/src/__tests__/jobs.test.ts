@@ -3,13 +3,14 @@
 // Postgres half cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see scoped-database.test.ts).
 
 import { runContractJob, serveContract } from '@fabrika/app/bun'
-import { BootError, type ContractApp, implement, type JobClock, type JobReport } from '@fabrika/app/implement'
+import { BootError, type ContractApp, type JobClock, type JobReport } from '@fabrika/app/implement'
 import { applicationSchema, Database, type Within } from '@fabrika/db'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { defineContract } from '../contract/define'
+import { implement } from '../implement/implement'
 import {
 	bootApp,
 	environment,
@@ -157,8 +158,8 @@ describe('boot binds every job or does not start', () => {
 		const options = { environment: environment(frameworkEnvFor(loose)), iam: keySource }
 		expect(problemsOf(() => bootApp(missing, options))).toEqual([
 			"job 'nightly' is scoped to 'workspace'; this version runs jobs with scope: 'app' only",
-			"job 'nightly' needs @fabrika/db on Postgres, which holds its lease and fences its writes: implement({ database: scoped(tables) })",
-			"job 'hourly' needs @fabrika/db on Postgres, which holds its lease and fences its writes: implement({ database: scoped(tables) })",
+			"job 'nightly' needs @fabrika/db on Postgres, which holds its lease and fences its writes: serve(contract, { database: scoped(tables) })",
+			"job 'hourly' needs @fabrika/db on Postgres, which holds its lease and fences its writes: serve(contract, { database: scoped(tables) })",
 			"job 'hourly' has no handler; add it to handlers.jobs",
 			"handler 'jobs.extra' is not in the contract; declare the endpoint in fabrika.contract.ts first",
 		])

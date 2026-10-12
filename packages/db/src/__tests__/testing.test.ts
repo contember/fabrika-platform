@@ -238,12 +238,16 @@ describe.skipIf(!hasPostgres)('a test database on Postgres', () => {
 		}
 	})
 
-	test('is a fresh app_ schema the real runner migrated, ledger included', async () => {
+	test("is a fresh app_ schema the real runner migrated, the framework's tables first, ledger included", async () => {
 		expect(postgres.schema).toMatch(/^app_test_[0-9a-f]{16}$/)
 		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
 		try {
-			const ledger: unknown = await sql.unsafe(`SELECT bundle, name FROM ${postgres.schema}.fabrika_migrations`)
-			expect(ledger).toEqual([{ bundle: 'app', name: '20261009120000_init.sql' }])
+			const ledger: unknown = await sql.unsafe(`SELECT bundle, name FROM ${postgres.schema}.fabrika_migrations ORDER BY bundle DESC, name`)
+			expect(ledger).toEqual([
+				{ bundle: 'fabrika', name: '0001_webhooks.sql' },
+				{ bundle: 'fabrika', name: '0002_job_leases.sql' },
+				{ bundle: 'app', name: '20261009120000_init.sql' },
+			])
 		} finally {
 			await sql.close()
 		}

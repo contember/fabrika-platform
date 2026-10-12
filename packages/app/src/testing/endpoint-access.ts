@@ -1,12 +1,13 @@
-// The endpoint access kit: the application's own `implement`, booted by `testKit` on its own data layer, asked by
+// The endpoint access kit: the application's own `serve(…)`, booted by `testKit` on its own data layer, asked by
 // callers of two scopes that share no value. A caller of one scope that names another scope's object or value must be
 // refused by the access form; an answer to one scope must hold nothing of another, also right after that other scope
-// was answered (a cache keyed by nothing). It cannot see an application bug that needs other data or another order.
+// was answered (a cache keyed by nothing); a caller that holds only the endpoint's action, or a link holder, reaches its
+// own target. The author's seed sets the state a precondition needs. It cannot see a bug that needs other data or order.
 
 import type { AccessForm, Caller, EndpointMethod, FileCollectionArtifact, SchemaShape } from '@fabrika/auth-core'
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import type { IsolationWorlds, TestDatabase } from '@fabrika/db/testing'
+import type { IsolationWorlds, SampleValue, TestDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
@@ -19,21 +20,34 @@ export interface DeniedOutcome {
 	readonly status: number
 }
 
-export interface LeakOutcome {
-	/** The status of the answer to one scope. */
-	readonly status: number
-	/** The values of the other scope's rows that the answer held: keys, parents, scope values and text markers. */
-	readonly leaked: readonly string[]
-}
+/**
+ * `answered` when every answer to the own scope is one the application gave: a 2xx, or a 4xx other than 401, 403 and
+ * 404 (a precondition's 409 included). Otherwise `status` is the first other answer. `leaked` are the values of the
+ * other scope's rows that the answers held: keys, parents, scope values and text markers.
+ */
+export type LeakOutcome =
+	| { readonly answered: true; readonly leaked: readonly string[] }
+	| { readonly answered: false; readonly status: number; readonly leaked: readonly string[] }
+
+/** Column → value of the row of the table that owns the endpoint's dimension, in both scopes: the author's seed. */
+export type Seed = Readonly<Record<string, SampleValue>>
 
 export interface EndpointAccessKit {
 	/**
 	 * A caller holding the endpoint's action in one scope names an object (`on`) or a scope value (`in`) of another;
 	 * `input` is the rest of a valid input, and its `from` field is replaced.
 	 */
-	denied(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
-	/** A caller of the other scope asks first, then a caller of one scope asks for its own (`on`) or its list (`over`). */
-	leaked(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<LeakOutcome>
+	denied(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
+	/**
+	 * A caller of the other scope asks first, then a caller of one scope asks for its own object (`on`), its list
+	 * (`over`) or, for every table that lies in the dimension, its scope value (`in`).
+	 */
+	leaked(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<LeakOutcome>
+	/**
+	 * A caller that holds only the endpoint's action asks for its own object: a person or a script in its scope, or, on
+	 * a link mount, the holder of a link bound to the object. A write action reads its own target.
+	 */
+	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
 	 * One file endpoint of `collection`, over a file seeded in each scope through the upload endpoint. `own` holds the
 	 * operation's action in one scope and addresses its own owner row or file, `other` holds it there and addresses
@@ -46,6 +60,8 @@ export type FileOperation = 'upload' | 'download' | 'remove'
 
 interface ActionEndpoint {
 	readonly id: string
+	/** The link mount of a link procedure; `null` for every other endpoint. */
+	readonly link: string | null
 	readonly method: EndpointMethod
 	readonly path: string
 	readonly callers: readonly Caller[]
@@ -138,6 +154,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		}
 		return {
 			id: row.id,
+			link: row.callers.some((caller) => caller === 'link') ? row.source.name : null,
 			method: row.method,
 			path: row.path,
 			callers: row.callers,
@@ -176,11 +193,13 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		throw new Error(`${row.id} admits neither a human nor a machine caller`)
 	}
 
-	const ask = async (row: ActionEndpoint, grants: readonly Grant[], body: unknown): Promise<{ readonly status: number; readonly text: string }> => {
+	const ask = (row: ActionEndpoint, grants: readonly Grant[], body: unknown): Promise<{ readonly status: number; readonly text: string }> =>
+		askAs(row, callerFor(row, grants).fetch, body)
+
+	const askAs = async (row: ActionEndpoint, fetch: RpcFetch, body: unknown): Promise<{ readonly status: number; readonly text: string }> => {
 		if (row.method !== 'POST') {
 			throw new Error(`${row.id} is not a procedure`)
 		}
-		const { fetch } = callerFor(row, grants)
 		const response = await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 		const text = await response.text()
 		// Input is parsed before the access form runs: a refused input would hide what the case is about.
@@ -221,8 +240,8 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return { collection, worlds, own: await put('own'), other: await put('other') }
 	}
 
-	/** Two scopes of `dimension`: rows of the table that owns it when one does, otherwise two fresh scope values. */
-	const scopesOf = async (action: string, dimension: string, field: SchemaShape | undefined): Promise<Scopes> => {
+	/** Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two fresh scope values. */
+	const scopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed): Promise<Scopes> => {
 		const collection = Object.keys(kit.artifact.files).find((name) => dimension === `file:${name}`)
 		if (collection !== undefined) {
 			const seeded = await seedFiles(collection)
@@ -241,7 +260,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				other: { target: other, grants: [{ action, scope: { type: dimension, value: other } }], values: [other] },
 			}
 		}
-		const worlds = await postgres.seedWorlds(tables, owner)
+		const worlds = await postgres.seedWorlds(tables, owner, seed)
 		return {
 			own: { target: worlds.own.key, grants: [{ action, scope: { type: worlds.dimension, value: worlds.own.scope } }] },
 			other: {
@@ -266,38 +285,116 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			}
 		}
 		if (own.length === 0) {
-			return scopesOf(action, dimension, undefined)
+			return scopesOf(action, dimension, undefined, {})
 		}
 		return { own: { target: '', grants: own }, other: { target: '', grants: other, values } }
+	}
+
+	/**
+	 * For a report `in` `dimension`: one row in each scope of every table that lies in it, the table that owns it with
+	 * `seed`. Each side's targets are its rows' values of `dimension`, and each caller holds all of them.
+	 */
+	const inScopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed) => {
+		const own: string[] = []
+		const other: string[] = []
+		const values: string[] = []
+		for (const name of tableNames) {
+			const mode = policies[name]?.scope.mode
+			if (mode !== 'dimension' && mode !== 'child') continue
+			const worlds = await postgres.seedWorlds(tables, name, name === ownerOf(dimension) ? seed : {})
+			const ownValue = worlds.own.chain.find((link) => link.type === dimension)?.value
+			const otherValue = worlds.other.chain.find((link) => link.type === dimension)?.value
+			if (ownValue !== undefined && otherValue !== undefined) {
+				own.push(ownValue)
+				other.push(otherValue)
+				values.push(...worldValues(worlds, 'other'))
+			}
+		}
+		if (own.length === 0) {
+			const scopes = await scopesOf(action, dimension, field, seed)
+			return { own: [scopes.own.target], other: [scopes.other.target], values: scopes.other.values }
+		}
+		return { own, other, values }
 	}
 
 	const withTarget = (input: Readonly<Record<string, unknown>>, from: string | null, target: string): Readonly<Record<string, unknown>> =>
 		from === null ? input : { ...input, [from]: target }
 
+	/** The outcome of the own scope's answers: answered unless one is a failure or an authorization refusal. */
+	const leakOutcome = (answers: readonly { readonly status: number; readonly text: string }[], values: readonly string[]): LeakOutcome => {
+		const leaked = values.filter((value) => answers.some((answer) => answer.text.includes(value)))
+		const refused = answers.find((answer) => answer.status >= 500 || answer.status === 401 || answer.status === 403 || answer.status === 404)
+		return refused === undefined ? { answered: true, leaked } : { answered: false, status: refused.status, leaked }
+	}
+
+	/** A link holder of `row`'s mount, its key bound to the own world's object. */
+	const linkHolder = async (row: ActionEndpoint, mount: string, seed: Seed): Promise<RpcFetch> => {
+		const owner = ownerOf(row.access.dimension)
+		if (owner === undefined) {
+			throw new Error(`${row.id}: no table owns ${row.access.dimension}, so no link can be bound to one`)
+		}
+		const { own } = await postgres.seedWorlds(tables, owner, seed)
+		const holder = kit.testCaller([{ action: row.action, scope: { type: row.access.dimension, value: own.key } }], {
+			kind: 'link',
+			link: { mount, chain: own.chain },
+		})
+		return (input, init) => {
+			const headers = new Headers(init?.headers)
+			headers.set('Authorization', `Bearer ${holder.key ?? ''}`)
+			return kit.fetch(input, { ...init, headers })
+		}
+	}
+
 	const accessKit: EndpointAccessKit = {
-		async denied(endpoint, input) {
+		async denied(endpoint, input, seed = {}) {
 			const row = endpointOf(endpoint)
 			const { action, access } = row
 			if (access.form !== 'on' && access.form !== 'in') {
 				throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
 			}
-			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from))
+			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
 			const { status } = await ask(row, scopes.own.grants, withTarget(input, access.from, scopes.other.target))
 			return { status }
 		},
-		async leaked(endpoint, input) {
+		async leaked(endpoint, input, seed = {}) {
 			const row = endpointOf(endpoint)
 			const { action, access } = row
+			if (access.form === 'in') {
+				const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
+				const grants = (targets: readonly string[]): Grant[] => targets.map((value) => ({ action, scope: { type: access.dimension, value } }))
+				for (const target of scopes.other) {
+					await ask(row, grants(scopes.other), withTarget(input, access.from, target))
+				}
+				const answers = []
+				for (const target of scopes.own) {
+					answers.push(await ask(row, grants(scopes.own), withTarget(input, access.from, target)))
+				}
+				return leakOutcome(answers, scopes.values)
+			}
 			if (access.form !== 'on' && access.form !== 'over') {
-				throw new Error(`${endpoint} has the access form ${access.form}; only on and over answer with rows of a scope`)
+				throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
 			}
 			const scopes = access.form === 'on'
-				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from))
+				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
 				: await listScopesOf(action, access.dimension)
 			const from = access.form === 'on' ? access.from : null
 			await ask(row, scopes.other.grants, withTarget(input, from, scopes.other.target))
-			const { status, text } = await ask(row, scopes.own.grants, withTarget(input, from, scopes.own.target))
-			return { status, leaked: scopes.other.values.filter((value) => text.includes(value)) }
+			const answer = await ask(row, scopes.own.grants, withTarget(input, from, scopes.own.target))
+			return leakOutcome([answer], scopes.other.values)
+		},
+		async own(endpoint, input, seed = {}) {
+			const row = endpointOf(endpoint)
+			const { action, access } = row
+			if (access.form !== 'on') {
+				throw new Error(`${endpoint} has the access form ${access.form}; only on addresses an object of its own`)
+			}
+			if (row.link !== null) {
+				const { status } = await askAs(row, await linkHolder(row, row.link, seed), input)
+				return { status }
+			}
+			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
+			const { status } = await ask(row, scopes.own.grants, withTarget(input, access.from, scopes.own.target))
+			return { status }
 		},
 		async file(name, operation, caller) {
 			const { collection, worlds, own, other } = await seedFiles(name)

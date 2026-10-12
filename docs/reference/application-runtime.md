@@ -1,7 +1,7 @@
 # Application runtime
 
 `@fabrika/app` is the first-party server framework for applications deployed by
-Fabrika. An application declares one contract and serves it through `implement`.
+Fabrika. An application declares one contract with the staged kit and serves it through `serve`.
 The package also holds typed RPC, structural error handling, object-level
 authorization, a typed browser client, and the dispatcher of the installation's own
 services.
@@ -12,8 +12,8 @@ Two surfaces serve requests. Both dispatch through `planEndpoint` from
 `@fabrika/auth-core`, the matcher the proxy selects with, so a request reaches the
 endpoint whose rules the proxy applied:
 
-- **A contract application** declares `fabrika.contract.ts` and implements it with
-  `implement` (`@fabrika/app/implement`). The generated entrypoint that
+- **A contract application** declares `fabrika.contract.ts` from groups whose endpoints carry their handlers, and
+  serves it with `serve` (`@fabrika/app/implement`). The generated entrypoint that
   `fabrika app build` writes boots it: `serveContract()` from `@fabrika/app/bun` on
   Zerops, `createContractWorker()` from `@fabrika/app/cloudflare` on Cloudflare. See
   [Contracts](#contracts) and [Serving a contract](#serving-a-contract).
@@ -140,45 +140,43 @@ manifest that still declares `gates`.
 
 ## Serving a contract
 
-`@fabrika/app/implement` serves a contract. An application writes `src/app.ts`:
+`@fabrika/app/implement` serves a contract. Its handlers sit beside their endpoints
+([application architecture](application-architecture.md)), so `src/app.ts` only composes:
 
 ```ts
-// src/db/database.ts
-export const database = scoped(tables) // the policies of src/db/tables.ts
-export const { defineStore, defineChildStore } = database
-
-// src/db/stores/notes.ts
-export const notes = defineStore('notes', (t) => ({
-	list: (within: Within<'workspace', 'notes.read'>) =>
-		t.select(within, (q) => q.columns(['id', 'title'])),
-	remove: (note: Ref<'note', 'notes.delete'>) => t.remove(note),
+// src/notes/endpoints.ts
+export const notes = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({
+		output: NoteList,
+		access: { action: 'notes.read', over: 'workspace' },
+	})
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.within.notes.list()).items.map((row) =>
+				fromRow(Note, row)
+			),
+		})),
+	remove: r.mutation({
+		input: Versioned,
+		output: Done,
+		access: { action: 'notes.delete', on: 'note', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.db.target.remove({ expectVersion: input.expectVersion })
+			return { id: ctx.target.value }
+		}),
 }))
 
 // src/app.ts
-export default implement(contract, {
-	database, // the policies, and the locator `on` and `in` use, generated from them
-	deps: () => ({}),
-	handlers: () => ({
-		api: {
-			notes: {
-				list: async ({ ctx }) => ({ items: await notes.list(ctx.within) }),
-				remove: async ({ ctx }) => {
-					await notes.remove(ctx.target)
-					return { deleted: ctx.target.value }
-				},
-			},
-		},
-	}),
-})
+export default serve(contract, { database: scoped(tables) })
 ```
 
-`implement` is typed by the contract: a missing handler, a handler for an undeclared
-endpoint or for a mount without procedures, a returned field the output does not
-declare, and a `Ref` passed to an operation of another action are type errors.
-`deps` runs once at boot with the application's own variables and the capability
-authority; `handlers` receives what it returned. Stores are defined in modules of their
-own, on the `scoped(tables)` result of `@fabrika/db`; nothing reaches the database until
-`boot` binds that layer. That result has no connection and no locator of its own.
+The kit types each handler by its endpoint: a returned field the output does not declare, a handle its access form
+does not give and a write in a query are type errors. `serve` refuses an endpoint, job or webhook without `.handle(…)`.
+`defineDeps(build)` declares dependencies, which `build` makes at each boot from the application's own variables; a
+handler reads them with `get()`. `scoped(tables)` of `@fabrika/db` has no connection, no locator and no handle of its
+own; nothing reaches the database until `boot` binds it. An application without tables (on Cloudflare, which has no
+data layer yet) writes `defineApp(vocabulary)` and `serve(contract, { database: null })`; its handlers have no
+`ctx.db`. The mirrored handler tree of `implement` is the framework's own test entry, not on the application surface.
 
 `fabrika app build` writes `fabrika/entry.generated.ts` for an application with a
 `fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
@@ -291,7 +289,7 @@ A handler of the staged kit (`app.group(…)` with `.handle(…)`, its cron jobs
 `ctx.db`, which `boot` builds for its site from the capability the access form minted, the site's kind and its
 declaration. `serve` puts each site into the handler tree as a `siteHandler(handler, declared)` leaf. The declaration
 a site runs with is the approved artifact's (`ContractArtifact.declared`, which the contract's digest covers); a leaf
-whose own `declared` differs does not boot. A handler `implement` bound gets no `ctx.db` and keeps its stores. The API matrix:
+whose own `declared` differs does not boot. The API matrix:
 
 | Access form | query                                                                                                 | mutation (adds)                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -474,9 +472,7 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   header only names the delivery in the log). The handler gets `ctx.refs`, a `Ref` of the
   bound value for each declared action, and `ctx.delivery.key`. **It runs at least
   once**: a failing handler forgets the key so GitHub's redelivery runs it again. A
-  staged-kit delivery runs in one transaction (above), so the failed run kept nothing; an
-  `implement` handler's stores commit each write on its own, so its redelivery runs after
-  whatever the failed run wrote, and it writes idempotently, keyed on `ctx.delivery.key`. Bindings and delivery keys live in the framework's `fabrika_*`
+  delivery runs in one transaction (above), so the failed run kept nothing. Bindings and delivery keys live in the framework's `fabrika_*`
   tables, which `fabrika db migrate` applies.
 - Revocation takes effect within the token lifetime: a removed member or revoked link
   keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
@@ -572,12 +568,13 @@ imports: {
 	catalog: { app: 'catalog', export: 'products', version: 1, digest: catalogProductsV1Digest,
 		procedures: ['get'], usedBy: ['api.products.show'], timeoutMs: 3000 },
 },
-// the consumer's implement()
-connect: { catalog: catalogProductsV1 },
-show: async ({ input, ctx }) => {
-	const product = await ctx.connect.catalog.get({ sku: input.sku })
-	return product.outcome === 'ok' ? { name: product.value?.name ?? null } : { name: null }
-},
+// the consumer's kit (src/app-kit.ts) and the endpoint that calls it
+const app = defineApp(vocabulary, tables, { imports: { catalog: { snapshot: catalogProductsV1, procedures: ['get'] } } })
+show: r.query({ input: BySku, output: Shown, access: { action: 'shop.view', over: 'shop' }, connect: ['catalog'] })
+	.handle(async ({ input, ctx }) => {
+		const product = await ctx.connect.catalog.get({ sku: input.sku })
+		return product.outcome === 'ok' ? { name: product.value?.name ?? null } : { name: null }
+	}),
 ```
 
 The owner side:
@@ -713,7 +710,7 @@ access test only under `bun test --isolate`: the data layer binds once per proce
 template's `test` script passes it.
 
 ```ts
-const kit = testKit(notesApp(rows))
+const kit = testKit(app, { database: postgres.database }) // app: the default export of src/app.ts
 const editor = kit.testCaller([{
 	role: 'editor',
 	scope: { type: 'workspace', value: 'w1' },
@@ -725,7 +722,11 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   is an action or a role of the contract, global or in one scope; a role resolves to
   its actions in that scope, and a membership role needs a scope of its dimension.
   A human signs in with a session (`cookie`) or a `px_` key; `machine` and `link`
-  callers present a key.
+  callers present a key. A `link` caller's key is bound to one object with
+  `{ kind: 'link', link: { mount, chain } }`: the object first, then each value containing it.
+- `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
+  `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
+  (`{ status: 'succeeded', attempts }`).
 - `kit.fetch` takes a request as it reaches the proxy; `kit.browser(caller?)` adds
   what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
   request's credentials are `omit`, the caller's session cookie. Both refuse a host
@@ -762,7 +763,8 @@ is the enforcement.
 `fabrika db test-scaffold` writes two kinds of test and deletes a generated test it no
 longer writes. Both run only for an application on `@fabrika/db`, and both open a test
 database with `@fabrika/db/testing`'s `testDatabase`: a fresh schema `app_test_<hex>`
-that the real migration runner fills from `db/migrations/`. Without
+that the real migration runner fills with the framework's tables and then `db/migrations/`, as
+`fabrika db migrate` does. Without
 `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file registers no
 test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 
@@ -802,17 +804,26 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   answers 404 for an object that does not exist yet.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
-  export) through `testKit`, on the application's own data layer, once: that layer
-  binds once per process. For every procedure with an `on` or `in` access form, a
-  caller holding the action in one scope names the other scope's object or value and
-  gets 404 (`on`) or 403 (`in`). For every `on` and `over` procedure, a caller of the
-  other scope asks first, then a caller of one scope asks for its own; the second answer
-  must be a 200 that holds no key, scope value or text marker of the other scope's rows.
-  `deps` runs with an empty environment. A file collection's endpoints get the same cases
-  over a file the kit uploads in each scope (`kit.file`, objects in memory): upload,
-  download and remove of an own file pass, of the other scope's are 404, and a caller
-  holding only the collection's `read` action is 403 for upload and remove. Those case
-  names carry the actions, so a changed action makes the committed test stale.
+  export, `serve(…)`) through `testKit`, on the application's own data layer, once: that layer
+  binds once per process. The cases:
+  - **Denial.** For every procedure with an `on` or `in` access form, a caller holding the action in one scope names
+    the other scope's object or value and gets 404 (`on`) or 403 (`in`), exactly.
+  - **Leak.** For every `on` and `over` procedure, and every `in` procedure that declares `sql`, a caller of the other
+    scope asks first, then a caller of one scope asks for its own (`in`: for the scope value of every table that lies
+    in the dimension). Each own answer must be one the application gave — a 2xx, or a 4xx other than 401, 403 and 404,
+    so a precondition's 409 passes — and hold no key, scope value or text marker of the other scope's rows
+    (`{ answered: true, leaked: [] }`). An endpoint that declares `unscoped` reaches across scopes by design and has no
+    leak case; it keeps its denial.
+  - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
+    (a write-only role), a caller holding only that action asks for its own object and gets 200: the capability
+    reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.
+  - **Files.** A file collection's endpoints get the same cases
+    over a file the kit uploads in each scope (`kit.file`, objects in memory): upload,
+    download and remove of an own file pass, of the other scope's are 404, and a caller
+    holding only the collection's `read` action is 403 for upload and remove. Those case
+    names carry the actions, so a changed action makes the committed test stale.
+
+  `deps` runs with an empty environment.
 - **Inputs.** A case sends a fixed literal written into the test: a sample of the input
   schema, or, where the scaffold cannot sample one (a `regex`), the author's literal from
   `src/__tests__/endpoint-access.fixtures.ts` (`export const fixtures = { '<endpoint id>':
@@ -820,6 +831,10 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   fixture and a fixture of no tested endpoint are `endpoint-fixture` findings; an input the
   endpoint's schema refuses fails its cases. The access form's `from` field is replaced by
   the seeded value.
+- **Seeds.** A precondition (`restore` only a note in the trash) is the author's seed in the same file:
+  `export const seeds = { '<endpoint id>': { <column>: <value> } }`, the state of the row of the table that owns the
+  endpoint's dimension, written into both scopes' rows before every case of that endpoint. A seed may not set a column
+  that places the row in its scope. A seed of no `on` or `in` endpoint is an `endpoint-fixture` finding.
 - **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
   `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
   which captures Bun's own functions before any application module loads, and a case that

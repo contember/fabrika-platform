@@ -36,6 +36,7 @@ import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import { exportBase } from '../contract/defaults'
 import type { Schema } from '../contract/define'
+import { isTableless } from '../contract/handled'
 import { fileCollections } from '../files/collections'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
@@ -259,7 +260,7 @@ function declaredProcedures(mount: string, tree: ProcedureTreeDeclaration<Schema
 	})
 }
 
-/** Every function in the tree must be a declared procedure's handler, even when a cast defeated `implement`'s types. */
+/** Every function in the tree must be a declared procedure's handler, even when a cast defeated the handler types. */
 function undeclaredHandlers(node: unknown, declared: ReadonlySet<string>, path: readonly string[], problems: string[]): void {
 	const id = path.join('.')
 	if (typeof node === 'function' || isSiteHandler(node)) {
@@ -302,7 +303,7 @@ function contractDatabase(
 		if ('locate' in database) {
 			return { database, framework: null, data: null }
 		}
-		problems.push('implement({ database }) takes the scoped(tables) result of @fabrika/db itself, not a copy or a wrapper of it')
+		problems.push('serve(contract, { database }) takes the scoped(tables) result of @fabrika/db itself, not a copy or a wrapper of it')
 		return null
 	}
 	if (connection === undefined) {
@@ -381,6 +382,22 @@ function siteConnect<W extends { readonly name: string }>(
 	return declared.length === 0 ? undefined : declared
 }
 
+/**
+ * A kit without tables has no `ctx.db`: its procedures are served as plain handlers with their approved reach, and a
+ * site that declares `sql` does not boot, since `ctx.sql` runs on `@fabrika/db`.
+ */
+function servedWithoutData(endpoints: Map<string, ServedEndpoint>, problems: string[]): void {
+	for (const [id, served] of endpoints) {
+		if (served.kind !== 'procedure' || served.site === undefined) {
+			continue
+		}
+		if (served.site.declaration.sql !== null) {
+			problems.push(`'${id}' declares sql, which runs on @fabrika/db; defineApp(vocabulary, tables) gives an application tables`)
+		}
+		endpoints.set(id, { ...served, site: undefined })
+	}
+}
+
 /** The site `dispatch` builds `ctx.db` for: a staged-kit site leaf only, with its approved declaration. */
 function servedSite(kind: DataKind, bound: BoundHandler): ServedSite | undefined {
 	return !bound.site || bound.declaration === null ? undefined : { kind, declaration: bound.declaration }
@@ -418,7 +435,7 @@ function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTable
 			continue
 		}
 		if (framework === null) {
-			problems.push(`mount '${name}' is a ${mount.kind}, which writes through @fabrika/db: pass implement({ database: scoped(tables) })`)
+			problems.push(`mount '${name}' is a ${mount.kind}, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 			continue
 		}
 		if (mount.kind === 'form') {
@@ -637,6 +654,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const data = bound?.data ?? null
+	if (data === null && isTableless(app.contract)) {
+		servedWithoutData(endpoints, problems)
+	}
 	const site = [...endpoints.values()].find((served) => (served.kind === 'procedure' || served.kind === 'webhook') && served.site !== undefined)
 	if (site !== undefined && data === null) {
 		problems.push(`'${site.row.id}' reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)

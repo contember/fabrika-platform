@@ -1,5 +1,5 @@
 // What the staged kit keeps beside a declaration, out of the declaration itself: a site's handler and a contract's
-// vendored snapshots. `compileContract` and the static reader see only the declaration; `serve` reads these.
+// vendored snapshots and whether its kit had tables. `compileContract` and the static reader see only the declaration; `serve` reads these.
 // Browser-safe: a handler is held here, never called.
 
 import type { ConnectSnapshot } from './connect'
@@ -28,4 +28,17 @@ export function withSnapshots<T extends object>(contract: T, imported: Readonly<
 /** The snapshots `app.contract` recorded for `contract`; none for a contract the kit did not build. */
 export function snapshotsOf(contract: object): Readonly<Record<string, ConnectSnapshot>> {
 	return snapshots.get(contract) ?? {}
+}
+
+const tableless = new WeakSet<object>()
+
+/** `contract` as built by a kit without tables, `defineApp(vocabulary)`. */
+export function withoutTables<T extends object>(contract: T): T {
+	tableless.add(contract)
+	return contract
+}
+
+/** Whether a kit without tables built `contract`: its sites are served without `ctx.db`, and `serve` takes no database. */
+export function isTableless(contract: object): boolean {
+	return tableless.has(contract)
 }

@@ -1,0 +1,13 @@
+import { z } from 'zod/v4'
+
+export const ById = z.strictObject({ id: z.string() })
+export const ByNote = z.strictObject({ noteId: z.string() })
+export const NewNote = z.strictObject({ workspaceId: z.string(), title: z.string().min(1) })
+export const Rename = z.strictObject({ id: z.string(), title: z.string().min(1), expectVersion: z.int().positive() })
+export const Note = z.strictObject({ id: z.string(), title: z.string() })
+export const Notes = z.strictObject({ items: z.array(Note) })
+export const Named = z.strictObject({ id: z.string(), name: z.string() })
+export const NamedList = z.strictObject({ items: z.array(Named) })
+export const Comments = z.strictObject({ items: z.array(z.strictObject({ id: z.string(), body: z.string() })) })
+export const Count = z.strictObject({ count: z.string() })
+export const Done = z.strictObject({ id: z.string() })

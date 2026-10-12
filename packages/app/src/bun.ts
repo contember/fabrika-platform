@@ -319,13 +319,13 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	return { port: server.port ?? port, stop }
 }
 
-/** The application module at `path`, imported when the loader runs; its default export must be what `implement` returned. */
+/** The application module at `path`, imported when the loader runs; its default export must be what `serve` returned. */
 export function implementationAt(path: string): ImplementationLoader {
 	return async () => {
 		const module: unknown = await import(path)
 		const value = typeof module === 'object' && module !== null ? Reflect.get(module, 'default') : undefined
 		if (!isContractImplementation(value)) {
-			throw new BootError([`${path} does not default-export implement(contract, { … })`])
+			throw new BootError([`${path} does not default-export serve(contract, { … })`])
 		}
 		return { default: value }
 	}

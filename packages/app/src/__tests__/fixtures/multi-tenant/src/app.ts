@@ -1,8 +1,9 @@
 // The multi-tenant fixture's implementation. Each call makes its own `scoped(tables)`, because `boot` binds a layer
 // once; `seen` records what the webhook handler received and can make its next run fail.
 
-import { implement } from '@fabrika/app/implement'
 import { type Ref, scoped } from '@fabrika/db'
+import { defineStore } from '@fabrika/db/testing'
+import { implement } from '../../../../implement/implement'
 import { contract } from '../fabrika.contract'
 import { tables } from './db/tables'
 
@@ -16,7 +17,7 @@ export interface Seen {
 
 export function multiTenantApp(seen: Seen) {
 	const database = scoped(tables)
-	const notes = database.defineStore('notes', (t) => ({
+	const notes = defineStore(database, 'notes', (t) => ({
 		get: (note: Ref<'note', 'notes.read'>) => t.get(note),
 		create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),
 	}))

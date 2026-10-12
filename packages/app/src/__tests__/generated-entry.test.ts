@@ -16,13 +16,29 @@ import { join } from 'node:path'
 
 const fixtures = join(import.meta.dir, 'fixtures', 'implement')
 
-/** The fixture application laid out as an application root, with the entrypoint for `runtime`. */
+/** A kit application without tables, laid out as an application root, with the entrypoint for `runtime`. */
 function applicationFiles(runtime: EntryRuntime): Map<string, string> {
-	const read = (file: string) => readFileSync(join(fixtures, file), 'utf8')
 	return new Map([
-		[CONTRACT_FILE, read('fabrika.contract.ts')],
-		['src/app.ts', `${read('app.ts').replace("from './fabrika.contract'", "from '../fabrika.contract'")}\nexport default notesApp(new Map())\n`],
-		['src/stores.ts', read('stores.ts')],
+		[
+			'src/vocabulary.ts',
+			"import { defineVocabulary } from '@fabrika/app/contract'\n\nexport const vocabulary = defineVocabulary({ app: 'notes', dimensions: { workspace: {} }, actions: { 'notes.read': 'Read notes' }, roles: { reader: { grants: ['notes.read'] } } })\n",
+		],
+		[
+			'src/app-kit.ts',
+			"import { defineApp } from '@fabrika/app/contract'\nimport { vocabulary } from './vocabulary'\n\nexport const app = defineApp(vocabulary)\n",
+		],
+		[
+			'src/notes/endpoints.ts',
+			"import { z } from 'zod/v4'\nimport { app } from '../app-kit'\n\nexport const notes = app.group({ callers: ['human'] }, (r) => ({\n\treadable: r.query({ output: z.strictObject({ all: z.boolean() }), access: { action: 'notes.read', over: 'workspace' } })\n\t\t.handle(({ ctx }) => ({ all: ctx.within.values === 'all' })),\n}))\n",
+		],
+		[
+			CONTRACT_FILE,
+			"import { app } from './src/app-kit'\nimport { notes } from './src/notes/endpoints'\n\nexport const contract = app.contract((c) => ({ api: c.rpc('/api', { notes }), health: c.health('/healthz') }))\n",
+		],
+		[
+			'src/app.ts',
+			"import { serve } from '@fabrika/app/implement'\nimport { contract } from '../fabrika.contract'\n\nexport default serve(contract, { database: null })\n",
+		],
 		[GENERATED_ENTRY_FILE, generatedEntry(runtime)],
 	])
 }

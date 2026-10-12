@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { DefaultQueryCompiler, PostgresQueryCompiler } from 'kysely'
 import { Database, type PostgresOptions } from '../database'
 import { CapabilityError, QueryRefusedError } from '../errors'
+import { defineStore } from '../store'
 import { call, type Outcome, recordingLayer } from './fixtures/harness'
 import { patchedChecks } from './fixtures/patch'
 
@@ -121,7 +122,10 @@ describe('patched built-ins do not disable the policy and allowlist checks', () 
 
 	test('a table that is not a store table is still refused', async () => {
 		const layer = recordingLayer()
-		const outcome = await patchedChecks(allowAll, () => layer.attempt(() => call(layer.stores, 'defineStore', 'hasOwnProperty', (t: unknown) => t)))
+		const outcome = await patchedChecks(
+			allowAll,
+			() => layer.attempt(() => Reflect.apply(defineStore, undefined, [layer.stores.database, 'hasOwnProperty', (t: unknown) => t])),
+		)
 		refused(outcome, QueryRefusedError, 'hasOwnProperty is not a dimension table')
 	})
 })

@@ -331,13 +331,13 @@ export class ValueReader {
 	}
 
 	/**
-	 * `defineApp(vocabulary, tables, options?)`. The tables are not read here: `src/db/tables.ts` is read on its own
+	 * `defineApp(vocabulary)` or `defineApp(vocabulary, tables, options?)`. The tables are not read here: `src/db/tables.ts` is read on its own
 	 * (`readTablesSource`), and the runtime takes them for the types only.
 	 */
 	#appCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
 		const [call] = links
 		const argumentNodes = call?.kind === 'call' && links.length === 1 ? children(call.node, 'arguments') : []
-		if (call?.kind !== 'call' || links.length !== 1 || argumentNodes.length < 2 || argumentNodes.length > 3) {
+		if (call?.kind !== 'call' || links.length !== 1 || argumentNodes.length < 1 || argumentNodes.length > 3) {
 			this.#problems.add(
 				located,
 				'defineApp used other than as one call of the vocabulary, the tables and its options',

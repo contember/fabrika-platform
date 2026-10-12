@@ -3,10 +3,11 @@
 // contract, a missing handler.
 
 import { defineContract } from '@fabrika/app/contract'
-import { boot, BootError, captureEnvironment, type ContractImplementation, implement } from '@fabrika/app/implement'
+import { boot, BootError, captureEnvironment, type ContractImplementation } from '@fabrika/app/implement'
 import { Database } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
 import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource, workloadTokensFor } from './fixtures/implement/harness'
 import { NOTE_TABLE, noteDatabase } from './fixtures/implement/stores'
@@ -169,8 +170,8 @@ describe('what this version does not serve yet stops the boot', () => {
 		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, workloadTokens: workloadTokensFor(app) })))
 			.toEqual([
 				"webhook 'hook' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')",
-				"mount 'contact' is a form, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
-				"mount 'hook' is a webhook, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
+				"mount 'contact' is a form, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })",
+				"mount 'hook' is a webhook, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })",
 			])
 	})
 

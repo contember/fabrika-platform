@@ -5,7 +5,7 @@ The scoped data layer for applications on Postgres: handlers reach rows only thr
 process, so it stops honest mistakes and makes a bypass conspicuous; it is not a hard boundary against
 code in the same process. Design: [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md),
 [ADR-0017](../../docs/decisions/0017-service-owned-postgres-migrations.md) for its migrations, and
-[application runtime](../../docs/reference/application-runtime.md) for how `implement` binds it.
+[application runtime](../../docs/reference/application-runtime.md) for how `serve` and `boot` bind it.
 Assumes the root CLAUDE.md.
 
 Published (`publishConfig.access: public`): applications depend on it.
@@ -29,7 +29,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                 |
 | `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `InvocationTransaction`, `applicationSchema` (`app_<id>`).                               |
 | `sql.ts`               | `ctx.sql`: `classifySql` (the template's static text over `@fabrika/platform-node/sql`), the value binding, the row parse, `sqlTag`.                           |
-| `store.ts`             | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                                               |
+| `store.ts`             | `scoped(tables)` → `ScopedDatabase`; the stores (`defineStore`, framework tests only); the generated locator; every check.                                     |
 | `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                                       |
 | `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`, `dataAccessOf`; browser-safe. |
 | `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                                    |
@@ -39,14 +39,16 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                                     |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                          |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).                             |
-| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                                  |
+| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`, the framework's `defineStore`.                                   |
 | `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                                        |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
 
-An application calls `scoped(tables)` once (its own `src/db/database.ts`), defines its stores with the
-`defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
+An application calls `scoped(tables)` once, in `src/app.ts`, and passes it to `serve(contract, { database })`; its
+handlers reach data through `ctx.db` (`orm.ts`). The result carries the policies and nothing else: the stores
+(`defineStore(layer, table, build)` / `defineChildStore`) are the framework's own test entry, exported from
+`@fabrika/db/testing` only. `@fabrika/app/bun` opens
 `Database.postgres` as the runtime role `run_<FABRIKA_APP_ID>`, whose URL `@fabrika/platform-node` derives from the
 provisioning credential `FABRIKA_APP_DATABASE_URL`, on `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
 the runtime's `CapabilityAuthority` (one per `boot`), which binds each capability to its request, through
@@ -62,9 +64,11 @@ each staged-kit site's `ctx.db`, which read `reference` tables too. Not built ye
 
 `@fabrika/db/testing` is the database half of the generated isolation tests (`fabrika db test-scaffold`, A11):
 `testDatabase` migrates a fresh `app_test_<hex>` schema with its own role family through `@fabrika/platform-node`'s
-application runner (`migrate`, as the migration role), connects and seeds as its runtime role, so every test of
+application runner (`migrate`, as the migration role: the framework's tables, then the application's, as
+`fabrika db migrate` applies them), connects and seeds as its runtime role, so every test of
 application code runs least-privileged, or answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
-chains that share no value, every container row a table owns first; `tableProbe` reaches one table of a layer by
+chains that share no value, every container row a table owns first, with the author's seed values in the table's own
+row (never a column that places it), and answers each row's `chain` of dimension values (a share link's chain); `tableProbe` reaches one table of a layer by
 name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer.
 There is no generated `move` case yet: an access form hands a handler one capability, and `t.move` needs the source

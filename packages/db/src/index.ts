@@ -73,10 +73,8 @@ export {
 	type AggregateRow,
 	type AggregateSpec,
 	type ChildListScope,
-	ChildTable,
 	type DataLayer,
 	type DataLayerRuntime,
-	DimensionTable,
 	scoped,
 	type ScopedDatabase,
 } from './store'

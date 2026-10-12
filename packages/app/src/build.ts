@@ -11,7 +11,7 @@ export const CONTRACT_FILE = 'fabrika.contract.ts'
 /** Relative to the application root. */
 export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
 
-/** The module whose default export is `implement(contract, …)`, relative to the application root. */
+/** The module whose default export is `serve(contract, …)`, relative to the application root. */
 export const IMPLEMENTATION_FILE = 'src/app.ts'
 
 export type EntryRuntime = 'bun' | 'cloudflare'

@@ -1,6 +1,7 @@
 import type { CompiledQuery } from 'kysely'
 import type { Ref, Within } from '../../capability'
 import { Database } from '../../database'
+import { defineChildStore, defineStore } from '../../store'
 import { TestAuthority } from './authority'
 import { RecordingDialect } from './recording-dialect'
 import { defineStores } from './stores'
@@ -27,11 +28,11 @@ export function recordingLayer() {
 	const capabilities = new TestAuthority()
 	const stores = defineStores({ database: Database.fromDialect(dialect), capabilities })
 	const raw = {
-		notes: stores.defineStore('notes', (t) => ({ t })).t,
-		organizations: stores.defineStore('organizations', (t) => ({ t })).t,
-		workspaces: stores.defineStore('workspaces', (t) => ({ t })).t,
-		secrets: stores.defineStore('secrets', (t) => ({ t })).t,
-		comments: stores.defineChildStore('note_comments', (t) => ({ t })).t,
+		notes: defineStore(stores.database, 'notes', (t) => ({ t })).t,
+		organizations: defineStore(stores.database, 'organizations', (t) => ({ t })).t,
+		workspaces: defineStore(stores.database, 'workspaces', (t) => ({ t })).t,
+		secrets: defineStore(stores.database, 'secrets', (t) => ({ t })).t,
+		comments: defineChildStore(stores.database, 'note_comments', (t) => ({ t })).t,
 	}
 
 	async function attempt(action: () => unknown): Promise<Outcome> {

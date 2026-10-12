@@ -1,7 +1,9 @@
 # Example app — a contract application on Cloudflare
 
-A minimal contract application on Cloudflare Workers. It declares who may call what in
-[`fabrika.contract.ts`](./fabrika.contract.ts) and implements it in [`src/app.ts`](./src/app.ts). The proxy Worker
+A minimal contract application on Cloudflare Workers, in the layout of
+[`application-architecture.md`](../../docs/reference/application-architecture.md). Its endpoints and their handlers are
+in [`src/access/endpoints.ts`](./src/access/endpoints.ts), and [`fabrika.contract.ts`](./fabrika.contract.ts) mounts
+them. The proxy Worker
 enforces the contract's endpoint table; the application verifies the token the proxy injected and makes no enforcement
 decision ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
 
@@ -10,16 +12,21 @@ The rules an agent follows when it changes this application are `@fabrika/app`'s
 
 ## What is where
 
-| File                            | What it is                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `fabrika.contract.ts`           | The vocabulary (dimensions, actions, roles) and every endpoint with its callers and access form. |
-| `src/app.ts`                    | `implement(contract, …)`: one handler per procedure.                                             |
-| `fabrika/entry.generated.ts`    | The Worker entrypoint `fabrika app build` writes (`createContractWorker`). Do not edit it.       |
-| `fabrika.config.ts`             | The deploy surface: the application Worker and the IAM schema the contract compiles to.          |
-| `oblaka.ts`, `lopata.config.ts` | A local run of the proxy, the application and IAM over service bindings.                         |
-| `src/__tests__/app.test.ts`     | The endpoints behind the production proxy decision (`testKit`), denied callers included.         |
+| File                            | What it is                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------ |
+| `src/vocabulary.ts`             | The vocabulary: dimensions, actions, roles.                                                |
+| `src/app-kit.ts`                | `defineApp(vocabulary)`: the kit, without tables.                                          |
+| `src/schemas.ts`                | The output schemas.                                                                        |
+| `src/access/endpoints.ts`       | The endpoints, each with its callers, access form and `.handle(…)`.                        |
+| `src/access/logic.ts`           | The answer for a set of granted values: plain TypeScript.                                  |
+| `fabrika.contract.ts`           | `app.contract(…)`: the `/api` mount and the health check.                                  |
+| `src/app.ts`                    | `serve(contract, { database: null })`.                                                     |
+| `fabrika/entry.generated.ts`    | The Worker entrypoint `fabrika app build` writes (`createContractWorker`). Do not edit it. |
+| `fabrika.config.ts`             | The deploy surface: the application Worker and the IAM schema the contract compiles to.    |
+| `oblaka.ts`, `lopata.config.ts` | A local run of the proxy, the application and IAM over service bindings.                   |
+| `src/__tests__/app.test.ts`     | The endpoints behind the production proxy decision (`testKit`), denied callers included.   |
 
-Cloudflare has no `@fabrika/db` yet, so this application has no tables: each endpoint answers from the caller's own
+Cloudflare has no `@fabrika/db` yet, so this application has no tables (`defineApp(vocabulary)`, no `ctx.db`): each endpoint answers from the caller's own
 grants (`member: true` for the caller's identity, `over` for the values it may read in) and reads no application data.
 Files, forms, webhooks and jobs do not boot on Cloudflare.
 

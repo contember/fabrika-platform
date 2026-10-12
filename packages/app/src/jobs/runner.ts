@@ -118,7 +118,7 @@ interface RunnerContext {
 
 export interface JobBindingInput {
 	readonly artifact: ContractArtifact
-	/** The tree `implement`'s `handlers` returned; a job's handler is `handlers.jobs.<name>`. */
+	/** The handler tree `boot` binds; a job's handler is `handlers.jobs.<name>`. */
 	readonly handlers: unknown
 	readonly database: ContractDatabase | null
 	/** The framework side of `@fabrika/db`, bound by `boot`; `null` when the application has no such layer. */
@@ -179,7 +179,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			problems.push(`${where} is scoped to '${artifact.scope.dimension}'; this version runs jobs with scope: 'app' only`)
 		}
 		if (input.framework === null) {
-			problems.push(`${where} needs @fabrika/db on Postgres, which holds its lease and fences its writes: implement({ database: scoped(tables) })`)
+			problems.push(`${where} needs @fabrika/db on Postgres, which holds its lease and fences its writes: serve(contract, { database: scoped(tables) })`)
 		}
 		const schedule = parseCron(artifact.schedule)
 		if (schedule === null) {

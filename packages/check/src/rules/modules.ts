@@ -57,11 +57,11 @@ const FORBIDDEN_PACKAGES: ReadonlyMap<string, Forbidden> = new Map([
 const FRAMEWORK_ONLY: ReadonlyMap<string, Forbidden> = new Map([
 	['@fabrika/db/framework', {
 		what: "the framework's binding of the data layer to its connection",
-		allowed: 'implement({ database: scoped(tables) }); boot binds it',
+		allowed: 'serve(contract, { database: scoped(tables) }); boot binds it',
 	}],
 	['@fabrika/app/service', {
 		what: "the installation services' own router, which bypasses the contract",
-		allowed: 'endpoints declared in fabrika.contract.ts, served by implement',
+		allowed: 'endpoints declared in the slices and fabrika.contract.ts, served by serve(contract, { database })',
 	}],
 ])
 

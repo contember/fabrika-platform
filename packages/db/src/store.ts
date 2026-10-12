@@ -80,7 +80,7 @@ import {
 	type UpdateValues,
 	type VersionArguments,
 } from './policy'
-import { type Locator, register } from './registry'
+import { frameworkSideOf, type Locator, register } from './registry'
 import { type TablePolicies, tablePolicies } from './tables'
 
 export interface DataLayerRuntime {
@@ -903,25 +903,27 @@ function joinShapes(models: TableModels, parent: TableModel): Readonly<Record<st
 	return freeze(joinable)
 }
 
-/** What `implement({ database })` takes: the policies as data. `boot` binds only an object `scoped` created. */
+/** What `serve(contract, { database })` takes: the policies as data. `boot` binds only an object `scoped` created. */
 export interface DataLayer {
 	/** Every table's policy as data, for the contract compiler. */
 	readonly tables: TablePolicies
 }
 
+declare const layerTypes: unique symbol
+
 /**
- * What `scoped` returns: the policies and the store builders for application modules. It has no connection and no
- * locator of its own; `boot` binds them through `@fabrika/db/framework`, which only `@fabrika/app` imports.
+ * What `scoped` returns: the policies, typed by the tables they came from. It has no connection, no locator and no
+ * handle of its own; `boot` binds it through `@fabrika/db/framework`, which only `@fabrika/app` imports, and a
+ * handler reaches data through `ctx.db`. The brand is type-only: no value has the property.
  */
 export interface ScopedDatabase<DB, P> extends DataLayer {
-	defineStore<const T extends DimensionTableName<P>, S>(table: T, build: (t: DimensionTable<DB, P, T>) => S): S
-	defineChildStore<const T extends ChildTableName<P>, S>(table: T, build: (t: ChildTable<DB, P, T>) => S): S
+	readonly [layerTypes]?: { readonly db: DB; readonly policies: P }
 }
 
 /**
- * Binds the table policies to the data layer. An application calls it once, in a module of its own, and passes the
- * result to `implement({ database })`; its store modules use the `defineStore` and `defineChildStore` it carries.
- * Nothing reaches the database until `boot` binds that one object; another `scoped` result never gets a connection.
+ * Binds the table policies to the data layer. An application calls it once, in `src/app.ts`, and passes the result to
+ * `serve(contract, { database })`. Nothing reaches the database until `boot` binds that one object; another `scoped`
+ * result never gets a connection.
  */
 export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	const models = tableModels(tables)
@@ -951,16 +953,9 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		return freeze({ model, parent, destination: destinationOf(models, model, parent), shape, joins: freeze(joins), connection })
 	}
 
-	const database: ScopedDatabase<DB, P> = Object.freeze({
-		tables: tablePolicies(tables),
-		defineStore<const T extends DimensionTableName<P>, S>(table: T, build: (t: DimensionTable<DB, P, T>) => S): S {
-			return build(new DimensionTable(contextFor(table, 'dimension')))
-		},
-		defineChildStore<const T extends ChildTableName<P>, S>(table: T, build: (t: ChildTable<DB, P, T>) => S): S {
-			return build(new ChildTable(contextFor(table, 'child')))
-		},
-	})
+	const database: ScopedDatabase<DB, P> = Object.freeze({ tables: tablePolicies(tables) })
 	register(database, {
+		tableContext: contextFor,
 		probe(table: string): TableProbe {
 			const mode = modelOf(models, table)?.scope.mode
 			if (mode !== 'dimension' && mode !== 'child') {
@@ -999,6 +994,36 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		}),
 	})
 	return database
+}
+
+/** The context of `table` in the layer `scoped` created, for the framework's own store builders below. */
+function storeContext(database: DataLayer, table: string, mode: 'dimension' | 'child'): TableContext {
+	const side = frameworkSideOf(database)
+	if (side === undefined) {
+		throw new TypeError('not a data layer scoped(tables) created')
+	}
+	return side.tableContext(table, mode)
+}
+
+/**
+ * A store over one dimension table of the layer: the framework's own tests and kits build them, never an application,
+ * whose handlers reach data through `ctx.db`. Exported from `@fabrika/db/testing` only.
+ */
+export function defineStore<DB, P, const T extends DimensionTableName<P>, S>(
+	database: ScopedDatabase<DB, P>,
+	table: T,
+	build: (t: DimensionTable<DB, P, T>) => S,
+): S {
+	return build(new DimensionTable(storeContext(database, table, 'dimension')))
+}
+
+/** A store over one child table of the layer, as `defineStore`; exported from `@fabrika/db/testing` only. */
+export function defineChildStore<DB, P, const T extends ChildTableName<P>, S>(
+	database: ScopedDatabase<DB, P>,
+	table: T,
+	build: (t: ChildTable<DB, P, T>) => S,
+): S {
+	return build(new ChildTable(storeContext(database, table, 'child')))
 }
 
 /** The inbox table of `form`: the one table whose scope is `{ inbox: form }`. */

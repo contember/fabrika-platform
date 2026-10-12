@@ -1,0 +1,2 @@
+// The state the endpoint access tests seed: a deal reopens only once it is decided.
+export const seeds = { 'api.deals.reopen': { stage: 'won' } }

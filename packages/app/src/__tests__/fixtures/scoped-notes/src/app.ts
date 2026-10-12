@@ -1,7 +1,7 @@
 // The application: handlers reach rows only through the stores, with the capabilities `ctx` hands them.
 
-import { implement } from '@fabrika/app/implement'
 import type { DataLayer, Ref } from '@fabrika/db'
+import { implement } from '../../../../implement/implement'
 import { contract } from '../fabrika.contract'
 import { database as applicationDatabase } from './db/database'
 import { notes } from './db/stores/notes'

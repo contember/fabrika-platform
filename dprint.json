@@ -20,7 +20,12 @@
 	"excludes": [
 		"**/node_modules",
 		"**/*-lock.json",
-		".claude"
+		".claude",
+		// What `fabrika db test-scaffold` writes: the checker compares it byte for byte (`generated-test-hash`).
+		"examples/*/src/__tests__/endpoint-access.test.ts",
+		"examples/*/src/db/__tests__/*.policy-isolation.test.ts",
+		"packages/cli/src/__tests__/fixtures/*/src/__tests__/endpoint-access.test.ts",
+		"packages/cli/src/__tests__/fixtures/*/src/db/__tests__/*.policy-isolation.test.ts"
 	],
 	"plugins": [
 		"https://plugins.dprint.dev/typescript-0.95.11.wasm",

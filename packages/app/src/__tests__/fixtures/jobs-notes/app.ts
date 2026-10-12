@@ -1,7 +1,9 @@
 // The application of the jobs fixture: each job reaches the notes only through the capabilities its ctx mints.
 
-import { implement, type JobContext } from '@fabrika/app/implement'
+import { type JobContext } from '@fabrika/app/implement'
 import { type Ref, scoped, type Within } from '@fabrika/db'
+import { defineStore } from '@fabrika/db/testing'
+import { implement } from '../../../implement/implement'
 import { tables } from '../scoped-notes/src/db/tables'
 import { contract, filesContract, startingContract } from './fabrika.contract'
 
@@ -22,7 +24,7 @@ export interface JobHooks {
 
 export function jobsApp(hooks: JobHooks) {
 	const database = scoped(tables)
-	const notes: NoteRows = database.defineStore('notes', (t) => ({
+	const notes: NoteRows = defineStore(database, 'notes', (t) => ({
 		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
 		remove: (note: Ref<'note', 'notes.delete'>) => t.remove(note),
 	}))
@@ -64,7 +66,7 @@ export function startingJobsApp() {
 /** The jobs contract with a file collection, so `boot` needs the object storage the platform wrote. */
 export function filesJobsApp() {
 	const database = scoped(tables)
-	const notes = database.defineStore('notes', (t) => ({
+	const notes = defineStore(database, 'notes', (t) => ({
 		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
 	}))
 	return implement(filesContract, {

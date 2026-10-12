@@ -31,7 +31,8 @@ crm/
   package.json
   tsconfig.json
   bun.lock
-  zerops.yaml                                   the build base only (Zerops); the platform writes the run section
+  zerops.yaml                                   the build base and the SPA build commands (Zerops); the platform writes the rest
+  build-web.ts                                  the SPA build: web/index.html through @fabrika/check/bun-plugin
   fabrika.config.ts                             the provider config: services, the proxy table, the IAM schema
   fabrika.contract.ts                           app.contract((c) => …): composes the slices' groups
   AGENTS.md                                     the rendered agent skill
@@ -63,7 +64,7 @@ crm/
         reopen.test.ts                          authored: a handler, on a test database
     __tests__/
       endpoint-access.test.ts                   generated
-      endpoint-access.fixtures.ts               authored: the inputs the scaffold cannot sample
+      endpoint-access.fixtures.ts               authored: inputs the scaffold cannot sample, seeds for preconditions
   web/
     index.html
     main.ts                                     the SPA: createClient(contract, 'api')
@@ -249,10 +250,12 @@ An import is judged by the file or package Bun loads for it:
 - **Generated tests** — `src/db/__tests__/<table>.policy-isolation.test.ts` and
   `src/__tests__/endpoint-access.test.ts` — are what `fabrika db test-scaffold` writes. They are committed and never
   edited (`generated-test-hash`), and no module imports one (`generated-test-import`).
-- **Authored inputs** for the endpoint access tests are `src/__tests__/endpoint-access.fixtures.ts`, read statically.
+- **Authored inputs and seeds** for the endpoint access tests are `src/__tests__/endpoint-access.fixtures.ts`, read
+  statically: `fixtures` for an input the scaffold cannot sample, `seeds` for the row state a precondition needs
+  (`export const seeds = { 'api.deals.reopen': { stage: 'won' } }`). A generated test is never edited to pass.
 - **Authored tests** live beside what they test: `src/<slice>/__tests__/*.test.ts` or `src/<slice>/*.test.ts`. A
   logic test calls the functions. A handler test boots the application through `testKit` from
-  `@fabrika/app/testing` and calls it through the typed client.
+  `@fabrika/app/testing` and calls it through the typed client; `kit.runJob(name)` runs a cron job.
 - **The test kits** (`@fabrika/app/testing`, `@fabrika/db/testing`) and helper modules under `__tests__/` are imported
   only by test files.
 

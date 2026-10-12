@@ -1,8 +1,9 @@
 // The application: each handler reaches rows through its capability and answers where that capability says the
 // object lies. Each call builds its own `scoped(tables)`, because `boot` binds a layer once.
 
-import { implement } from '@fabrika/app/implement'
 import { type Ref, scoped, type Within } from '@fabrika/db'
+import { defineStore } from '@fabrika/db/testing'
+import { implement } from '../../../../implement/implement'
 import { contract } from '../fabrika.contract'
 import { tables } from './db/tables'
 
@@ -13,7 +14,7 @@ export interface Hooks {
 
 export function organizationsApp(hooks: Hooks) {
 	const database = scoped(tables)
-	const notes = database.defineStore('notes', (t) => ({
+	const notes = defineStore(database, 'notes', (t) => ({
 		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
 		get: (note: Ref<'note', 'notes.read'>) => t.get(note),
 		create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),

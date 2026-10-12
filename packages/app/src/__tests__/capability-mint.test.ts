@@ -3,12 +3,12 @@
 // own, binds its stores to that issuer's authority and holds the mint in its closure. A mint application code makes,
 // or a second runtime it boots with keys of its own, mints capabilities the real stores refuse.
 
-import { implement } from '@fabrika/app/implement'
 import { buildAccessClaims, type Jwks } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { describe, expect, test } from 'bun:test'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { CapabilityRefusedError, createCapabilityIssuer, RequestFrame, runInRequest } from '../implement/capability'
+import { implement } from '../implement/implement'
 import { contract } from './fixtures/implement/fabrika.contract'
 import { APP_ID, bootApp, grant, ISSUER, resultOf, send, token } from './fixtures/implement/harness'
 import { noteDatabase, type NoteRow, type NotesStore, notesStore } from './fixtures/implement/stores'

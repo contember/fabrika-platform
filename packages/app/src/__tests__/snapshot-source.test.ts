@@ -6,7 +6,7 @@ import type { ExportDescription, SchemaShape } from '@fabrika/auth-core'
 import { exportDigest } from '@fabrika/auth-core'
 import { checkApplication } from '@fabrika/check'
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { compileContract } from '../contract/compile'
@@ -160,7 +160,10 @@ describe('the snapshot reads back into what it was written from', () => {
 
 describe('the consumer that vendors it', () => {
 	test('@fabrika/check reads the shop, its contract and the vendored snapshot, with no finding', async () => {
-		const findings = await checkApplication({ root: join(import.meta.dir, 'fixtures', 'connect-shop') })
-		expect(findings).toEqual([])
+		// The shop's handler module serves it through the framework's own test entry, which no application imports.
+		const root = join(import.meta.dir, 'fixtures', 'connect-shop')
+		const shell = ['fabrika.contract.ts', 'fabrika/connect/catalog.products.v1.ts']
+		const files = new Map(shell.map((path) => [path, readFileSync(join(root, path), 'utf8')]))
+		expect(await checkApplication({ root, files })).toEqual([])
 	})
 })

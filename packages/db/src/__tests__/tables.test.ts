@@ -7,7 +7,7 @@ import { applicationDatabaseSchema } from '../../../platform-node/src/applicatio
 import { applicationSchema, Database } from '../database'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, isScopedDatabase } from '../framework'
-import { scoped } from '../store'
+import { defineStore, scoped } from '../store'
 import { isTables, readTables, tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 import { RecordingDialect } from './fixtures/recording-dialect'
@@ -122,7 +122,7 @@ describe('only the framework binds the layer, once', () => {
 
 	test('a store refuses before the framework bound the layer', async () => {
 		const database = scoped(tables)
-		const notesTable = database.defineStore('notes', (t) => t)
+		const notesTable = defineStore(database, 'notes', (t) => t)
 		await expect(notesTable.get(authority.ref('note', 'notes.read', 'n1', { workspace: 'w1', organization: 'o1' }))).rejects.toThrow(
 			'the data layer is not connected',
 		)
@@ -130,7 +130,7 @@ describe('only the framework binds the layer, once', () => {
 
 	test('the application-facing object has no connect and no locator, and takes no new member', () => {
 		const database = scoped(tables)
-		expect(Object.keys(database).sort()).toEqual(['defineChildStore', 'defineStore', 'tables'])
+		expect(Object.keys(database).sort()).toEqual(['tables'])
 		expect('connect' in database).toBe(false)
 		expect('locate' in database).toBe(false)
 		expect(Object.isFrozen(database)).toBe(true)

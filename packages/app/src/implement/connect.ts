@@ -272,14 +272,16 @@ export function wireImports(wiring: ImportWiring, problems: string[]): ReadonlyM
 	const bindings = new Map<string, string>()
 	for (const name of Object.keys(snapshots)) {
 		if (!Object.hasOwn(artifact.imports, name)) {
-			problems.push(`implement({ connect }) passes a snapshot as '${name}', and the contract imports nothing of that name`)
+			problems.push(`a snapshot is passed as '${name}', and the contract imports nothing of that name`)
 		}
 	}
 	for (const [name, declared] of Object.entries(artifact.imports)) {
 		const where = `import '${name}'`
 		const snapshot = Object.hasOwn(snapshots, name) ? snapshots[name] : undefined
 		if (snapshot === undefined) {
-			problems.push(`${where} has no snapshot; pass implement({ connect: { ${name}: <the snapshot in fabrika/connect/> } })`)
+			problems.push(
+				`${where} has no snapshot; pass it in defineApp(vocabulary, tables, { imports: { ${name}: { snapshot, procedures } } }), from fabrika/connect/`,
+			)
 			continue
 		}
 		const description = checkedDescription(where, declared, snapshot, problems)

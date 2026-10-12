@@ -12,12 +12,13 @@ import { inSet, namesOf } from './builtins'
 import { type CatalogColumn, introspectSchema } from './codegen'
 import { applicationSchema, Database } from './database'
 import type { Primitive } from './description'
+import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from './migrations'
 import { type Container, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
 import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
 import type { TableProbe } from './store'
 
-export type { TableProbe } from './store'
+export { ChildTable, defineChildStore, defineStore, DimensionTable, type TableProbe } from './store'
 
 const MODULE = '@fabrika/db/testing'
 refuseInProduction(MODULE)
@@ -48,6 +49,11 @@ export interface WorldRow {
 	readonly parent: string | null
 	/** The value of the grant dimension the row lies in (`IsolationWorlds.dimension`). */
 	readonly scope: string
+	/**
+	 * Every dimension value the row lies in: a dimension table's own first, then each container, innermost first. A
+	 * share link's chain is this list.
+	 */
+	readonly chain: readonly { readonly type: string; readonly value: string }[]
 	/** The row's values of the policy's update columns, as seeded. */
 	readonly updates: Readonly<Record<string, SampleValue>>
 	/**
@@ -72,8 +78,11 @@ export interface TestDatabase {
 	/** The connection `boot` binds the data layer to: the runtime role, on the migrated schema. */
 	readonly database: Database
 	readonly schema: string
-	/** Seeds one row of `table` in each of two fresh chains, with every container row a table owns. */
-	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string): Promise<IsolationWorlds>
+	/**
+	 * Seeds one row of `table` in each of two fresh chains, with every container row a table owns. `values` (column →
+	 * value) are written into both rows of `table`: the state an endpoint's precondition needs.
+	 */
+	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string, values?: Readonly<Record<string, SampleValue>>): Promise<IsolationWorlds>
 	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled. */
 	sampleInsert<DB, P>(tables: Tables<DB, P>, table: string): Promise<Readonly<Record<string, SampleValue>>>
 	/** Closes the connections and drops the schema and its roles. */
@@ -227,7 +236,7 @@ function migrationsDirectory(migrations: string | URL): string {
 }
 
 /**
- * A fresh schema with the application's migrations applied by the real runner (`@fabrika/platform-node`) as its
+ * A fresh schema with the framework's and the application's migrations applied by the real runner (`@fabrika/platform-node`) as its
  * migration role, connected and seeded as its runtime role, or `null` after the standard skip message when
  * `FABRIKA_TEST_POSTGRES_URL` is unset. That URL is the provisioning credential, which must be able to create roles.
  * With `FABRIKA_TEST_POSTGRES_REQUIRED=1` a missing URL throws instead. The URL is a credential: no message names it.
@@ -244,7 +253,12 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 	const appId = `test-${randomHex()}${randomHex()}`
 	const schema = applicationSchema(appId)
-	const migrations = definePostgresApplicationMigrations({ appId, directory: migrationsDirectory(options.migrations) })
+	// The framework's tables first, as `fabrika db migrate` applies them: a job's lease and a webhook's bindings live there.
+	const migrations = definePostgresApplicationMigrations({
+		appId,
+		directory: migrationsDirectory(options.migrations),
+		framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS },
+	})
 	const runtimeUrl = applicationRuntimeUrl(url, appId)
 	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	const holder = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
@@ -304,7 +318,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 
 	/** Inserts one row: `assigned` as given, every other required column sampled. Answers what the row holds. */
-	async function insert(table: string, assigned: ReadonlyMap<string, Primitive>, markers: string[]): Promise<ReadonlyMap<string, SampleValue>> {
+	async function insert(table: string, assigned: ReadonlyMap<string, SampleValue>, markers: string[]): Promise<ReadonlyMap<string, SampleValue>> {
 		const row = new Map<string, SampleValue>()
 		for (const column of await columnsOf(table)) {
 			const value = assigned.get(column.column_name)
@@ -330,8 +344,8 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 
 	/** The columns a model's row is placed by: its own key when it owns a dimension, and each link of its chain. */
-	function placement(model: TableModel, values: ReadonlyMap<string, string>, key: string): Map<string, Primitive> {
-		const assigned = new Map<string, Primitive>()
+	function placement(model: TableModel, values: ReadonlyMap<string, string>, key: string): Map<string, SampleValue> {
+		const assigned = new Map<string, SampleValue>()
 		const scope = model.scope
 		if (scope.mode === 'dimension' || scope.mode === 'child') {
 			assigned.set(scope.key, key)
@@ -351,7 +365,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		return assigned
 	}
 
-	async function seedWorld(models: TableModels, model: TableModel, world: string): Promise<WorldRow> {
+	async function seedWorld(models: TableModels, model: TableModel, world: string, seed: Readonly<Record<string, SampleValue>>): Promise<WorldRow> {
 		const markers: string[] = []
 		const values = new Map<string, string>()
 		const links: readonly Container[] = model.chain
@@ -375,16 +389,32 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 				await insert(owner.name, placement(owner, values, value), markers)
 			}
 		}
-		const row = await insert(model.name, placement(model, values, key), markers)
+		const assigned = placement(model, values, key)
+		for (const [column, value] of Object.entries(seed)) {
+			await columnOf(model.name, column)
+			if (assigned.has(column)) {
+				throw new Error(`${model.name}.${column} places the row in its scope; a seed sets only the row's own state`)
+			}
+			assigned.set(column, value)
+		}
+		const row = await insert(model.name, assigned, markers)
 		const updates: Record<string, SampleValue> = {}
 		for (const name of namesOf(model.update)) {
 			updates[name] = row.get(name) ?? await updateSample(model.name, name)
 		}
 		const dimension = grantDimension(models, model)
+		const chain = [
+			...(scope.mode === 'dimension' ? [{ type: scope.dimension, value: key }] : []),
+			...links.flatMap((link) => {
+				const value = values.get(link.dimension)
+				return value === undefined ? [] : [{ type: link.dimension, value }]
+			}),
+		]
 		return {
 			key,
 			parent: scope.mode === 'child' ? (values.get(links[0]?.dimension ?? '') ?? null) : null,
 			scope: values.get(dimension) ?? key,
+			chain,
 			updates,
 			markers,
 		}
@@ -393,10 +423,10 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	return {
 		database,
 		schema,
-		async seedWorlds(tables, table) {
+		async seedWorlds(tables, table, values = {}) {
 			const { models, model } = scopedModel(tables, table)
 			const dimension = grantDimension(models, model)
-			return { dimension, own: await seedWorld(models, model, 'own'), other: await seedWorld(models, model, 'other') }
+			return { dimension, own: await seedWorld(models, model, 'own', values), other: await seedWorld(models, model, 'other', values) }
 		},
 		async sampleInsert(tables, table) {
 			const { model } = scopedModel(tables, table)

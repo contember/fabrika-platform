@@ -4,7 +4,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { AnyContract, Schema } from '../contract/define'
-import { handlerOf, snapshotsOf } from '../contract/handled'
+import { handlerOf, isTableless, snapshotsOf } from '../contract/handled'
 import { ContractError } from '../contract/problems'
 import {
 	type ApplicationEnvironment,
@@ -58,7 +58,7 @@ export function defineDeps<D>(build: (env: ApplicationEnvironment, runtime: Deps
 }
 
 export interface ServeOptions {
-	/** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or `null` for an application without tables. */
+	/** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or `null` for a kit without tables (`defineApp(vocabulary)`). */
 	readonly database: ImplementationDatabase | null
 	readonly deps?: AppDeps<unknown>
 }
@@ -69,6 +69,13 @@ export interface ServeOptions {
  */
 export function serve<const C extends AnyContract>(contract: C, options: ServeOptions): ContractImplementation<C> {
 	handlerTree(contract, (work) => work())
+	if (isTableless(contract) !== (options.database === null)) {
+		throw new ContractError([
+			isTableless(contract)
+				? 'serve: defineApp(vocabulary) declares no tables, so it takes database: null'
+				: 'serve: the kit declares tables, so it takes database: scoped(tables) from @fabrika/db',
+		])
+	}
 	const build = options.deps === undefined ? undefined : builds.get(options.deps)
 	return contractImplementation({
 		contract,

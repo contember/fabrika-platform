@@ -6,7 +6,7 @@
 import type { RpcCaller } from '@fabrika/auth-core'
 import type { DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { Declared, JobKitContext, KitImports, KitTypes, SqlMode, WebhookKitContext } from './context'
+import type { Declared, JobKitContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
 import {
 	type AccessDeclaration,
 	type CronDeclaration,
@@ -45,7 +45,7 @@ import {
 	type WebhookMount,
 } from './define'
 import type { DeclaredFields, Endpoint, ExportKit, Group, GroupBuild, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
-import { withHandler, withSnapshots } from './handled'
+import { withHandler, withoutTables, withSnapshots } from './handled'
 import { ContractError } from './problems'
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 
@@ -226,6 +226,7 @@ export interface App<K extends KitTypes> {
  * no implementation can return (`.handle`'s `ExactReturn`, `contract`'s `imports` section by the kit's imports), so
  * the compiler relates the two nowhere else; `kit-runtime.test.ts` holds that each builder returns what its type says.
  */
+export function defineApp<V extends AnyAppVocabulary>(vocabulary: V): App<KitOf<V, NoTablesIndex, Record<never, never>>>
 export function defineApp<V extends AnyAppVocabulary, DB, P>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
@@ -236,8 +237,8 @@ export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends K
 	tables: Tables<DB, P>,
 	options: { readonly imports: Imp },
 ): App<KitOf<V, DbIndex<DB, P>, Imp>>
-export function defineApp(vocabulary: AnyAppVocabulary, _tables: unknown, options?: { readonly imports: KitImports }): object {
-	return runtimeApp(vocabulary, options?.imports)
+export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: { readonly imports: KitImports }): object {
+	return runtimeApp(vocabulary, options?.imports, tables !== undefined)
 }
 
 // ── The runtime ─────────────────────────────────────────────────────────────────────────────────
@@ -350,8 +351,11 @@ interface RuntimeApp {
 	contract(build: (c: RuntimeContractKit) => Surface): AnyContract
 }
 
-/** `imports` is what `defineApp`'s options carry; the contract has an imports section exactly when they carry one. */
-function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefined): RuntimeApp {
+/**
+ * `imports` is what `defineApp`'s options carry; the contract has an imports section exactly when they carry one.
+ * `tables` is whether the kit was given tables: a contract of a kit without them is served without a database.
+ */
+function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefined, tables: boolean): RuntimeApp {
 	return {
 		group: (options, build) => ({
 			'~kind': 'group',
@@ -417,7 +421,8 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 				dimensions: vocabulary.dimensions,
 				surface: declared,
 			}
-			return withSnapshots(contract, Object.fromEntries(Object.entries(imports ?? {}).map(([name, imported]) => [name, imported.snapshot])))
+			const built = withSnapshots(contract, Object.fromEntries(Object.entries(imports ?? {}).map(([name, imported]) => [name, imported.snapshot])))
+			return tables ? built : withoutTables(built)
 		},
 	}
 }

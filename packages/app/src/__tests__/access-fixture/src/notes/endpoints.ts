@@ -1,0 +1,59 @@
+// The cases of the endpoint access kit: a write that reads its own target, a precondition (`restore` only a trashed
+// note), a report in a workspace through `ctx.sql`, one that forgets its scope, and a link holder's read.
+
+import { ConflictError } from '@fabrika/app'
+import { app } from '../app-kit'
+import { ById, InWorkspace, Note, Notes, Saved, Titles, Versioned } from '../schemas'
+
+export const notes = app.group({ callers: ['human'] }, (r) => ({
+	get: r.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })
+		.handle(async ({ ctx }) => {
+			const note = await ctx.db.target.get()
+			return { id: note.id, title: note.title, trashed: note.trashed }
+		}),
+	list: r.query({ output: Notes, access: { action: 'notes.read', over: 'workspace' } })
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.db.within.notes.list()).items.map((note) => ({ id: note.id, title: note.title, trashed: note.trashed })),
+		})),
+	trash: r.mutation({ input: Versioned, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
+		.handle(async ({ input, ctx }) => ctx.db.target.update({ trashed: true }, { expectVersion: input.expectVersion })),
+	restore: r.mutation({ input: Versioned, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			if (!(await ctx.db.target.getForUpdate()).trashed) throw new ConflictError('only a trashed note is restored')
+			return ctx.db.target.update({ trashed: false }, { expectVersion: input.expectVersion })
+		}),
+	titles: r.query({ input: InWorkspace, output: Titles, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' }, sql: 'read' })
+		.handle(async ({ ctx }) => ({
+			titles: (await ctx.sql(Note)`select id, title, trashed from notes where workspace_id = ${ctx.target.value} order by title`).map((note) =>
+				note.title
+			),
+		})),
+	everyTitle: r.query({ input: InWorkspace, output: Titles, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' }, sql: 'read' })
+		.handle(async ({ ctx }) => ({ titles: (await ctx.sql(Note)`select id, title, trashed from notes order by title`).map((note) => note.title) })),
+}))
+
+export const shared = app.link('/s', {
+	spa: 'dist/share',
+	dimension: 'note',
+	grants: ['notes.read'],
+	issuedBy: 'notes.share',
+	maxDays: 30,
+	procedures: (l) => ({
+		note: l.query({ output: Note, access: { action: 'notes.read' } })
+			.handle(async ({ ctx }) => {
+				const note = await ctx.db.target.get()
+				return { id: note.id, title: note.title, trashed: note.trashed }
+			}),
+	}),
+})
+
+/** Removes every trashed note; a retried attempt lists again, so it removes nothing twice. */
+export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.write'], scope: 'app' })
+	.handle(async ({ ctx }) => {
+		const trashed = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ where: [['trashed', '=', true]] })
+		await ctx.transaction(async (tx) => {
+			for (const note of trashed.items) {
+				await tx.db.on(await ctx.ref('notes.write', 'note', note.id)).remove({ expectVersion: note.version })
+			}
+		})
+	})

@@ -32,20 +32,20 @@ describe('the example application', () => {
 		const viewer = kit.testCaller([{ role: 'viewer', scope: DEMO }], { id: 'viewer-1', label: 'viewer@example.test' })
 		const api = createClient(contract, 'api', { fetch: kit.browser(viewer) })
 		expect(await api.me()).toEqual({ id: 'viewer-1', label: 'viewer@example.test' })
-		expect(await api.projects.readable()).toEqual({ all: false, values: ['demo'] })
-		expect((await failure(api.organizations.readable())).httpStatus).toBe(403)
+		expect(await api.projects()).toEqual({ all: false, values: ['demo'] })
+		expect((await failure(api.organizations())).httpStatus).toBe(403)
 	})
 
 	test('a global grant reads every value of the dimension', async () => {
 		const reader = kit.testCaller([{ action: 'example.read' }])
 		const api = createClient(contract, 'api', { fetch: kit.browser(reader) })
-		expect(await api.organizations.readable()).toEqual({ all: true, values: [] })
+		expect(await api.organizations()).toEqual({ all: true, values: [] })
 	})
 
 	test('a machine key reaches the API with its own grants', async () => {
 		const machine = kit.testCaller([{ action: 'example.read', scope: ACME }], { kind: 'machine' })
 		const api = createClient(contract, 'api', { fetch: kit.fetch, key: machine.key ?? '' })
-		expect(await api.organizations.readable()).toEqual({ all: false, values: ['acme'] })
+		expect(await api.organizations()).toEqual({ all: false, values: ['acme'] })
 	})
 
 	test('a caller without a session is sent to sign in, and one without any permission is refused', async () => {

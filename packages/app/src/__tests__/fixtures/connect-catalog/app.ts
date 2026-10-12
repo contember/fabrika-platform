@@ -1,6 +1,6 @@
 // The catalog's handlers over an in-memory product list; the export serves the same rows as the API.
 
-import { implement } from '@fabrika/app/implement'
+import { implement } from '../../../implement/implement'
 import { contract } from './fabrika.contract'
 
 export interface ProductRow {

@@ -1,6 +1,6 @@
 // The shop's handlers: `show` reads a product through the connector and reports the outcome it got.
 
-import { implement } from '@fabrika/app/implement'
+import { implement } from '../../../../implement/implement'
 import { contract } from '../fabrika.contract'
 import { catalogProductsV1 } from '../fabrika/connect/catalog.products.v1'
 

@@ -3,10 +3,11 @@
 // that declares `issues: 'shared'` issues on that mount and no other compatible one.
 
 import { defineApp } from '@fabrika/app/contract'
-import { type ContractDatabase, implement } from '@fabrika/app/implement'
+import { type ContractDatabase } from '@fabrika/app/implement'
 import { tablePolicies } from '@fabrika/db/tables'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { implement } from '../implement/implement'
 import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { RecordingMembership } from './fixtures/multi-tenant/iam'
 import { tables } from './kit-fixture/src/db/tables'

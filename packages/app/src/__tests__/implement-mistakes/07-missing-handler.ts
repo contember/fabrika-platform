@@ -1,4 +1,4 @@
-import { implement } from '@fabrika/app/implement'
+import { implement } from '../../implement/implement'
 import { contract } from '../fixtures/implement/fabrika.contract'
 import { noteDatabase, type NoteRow, notesStore } from '../fixtures/implement/stores'
 

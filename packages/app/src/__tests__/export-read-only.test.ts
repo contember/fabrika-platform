@@ -9,6 +9,7 @@
 
 import { applicationSchema, Database, type Ref, scoped, type Within } from '@fabrika/db'
 import { bindScopedDatabase } from '@fabrika/db/framework'
+import { defineStore } from '@fabrika/db/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -37,7 +38,7 @@ const exporting = defineContract(notesContract.vocabulary, (c) => ({
 }))
 
 const database = scoped(tables)
-const notes = database.defineStore('notes', (t) => ({
+const notes = defineStore(database, 'notes', (t) => ({
 	list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
 }))
 
@@ -47,7 +48,7 @@ const notes = database.defineStore('notes', (t) => ({
  */
 const issuer = createCapabilityIssuer()
 const direct = scoped(tables)
-const directNotes = direct.defineStore('notes', (t) => ({
+const directNotes = defineStore(direct, 'notes', (t) => ({
 	create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),
 }))
 

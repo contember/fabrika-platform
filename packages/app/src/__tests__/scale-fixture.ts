@@ -68,7 +68,7 @@ ${tree(procedures, ([procedure]) => procedure, '\t')}
 		return contract
 	}
 	return `${contract}
-import { implement } from '@fabrika/app/implement'
+import { implement } from '../implement/implement'
 
 export const app = implement(contract, {
 	database: null,

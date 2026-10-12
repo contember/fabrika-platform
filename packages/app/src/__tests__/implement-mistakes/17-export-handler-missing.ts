@@ -1,4 +1,4 @@
-import { implement } from '@fabrika/app/implement'
+import { implement } from '../../implement/implement'
 import { contract } from '../fixtures/connect-catalog/fabrika.contract'
 
 // every exported procedure needs its handler under handlers.exports

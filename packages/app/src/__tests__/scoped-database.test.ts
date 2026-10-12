@@ -8,13 +8,15 @@
 // The file gets its own application schema `app_<id>`. The URL is a credential: it is never logged.
 
 import { serveContract } from '@fabrika/app/bun'
-import { BootError, type ContractApp, implement } from '@fabrika/app/implement'
+import { BootError, type ContractApp } from '@fabrika/app/implement'
 import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped } from '@fabrika/db'
 import { bindScopedDatabase } from '@fabrika/db/framework'
+import { defineStore } from '@fabrika/db/testing'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createCapabilityIssuer } from '../implement/capability'
+import { implement } from '../implement/implement'
 import {
 	bootApp,
 	errorType,
@@ -185,7 +187,7 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 	test('a wrapper around the database gets no connection, so a second layer the application creates stays unconnected', async () => {
 		const foreign = await seedNote('w2', 'foreign')
 		const rogue = scoped(tables)
-		const rogueNotes = rogue.defineStore('notes', (t) => ({ get: (note: Ref<'note', 'notes.read'>) => t.get(note) }))
+		const rogueNotes = defineStore(rogue, 'notes', (t) => ({ get: (note: Ref<'note', 'notes.read'>) => t.get(note) }))
 		// An authority of the application's own over the runtime's: every Ref it is handed lies in w2.
 		let runtimeAuthority: CapabilityAuthority | undefined
 		const everyWorkspace: CapabilityAuthority = {

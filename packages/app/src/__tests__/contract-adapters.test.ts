@@ -4,13 +4,13 @@
 import { diskAssets, issuerJwks, serveContract } from '@fabrika/app/bun'
 import { createContractWorker } from '@fabrika/app/cloudflare'
 import { defineContract } from '@fabrika/app/contract'
-import { implement } from '@fabrika/app/implement'
 import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
+import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
 import {
 	endpointHeaderFor,

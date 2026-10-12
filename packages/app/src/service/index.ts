@@ -1,5 +1,5 @@
 // @fabrika/app/service — the installation's own services only (IAM, Control, Operations). An application serves its
-// contract through `implement`; `@fabrika/check` refuses this import in one.
+// contract through `serve`; `@fabrika/check` refuses this import in one.
 
 export { dispatchRpcRequest } from '../rpc/dispatcher.js'
 export {
