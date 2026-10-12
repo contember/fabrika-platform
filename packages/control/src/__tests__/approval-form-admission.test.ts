@@ -4,6 +4,7 @@
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
+import { cspOrigins, headerPolicy } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess } from '../approval/diff'
 import { type AccessSnapshot, parseSnapshot } from '../approval/snapshot'
@@ -55,6 +56,24 @@ describe('script and frame origins in the approval diff', () => {
 			{ widens: false, line: 'CSP `scriptSrc` no longer allows `https://widgets.example.com`' },
 			{ widens: false, line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' },
 		])
+	})
+
+	test("removing the last frame origin narrows: frames fall back to default-src 'self', which frame-src 'self' already allowed", () => {
+		const before = snapshot(withCsp(`{ frameSrc: [${WIDGET}] }`))
+		const after = snapshot()
+		const classification = classifyAccess(before, after)
+		expect(classification).toEqual({
+			outcome: 'removal',
+			changes: [{ widens: false, line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' }],
+		})
+		const frames = (contract: AccessSnapshot['contract']) => {
+			const policy = contract === null
+				? ''
+				: (headerPolicy(cspOrigins(contract.csp), null).find(([name]) => name === 'Content-Security-Policy')?.[1] ?? '')
+			return policy.split('; ').find((directive) => directive.startsWith('frame-src')) ?? "frame-src (default-src) 'self'"
+		}
+		expect(frames(before.contract)).toBe("frame-src 'self' https://widgets.example.com")
+		expect(frames(after.contract)).toBe("frame-src (default-src) 'self'")
 	})
 
 	test('a snapshot stored before the two directives existed parses and compares as naming none', () => {

@@ -63,7 +63,14 @@ describe('the CSP of named script and frame origins', () => {
 		expect(csp({})).toContain("script-src 'self';")
 		expect(csp({}) ?? '').not.toContain('frame-src')
 		expect(csp({ scriptSrc: [widget], frameSrc: [widget] })).toContain(`script-src 'self' ${widget};`)
-		expect(csp({ scriptSrc: [widget], frameSrc: [widget] })).toEndWith(`; frame-src ${widget}`)
+		expect(csp({ scriptSrc: [widget], frameSrc: [widget] })).toEndWith(`; frame-src 'self' ${widget}`)
+	})
+
+	test("a declared frame origin only extends the same-origin frames default-src 'self' already allows", () => {
+		const csp = (frameSrc: readonly string[]) => headerPolicy({ ...CSP, frameSrc }, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(csp([])).toContain("default-src 'self';")
+		expect(csp([widget])).toContain("default-src 'self';")
+		expect(csp([widget])).toContain(`frame-src 'self' ${widget}`)
 	})
 })
 

@@ -50,7 +50,7 @@ export interface CspOrigins {
 	readonly imgSrc: readonly string[]
 	readonly frameAncestors: readonly string[]
 	readonly scriptSrc: readonly string[]
-	/** `frame-src` is emitted only when it names an origin; without it frames fall back to `default-src 'self'`. */
+	/** `frame-src 'self' <origins>` is emitted only when it names an origin; without it frames fall back to `default-src 'self'`. */
 	readonly frameSrc: readonly string[]
 }
 
@@ -102,7 +102,8 @@ export function headerPolicy(origins: CspOrigins, operationsOrigin: string | nul
 		"object-src 'none'",
 		"base-uri 'none'",
 		`frame-ancestors ${frameAncestors.join(' ')}`,
-		...(origins.frameSrc.length === 0 ? [] : [`frame-src ${origins.frameSrc.join(' ')}`]),
+		// Without it frames fall back to `default-src 'self'`; a declared origin only extends that, so `'self'` stays.
+		...(origins.frameSrc.length === 0 ? [] : [`frame-src ${["'self'", ...origins.frameSrc].join(' ')}`]),
 	]
 	return Object.freeze([
 		['Content-Security-Policy', directives.join('; ')],

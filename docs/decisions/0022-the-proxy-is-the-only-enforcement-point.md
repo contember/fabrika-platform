@@ -169,7 +169,9 @@ The policy:
   contract may extend `connect-src`, `img-src`, `frame-ancestors`, `script-src` and `frame-src` with
   named origins — exact `https://` origins with a literal host, never a pattern, at most 16 per directive
   (`MAX_CSP_ORIGINS`, checked by the contract build and the manifest parser); such an extension is
-  approvable ([ADR-0050](0050-approved-access.md)). `frame-src` appears only when it names an origin. A
+  approvable ([ADR-0050](0050-approved-access.md)). `frame-src` appears only when it names an origin, and then as
+  `frame-src 'self' <origins>`: without it frames fall back to `default-src 'self'`, so an extension never
+  takes the same origin away and removing the last one narrows. A
   form's challenge provider adds its own fixed origins to `script-src` and `frame-src`, which the
   approval diff shows like any other.
 - `X-Content-Type-Options: nosniff`.
