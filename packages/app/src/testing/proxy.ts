@@ -14,6 +14,7 @@ import {
 	type IamGateway,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	type TokenCache,
 } from '@fabrika/proxy-core'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 
@@ -45,6 +46,8 @@ export interface EndpointProxyOptions {
 	readonly issuer: string
 	/** Issues the delegation grants of membership and scope-creating endpoints, as IAM does for the proxy. */
 	readonly delegations: DelegationIssuer | null
+	/** The proxy's token cache, as production keeps one; omitted, every request mints. */
+	readonly cache?: TokenCache
 }
 
 const ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]
@@ -58,6 +61,7 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 		iam: options.iam,
 		issuer: options.issuer,
 		delegations: options.delegations,
+		...(options.cache === undefined ? {} : { cache: options.cache }),
 	})
 	const verifyUrl = `https://fabrika-proxy.internal${DEFAULT_VERIFY_PATH}?${APP_QUERY_PARAM}=${encodeURIComponent(options.appId)}`
 	return async (request) => {

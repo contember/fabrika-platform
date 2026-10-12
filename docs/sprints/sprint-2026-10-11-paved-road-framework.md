@@ -1006,9 +1006,10 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   the target dimension's `members.list` (access `on`/`in`), decided by `endpointMembers` (`@fabrika/auth-core`) in
   the types, `facilitiesOf` and Control alike: the proxy admitted the caller for that action on that value and IAM
   re-checks the same action live, so the type promises what IAM answers. Another read action would type a list IAM
-  refuses. **IAM change:** `listMembers` shows labels to every `members.list` holder (it showed them to
-  `members.manage` only, since a user's label spells its address); emails and invitations stay with
-  `members.manage`. A directory does not make `boot` require a transport (every read endpoint of that action has
+  refuses. **Labels (review round 1):** a user's label spells its address, so a list-only caller gets
+  `label: null` unless the dimension declares `directory: 'labels'` in the vocabulary (artifact
+  `dimensions.<d>.directory`, absent otherwise so digests stay; IAM `app_scopes.members_directory`, migration 0007;
+  `classifyAccess` widens adding it with closer review). A directory does not make `boot` require a transport (every read endpoint of that action has
   one); without it only `list()` answers 503. **Outside the touch points:** Control's `needsMembershipTransport`
   issues the Zerops key for a list endpoint too, and IAM's schema reconcile keeps it while a dimension declares
   members (IAM's schema has no per-endpoint list fact). WU10: the skill's "Members" line and `AGENTS.md` still say
@@ -1018,3 +1019,8 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   `direct-forms` expectations dropped their import-site lines). `raw-sql` refuses a call, tag or helper by the
   module's `sql` binding (`rawSqlBindings`: an import of `sql` under any alias, a destructured load), so an aliased
   driver tag is refused now and a `queries.ts` parameter named `sql` is not.
+- **WU13b review round 1 — the Bun escape is closed:** `Bun` reached through `globalThis`/`window`/`self` (any key
+  spelling) as a value, a global object destructured for `Bun` (nested too) or bound to a name is `forbidden-global`;
+  the documented escape keeps only `process`. The directory witness is `packages/local-stack/__tests__/
+  member-directory.test.ts`: proxy-core's verify service with a token cache, the real IAM RPC on its SQLite harness,
+  `boot`. The proxy admits a holder of the action in another workspace (it reads no body); the access form refuses it.
