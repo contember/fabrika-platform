@@ -225,6 +225,15 @@ describe.skipIf(!hasPostgres)('over lists every table whose containment chain ho
 		await transaction.commit()
 	})
 
+	test("a task cannot carry another org than its project's, so no Within of an org lists another org's task", async () => {
+		// The composite foreign key the policy parse requires ties the inherited org_id to the project's own.
+		await expect(seedTask({ title: 'misplaced', project: 'p3', org: 'o1' })).rejects.toThrow()
+		const { transaction, handles } = invocation('query')
+		const page = await call(handles.within(alice.within('org', 'tasks.read', ['o1'])), 'tasks.list', { where: [['project_id', '=', 'p3']] })
+		expect(itemsOf(page)).toEqual([])
+		await transaction.commit()
+	})
+
 	test('a container grant above the dimension still reaches through its chain column', async () => {
 		const marker = `grant-${Bun.randomUUIDv7()}`
 		const id = await seedTask({ title: marker, project: 'p2' })
@@ -293,6 +302,27 @@ describe.skipIf(!hasPostgres)('a date column is a YYYY-MM-DD string end to end; 
 		await transaction.commit()
 	})
 
+	test('a relative, locale, offset-less or impossible text is refused before it is sent, and the row keeps its version', async () => {
+		const id = await seedTask()
+		const update = (values: Readonly<Record<string, unknown>>) =>
+			mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', values, { expectVersion: 1 }))
+		const instant = 'tasks.closed_at takes a Date or ISO 8601 text with Z or an offset'
+		for (const text of ['now', '10/12/2026', '2026-02-30T00:00:00Z', '2026-10-12T08:30:00', '2026-10-12 08:30:00Z', '2026-10-12T24:00:00Z']) {
+			await expect(update({ closed_at: text })).rejects.toThrow(instant)
+		}
+		for (const text of ['today', '2026-02-30', '20/10/2026', '2026-10-20T00:00:00Z']) {
+			await expect(update({ due_on: text })).rejects.toThrow('tasks.due_on takes a day as YYYY-MM-DD text')
+		}
+		await expect(
+			mutate((handles) =>
+				call(handles.target(alice.ref('project', 'tasks.write', 'p1', { org: 'o1' }), 'in'), 'tasks.insert', { title: 'x', due_on: 'tomorrow' })
+			),
+		).rejects.toThrow('tasks.due_on takes a day as YYYY-MM-DD text')
+		expect(await row('tasks', id)).toMatchObject({ closed_at: null, due_on: null, version: 1 })
+		expect(await update({ closed_at: '2026-10-12T10:30:00.123456+02:00' })).toEqual({ id, version: 2 })
+		expect((await row('tasks', id))?.['closed_at']).toEqual(new Date('2026-10-12T08:30:00.123Z'))
+	})
+
 	test('ctx.sql answers a day for a z.iso.date() field and an instant for a datetime one', async () => {
 		const id = await seedTask({ dueOn: '2026-10-20' })
 		await admin((sql) => sql.unsafe(`update ${schema}.tasks set closed_at = '2026-10-21T10:00:00Z' where id = $1`, [id]))
@@ -303,6 +333,36 @@ describe.skipIf(!hasPostgres)('a date column is a YYYY-MM-DD string end to end; 
 			{ dueOn: '2026-10-20', closedAt: '2026-10-21T10:00:00.000Z', later: null },
 		])
 		await transaction.commit()
+	})
+
+	test('east of UTC, a day past 9999 is refused in a row, an aggregate and ctx.sql, never answered as a neighbouring day', async () => {
+		// Bun decodes 10000-01-01 as 9999-12-31T23:00Z in Prague: a valid-looking day one off.
+		const originalTimeZone = process.env['TZ']
+		process.env['TZ'] = 'Europe/Prague'
+		try {
+			expect(new Date(2026, 0, 1).getTimezoneOffset()).toBe(-60)
+			const marker = `far-${Bun.randomUUIDv7()}`
+			const id = await seedTask({ title: marker, project: 'p2' })
+			await admin((sql) => sql.unsafe(`update ${schema}.tasks set due_on = '10000-01-01' where id = $1`, [id]))
+			const { transaction, handles, site } = invocation('query')
+			const where = 'tasks.due_on holds a date outside 0001-01-01 to 9999-12-31'
+			await expect(call(handles.target(task('tasks.read', id, 'p2'), 'on'), 'get')).rejects.toThrow(where)
+			const within = handles.within(alice.within('project', 'tasks.read', ['p2']))
+			await expect(call(within, 'tasks.list', { where: [['title', '=', marker]] })).rejects.toThrow(where)
+			await expect(call(within, 'tasks.aggregate', { max: ['due_on'] })).rejects.toThrow('tasks.max_due_on holds a date outside')
+			const sql = data.sql({ mode: 'read', check: () => site.check(), session: () => transaction.session(), fail: () => transaction.fail() })
+			await expect(sql(z.strictObject({ dueOn: z.iso.date() }))`select due_on from tasks where id = ${id}`).rejects.toThrow(
+				"ctx.sql: the column 'due_on' holds a date outside",
+			)
+			await transaction.rollback()
+			await admin((sql) => sql.unsafe(`delete from ${schema}.tasks where id = $1`, [id]))
+		} finally {
+			if (originalTimeZone === undefined) {
+				delete process.env['TZ']
+			} else {
+				process.env['TZ'] = originalTimeZone
+			}
+		}
 	})
 
 	test('a day the driver cannot decode is refused rather than answered wrong', async () => {

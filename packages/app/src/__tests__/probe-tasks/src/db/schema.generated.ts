@@ -59,5 +59,6 @@ export const columns: TypedColumnList<DB> = {
 			},
 		],
 		dates: ['due_on'],
+		timestamps: ['closed_at'],
 	},
 }

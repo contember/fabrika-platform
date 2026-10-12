@@ -100,7 +100,8 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 	const dimension = grantDimension(policies, policy)
 	if (dimension === undefined) return undefined
 	const isolation = isolationCases(policy, dimension)
-	const hidden = Object.keys(policy.columns).sort().map((column) =>
+	// A column with only its own write action is read by the table's read action, so it is returned like any other.
+	const hidden = Object.keys(policy.columns).filter((column) => policy.columns[column]?.read !== undefined).sort().map((column) =>
 		testCase(`get leaves out ${column}, which has its own read action`, `expect((await kit.get('own')).columns).not.toContain(${quote(column)})`)
 	)
 	const blocks = [describeBlock(`policy of ${table}: a caller of one ${dimension} reaches no row of another`, isolation)]

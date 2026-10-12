@@ -120,6 +120,8 @@ export interface TableColumns<Col extends string = string, Table extends string 
 	readonly foreignKeys: readonly ForeignKey<Col, Table>[]
 	/** The columns of Postgres type `date`, which a read answers as `YYYY-MM-DD` text; absent when there are none. */
 	readonly dates?: readonly Col[]
+	/** The `timestamp` and `timestamptz` columns, which a write takes as a `Date` or strict ISO 8601 text; absent when none. */
+	readonly timestamps?: readonly Col[]
 }
 
 /** The columns and foreign keys of every table, generated next to the schema types. */
@@ -162,6 +164,8 @@ export interface TableModel {
 	readonly columnWrites: Readonly<Record<string, string>>
 	/** The columns of Postgres type `date`, read as `YYYY-MM-DD` text. */
 	readonly dates: NameSet
+	/** The `timestamp` and `timestamptz` columns: a write's text must be strict ISO 8601 with an offset. */
+	readonly timestamps: NameSet
 	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
 	readonly foreignKeys: readonly ForeignKey[]
 	/**
@@ -283,7 +287,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
 }
 
-const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates'])
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
 const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete'])
@@ -459,7 +463,8 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	) {
 		throw new PolicyError(`${table}: a ${scope.mode} table is never written by a handler`)
 	}
-	const dates = parseDates(table, ownEntry(entry, 'dates'), column)
+	const dates = parseColumnSet(table, ownEntry(entry, 'dates'), column, 'dates')
+	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
 	const visible: string[] = []
 	for (let index = 0; index < columnNames.length; index++) {
 		const name = columnNames[index] ?? ''
@@ -480,6 +485,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		columnReads: freeze(columnReads),
 		columnWrites: freeze(columnWrites),
 		dates,
+		timestamps,
 		foreignKeys,
 	}
 }
@@ -500,14 +506,14 @@ function columnWrite(table: string, name: string, write: string, actions: Action
 	return write
 }
 
-/** The column list's `date` columns, each one of the table's. */
-function parseDates(table: string, input: unknown, column: (name: unknown, field: string) => string): NameSet {
+/** The column list's `date` (`dates`) or timestamp (`timestamps`) columns, each one of the table's. */
+function parseColumnSet(table: string, input: unknown, column: (name: unknown, field: string) => string, field: string): NameSet {
 	if (input === undefined) {
 		return nameSet([])
 	}
-	const names = parseList(input, (name) => column(name, 'dates'))
+	const names = parseList(input, (name) => column(name, field))
 	if (names === undefined) {
-		throw new PolicyError(`${table}: the column list entry takes dates, a plain array of column names`)
+		throw new PolicyError(`${table}: the column list entry takes ${field}, a plain array of column names`)
 	}
 	return nameSet(names)
 }
@@ -840,6 +846,7 @@ function resolveChain(
 		const owner = ownEntry(owners, container.dimension)
 		if (owner !== undefined) {
 			requireReference(table, container, owner, (column) => `scope.in: { column: '${column}' }`)
+			requireCoveringKey(table, container, owner, chainOf(owner))
 		}
 		return { scope, chain: prepend(container, above(container.dimension)) }
 	}
@@ -871,6 +878,7 @@ function resolveChain(
 	const dimension = parent.scope.dimension
 	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
 	requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
+	requireCoveringKey(table, link, parent, parentChain)
 	return {
 		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }),
 		chain: prepend(link, parentChain),
@@ -915,6 +923,60 @@ function requireReference(table: ParsedTable, link: Container, owner: ParsedTabl
 		? `state ${fix(only)}`
 		: `add a foreign key from ${link.column} to ${owner.name} (${key}) in a migration`
 	throw new PolicyError(`${table.name}: ${link.column} is not a foreign key to ${owner.name}.${key}, which owns ${link.dimension}; ${hint}`)
+}
+
+/**
+ * The columns a row inherits from its owner's chain are bound to the owner's own values by one composite foreign key,
+ * with the containment column: `(project_id, org_id) references projects (id, org_id)`. A `Within` of an ancestor
+ * reads a row by its inherited column alone, so a column the database does not tie to the owner would place the row
+ * in a scope its owner is not in.
+ */
+function requireCoveringKey(table: ParsedTable, link: Container, owner: ParsedTable, ownerChain: readonly Container[]): void {
+	if (ownerChain.length === 0) {
+		return
+	}
+	const key = owner.scope.mode === 'dimension' ? owner.scope.key : ''
+	const pairs: [string, string][] = [[link.column, key]]
+	for (let index = 0; index < ownerChain.length; index++) {
+		const column = ownerChain[index]?.column ?? ''
+		if (!inSet(table.columns, column)) {
+			// The chain check refuses the missing column itself, with the message that names it.
+			return
+		}
+		pairs[pairs.length] = [column, column]
+	}
+	for (let index = 0; index < table.foreignKeys.length; index++) {
+		const foreignKey = table.foreignKeys[index]
+		if (foreignKey !== undefined && foreignKey.table === owner.name && coversPairs(foreignKey, pairs)) {
+			return
+		}
+	}
+	const columns: string[] = []
+	const referenced: string[] = []
+	for (let index = 0; index < pairs.length; index++) {
+		columns[index] = pairs[index]?.[0] ?? ''
+		referenced[index] = pairs[index]?.[1] ?? ''
+	}
+	throw new PolicyError(
+		`${table.name}: ${link.column} and the chain it inherits must be one foreign key to ${owner.name}, so a row lies where its ${link.dimension} lies; add foreign key (${
+			columns.join(', ')
+		}) references ${owner.name} (${referenced.join(', ')}) in a migration, with unique (${referenced.join(', ')}) on ${owner.name}`,
+	)
+}
+
+/** Whether every `[column, referenced]` pair is a column of `foreignKey` with that referenced column. */
+function coversPairs(foreignKey: ForeignKey, pairs: readonly (readonly [string, string])[]): boolean {
+	for (let index = 0; index < pairs.length; index++) {
+		const [column, referenced] = pairs[index] ?? ['', '']
+		let found = false
+		for (let position = 0; position < foreignKey.columns.length; position++) {
+			found = found || (foreignKey.columns[position] === column && foreignKey.references[position] === referenced)
+		}
+		if (!found) {
+			return false
+		}
+	}
+	return true
 }
 
 /** Every foreign key names a table of the column list and columns it has. */

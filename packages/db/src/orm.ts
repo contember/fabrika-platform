@@ -8,7 +8,6 @@ import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
 import type { CapabilityGrant, RefGrant } from './capability'
 import type { InvocationTransaction, Session } from './database'
-import { answerDays } from './days'
 import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
 import { CapabilityError, NotFoundError, QueryRefusedError } from './errors'
 import { linksPredicate, linkValues } from './links'
@@ -43,6 +42,7 @@ import {
 	updatingRef,
 	versionArgument,
 } from './store'
+import { answerDays } from './temporal'
 
 /** A list page holds this many rows unless the caller asks for fewer, and never more than `MAX_LIST_LIMIT`. */
 export const DEFAULT_LIST_LIMIT = 50
@@ -286,7 +286,7 @@ function targetRow(
 	const lock = bound(site, async () => {
 		const grant = namedRef(context, capability, dimension)
 		const scope = targetPredicate(context, grant)
-		const node = lockedSelectNode(context.model.name, visibleFor(context.model, grant.action), scope)
+		const node = lockedSelectNode(context.model.name, visibleFor(context.model, grant.action), scope, context.model.dates)
 		const session = await run.read()
 		const rows = await session.run(node, { root: 'SelectQueryNode', table: context.model.name, joins: {}, scope, lock: 'update' })
 		const [row] = answerDays(context.model.name, context.model.dates, rows)
@@ -305,7 +305,7 @@ function targetRow(
 	const update = form === 'on'
 		? writing(site, 'update', async (values: unknown, ...options: unknown[]) => {
 			const grant = updatingRef(context, capability, dimension)
-			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model.name)
+			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model)
 			return updateRow(context, run, { scope: targetPredicate(context, grant) }, changes, versionArgument(context, options))
 		})
 		: refused(site, onOnly('update'))
@@ -341,7 +341,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 				throw new QueryRefusedError(`a ${context.model.name} row is addressed by its parent Ref and its ${key}`)
 			}
 			const grant = updatingRef(context, capability, parent)
-			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model.name)
+			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model)
 			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
 			return updateRow(context, run, { scope }, changes, versionArgument(context, options))
 		}),
@@ -468,7 +468,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, everything(), spec)),
 		get: bound(site, async (id: unknown) => {
 			const scope = everything()
-			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id))
+			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id), model.dates)
 			const rows = await (await run.read()).run(node, { root: 'SelectQueryNode', table, joins: {}, scope })
 			const [row] = answerDays(table, model.dates, rows)
 			if (row === undefined) {
@@ -478,7 +478,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		}),
 		insert: write('insert', async (values: unknown) => insertUnscoped(context, run, site.principal, values)),
 		update: write('update', async (id: unknown, values: unknown, ...options: unknown[]) => {
-			const changes = updateValues(values, model.update, table)
+			const changes = updateValues(values, model.update, model)
 			return updateRow(context, run, { scope: everything(), conditions: byKey(id) }, changes, versionArgument(context, options))
 		}),
 		remove: write('remove', async (id: unknown, ...options: unknown[]) => {
@@ -501,7 +501,7 @@ async function insertUnscoped(context: TableContext, run: Runner, principal: str
 		chain[chain.length] = model.chain[index]?.column ?? ''
 	}
 	const allowed = nameSet([...namesOf(model.insert), ...chain])
-	const row = readValues(values, allowed, 'insert', model.name)
+	const row = readValues(values, allowed, 'insert', model)
 	for (let index = 0; index < chain.length; index++) {
 		const name = chain[index] ?? ''
 		const value = row.get(name)
@@ -719,7 +719,7 @@ async function listRows(
 		return { items: [], next: null }
 	}
 	const node = withCursorColumns(
-		selectNode(rowState(table, conditions, order, limit + 1), visible, scope, position),
+		selectNode(rowState(table, conditions, order, limit + 1), visible, scope, position, context.model.dates),
 		table,
 		order.map((term) => term.column),
 	)

@@ -139,6 +139,7 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'organization_id'],
 			},
 		],
+		timestamps: ['created_at'],
 	},
 	'organizations': {
 		columns: [

@@ -230,13 +230,13 @@ export function defineApp<V extends AnyAppVocabulary>(vocabulary: V): App<KitOf<
 export function defineApp<V extends AnyAppVocabulary, DB, P>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-): App<KitOf<V, DbIndex<DB, P>, Record<never, never>>>
+): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>>>
 /** Options that may be absent are no overload: the contract's type would promise an imports section it may not have. */
 export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
 	options: { readonly imports: Imp },
-): App<KitOf<V, DbIndex<DB, P>, Imp>>
+): App<KitOf<V, DbIndex<DB, P, V>, Imp>>
 export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: { readonly imports: KitImports }): object {
 	return runtimeApp(vocabulary, options?.imports, tables !== undefined)
 }

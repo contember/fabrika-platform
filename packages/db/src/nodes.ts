@@ -36,7 +36,7 @@ import {
 	ValuesNode,
 	WhereNode,
 } from 'kysely'
-import { namesOf } from './builtins'
+import { inSet, type NameSet, nameSet, namesOf } from './builtins'
 import type { Compare, Condition, Contains, JoinState, Primitive, SelectState } from './description'
 import { QueryRefusedError } from './errors'
 
@@ -129,6 +129,19 @@ function selection(table: string, name: string): SelectionNode {
 	return SelectionNode.create(column(table, name))
 }
 
+/**
+ * A selected column; a `date` one as `cast(<column> as text)` under its own name, so the layer reads the database's
+ * day rather than the `Date` `Bun.SQL` decodes, which drifts by the process's offset outside 0001–9999.
+ */
+function rowSelection(table: string, name: string, days: NameSet): SelectionNode {
+	if (!inSet(days, name)) {
+		return selection(table, name)
+	}
+	return SelectionNode.create(AliasNode.create(CastNode.create(column(table, name), DataTypeNode.create('text')), IdentifierNode.create(name)))
+}
+
+const NO_DAYS: NameSet = nameSet([])
+
 /** `returning key as id[, version as version]`: a mutation's acknowledgement, never row data. */
 export function acknowledgement(table: string, key: string, version: string | undefined): ReturningNode {
 	const fields: [string, string][] = version === undefined ? [[key, 'id']] : [[key, 'id'], [version, 'version']]
@@ -154,7 +167,13 @@ function joinedSelections(join: JoinState): SelectionNode[] {
 }
 
 /** `after` is a keyset page's position, ANDed to the caller's conditions inside their parenthesis. */
-export function selectNode(state: SelectState, visible: readonly string[], scope: OperationNode, after?: OperationNode): SelectQueryNode {
+export function selectNode(
+	state: SelectState,
+	visible: readonly string[],
+	scope: OperationNode,
+	after?: OperationNode,
+	days: NameSet = NO_DAYS,
+): SelectQueryNode {
 	const table = state.table
 	const columns = state.columns ?? visible
 	const conditions = conditionsNode(table, state.conditions)
@@ -163,7 +182,7 @@ export function selectNode(state: SelectState, visible: readonly string[], scope
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
-		selections: [...columns.map((name) => selection(table, name)), ...state.joins.flatMap(joinedSelections)],
+		selections: [...columns.map((name) => rowSelection(table, name, days)), ...state.joins.flatMap(joinedSelections)],
 		joins: state.joins.length === 0 ? undefined : state.joins.map((join) => joinNode(table, join)),
 		where: scopedWhere(filter, scope),
 		orderBy: orderBy.length === 0 ? undefined : OrderByNode.create(orderBy),
@@ -185,9 +204,15 @@ function aggregate(func: string, aggregated: OperationNode, alias: string): Sele
 	return SelectionNode.create(AliasNode.create(AggregateFunctionNode.create(func, [aggregated]), IdentifierNode.create(alias)))
 }
 
-export function aggregateNode(table: string, columns: AggregateColumns, conditions: readonly Condition[], scope: OperationNode): SelectQueryNode {
+export function aggregateNode(
+	table: string,
+	columns: AggregateColumns,
+	conditions: readonly Condition[],
+	scope: OperationNode,
+	days: NameSet = NO_DAYS,
+): SelectQueryNode {
 	const selections = [
-		...columns.groupBy.map((name) => selection(table, name)),
+		...columns.groupBy.map((name) => rowSelection(table, name, days)),
 		...(columns.count ? [aggregate('count', SelectAllNode.create(), 'count')] : []),
 		...columns.sum.map((name) => aggregate('sum', column(table, name), `sum_${name}`)),
 		...columns.min.map((name) => aggregate('min', column(table, name), `min_${name}`)),
@@ -295,11 +320,11 @@ export function withCursorColumns(node: SelectQueryNode, table: string, columns:
 }
 
 /** `select <columns> from table where scope for update`: a mutation's precondition read of its own target. */
-export function lockedSelectNode(table: string, columns: readonly string[], scope: OperationNode): SelectQueryNode {
+export function lockedSelectNode(table: string, columns: readonly string[], scope: OperationNode, days: NameSet = NO_DAYS): SelectQueryNode {
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
-		selections: columns.map((name) => selection(table, name)),
+		selections: columns.map((name) => rowSelection(table, name, days)),
 		where: scopedWhere(undefined, scope),
 		endModifiers: [lockModifier('update')],
 	}

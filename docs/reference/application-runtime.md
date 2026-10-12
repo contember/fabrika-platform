@@ -375,7 +375,7 @@ names the same fix at runtime.
   table names. It is part of the access snapshot, so a new one, or a column moved under one, widens.
 - **A `date` column is `YYYY-MM-DD` text** in the generated types, every handle's rows, filters and writes; `fromRow`
   and `ctx.sql` read a `Date` as its day for a `z.iso.date()` field. A timestamp reads as a `Date` and a write takes a
-  `Date` or its ISO text. `RowOf<typeof tables, 'tasks', 'tasks.read'>` (`@fabrika/db/tables`) is the row an action
+  `Date` or strict ISO 8601 text with `Z` or an offset; `now`, a locale form or an impossible day is refused. `RowOf<typeof tables, 'tasks', 'tasks.read'>` (`@fabrika/db/tables`) is the row an action
   reads, for a mapper that takes rows.
 - **`getForUpdate()`** is `SELECT … FOR UPDATE` on the target's whole chain, in a mutation `on` an object only: a
   precondition read that a concurrent write of the same row waits behind, so of two concurrent "reopen a won deal"

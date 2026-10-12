@@ -270,11 +270,15 @@ export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: rea
 		)
 		return `\t\tforeignKeys: [\n${rendered.join('')}\t\t],\n`
 	}
-	/** A table's `date` columns, which the layer answers as `YYYY-MM-DD`; a table without one has no `dates`. */
-	const datesOf = (table: string): string => {
-		const dates = (tables.get(table) ?? []).filter((column) => column.type_type === 'b' && column.type_name === 'date')
-		return dates.length === 0 ? '' : `\t\tdates: [${dates.map((column) => quote(column.column_name)).join(', ')}],\n`
+	/**
+	 * A table's columns of `types` as the list field `field`: the `date` columns, which the layer answers as `YYYY-MM-DD`,
+	 * and the timestamps, whose written text it checks. A table without one has no such field.
+	 */
+	const listOf = (table: string, field: string, types: readonly string[]): string => {
+		const listed = (tables.get(table) ?? []).filter((column) => column.type_type === 'b' && types.includes(column.type_name))
+		return listed.length === 0 ? '' : `\t\t${field}: [${listed.map((column) => quote(column.column_name)).join(', ')}],\n`
 	}
+	const datesOf = (table: string): string => `${listOf(table, 'dates', ['date'])}${listOf(table, 'timestamps', ['timestamp', 'timestamptz'])}`
 	const columns = names
 		.map((table) =>
 			`\t'${table}': {\n\t\tcolumns: [\n${(tables.get(table) ?? []).map((column) => `\t\t\t'${column.column_name}',\n`).join('')}\t\t],\n${

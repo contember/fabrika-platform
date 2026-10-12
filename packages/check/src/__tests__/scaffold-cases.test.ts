@@ -87,3 +87,16 @@ describe('the endpoint access cases of a kit application', () => {
 		expect(() => read('export const setup = {}\n')).toThrow()
 	})
 })
+
+describe('the policy isolation cases of a column policy', () => {
+	test('a column with its own read action gets its hidden-column case; one with only a write action is returned and gets none', async () => {
+		const inputs = scaffoldInputs(tree())
+		const [table, policy] = Object.entries(inputs.policies)[0] ?? []
+		if (table === undefined || policy === undefined) throw new Error('the access fixture declares no table')
+		const columns = { kept: { write: 'notes.write' }, secret: { read: 'notes.write' } }
+		const tests = await generatedTests({ ...inputs.policies, [table]: { ...policy, columns } }, inputs.artifact, inputs.fixtures)
+		const text = tests.get(`src/db/__tests__/${table}.policy-isolation.test.ts`)?.text ?? ''
+		expect(text).toContain('get leaves out secret, which has its own read action')
+		expect(text).not.toContain('leaves out kept')
+	})
+})

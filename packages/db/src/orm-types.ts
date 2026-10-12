@@ -17,6 +17,7 @@ import type {
 	UpdateValues,
 } from './policy'
 import type { AggregateRow, AggregateSpec } from './store'
+import type { VocabularyContainerOf } from './vocabulary-tables'
 
 /** A member an endpoint may not use. It has no call signature, so a call fails at its line with this message. */
 export type Unavailable<Message extends string> = readonly [unavailable: Message]
@@ -87,7 +88,7 @@ export interface IndexedTable {
 	readonly versioned: boolean
 }
 
-type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string> = {
+type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> = {
 	readonly mode: ModeOf<P, T>
 	readonly dimension: DimensionOf<P, T>
 	readonly list: ListDimensionOf<P, T>
@@ -103,29 +104,38 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string> = {
 	readonly insert: InsertValues<DB, P, T>
 	readonly update: UpdateValues<DB, P, T>
 	readonly writes: UpdatesOf<DB, P, T>
-	readonly chain: ChainColumns<P, T>
+	readonly chain: ChainColumns<P, T, V>
 	readonly versioned: PolicyOf<P, T> extends { readonly version: string } ? true : false
 }
 
 type OwnerTable<P, D> = { [K in keyof P]: P[K] extends { readonly scope: { readonly dimension: D } } ? K : never }[keyof P]
 
-/** A row's containment columns, nearest first: a dimension table's container and its chain; a child's parent and its. */
-type ChainColumns<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S extends {
+/** The dimensions above `D` by the vocabulary `V`, nearest first: `never` without a vocabulary or at the top. */
+type VocabularyAncestors<V, D> = VocabularyContainerOf<V, D> extends infer C extends string
+	? [C] extends [never] ? never : C | VocabularyAncestors<V, C>
+	: never
+
+/**
+ * A row's containment columns: a dimension table's container and its chain; a child's parent and its. Above a dimension
+ * no table owns, the vocabulary's ancestry on the `<dimension>_id` convention, as the layer stamps it.
+ */
+type ChainColumns<P, T, V> = PolicyOf<P, T> extends { readonly scope: infer S } ? S extends {
 		readonly in: { readonly dimension: infer C extends string; readonly column: infer Col extends string }
-	} ? Col | ChainColumns<P, OwnerTable<P, C>>
-	: S extends { readonly child: infer Parent extends string; readonly column: infer Col extends string } ? Col | ChainColumns<P, Parent>
+	} ? Col | ([OwnerTable<P, C>] extends [never] ? `${VocabularyAncestors<V, C>}_id` : ChainColumns<P, OwnerTable<P, C>, V>)
+	: S extends { readonly child: infer Parent extends string; readonly column: infer Col extends string } ? Col | ChainColumns<P, Parent, V>
 	: never
 	: never
 
 /** The dimensions of a row's containment chain: a dimension table's container and above; a child's parent and above. */
-type ChainDimensions<P, T> = PolicyOf<P, T> extends { readonly scope: infer S }
-	? S extends { readonly in: { readonly dimension: infer C extends string } } ? C | ChainDimensions<P, OwnerTable<P, C>>
-	: S extends { readonly child: infer Parent extends string } ? DimensionOf<P, Parent> | ChainDimensions<P, Parent>
+type ChainDimensions<P, T, V> = PolicyOf<P, T> extends { readonly scope: infer S }
+	? S extends { readonly in: { readonly dimension: infer C extends string } }
+		? C | ([OwnerTable<P, C>] extends [never] ? VocabularyAncestors<V, C> : ChainDimensions<P, OwnerTable<P, C>, V>)
+	: S extends { readonly child: infer Parent extends string } ? DimensionOf<P, Parent> | ChainDimensions<P, Parent, V>
 	: never
 	: never
 
 /** The dimensions whose `Within` lists table `T`: every dimension of its chain, and a top-level table's own. */
-type ReachOf<P, T> = [ContainerOf<P, T>] extends [never] ? DimensionOf<P, T> | ChainDimensions<P, T> : ChainDimensions<P, T>
+type ReachOf<P, T, V> = [ContainerOf<P, T>] extends [never] ? DimensionOf<P, T> | ChainDimensions<P, T, V> : ChainDimensions<P, T, V>
 
 /**
  * A row as reads return it: the generated interface itself where no column has a separate write type, so a
@@ -137,10 +147,11 @@ type ReferenceTableName<P> = { [K in keyof P]: P[K] extends { readonly scope: { 
 
 /**
  * Every table of an application, and the lookups the handles need, built once by the kit (`defineApp`) so that each
- * endpoint's context is a property lookup, not a pass over the policies.
+ * endpoint's context is a property lookup, not a pass over the policies. `V`, the vocabulary, gives a row's chain above
+ * a dimension no table owns, as the layer derives it.
  */
-export type DbIndex<DB, P> = {
-	readonly tables: { readonly [T in keyof P & keyof DB & string]: IndexedTableOf<DB, P, T> }
+export type DbIndex<DB, P, V = unknown> = {
+	readonly tables: { readonly [T in keyof P & keyof DB & string]: IndexedTableOf<DB, P, T, V> }
 	/** Dimension → the table that owns it. */
 	readonly owner: { readonly [T in DimensionTableName<P> as DimensionOf<P, T>]: T }
 	/** Parent table → its child tables. */
@@ -148,7 +159,7 @@ export type DbIndex<DB, P> = {
 	/** Dimension → the dimension tables listed in it: those it contains, and a top-level table its own. */
 	readonly listed: { readonly [T in DimensionTableName<P> as ListDimensionOf<P, T>]: T }
 	/** Dimension → the tables an `over` of it lists: each whose containment chain holds it, and a top-level table its own. */
-	readonly within: { readonly [T in DimensionTableName<P> | ChildTableName<P> as ReachOf<P, T>]: T }
+	readonly within: { readonly [T in DimensionTableName<P> | ChildTableName<P> as ReachOf<P, T, V>]: T }
 	readonly references: ReferenceTableName<P>
 }
 

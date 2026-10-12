@@ -61,7 +61,7 @@ describe('renderSchema', () => {
 }
 `)
 		expect(source).toContain("import type { ColumnType, GeneratedAlways } from 'kysely'\n")
-		expect(source).toContain("\t\tforeignKeys: [],\n\t\tdates: ['due'],\n\t},\n")
+		expect(source).toContain("\t\tforeignKeys: [],\n\t\tdates: ['due'],\n\t\ttimestamps: ['created_at'],\n\t},\n")
 	})
 
 	test('leaves out framework tables and imports only what it uses', () => {

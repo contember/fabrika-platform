@@ -24,7 +24,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`; `dataAccess`.                            |
 | `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                                           |
 | `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                                          |
-| `days.ts`              | A `date` column's `YYYY-MM-DD` text: `dayText` and `answerDays`, which every read of a table's rows applies.                                                   |
+| `temporal.ts`          | Days and timestamps at the boundary: a read's `YYYY-MM-DD` (`answerDays`), a write's strict day and ISO 8601 text (`dayInput`, `timestampInput`).              |
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                        |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                         |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                 |
@@ -100,6 +100,11 @@ and the target `Ref`, so no handler can call it.
   references that table's key; the column list carries the foreign keys. A column that only has the convention's name
   is refused, naming the column whose foreign key does reference the key. A container no table owns (a scope only IAM
   knows) has no key to reference, so the convention stands there.
+- **An inherited chain is one foreign key with the containment column** (`requireCoveringKey`): a contained table's or
+  a child's columns of its owner's chain go in the same composite foreign key as its container or parent column,
+  `(project_id, org_id) references projects (id, org_id)`, or the parse refuses it and names that key. A `Within` of an
+  ancestor reads a row by its inherited column alone, so a column the database does not tie to the owner would put the
+  row in a scope its owner is not in.
 - **Every action is the vocabulary's.** Table actions, an inbox's `scope.read` and a column's own read action are
   refused unless the vocabulary declares them, in the one parse: the reader refuses them from source too.
 - **The authoring types pick each table's form by the scope it states** (`VocabularyPolicyMap<DB, V, P>`): a misspelt
@@ -196,7 +201,8 @@ and the target `Ref`, so no handler can call it.
 - **A handle's `Within` lists every table whose containment chain holds its dimension** (`reachColumn`,
   `reachPredicate`), and a top-level table its own: tasks under a `Within` of `org` through their stamped `org_id`.
   The predicate, the keyset page, the projection and the hidden columns are the nearest container's. The stores'
-  `select`/`aggregate` keep the nearest container only.
+  `select`/`aggregate` keep the nearest container only. `DbIndex<DB, P, V>` takes the vocabulary, so its types follow
+  the chain past a dimension no table owns, as the parse does.
 - **A Within's predicate is `column in (values)`, plus one `<chain column> in (values)` disjunct per container
   grant, in one parenthesis.** The container grants stay separate from the values (`WithinGrant.containers`), so
   the statement judges each row by the chain it carries now; a scope moved out of a container is out. A container
@@ -306,9 +312,11 @@ and the target `Ref`, so no handler can call it.
   what the site's kind or declaration does not allow with the message its type gives, then runs the store's own
   checks. A handle is built per invocation; never cache one across invocations or skip the check for a read.
 - **Codegen types a column exactly as the layer answers it, or refuses it.** `int8` and `numeric` are
-  strings (bound as a number, bigint or string); a `date` is `YYYY-MM-DD` text, which the layer converts from the
-  UTC-midnight `Date` `Bun.SQL` decodes (the column list's `dates`, `days.ts`; a day outside 0001–9999 is refused, as
-  Bun decodes those wrong); a timestamp is a `Date` that a write also takes as ISO text; an enum is its label union; JSON,
+  strings (bound as a number, bigint or string); a `date` is `YYYY-MM-DD` text, which a handle selects as the
+  database's own text (`cast(… as text)`, the column list's `dates`), never through the `Date` `Bun.SQL` decodes, which
+  drifts by the process's offset outside 0001–9999; such a day is refused. A timestamp is a `Date`; a write also takes
+  strict ISO 8601 text with `Z` or an offset (the column list's `timestamps`), and refuses `now`, `10/12/2026` or an
+  impossible day before anything is sent, as a day's text must be a real `YYYY-MM-DD`. An enum is its label union; JSON,
   `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
   them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the

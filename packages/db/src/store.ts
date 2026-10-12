@@ -20,7 +20,6 @@ import {
 } from './builtins'
 import { type CapabilityAuthority, MAX_WITHIN_VALUES, type Ref, type RefGrant, type Within, type WithinGrant } from './capability'
 import { type Database, InvocationTransaction, type Session, sessionOf } from './database'
-import { answerDays } from './days'
 import {
 	finishSelect,
 	isPrimitive,
@@ -84,6 +83,7 @@ import {
 } from './policy'
 import { frameworkSideOf, type Locator, register } from './registry'
 import { type TablePolicies, tablePolicies } from './tables'
+import { answerDays, dayInput, timestampInput } from './temporal'
 
 export interface DataLayerRuntime {
 	readonly database: Database
@@ -383,7 +383,8 @@ function storeRunner(context: TableContext): Runner {
  * non-enumerable key slips past. Every key is checked before any value is read; unknown keys are refused, not
  * dropped, so an agent learns about them.
  */
-export function readValues(values: unknown, allowed: NameSet, what: 'insert' | 'update', table: string): Map<string, Primitive | null> {
+export function readValues(values: unknown, allowed: NameSet, what: 'insert' | 'update', model: TableModel): Map<string, Primitive | null> {
+	const table = model.name
 	if (typeof values !== 'object' || values === null || isArray(values)) {
 		throw new QueryRefusedError(`${what} takes an object of column values`)
 	}
@@ -418,19 +419,29 @@ export function readValues(values: unknown, allowed: NameSet, what: 'insert' | '
 		if (value !== null && !isPrimitive(value)) {
 			throw new QueryRefusedError(`${table}.${key} takes a plain value (string, number, bigint, boolean, Date or null)`)
 		}
-		copied.set(key, value)
+		copied.set(key, typeof value === 'string' ? temporalText(model, key, value) : value)
 	}
 	return copied
+}
+
+/** A day's or a timestamp's text, checked before it is bound; any other column's text as it is. */
+function temporalText(model: TableModel, column: string, value: string): string {
+	if (inSet(model.dates, column)) {
+		return dayInput(value, `${model.name}.${column}`)
+	}
+	return inSet(model.timestamps, column) ? timestampInput(value, `${model.name}.${column}`) : value
 }
 
 /**
  * An update's values: any subset of the columns `allowed` names, and at least one of them set. An update that sets
  * no column would only bump the version.
  */
-export function updateValues(values: unknown, allowed: NameSet, table: string): Map<string, Primitive | null> {
-	const changes = readValues(values, allowed, 'update', table)
+export function updateValues(values: unknown, allowed: NameSet, model: TableModel): Map<string, Primitive | null> {
+	const changes = readValues(values, allowed, 'update', model)
 	if (changes.size === 0) {
-		throw new QueryRefusedError(`update sets no column of ${table}; set at least one (update columns: ${namesOf(allowed).join(', ') || 'none'})`)
+		throw new QueryRefusedError(
+			`update sets no column of ${model.name}; set at least one (update columns: ${namesOf(allowed).join(', ') || 'none'})`,
+		)
 	}
 	return changes
 }
@@ -469,7 +480,8 @@ async function selectRows<S>(context: TableContext, scope: OperationNode | undef
 	if (scope === undefined) {
 		return []
 	}
-	const rows = await (await run.read()).run<S>(selectNode(state, context.model.visible, scope), guard(context, 'SelectQueryNode', scope))
+	const node = selectNode(state, context.model.visible, scope, undefined, context.model.dates)
+	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
 	return answerDays(context.model.name, joinedDays(context.model.dates, state), rows)
 }
 
@@ -497,7 +509,8 @@ function joinedDays(own: NameSet, state: SelectState): NameSet {
 export async function selectOne<O>(context: TableContext, run: Runner, scope: OperationNode, visible = context.model.visible): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
-	const rows = await (await run.read()).run<O>(selectNode(state, visible, scope), guard(context, 'SelectQueryNode', scope))
+	const node = selectNode(state, visible, scope, undefined, context.model.dates)
+	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
 	const [row] = answerDays(context.model.name, context.model.dates, rows)
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
@@ -728,7 +741,7 @@ export async function aggregateRows<Row, O>(
 	if (scope === undefined) {
 		return []
 	}
-	const node = aggregateNode(context.model.name, columns, filter?.conditions ?? [], scope)
+	const node = aggregateNode(context.model.name, columns, filter?.conditions ?? [], scope, context.model.dates)
 	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
 	return answerDays(context.model.name, aggregateDays(context.model.dates, columns), rows)
 }
@@ -754,7 +767,7 @@ function aggregateDays(dates: NameSet, columns: AggregateColumns): NameSet {
 export function insertIntoDimension<O>(context: TableContext, run: Runner, target: unknown, values: unknown): Promise<O> {
 	const scope = dimensionScope(context.model)
 	const grant = refGrant(context, target, listDimension(scope), 'insert')
-	const row = readValues(values, context.model.insert, 'insert', context.model.name)
+	const row = readValues(values, context.model.insert, 'insert', context.model)
 	if (scope.container === undefined) {
 		// The object does not exist yet; this only refuses a chain the table has no column for.
 		linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
@@ -772,7 +785,7 @@ export function insertIntoDimension<O>(context: TableContext, run: Runner, targe
 export function insertIntoChild<O>(context: TableContext, run: Runner, parent: unknown, values: unknown): Promise<O> {
 	const scope = childScope(context)
 	const grant = refGrant(context, parent, scope.parent.dimension, 'insert')
-	const row = readValues(values, context.model.insert, 'insert', context.model.name)
+	const row = readValues(values, context.model.insert, 'insert', context.model)
 	stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
 	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
 		row.set(link.column, value)
@@ -825,7 +838,7 @@ export class DimensionTable<DB, P, T extends string> {
 	): Promise<Acknowledgement<P, T>> {
 		const context = this.#context
 		const scope = objectPredicate(context, ref, 'update')
-		const changes = updateValues(values, context.model.update, context.model.name)
+		const changes = updateValues(values, context.model.update, context.model)
 		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
@@ -908,7 +921,7 @@ export class ChildTable<DB, P, T extends string> {
 	): Promise<Acknowledgement<P, T>> {
 		const context = this.#context
 		const scope = childObjectPredicate(context, parent, key, 'update')
-		const changes = updateValues(values, context.model.update, context.model.name)
+		const changes = updateValues(values, context.model.update, context.model)
 		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
@@ -971,7 +984,7 @@ function probeOf(context: TableContext): TableProbe {
 			child ? insertIntoChild(context, run, capability, values) : insertIntoDimension(context, run, capability, values),
 		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
 			const scope = object(capability, key, 'update')
-			const changes = readValues(values, context.model.update, 'update', context.model.name)
+			const changes = readValues(values, context.model.update, 'update', context.model)
 			return updateRow(context, run, addressed(scope), changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
 		},
 		remove: async (capability: unknown, key?: string) => removeRow(context, run, addressed(object(capability, key, 'delete'))),
@@ -1176,7 +1189,7 @@ async function appendToInbox(models: TableModels, runtime: DataLayerRuntime, for
 	if (inbox === undefined) {
 		throw new QueryRefusedError(`no table is the inbox of ${form}`)
 	}
-	const row = readValues(values, inbox.columns, 'insert', inbox.name)
+	const row = readValues(values, inbox.columns, 'insert', inbox)
 	await sessionOf(runtime).run(insertNode(inbox.name, row, undefined), {
 		root: 'InsertQueryNode',
 		table: inbox.name,

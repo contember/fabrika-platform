@@ -325,3 +325,35 @@ describe('a column write action and the date columns, as the one parse reads the
 		expect(read(taskPolicy, withDates('due_on'))).toThrow('tasks: the column list entry takes dates, a plain array of column names')
 	})
 })
+
+describe('an inherited chain is one foreign key with its container column', () => {
+	const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value))
+	const policies = plain({
+		projects: { scope: { dimension: 'project' }, actions: { read: 'tasks.read' } },
+		tasks: { scope: { dimension: 'task' }, actions: { read: 'tasks.read' } },
+		task_comments: { scope: { child: 'tasks' }, actions: { read: 'tasks.read' } },
+	})
+	/** The task tracker's column list with `table`'s foreign keys replaced. */
+	const withKeys = (table: 'tasks' | 'task_comments', foreignKeys: readonly unknown[]) =>
+		plain({ ...tasksColumns, [table]: { ...tasksColumns[table], foreignKeys } })
+
+	test('a container column whose own key does not carry the inherited org_id is refused: a task could sit in another org than its project', () => {
+		const loose = withKeys('tasks', [{ columns: ['project_id'], table: 'projects', references: ['id'] }])
+		expect(() => readTables(loose, policies, plain(tasksVocabulary))).toThrow(
+			new PolicyError(
+				'tasks: project_id and the chain it inherits must be one foreign key to projects, so a row lies where its project lies; add foreign key (project_id, org_id) references projects (id, org_id) in a migration, with unique (id, org_id) on projects',
+			),
+		)
+	})
+
+	test('a child whose parent reference leaves out an inherited column is refused', () => {
+		const partial = withKeys('task_comments', [{ columns: ['task_id', 'project_id'], table: 'tasks', references: ['id', 'project_id'] }])
+		expect(() => readTables(partial, policies, plain(tasksVocabulary))).toThrow(
+			'task_comments: task_id and the chain it inherits must be one foreign key to tasks, so a row lies where its task lies; add foreign key (task_id, project_id, org_id) references tasks (id, project_id, org_id)',
+		)
+	})
+
+	test('the composite key the layout recommends is accepted', () => {
+		expect(() => readTables(plain(tasksColumns), policies, plain(tasksVocabulary))).not.toThrow()
+	})
+})

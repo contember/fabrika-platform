@@ -61,7 +61,7 @@ export interface NoTablesIndex {
 	readonly owner: Record<never, never>
 	readonly children: Record<never, never>
 	readonly listed: Record<never, never>
-	readonly listedChildren: Record<never, never>
+	readonly within: Record<never, never>
 	readonly references: never
 }
 

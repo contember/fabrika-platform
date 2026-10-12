@@ -21,8 +21,8 @@ import {
 import { z } from 'zod/v4'
 import { hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
 import { runApplicationStatement, type Session, type SqlParameter } from './database'
-import { dayText } from './days'
 import { QueryRefusedError, SqlRowError } from './errors'
+import { dayText } from './temporal'
 
 /** What a site declares: `'read'` runs queries only, `'write'` also `INSERT`, `UPDATE` and `DELETE`. */
 export type SqlMode = 'read' | 'write'
