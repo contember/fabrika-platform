@@ -582,3 +582,20 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   idle in its transaction while pool queries queue behind it, so a burst larger than the pool hangs; the round-1 note
   blamed the migration connection. `AuditWriter.run` now sends a single audited statement (always the case on Postgres)
   without a transaction, which is atomic alone. Batches elsewhere keep the hazard; it predates this unit.
+- **WU20 — failure codes, not names (review item 7).** A 5xx reports `framework_fault`, `unavailable`,
+  `capability_refused`, `query_refused`, `handler_status` or `handler_failed`, never the error's name or message. The
+  server log line (the record without a DSN) is the code plus the text of a framework refusal; it no longer prints an
+  unknown error's name, which any thrown value sets.
+- **WU20 — one reporter per boot.** `operationsSettings` reads the DSN once in `boot`; jobs and requests get their own
+  envelope `logger` (`fabrika.jobs`, `fabrika.requests`). A DSN that is not an ingest DSN now stops every boot, not only
+  one with jobs. `JobReport`/`JobReporter` are renamed `OperationsReport`/`OperationsReporter` (`runner.ts`: a merge
+  note for WU15). The delivery is not awaited: `ContractApp.fetch(request, exec?)` hands it to a Worker's `waitUntil`.
+- **WU20 — HSTS lives in the proxy only.** The framework has no public scheme, so its in-process policy stays without
+  it; `appHeaderPolicy`/`appFileTreatment` add it from the manifest. Caddy's own 502 (an upstream it cannot dial)
+  carried no header at all before; the server's `errors` routes now give it the host's policy. Installation hosts
+  (IAM, Control) are out of scope: their answers pass through, and a proxy denial there carries the base policy
+  without HSTS.
+- **WU20 — the SDK witness is the Notes example.** The local stack builds the example's SPA on every prepare (it was
+  never built, so `/` answered no file); the browser identity's notes grant replaced the witness grant
+  (`packages/iam/src/node/browser-identity.ts`, one line). The scenario throws an uncaught error whose function name
+  carries the run marker, because the SPA sets no SDK fingerprint and the grouping is by type and frames.
