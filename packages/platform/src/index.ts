@@ -9,7 +9,7 @@
 // Runtime-specific implementations live with the workers that use them, or in @fabrika/platform-node.
 
 export { SqlDeployLocks, type SqlDeployLocksOptions } from './deploy-locks-sql'
-export { ObjectTooLargeError } from './ports'
+export { ObjectExistsError, ObjectTooLargeError } from './ports'
 export type {
 	AssetServer,
 	BlobStore,

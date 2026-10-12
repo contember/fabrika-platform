@@ -12,6 +12,7 @@
 import {
 	type BlobStore,
 	type FileObjectStore,
+	ObjectExistsError,
 	type ObjectMetadata,
 	ObjectTooLargeError,
 	type ObjectWriteOptions,
@@ -85,6 +86,12 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 	}
 
 	async write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata> {
+		// Bun's client sends no `If-None-Match`; a file's key is a fresh UUID behind a unique row, and a download checks
+		// the version the scan recorded, so this check refuses a reused key rather than racing a concurrent writer.
+		if ((await statOrNull(this.client.file(key))) !== null) {
+			await body.cancel()
+			throw new ObjectExistsError()
+		}
 		let size = 0
 		// Erroring the transform cancels `body` and fails the upload, so no more than one chunk past the limit is read.
 		const bounded = body.pipeThrough(
@@ -108,15 +115,42 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 		return { size, contentType: options.contentType }
 	}
 
-	async read(key: string): Promise<StoredObject | null> {
-		const file = this.client.file(key)
-		const stat = await statOrNull(file)
-		if (stat === null) {
+	read(key: string, signal?: AbortSignal): Promise<StoredObject | null> {
+		return this.#get(key, {}, signal)
+	}
+
+	readVersion(key: string, version: string, signal?: AbortSignal): Promise<StoredObject | null> {
+		return this.#get(key, { 'If-Match': version }, signal)
+	}
+
+	/**
+	 * One GET through a short-lived presigned URL, so the ETag, the size and the body come from the same answer and a
+	 * conditional header can be sent, which `Bun.S3File` does not offer. Errors never carry the URL: it is signed.
+	 */
+	async #get(key: string, headers: Readonly<Record<string, string>>, signal: AbortSignal | undefined): Promise<StoredObject | null> {
+		const url = this.client.file(key).presign({ method: 'GET', expiresIn: PRESIGNED_READ_SECONDS })
+		let response: Response
+		try {
+			response = await fetch(url, { headers, ...(signal === undefined ? {} : { signal }) })
+		} catch {
+			throw new Error(signal?.aborted === true ? 'the object read was stopped' : 'the object store did not answer a read')
+		}
+		if (response.status === 404 || response.status === 412) {
+			await response.body?.cancel()
 			return null
 		}
-		return { size: stat.size, contentType: stat.type === '' ? null : stat.type, body: file.stream() }
+		const version = response.headers.get('ETag')
+		const size = Number(response.headers.get('Content-Length'))
+		if (!response.ok || response.body === null || version === null || !Number.isSafeInteger(size)) {
+			await response.body?.cancel()
+			throw new Error(`the object store answered a read with ${response.status}`)
+		}
+		const type = response.headers.get('Content-Type')
+		return { size, contentType: type === null || type === '' ? null : type, version, body: response.body }
 	}
 }
+
+const PRESIGNED_READ_SECONDS = 60
 
 /** One HEAD; a missing key is `null`, any other failure propagates. */
 async function statOrNull(file: Bun.S3File): Promise<Bun.S3Stats | null> {

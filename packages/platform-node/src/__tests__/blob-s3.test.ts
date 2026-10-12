@@ -141,4 +141,21 @@ describe.skipIf(!hasS3)('S3BlobStore as a FileObjectStore', () => {
 	test('read() returns NULL for a missing key', async () => {
 		expect(await store?.read(key('missing.bin'))).toBeNull()
 	})
+
+	test('a key is written once, and a read is bound to the version it returned', async () => {
+		const path = key('once.txt')
+		const bytes = (text: string) => new Blob([text]).stream()
+		await store?.write(path, bytes('first'), { contentType: 'text/plain', maxBytes: 100 })
+		const failure = await store?.write(path, bytes('second'), { contentType: 'text/plain', maxBytes: 100 }).then(() => null, (error) => error)
+		expect(failure instanceof Error ? failure.name : '').toBe('ObjectExistsError')
+		const first = await store?.read(path)
+		expect(await new Response(first?.body).text()).toBe('first')
+		const version = first?.version ?? ''
+		expect(version).not.toBe('')
+		expect(await new Response((await store?.readVersion(path, version))?.body).text()).toBe('first')
+		// A write outside the upload path replaces it: the version it was read as no longer reads.
+		await store?.put(path, 'other')
+		expect(await store?.readVersion(path, version)).toBeNull()
+		expect((await store?.read(path))?.version).not.toBe(version)
+	})
 })

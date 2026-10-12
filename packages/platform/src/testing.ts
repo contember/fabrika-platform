@@ -2,6 +2,7 @@ import {
 	type BlobStore,
 	type FileObjectStore,
 	type JobQueue,
+	ObjectExistsError,
 	type ObjectMetadata,
 	ObjectTooLargeError,
 	type ObjectWriteOptions,
@@ -33,10 +34,15 @@ export class MemoryBlobs implements BlobStore {
 
 /** A file object store in memory, with the port's size bound enforced while the body streams. */
 export class MemoryFileObjects implements FileObjectStore {
-	readonly objects = new Map<string, { readonly bytes: Uint8Array<ArrayBuffer>; readonly contentType: string }>()
+	readonly objects = new Map<string, { readonly bytes: Uint8Array<ArrayBuffer>; readonly contentType: string; readonly version: string }>()
+	#writes = 0
 
 	async write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata> {
 		const reader = body.getReader()
+		if (this.objects.has(key)) {
+			await reader.cancel()
+			throw new ObjectExistsError()
+		}
 		const chunks: Uint8Array[] = []
 		let size = 0
 		for (let next = await reader.read(); !next.done; next = await reader.read()) {
@@ -53,14 +59,30 @@ export class MemoryFileObjects implements FileObjectStore {
 			bytes.set(chunk, offset)
 			offset += chunk.byteLength
 		}
-		this.objects.set(key, { bytes, contentType: options.contentType })
+		this.replace(key, bytes, options.contentType)
 		return { size, contentType: options.contentType }
+	}
+
+	/** Puts `bytes` under `key` whatever it held, under a new version: what a write outside the upload path does. */
+	replace(key: string, bytes: Uint8Array<ArrayBuffer>, contentType = 'application/octet-stream'): void {
+		this.#writes++
+		this.objects.set(key, { bytes, contentType, version: `"memory-${this.#writes}"` })
 	}
 
 	read(key: string): Promise<StoredObject | null> {
 		const object = this.objects.get(key)
 		if (object === undefined) return Promise.resolve(null)
-		return Promise.resolve({ size: object.bytes.byteLength, contentType: object.contentType, body: new Blob([object.bytes]).stream() })
+		return Promise.resolve({
+			size: object.bytes.byteLength,
+			contentType: object.contentType,
+			version: object.version,
+			body: new Blob([object.bytes]).stream(),
+		})
+	}
+
+	async readVersion(key: string, version: string): Promise<StoredObject | null> {
+		const object = await this.read(key)
+		return object?.version === version ? object : null
 	}
 
 	delete(key: string): Promise<void> {

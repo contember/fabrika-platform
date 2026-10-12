@@ -25,12 +25,23 @@ export interface ObjectMetadata {
 export interface StoredObject extends ObjectMetadata {
 	/** One stream, consumable once. */
 	readonly body: ReadableStream<Uint8Array>
+	/** These exact bytes' version, from the same answer as the body: an S3 ETag. It changes when the object is replaced. */
+	readonly version: string
 }
 
 export interface ObjectWriteOptions {
 	readonly contentType: string
 	/** The most bytes the object may have. The write stops reading `body` once more arrive. */
 	readonly maxBytes: number
+}
+
+/** A write named a key that already holds an object: a file's object is written once. Read by `name`. */
+export class ObjectExistsError extends Error {
+	override readonly name = 'ObjectExistsError'
+
+	constructor() {
+		super('an object is already stored under this key')
+	}
 }
 
 /** The body of a write was longer than its `maxBytes`. Read by `name`, never by a cross-package `instanceof`. */
@@ -51,12 +62,15 @@ export class ObjectTooLargeError extends Error {
  */
 export interface FileObjectStore {
 	/**
-	 * Streams `body` to `key`. Past `options.maxBytes` it stops reading, keeps nothing under `key` and rejects with
+	 * Streams `body` to a new `key`. A key that already holds an object is refused with `ObjectExistsError`, and nothing
+	 * is written. Past `options.maxBytes` it stops reading, keeps nothing under `key` and rejects with
 	 * `ObjectTooLargeError`. Any other failure also leaves nothing stored.
 	 */
 	write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata>
-	/** The object with its metadata, or `null` for a missing key. */
-	read(key: string): Promise<StoredObject | null>
+	/** The object with its metadata and version, in one answer, or `null` for a missing key. `signal` stops it. */
+	read(key: string, signal?: AbortSignal): Promise<StoredObject | null>
+	/** The object only while it is still `version`, in one answer; `null` when it is missing or was replaced. */
+	readVersion(key: string, version: string, signal?: AbortSignal): Promise<StoredObject | null>
 	/** Idempotent: a missing key is not an error. */
 	delete(key: string): Promise<void>
 }
