@@ -26,12 +26,6 @@ const appRoot = join(templateDir, '.skill-app')
 /** The files whose blocks are the one application; every other reference file is a variant of it. */
 const BASE = ['SKILL.md', 'references/app-setup.md', 'references/table-and-migration.md', 'references/endpoint.md', 'references/tests.md']
 
-/**
- * Files whose diagnostics wait for WU13b: the read-only member directory, and the missing-handler error it cascades into
- * at the mount. Delete this list when WU13b is on main.
- */
-const AWAITING_WU13B: readonly string[] = ['fabrika.contract.ts', 'src/members/endpoints.ts']
-
 interface Block {
 	readonly file: string
 	readonly language: string
@@ -123,7 +117,6 @@ function compile(files: ReadonlyMap<string, string>): string[] {
 	return ts.getPreEmitDiagnostics(program).flatMap((diagnostic) => {
 		const file = diagnostic.file?.fileName ?? ''
 		const relative = file.startsWith(`${appRoot}/`) ? file.slice(appRoot.length + 1) : file
-		if (AWAITING_WU13B.includes(relative)) return []
 		const line = diagnostic.file === undefined || diagnostic.start === undefined
 			? 0
 			: diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1
