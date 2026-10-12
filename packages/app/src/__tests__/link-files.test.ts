@@ -1,4 +1,4 @@
-// Link-holder file collections (WU15): a `link: true` collection gets upload and download routes under the API prefix
+// Link-holder file collections (WU15): a `link: true` collection gets upload, list and download routes under the API prefix
 // of every link mount bound to its owner's dimension, caller `link`. The owner is the link's object, never a parameter:
 // each route checks the key's mount and the object's current chain as a link procedure does, and a download resolves
 // its file beneath that object. On a REAL Postgres; skips cleanly without FABRIKA_TEST_POSTGRES_URL.
@@ -12,10 +12,11 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
-import { bootApp, endpointHeaderFor, grant, linkToken, ORIGIN, token } from './fixtures/implement/harness'
+import { bootApp, endpointHeaderFor, grant, linkToken, ORIGIN, resultOf, send, token } from './fixtures/implement/harness'
 import { migration } from './fixtures/scoped-files/migration'
 import { tables } from './fixtures/scoped-files/src/db/tables'
 import { vocabulary } from './fixtures/scoped-files/src/vocabulary'
+import { record } from './helpers'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -81,8 +82,10 @@ describe('a link: true collection in the artifact', () => {
 		const rows = compileContract(contract, tables).endpoints.filter((row) => row.id.includes('.files.'))
 		expect(rows.map((row) => [row.id, row.method, row.path, row.kind === 'public-spa' ? null : row.callers])).toEqual([
 			['other.files.attachments.download', 'GET', '/o/api/files.attachments/:fileId', ['link']],
+			['other.files.attachments.list', 'POST', '/o/api/files.attachments.list', ['link']],
 			['other.files.attachments.upload', 'POST', '/o/api/files.attachments.upload', ['link']],
 			['shared.files.attachments.download', 'GET', '/s/api/files.attachments/:fileId', ['link']],
+			['shared.files.attachments.list', 'POST', '/s/api/files.attachments.list', ['link']],
 			['shared.files.attachments.upload', 'POST', '/s/api/files.attachments.upload', ['link']],
 		])
 		const upload = rows.find((row) => row.id === 'shared.files.attachments.upload')
@@ -180,6 +183,19 @@ describe.skipIf(!hasPostgres)('a link holder and its object’s files', () => {
 		const response = await download(app, holder, id)
 		expect(response.status).toBe(200)
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(PDF)
+	})
+
+	test("lists its object's files only, and takes no owner", async () => {
+		const mine = await seedNote()
+		const theirs = await seedNote()
+		const holder = await holderOf(mine)
+		const own = idOf(await upload(app, holder))
+		idOf(await upload(app, await holderOf(theirs)))
+		const listed = await send(app, '/s/api/files.attachments.list', { token: holder, body: {} })
+		const items = record(resultOf(listed))['items']
+		expect(Array.isArray(items) ? items.map((item: unknown) => record(item)['id']) : items).toEqual([own])
+		expect((await send(app, '/s/api/files.attachments.list', { token: holder, body: { owner: theirs } })).status).toBe(400)
+		expect((await send(app, '/s/api/files.attachments.list', { token: await holderOf(mine, 'other'), body: {} })).status).toBe(403)
 	})
 
 	test("another object's file is 404, and so is an id that names no file", async () => {

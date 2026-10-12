@@ -537,7 +537,8 @@ the same pipeline:
   `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
   `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
 - **Link holders' files** (`link: true`). Every link mount bound to the owner's dimension
-  gets `POST <prefix>/api/files.<name>.upload` and `GET <prefix>/api/files.<name>/:fileId`,
+  gets `POST <prefix>/api/files.<name>.upload`, `POST <prefix>/api/files.<name>.list`
+  (`{ after?, limit? }`, no owner) and `GET <prefix>/api/files.<name>/:fileId`,
   caller `link`, `on` the owner's dimension with no parameter: the owner is the link's
   object. Each checks the key's mount and the object's current chain as a link procedure
   does (a key of another mount is 403, an object that moved 404), and a download resolves

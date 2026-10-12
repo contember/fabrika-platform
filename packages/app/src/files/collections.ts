@@ -39,6 +39,8 @@ export const FileListInput = z.strictObject({
 	after: z.uuid().optional(),
 	limit: z.number().int().min(1).max(FILE_LIMITS.listPageMax).optional(),
 })
+/** A link holder's `<mount>.files.<name>.list`: no owner, which is the link's object; `FILE_LINK_LIST_INPUT` describes it. */
+export const FileLinkListInput = FileListInput.omit({ owner: true })
 export const FileListOutput = z.strictObject({
 	items: z.array(z.strictObject({
 		id: z.uuid(),
@@ -221,6 +223,17 @@ export class FileCollections {
 				const linkRow = (suffix: string): CredentialedEndpoint | null => row(suffix, `${mount}.files.${collection.name}.${suffix}`)
 				const linkUpload = linkRow('upload')
 				const linkDownload = linkRow('download')
+				const linkList = linkRow('list')
+				if (linkList !== null) {
+					served.set(linkList.id, {
+						kind: 'procedure',
+						row: linkList,
+						input: FileLinkListInput,
+						output: FileListOutput,
+						handler: async ({ input, ctx }) => this.#list(collection, 'target' in ctx ? ctx.target : undefined, input),
+						facilities: NO_FACILITIES,
+					})
+				}
 				if (linkUpload !== null) {
 					served.set(linkUpload.id, { kind: 'file', row: linkUpload, serve: (request, target) => this.#upload(collection, request, target) })
 				}
@@ -356,7 +369,7 @@ export class FileCollections {
 	}
 
 	async #list(collection: Collection, owner: unknown, input: Readonly<Record<string, unknown>>): Promise<z.input<typeof FileListOutput>> {
-		// The dispatcher parsed the input with `FileListInput`; the access form took `owner` for the target.
+		// The dispatcher parsed the input with `FileListInput` (`FileLinkListInput` for a link holder); the target is the owner.
 		const after = input['after']
 		const limit = input['limit']
 		const page = await collection.table.list(owner, {

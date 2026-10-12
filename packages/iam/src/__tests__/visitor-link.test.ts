@@ -314,6 +314,8 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 		expect(downloaded.status).toBe(200)
 		expect(downloaded.body).toBe(new TextDecoder().decode(PDF))
 		expect((await s.visit(`/p/api/files.attachments/${theirs}`, { key: eve })).status).toBe(404)
+		const listed = prop(resultOf(await s.visit('/p/api/files.attachments.list', { key: eve, body: {} })), 'items')
+		expect(Array.isArray(listed) ? listed.map((item: unknown) => prop(item, 'id')) : listed).toEqual([own])
 	})
 
 	test('a link the job revoked keeps working only until the proxy must refresh its cached token', async () => {

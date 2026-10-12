@@ -127,6 +127,14 @@ export const FILE_LIST_INPUT: SchemaShape = {
 		limit: { type: 'optional', inner: { ...COUNT, min: 1, max: FILE_LIMITS.listPageMax } },
 	},
 }
+/** A link holder's list names no owner: the owner is the link's object. */
+export const FILE_LINK_LIST_INPUT: SchemaShape = {
+	type: 'object',
+	fields: {
+		after: { type: 'optional', inner: UUID },
+		limit: { type: 'optional', inner: { ...COUNT, min: 1, max: FILE_LIMITS.listPageMax } },
+	},
+}
 export const FILE_LIST_OUTPUT: SchemaShape = {
 	type: 'object',
 	fields: {
@@ -847,7 +855,7 @@ class ArtifactBuilder {
 	}
 
 	/**
-	 * The rows a link holder reaches a collection by: under the API prefix of every link mount bound to the owner's
+	 * The rows a link holder reaches a collection by (upload, list, download): under the API prefix of every link mount bound to the owner's
 	 * dimension, caller `link`, the owner being the link's object (no parameter names it). The mount grants the
 	 * collection's write and read actions, so a key of it can do what the rows require.
 	 */
@@ -894,6 +902,18 @@ class ArtifactBuilder {
 					output: ID_OBJECT,
 				})
 			}
+			this.#row({
+				id: `${mountName}.files.${name}.list`,
+				source,
+				kind: 'query',
+				method: 'POST',
+				path: `${base}.list`,
+				callers: ['link'],
+				requirement: ofTheLink(collection.read),
+				admission: JSON_ADMISSION,
+				input: FILE_LINK_LIST_INPUT,
+				output: FILE_LIST_OUTPUT,
+			})
 			this.#row({
 				id: `${mountName}.files.${name}.download`,
 				source,
