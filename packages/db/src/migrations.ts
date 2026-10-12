@@ -83,4 +83,10 @@ CREATE TABLE ${FORM_CHALLENGES_TABLE} (
 CREATE INDEX ${FORM_CHALLENGES_TABLE}_expires_at ON ${FORM_CHALLENGES_TABLE} (expires_at);
 `,
 	}),
+	Object.freeze({
+		name: '0004_job_kicks.sql',
+		sql: `-- A kick that found the job's lease held: the run holding it runs the job once more after it finishes.
+ALTER TABLE ${JOB_LEASES_TABLE} ADD COLUMN pending BOOLEAN NOT NULL DEFAULT false;
+`,
+	}),
 ])

@@ -135,6 +135,23 @@ describe.skipIf(!hasPostgres)('the job lease on Postgres', () => {
 		expect(await leases.acquire('retrying', 'next-run', HOUR, HOUR)).toEqual({ job: 'retrying', holder: 'next-run', generation: second.generation + 1 })
 	})
 
+	test('a kick marks only a live held lease pending, and one caller takes the flag', async () => {
+		await leases.register('kicked')
+		expect(await leases.markPending('kicked')).toBe(false)
+		const run = await lease('kicked')
+		expect((await Promise.all([1, 2, 3].map(() => leases.markPending('kicked')))).every(Boolean)).toBe(true)
+		expect(await leases.state('kicked')).toMatchObject({ holder: run.holder, pending: true })
+		expect(await leases.finish(run, 'succeeded')).toBe(true)
+		// The flag outlives the run that held the lease: its holder takes it after it finished.
+		expect(await leases.markPending('kicked')).toBe(false)
+		expect((await Promise.all([leases.takePending('kicked'), leases.takePending('kicked')])).sort()).toEqual([false, true])
+		expect(await leases.state('kicked')).toMatchObject({ holder: null, pending: false })
+		await lease('kicked')
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_job_leases set expires_at = now() - interval '1 second' where job = 'kicked'`))
+		// A crashed holder never finishes, so the kick reaps and takes the lease instead.
+		expect(await leases.markPending('kicked')).toBe(false)
+	})
+
 	test('an overdue job is claimed for one report per period, by one of many concurrent claimers', async () => {
 		await leases.register('stalled')
 		expect(await leases.claimOverdue('stalled', HOUR)).toBeNull()

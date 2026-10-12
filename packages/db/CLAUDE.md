@@ -37,7 +37,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `file-tables.ts`       | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                                          |
 | `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                                |
 | `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                                          |
-| `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                                     |
+| `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, a kick's pending run, the last run; `fencedTransaction`.                               |
 | `form-admissions.ts`   | `fabrika_form_admissions` and `fabrika_form_challenges`: a form's per-minute buckets and accepted challenge tokens, one statement each.                        |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                          |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).                             |
@@ -192,7 +192,9 @@ and the target `Ref`, so no handler can call it.
 - **A lease changes hands in one conditional statement.** `acquire` takes only a free lease; an expired lease whose
   holder never finished is freed first by `reapCrashed`, whose one winner reports the crash. `renew` and `finish`
   match the caller's generation and holder. `claimOverdue` sets `last_missed_reported_at` at most once per period, so
-  one of many concurrent checkers reports. Never read a lease and then write it.
+  one of many concurrent checkers reports. `markPending` sets `pending` only while a live holder exists, and
+  `takePending` clears it for one caller, so a kick either reaches the holder or finds the lease free. Never read a
+  lease and then write it.
 - **The lease and admission statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath
   exports): they need `now()`, `set_config`, `pg_backend_pid()`, `on conflict` and `skip locked`, which the guard
   refuses on purpose. Only `job-leases.ts` and `form-admissions.ts` call it, with constant texts and scalar parameters;
