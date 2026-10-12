@@ -44,12 +44,14 @@ const WORKSPACE_INSTRUCTIONS = 'Edit applications on Fabrika. A workspace is a G
 // Some clients cut server instructions at about 2 KB, so the whole rules are a tool and these carry the critical ones.
 const CONTROL_MCP_INSTRUCTIONS = `${WORKSPACE_INSTRUCTIONS}
 
-Before editing an application, call get_app_rules and follow it. The critical rules:
-- Declare every endpoint in fabrika.contract.ts first, then implement it.
+Before editing an application, call get_app_rules and follow it. Its topics hold the details. The critical rules:
+- Declare every endpoint with its access and its .handle() in a slice's endpoints.ts; declare every step off the paved road.
 - Never loosen a contract, a table policy, a role or a test to make something pass. Tell the human which role the caller lacks.
 - When a file is refused as protected, stop and ask the human.`
 
-const APP_RULES = readAppAgentSkill().body
+const APP_SKILL = readAppAgentSkill()
+const APP_TOPICS = APP_SKILL.references.map((reference) => reference.topic)
+const AppDependency = z.object({ dependencies: z.record(z.string(), z.string()).optional() })
 
 export interface ControlMcpOptions {
 	/** Verifies the proxy-injected token against the MCP resource profile only. */
@@ -114,7 +116,10 @@ const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byt
 const workspaceInput = z.object({ workspaceId: identifier }).strict()
 
 const toolInputs = {
-	getAppRules: z.object({}).strict(),
+	getAppRules: z.object({
+		topic: z.string().refine((topic) => APP_TOPICS.includes(topic), `the topics are ${APP_TOPICS.join(', ')}`).optional(),
+		workspaceId: identifier.optional(),
+	}).strict(),
 	listTargets: z.object({}).strict(),
 	createWorkspace: z.object({ appId: identifier, env: identifier, title: z.string().min(1).max(200) }).strict(),
 	listWorkspaces: z.object({ appId: identifier.optional(), env: identifier.optional() }).strict(),
@@ -152,11 +157,22 @@ function toolInput<T extends z.ZodType>(schema: T): StandardSchemaWithJSON<z.inp
 function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	const server = new McpServer({ name: 'fabrika', version: '0.1.0' }, { instructions: CONTROL_MCP_INSTRUCTIONS })
 	server.registerTool('get_app_rules', {
-		description: 'Read the rules for writing and changing a Fabrika application: the contract, table policies, migrations, '
-			+ 'the generated tests and what the checker refuses. Call it before editing an application.',
+		description: 'Read the rules for writing and changing a Fabrika application: the paved road, the declared steps off it, '
+			+ 'the loop and when to ask. Call it before editing an application. Without a topic it answers the main rules; '
+			+ `a topic answers one reference file they name (references/<topic>.md): ${APP_TOPICS.join(', ')}. `
+			+ 'With workspaceId it also warns when that workspace pins another @fabrika/app than these rules describe.',
 		inputSchema: toolInput(toolInputs.getAppRules),
 		annotations: { readOnlyHint: true },
-	}, (): CallToolResult => ({ content: [{ type: 'text', text: APP_RULES }] }))
+	}, async (input): Promise<CallToolResult> => {
+		try {
+			const warning = input.workspaceId === undefined ? null : await pinWarning(c, input.workspaceId)
+			const text = APP_SKILL.references.find((reference) => reference.topic === input.topic)?.text ?? APP_SKILL.body
+			const header = `fabrika-app ${APP_SKILL.version}${warning === null ? '' : `\n${warning}`}\n\n`
+			return { content: [{ type: 'text', text: header + text }] }
+		} catch (cause) {
+			return toolFailure(cause)
+		}
+	})
 	server.registerTool('list_targets', {
 		description: 'List the app environments you may author. Each target is one stage environment of one app, with its GitHub repository.',
 		inputSchema: toolInput(toolInputs.listTargets),
@@ -214,13 +230,34 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	return server
 }
 
+/** A warning when the workspace's `package.json` pins an `@fabrika/app` range these rules' version is outside. */
+async function pinWarning(c: WorkspaceUseCaseContext, workspaceId: string): Promise<string | null> {
+	const read = await readFilesUseCase(c, { workspaceId, paths: ['package.json'] })
+	const content = read.files[0]?.content ?? null
+	if (content === null) return null
+	let manifest: z.infer<typeof AppDependency>
+	try {
+		manifest = AppDependency.parse(JSON.parse(content))
+	} catch {
+		return null
+	}
+	const range = manifest.dependencies?.['@fabrika/app']
+	if (range === undefined || Bun.semver.satisfies(APP_SKILL.version, range)) return null
+	return `Warning: this workspace pins @fabrika/app ${range}, and these rules describe ${APP_SKILL.version}. `
+		+ 'Follow node_modules/@fabrika/app/skill/ of the pinned version where they differ, or ask the human to upgrade.'
+}
+
 async function run(effect: () => Promise<object>): Promise<CallToolResult> {
 	try {
 		return { content: [{ type: 'text', text: JSON.stringify(await effect()) }] }
 	} catch (cause) {
-		if (cause instanceof ControlApiError) return { isError: true, content: [{ type: 'text', text: cause.message }] }
-		// Never log the error object: a GitHub or provider failure may carry repository detail.
-		console.error('mcp tool failed:', cause instanceof Error ? cause.name : 'unknown error')
-		return { isError: true, content: [{ type: 'text', text: 'The request failed. Try again later.' }] }
+		return toolFailure(cause)
 	}
+}
+
+function toolFailure(cause: unknown): CallToolResult {
+	if (cause instanceof ControlApiError) return { isError: true, content: [{ type: 'text', text: cause.message }] }
+	// Never log the error object: a GitHub or provider failure may carry repository detail.
+	console.error('mcp tool failed:', cause instanceof Error ? cause.name : 'unknown error')
+	return { isError: true, content: [{ type: 'text', text: 'The request failed. Try again later.' }] }
 }

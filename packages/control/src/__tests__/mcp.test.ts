@@ -105,20 +105,46 @@ describe('the MCP endpoint', () => {
 		expect(instructions).toContain('Before editing an application, call get_app_rules and follow it.')
 	})
 
-	test('get_app_rules is read-only, takes no input and answers the skill body of @fabrika/app verbatim', async () => {
+	test('get_app_rules is read-only and answers the skill of @fabrika/app under its version, or one reference file by topic', async () => {
 		const { fetch, world } = await fixture()
 		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const skill = readAppAgentSkill()
 		const listed = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
 		const tool = Array.isArray(listed) ? listed.find((entry) => field(entry, 'name') === 'get_app_rules') : undefined
 		expect(field(tool, 'annotations')).toEqual({ readOnlyHint: true })
-		expect(field(field(tool, 'inputSchema'), 'properties')).toEqual({})
+		const properties = field(field(tool, 'inputSchema'), 'properties')
+		expect(typeof properties === 'object' && properties !== null ? Object.keys(properties).sort() : []).toEqual(['topic', 'workspaceId'])
 
 		const answered = field(await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: {} }), 'result')
 		expect(field(answered, 'isError')).not.toBe(true)
-		expect(field(answered, 'content')).toEqual([{ type: 'text', text: readAppAgentSkill().body }])
-		const refused = field(await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: { path: 'x' } }), 'result')
-		expect(JSON.stringify(refused)).toContain('"isError":true')
+		expect(field(answered, 'content')).toEqual([{ type: 'text', text: `fabrika-app ${skill.version}\n\n${skill.body}` }])
+		const endpoint = skill.references.find((reference) => reference.topic === 'endpoint')
+		const byTopic = field(await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: { topic: 'endpoint' } }), 'result')
+		expect(field(byTopic, 'content')).toEqual([{ type: 'text', text: `fabrika-app ${skill.version}\n\n${endpoint?.text}` }])
+		for (const refusedArguments of [{ path: 'x' }, { topic: 'unknown' }]) {
+			const refused = field(await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: refusedArguments }), 'result')
+			expect(JSON.stringify(refused)).toContain('"isError":true')
+		}
 		expect(world.source.kinds()).toEqual([])
+	})
+
+	test("get_app_rules warns when the workspace's package.json pins another @fabrika/app", async () => {
+		const { fetch, world } = await fixture()
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const version = readAppAgentSkill().version
+		const workspace = toolJson(
+			await rpc(fetch, token, 'tools/call', { name: 'create_workspace', arguments: { appId: 'shop', env: 'stage', title: 'Rules' } }),
+		)
+		const rulesFor = async (range: string): Promise<string> => {
+			world.source.contents.set('package.json', JSON.stringify({ dependencies: { '@fabrika/app': range } }))
+			const answered = field(
+				await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: { workspaceId: field(workspace, 'id') } }),
+				'result',
+			)
+			return JSON.stringify(field(answered, 'content'))
+		}
+		expect(await rulesFor(`^${version}`)).not.toContain('Warning:')
+		expect(await rulesFor('^99.0.0')).toContain(`Warning: this workspace pins @fabrika/app ^99.0.0, and these rules describe ${version}.`)
 	})
 
 	test('a resource token lists the tools and calls a read and a write tool', async () => {

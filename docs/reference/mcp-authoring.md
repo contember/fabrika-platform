@@ -28,24 +28,27 @@ commit that names the expected head; a stale head fails and the client re-reads.
 
 ## Tools
 
-| Tool                  | What it does                                                   |
-| --------------------- | -------------------------------------------------------------- |
-| `list_targets`        | App environments the user may author.                          |
-| `create_workspace`    | Create a workspace branch from the default branch.             |
-| `list_workspaces`     | The user's workspaces on a target.                             |
-| `get_workspace`       | One workspace, with its head.                                  |
-| `list_files`          | Paths in the workspace.                                        |
-| `read_files`          | File contents at the workspace head.                           |
-| `apply_changes`       | Commit file writes and deletions against an expected head.     |
-| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env. |
-| `get_deployment`      | The run's state, a parked run's approval link, `deviations`.   |
-| `create_pull_request` | Open a pull request from the workspace to the default branch.  |
-| `get_app_rules`       | The application rules, read-only.                              |
+| Tool                  | What it does                                                       |
+| --------------------- | ------------------------------------------------------------------ |
+| `list_targets`        | App environments the user may author.                              |
+| `create_workspace`    | Create a workspace branch from the default branch.                 |
+| `list_workspaces`     | The user's workspaces on a target.                                 |
+| `get_workspace`       | One workspace, with its head.                                      |
+| `list_files`          | Paths in the workspace.                                            |
+| `read_files`          | File contents at the workspace head.                               |
+| `apply_changes`       | Commit file writes and deletions against an expected head.         |
+| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.     |
+| `get_deployment`      | The run's state, a parked run's approval link, `deviations`.       |
+| `create_pull_request` | Open a pull request from the workspace to the default branch.      |
+| `get_app_rules`       | The application rules or one topic, read-only, with a pin warning. |
 
-`get_app_rules` answers the application rules every agent gets: the body of `@fabrika/app`'s `skill/SKILL.md`
-([application runtime](application-runtime.md#the-agent-skill)). Some clients cut server `instructions` at about
-2 KB, so the instructions stay under 2,000 characters: the workspace flow, a pointer to `get_app_rules`, and three
-rules (contract first; never loosen anything to make something pass; ask when a file is protected).
+`get_app_rules` answers the application rules every agent gets, headed by their version (`fabrika-app <version>`):
+the body of `@fabrika/app`'s `skill/SKILL.md`, or with `topic` one of its `references/<topic>.md`
+([application runtime](application-runtime.md#the-agent-skill)). With `workspaceId` it reads that workspace's
+`package.json` and warns when its `@fabrika/app` range does not admit the rules' version. Some clients cut server
+`instructions` at about 2 KB, so the instructions stay under 2,000 characters: the workspace flow, a pointer to
+`get_app_rules`, and three rules (each endpoint and every step off the paved road declared; never loosen anything to
+make something pass; ask when a file is protected).
 
 ## Enable it on an installation
 

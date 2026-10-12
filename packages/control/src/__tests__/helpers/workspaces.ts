@@ -47,6 +47,8 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 	readonly calls: SourceCall[] = []
 	readonly targets: WorkspaceSourceTarget[] = []
 	readonly branches = new Map<string, string>([['main', sha('a')]])
+	/** The content `readFiles` answers for a path; any other path reads as `content of <path>`. */
+	readonly contents = new Map<string, string>()
 	private commits = 0
 
 	readBranch(input: { target: WorkspaceSourceTarget; branch: string }): Promise<string | null> {
@@ -72,7 +74,10 @@ export class FakeWorkspaceSource implements WorkspaceSourcePort {
 
 	readFiles(input: { target: WorkspaceSourceTarget; commitSha: string; paths: readonly string[] }) {
 		this.record(input.target, { kind: 'read-files', commitSha: input.commitSha, paths: input.paths })
-		return Promise.resolve({ commitSha: input.commitSha, files: input.paths.map((path) => ({ path, content: `content of ${path}` })) })
+		return Promise.resolve({
+			commitSha: input.commitSha,
+			files: input.paths.map((path) => ({ path, content: this.contents.get(path) ?? `content of ${path}` })),
+		})
 	}
 
 	commit(input: WorkspaceCommit & { target: WorkspaceSourceTarget; signal: AbortSignal }): Promise<string> {
