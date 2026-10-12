@@ -3,6 +3,7 @@
 // files may import.
 
 import type { FileTables } from './file-tables'
+import type { FormAdmissions } from './form-admissions'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { DataAccess } from './orm'
@@ -19,6 +20,8 @@ export interface FrameworkTables {
 	appendToInbox(form: string, values: Readonly<Record<string, unknown>>): Promise<void>
 	readonly webhooks: WebhookTables
 	readonly jobs: JobLeases
+	/** A form's admission counters and the challenge tokens it accepted. */
+	readonly forms: FormAdmissions
 }
 
 export interface FrameworkSide {

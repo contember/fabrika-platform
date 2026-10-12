@@ -8,6 +8,8 @@ export const FRAMEWORK_MIGRATION_BUNDLE = 'fabrika'
 export const WEBHOOK_BINDINGS_TABLE = 'fabrika_webhook_bindings'
 export const WEBHOOK_DELIVERIES_TABLE = 'fabrika_webhook_deliveries'
 export const JOB_LEASES_TABLE = 'fabrika_job_leases'
+export const FORM_ADMISSIONS_TABLE = 'fabrika_form_admissions'
+export const FORM_CHALLENGES_TABLE = 'fabrika_form_challenges'
 
 export interface FrameworkMigration {
 	/** Ordered by name; an applied one is immutable, like an application's. */
@@ -56,6 +58,29 @@ CREATE TABLE ${JOB_LEASES_TABLE} (
 	last_duration_ms INTEGER,
 	last_missed_reported_at TIMESTAMPTZ
 );
+`,
+	}),
+	Object.freeze({
+		name: '0003_form_admissions.sql',
+		sql: `-- A form's admission counters, one row per form, bucket (a client's digest, or the form's accepted submissions) and
+-- minute; a row of a past minute is expired and pruned by the next admission.
+CREATE TABLE ${FORM_ADMISSIONS_TABLE} (
+	form TEXT NOT NULL,
+	bucket TEXT NOT NULL,
+	window_start TIMESTAMPTZ NOT NULL,
+	count INTEGER NOT NULL,
+	PRIMARY KEY (form, bucket, window_start)
+);
+CREATE INDEX ${FORM_ADMISSIONS_TABLE}_window_start ON ${FORM_ADMISSIONS_TABLE} (window_start);
+
+-- The digest of each challenge token a form accepted, until the token could no longer verify: a replay is refused.
+CREATE TABLE ${FORM_CHALLENGES_TABLE} (
+	form TEXT NOT NULL,
+	token_digest TEXT NOT NULL,
+	expires_at TIMESTAMPTZ NOT NULL,
+	PRIMARY KEY (form, token_digest)
+);
+CREATE INDEX ${FORM_CHALLENGES_TABLE}_expires_at ON ${FORM_CHALLENGES_TABLE} (expires_at);
 `,
 	}),
 ])

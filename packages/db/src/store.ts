@@ -33,6 +33,7 @@ import {
 } from './description'
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { fileTables } from './file-tables'
+import { formAdmissions } from './form-admissions'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
@@ -1163,6 +1164,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>) => appendToInbox(models, runtimeOf(connection), form, values),
 			webhooks: webhookTables(() => runtimeOf(connection)),
 			jobs: jobLeases(() => runtimeOf(connection)),
+			forms: formAdmissions(() => runtimeOf(connection)),
 		}),
 		data: dataAccess({
 			models,

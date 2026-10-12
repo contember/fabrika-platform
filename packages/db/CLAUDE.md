@@ -38,6 +38,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                                |
 | `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                                          |
 | `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                                     |
+| `form-admissions.ts`   | `fabrika_form_admissions` and `fabrika_form_challenges`: a form's per-minute buckets and accepted challenge tokens, one statement each.                        |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                          |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).                             |
 | `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`, the framework's `defineStore`.                                   |
@@ -57,7 +58,9 @@ the runtime's `CapabilityAuthority` (one per `boot`), which binds each capabilit
 table's containment columns. `frameworkTablesOf` gives the framework the writes no store makes: a `c.form`
 appends one row to its inbox table (the declared columns only, answering nothing), and `c.webhook` keeps its
 bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. The job runner of
-`@fabrika/app` takes a job's lease in `fabrika_job_leases` (`frameworkTablesOf(…).jobs`). `fabrika db migrate`
+`@fabrika/app` takes a job's lease in `fabrika_job_leases` (`frameworkTablesOf(…).jobs`), and a form's admission
+takes from its per-minute buckets in `fabrika_form_admissions` and records accepted challenge tokens in
+`fabrika_form_challenges` (`frameworkTablesOf(…).forms`). `fabrika db migrate`
 applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle.
 `dataAccessOf` gives the framework the mini-ORM (`orm.ts`): an `InvocationTransaction` per invocation and the handles of
 each staged-kit site's `ctx.db`, which read `reference` tables too. Not built yet: reading an inbox on the road (an
@@ -189,9 +192,14 @@ and the target `Ref`, so no handler can call it.
   holder never finished is freed first by `reapCrashed`, whose one winner reports the crash. `renew` and `finish`
   match the caller's generation and holder. `claimOverdue` sets `last_missed_reported_at` at most once per period, so
   one of many concurrent checkers reports. Never read a lease and then write it.
-- **The lease statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath exports): they need
-  `now()`, `set_config`, `pg_backend_pid()` and `on conflict`, which the guard refuses on purpose. Only `job-leases.ts`
-  calls it, with constant texts and scalar parameters; never build a text from a value.
+- **The lease and admission statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath
+  exports): they need `now()`, `set_config`, `pg_backend_pid()`, `on conflict` and `skip locked`, which the guard
+  refuses on purpose. Only `job-leases.ts` and `form-admissions.ts` call it, with constant texts and scalar parameters;
+  never build a text from a value.
+- **A form bucket is taken in one statement** (`take`: an upsert whose update only runs below the limit), so
+  concurrent instances never admit past it; never read a counter and then write it. Every take and every challenge
+  record also prunes up to 32 expired rows with `for update skip locked` (no wait, so no deadlock), never the row it
+  writes itself, so both tables hold only the last minutes. Times are the database's.
 - **The framework migrations are migration identity** (ADR-0017): never edit an entry of `FRAMEWORK_MIGRATIONS`,
   add one.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);

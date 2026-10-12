@@ -23,6 +23,7 @@ export type {
 	RemovableFile,
 	StoredFile,
 } from './file-tables'
+export type { FormAdmissions } from './form-admissions'
 export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { DataAccess, DataHandles, DataSite } from './orm'
