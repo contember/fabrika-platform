@@ -870,7 +870,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU15 — deviations.** `@fabrika/iam` gains the dev dependencies `@fabrika/db` and `@fabrika/proxy-core` for the
   end-to-end witness, which boots `@fabrika/app`'s intake fixture against IAM's SQLite harness through proxy-core's
   `Authorizer` (Postgres for the application only). Link-file rows take source `{ kind: 'mount', name: <mount> }` and
-  ids `<mount>.files.<name>.{upload,download}`, so `#linkTarget`'s mount check applies unchanged; `link: true` is refused
+  ids `<mount>.files.<name>.{upload,list,download}`, so `#linkTarget`'s mount check applies unchanged; `link: true` is refused
   in the contract (not at boot) when no link mount is bound to the owner's dimension or one does not grant write and
   read. The endpoint test of `ctx.links.revoke` is in `job-links.test.ts`: the multi-tenant fixture is implemented by
   the type-mistake fixtures, which an extra endpoint breaks.
@@ -879,3 +879,6 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   stop after any effect is finished by the next run with exactly one live e-mailed link (`intake.test.ts`, one case
   per stop, a refused e-mail and an unreachable IAM): an `issued` row's link is revoked and replaced, an unrecorded
   link's key never left the job. The e-mail is at-least-once; a link's key is never stored.
+- **WU15 — link-holder files on WU17.** After the rebase onto WU17 the link holder's list (`<mount>.files.<name>.list`,
+  `{ after?, limit? }`, no owner) joins upload and download; quarantine and the held-file quota apply through the shared
+  upload and download paths. No scanning link collection is tested here: WU17's suites own the scan.
