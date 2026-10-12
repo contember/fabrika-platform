@@ -116,7 +116,7 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 	}),
 	z.strictObject({
 		...rowBase,
-		kind: z.enum(['health', 'form', 'webhook', 'link-spa']),
+		kind: z.enum(['health', 'form', 'webhook', 'link-spa', 'public-spa']),
 		callers: z.tuple([]),
 		requirement: z.null(),
 	}),

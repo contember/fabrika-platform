@@ -153,7 +153,7 @@ covers:
 - endpoint callers, access forms, input domains and output shapes;
 - containment, roles and their actions, membership rules;
 - table and column policies, with the actions each column is read and written with;
-- anonymous kinds, link mounts and link-reachable file collections;
+- anonymous kinds (a new public SPA, or an SPA that becomes public, widens), link mounts and link-reachable file collections;
 - job and webhook actions, connector exports and imports;
 - CSP extensions;
 - each site's declared reach;

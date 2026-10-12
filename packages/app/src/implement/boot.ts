@@ -550,6 +550,8 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			const row = rows.get(name)
 			if (isCredentialed(row)) {
 				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir })
+			} else if (row?.kind === 'public-spa') {
+				endpoints.set(name, { kind: 'public-spa', row, prefix: mount.prefix, dir: mount.dir })
 			}
 		} else if (mount.kind === 'rpc' || mount.kind === 'link') {
 			if (mount.kind === 'link') {

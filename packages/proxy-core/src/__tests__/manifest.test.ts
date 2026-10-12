@@ -240,9 +240,21 @@ describe('contract apps — the endpoint table', () => {
 		input: null,
 		output: null,
 	} satisfies EndpointRow
+	const site = {
+		id: 'site',
+		source: { kind: 'mount', name: 'site' },
+		kind: 'public-spa',
+		method: 'GET',
+		path: '/site/*',
+		callers: [],
+		requirement: null,
+		admission: null,
+		input: null,
+		output: null,
+	} satisfies EndpointRow
 	const artifact: ContractArtifact = {
 		...notesArtifact,
-		endpoints: [...notesArtifact.endpoints, invite],
+		endpoints: [...notesArtifact.endpoints, invite, site],
 		csp: { ...notesArtifact.csp, connectSrc: [{ origin: 'https://api.maps.example', purpose: 'the map search' }] },
 	}
 	const app = { id: 'notes@prod', hosts: ['notes.example.com'], upstream: 'notes:3000', ...contractProxyTable(artifact) }

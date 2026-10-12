@@ -227,8 +227,8 @@ not describe its rules. Array order has no meaning. The proxy makes one pass ove
    not: a page cannot attach `Authorization` to another site's request without a preflight nobody answers,
    so a bearer is explicit authority and needs no `Sec-Fetch-Site`.
 
-**Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, and the shell
-of a link SPA) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
+**Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, the shell
+of a link SPA, and a public SPA, `c.spa` with `access: { public: true }`) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
 It does not forward a `px_` key or a session that arrives on such a request; only an installation
 entry's `protocol` row keeps the `Authorization` header (below). Admission still applies:
 a form admits only its content type. Its body limit is the framework's, because `forward_auth` hands

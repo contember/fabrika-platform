@@ -294,7 +294,9 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
 
 function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): AccessChange[] {
 	const name = `Endpoint \`${id}\``
+	const becomesPublic = from.requirement !== null && to.kind === 'public-spa'
 	return [
+		...(becomesPublic ? [widening(`${name} becomes public: anyone opens it without signing in`)] : []),
 		...valueChange(`${name} kind`, from.kind, to.kind),
 		...valueChange(`${name} route`, `${from.method} ${from.path}`, `${to.method} ${to.path}`),
 		...setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller'),
@@ -539,6 +541,7 @@ function segmentsOf(path: string): string[] {
 }
 
 function audience(row: EndpointRow): string {
+	if (row.kind === 'public-spa') return 'for anyone, without signing in'
 	if (row.requirement === null) return `for anonymous ${row.kind} requests`
 	const callers = row.callers.join(', ')
 	return row.requirement.kind === 'member'

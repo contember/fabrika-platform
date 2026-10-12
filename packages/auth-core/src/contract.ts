@@ -57,8 +57,11 @@ export type EndpointMethod = 'GET' | 'POST'
 /** Kinds that verify a credential, check the caller kind and the requirement. */
 export type CredentialedEndpointKind = 'query' | 'mutation' | 'spa' | 'upload' | 'download'
 
-/** Fixed anonymous kinds: no caller, no requirement, no token. `link-spa` is the shell of a link mount's SPA. */
-export type AnonymousEndpointKind = 'health' | 'form' | 'webhook' | 'link-spa'
+/**
+ * Fixed anonymous kinds: no caller, no requirement, no token. `link-spa` is the shell of a link mount's SPA;
+ * `public-spa` is an SPA anyone opens (`access: { public: true }`).
+ */
+export type AnonymousEndpointKind = 'health' | 'form' | 'webhook' | 'link-spa' | 'public-spa'
 
 export type EndpointKind = CredentialedEndpointKind | AnonymousEndpointKind
 

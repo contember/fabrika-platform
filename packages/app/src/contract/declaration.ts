@@ -120,7 +120,8 @@ export interface LinkAccessDeclaration {
 	readonly action: string
 }
 
-export type SpaAccessDeclaration = { readonly member: true } | { readonly action: string; readonly over: string }
+/** `{ public: true }` serves the SPA to anyone, with no session: an anonymous `public-spa` row. */
+export type SpaAccessDeclaration = { readonly member: true } | { readonly action: string; readonly over: string } | { readonly public: true }
 
 export type ProcedureType = 'query' | 'mutation'
 

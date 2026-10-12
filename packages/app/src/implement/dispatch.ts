@@ -109,6 +109,8 @@ export type ServedEndpoint =
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
 	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string }
+	/** An SPA anyone opens: anonymous, served without a token. */
+	| { readonly kind: 'public-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
 	| {
 		/** A file collection's upload or download, served by `src/files` once the access form minted its target. */
@@ -237,6 +239,8 @@ export class ContractRuntime {
 					await this.#authorize(served.row, request)
 					return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
 				}
+				case 'public-spa':
+					return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
 				case 'link-spa':
 					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
 						return bootstrapResponse()

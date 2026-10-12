@@ -536,6 +536,10 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   `@fabrika/app/client` reads. A link procedure admits only a key of its own mount and
   re-reads where the object lies on every request: a key whose chain differs, because
   the note moved, is 404.
+- `c.spa(prefix, { dir, access: { public: true } })` serves the SPA at `GET <prefix>/*`
+  to anyone: the row is the anonymous kind `public-spa`, so the proxy reads no credential,
+  forwards no token and never bounces to login. The page reaches only the anonymous endpoints
+  (a form); every other call still needs a session. `{ public: true }` takes no other key.
 - `c.form` appends one row of its declared fields to its inbox table and answers
   `{ result: { received: true } }`: it reads nothing and runs no handler. The body limit
   is the framework's (413); the rate limit is a token bucket per form per instance

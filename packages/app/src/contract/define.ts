@@ -122,6 +122,10 @@ export interface CreatesAccess<A extends string, D extends string> {
 export interface LinkAccess<A extends string> {
 	readonly action: A
 }
+/** An SPA anyone opens, with no session; the page reaches only the anonymous endpoints. */
+export interface PublicAccess {
+	readonly public: true
+}
 
 /** Without an `input`, TS infers `I` as its whole constraint, not the `null` default; both mean "no input". */
 export type InputOf<I> = [I] extends [InputSchema] ? z.output<I> : Record<never, never>
@@ -258,8 +262,8 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly procedures: (l: LinkKit<G[number]>) => T
 		} & Owned<'kind' | 'prefix'>,
 	): LinkMount<LD, G[number], IB, T>
-	/** The SPA under `prefix`, for signed-in people only. */
-	spa<const Acc extends MemberAccess | OverAccess<A, D>>(
+	/** The SPA under `prefix`: for signed-in people, or for anyone with `access: { public: true }`. */
+	spa<const Acc extends MemberAccess | OverAccess<A, D> | PublicAccess>(
 		prefix: Path,
 		options: { readonly dir: string; readonly access: Acc } & Owned<'kind' | 'prefix'>,
 	): SpaMount<Acc>

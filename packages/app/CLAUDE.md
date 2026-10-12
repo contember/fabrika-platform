@@ -204,8 +204,9 @@ src/
 - `tables` is what `defineTables` returned or the artifact form of each table
   policy (`TablePolicyArtifact`); `@fabrika/db/tables`' `tablePolicies` converts
   the one into the other, so both paths share `@fabrika/db`'s one policy parse.
-- Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; a link mount
-  serves `GET <prefix>/*` (anonymous) and its procedures at
+- Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; an SPA serves
+  `GET <prefix>/*`, anonymous (kind `public-spa`, no token) with `access: { public: true }`,
+  which takes no other key; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook

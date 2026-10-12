@@ -310,14 +310,17 @@ class ArtifactBuilder {
 					this.#prefix(where, mount.prefix)
 				}
 				this.#nonEmpty(`${where} dir`, mount.dir)
+				const path = joinPath(mount.prefix, '*')
 				const requirement = this.#spaRequirement(where, mount.access)
-				if (requirement !== null) {
+				if (requirement === 'public') {
+					this.#anonymous(name, 'public-spa', 'GET', path, null, null)
+				} else if (requirement !== null) {
 					this.#row({
 						id: name,
 						source: { kind: 'mount', name },
 						kind: 'spa',
 						method: 'GET',
-						path: joinPath(mount.prefix, '*'),
+						path,
 						callers: ['human'],
 						requirement,
 						admission: null,
@@ -477,7 +480,7 @@ class ArtifactBuilder {
 
 	#anonymous(
 		name: string,
-		kind: 'health' | 'form' | 'webhook',
+		kind: 'health' | 'form' | 'webhook' | 'public-spa',
 		method: 'GET' | 'POST',
 		path: string,
 		admission: BodyAdmission | null,
@@ -547,7 +550,11 @@ class ArtifactBuilder {
 		return { kind: 'action', action: access.action, access: { form: 'on', dimension: mount.dimension, from: null } }
 	}
 
-	#spaRequirement(where: string, access: SpaAccessDeclaration): EndpointRequirement | null {
+	/** `'public'` is the anonymous `public-spa` row: no requirement at all. */
+	#spaRequirement(where: string, access: SpaAccessDeclaration): EndpointRequirement | 'public' | null {
+		if (hasExactKeys(access, ['public']) && 'public' in access && access.public === true) {
+			return 'public'
+		}
 		if (hasExactKeys(access, ['member']) && 'member' in access && access.member === true) {
 			return { kind: 'member' }
 		}
@@ -556,7 +563,7 @@ class ArtifactBuilder {
 			this.#knownDimension(where, access.over)
 			return { kind: 'action', action: access.action, access: { form: 'over', dimension: access.over } }
 		}
-		this.#problem(where, `access ${JSON.stringify(access)} is not an SPA access (allowed: { member: true } or { action, over })`)
+		this.#problem(where, `access ${JSON.stringify(access)} is not an SPA access (allowed: { member: true }, { action, over } or { public: true })`)
 		return null
 	}
 

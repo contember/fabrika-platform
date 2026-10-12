@@ -866,15 +866,21 @@ function linkAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue
 	return { action: text(fields.get('action'), value ?? at, 'access.action') }
 }
 
+const SPA_ACCESS_ALLOWED = '{ member: true }, { action, over } or { public: true }'
+
 function spaAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue): SpaAccessDeclaration {
-	const fields = accessFields(value, at, '{ member: true } or { action, over }')
+	const fields = accessFields(value, at, SPA_ACCESS_ALLOWED)
 	if (isMember(fields)) {
 		return { member: true }
+	}
+	const open = fields.get('public')
+	if (hasKeys(fields, ['public']) && open?.kind === 'boolean' && open.value) {
+		return { public: true }
 	}
 	if (hasKeys(fields, ['action', 'over'])) {
 		return { action: text(fields.get('action'), value ?? at, 'access.action'), over: text(fields.get('over'), value ?? at, 'access.over') }
 	}
-	throw new Refused(value?.at ?? at.at, 'access is not an SPA access', '{ member: true } or { action, over }')
+	throw new Refused(value?.at ?? at.at, 'access is not an SPA access', SPA_ACCESS_ALLOWED)
 }
 
 // ── Imports and CSP ─────────────────────────────────────────────────────────────────────────────

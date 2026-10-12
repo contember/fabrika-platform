@@ -170,7 +170,7 @@ export const proxyEndpointRowSchema = z.union([
 	}).strict(),
 	z.object({
 		...endpointRuleFields,
-		kind: z.enum(['health', 'form', 'webhook', 'link-spa']),
+		kind: z.enum(['health', 'form', 'webhook', 'link-spa', 'public-spa']),
 		callers: z.tuple([]),
 		requirement: z.null(),
 		delegation: z.null(),

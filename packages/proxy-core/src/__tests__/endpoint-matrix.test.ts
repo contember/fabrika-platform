@@ -372,6 +372,38 @@ describe('anonymous kinds', () => {
 		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
 
+	test('a public SPA reads no credential and never bounces; the member SPA under it still does', async () => {
+		const site = anonymousRow({ id: 'site', kind: 'public-spa', method: 'GET', path: '/*', admission: null })
+		const app = endpointRow({
+			id: 'web',
+			kind: 'spa',
+			method: 'GET',
+			path: '/app/*',
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: null,
+		})
+		const iam = new FakeIam({ mintToken: await minted('user'), mintFromKey: await minted('service') })
+		const verify = createVerifyService({ manifest: { apps: [contractAppWith([site, app, ME], ['/api'])] }, iam, issuer: ISSUER })
+
+		for (const path of ['/', '/assets/app.js']) {
+			const anonymous = await verify(verifyRequest({ path, headers: { 'Sec-Fetch-Mode': 'navigate' } }))
+			expect(anonymous.status).toBe(204)
+			expect(anonymous.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+			expect(anonymous.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(site.id, site.digest))
+		}
+		const credentialed = await verify(verifyRequest({ path: '/', bearer: 'px_k', cookie: SESSION }))
+		expect(credentialed.status).toBe(204)
+		expect(credentialed.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
+
+		expectDenied(await verify(verifyRequest({ method: 'POST', path: '/', headers: { 'Content-Type': 'application/json' } })), 403)
+		const member = await verify(verifyRequest({ path: '/app/', headers: { 'Sec-Fetch-Mode': 'navigate' } }))
+		expect(member.status).toBe(302)
+		expect(member.headers.get('location')).toStartWith(`${ISSUER}/auth/login`)
+		expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/api/me', headers: { ...JSON_POST.headers, 'Sec-Fetch-Mode': 'cors' } })), 401)
+	})
+
 	test('a form admits only its content type', async () => {
 		const { verify } = service({})
 		expectDenied(await verify(verifyRequest({ method: 'POST', path: '/contact', headers: { 'Content-Type': 'application/json' } })), 400)
