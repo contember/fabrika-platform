@@ -87,12 +87,11 @@ function canonicalIssuer(raw: string | undefined): string | null {
 /** Factory exported for Lopata and unit tests; production uses the default Worker fetch below. */
 export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: ProxyLogger = consoleLogger): ProxyFetch {
 	const manifestJson = env.FABRIKA_PROXY_MANIFEST_JSON ?? ''
+	const parsed = manifestJson === '' ? null : parseProxyManifestJson(manifestJson)
+	const manifest = parsed !== null && validManifest(parsed) ? parsed : null
 	const canonical = canonicalIssuer(env.FABRIKA_IAM_ISSUER)
-	if (!isIamGateway(env.IAM) || manifestJson === '' || canonical === null) return () => Promise.resolve(UNAVAILABLE.clone())
+	if (!isIamGateway(env.IAM) || manifest === null || canonical === null) return unavailable(manifest)
 	const issuer = canonical
-
-	const manifest = parseProxyManifestJson(manifestJson)
-	if (manifest === null || !validManifest(manifest)) return () => Promise.resolve(UNAVAILABLE.clone())
 
 	if (cached?.manifestJson === manifestJson && cached.iam === env.IAM && cached.issuer === issuer) {
 		return cached.handler
@@ -110,6 +109,18 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 	const handler = proxyHandler(env, manifest, verify)
 	cached = { manifestJson, iam: env.IAM, issuer, handler }
 	return handler
+}
+
+/**
+ * The fixed 503 of a Worker that cannot serve. A host the manifest still names as an application gets that
+ * application's treatment, its transport header included; without a usable manifest no host is known.
+ */
+function unavailable(manifest: ProxyManifest | null): ProxyFetch {
+	return (request) => {
+		const app = manifest === null ? null : findApp(manifest, new URL(request.url))
+		const answer = UNAVAILABLE.clone()
+		return Promise.resolve(app === null || !isApplicationEntry(app) ? answer : withResponseHeaders(answer, contractAnswerHeaders(app)(null)))
+	}
 }
 
 function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: VerifyService): ProxyFetch {

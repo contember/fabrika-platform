@@ -69,6 +69,8 @@ const APP_ANSWERS: Record<string, { readonly fields: [string, string][]; readonl
 	'/api/files.avatar/blob': { fields: [['Content-Type', 'application/octet-stream'], ['Cache-Control', 'public, max-age=3600']] },
 	'/api/files.avatar/mixed': { fields: [['Content-Type', 'image/png'], ['Content-Type', 'text/html'], ['Content-Disposition', 'inline']] },
 	'/api/files.avatar/early': { fields: [['Content-Type', 'image/png']], informational: EARLY_HINTS },
+	'/api/pinned': { fields: [['Strict-Transport-Security', 'max-age=999; includeSubDomains']] },
+	'/api/files.avatar/pinned': { fields: [['Content-Type', 'image/png'], ['Strict-Transport-Security', 'max-age=999; includeSubDomains']] },
 }
 
 function rawAnswer(path: string): string {
@@ -182,18 +184,27 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 	}
 	// An application whose upstream nothing listens on: Caddy's own 502 is the answer.
 	const unreachable: ContractProxyApp = { ...contract, id: 'down@prod', hosts: ['down.example'], upstream: `127.0.0.1:${freePort()}` }
+	// The same application served over http, as the local stack serves it.
+	const plain: ContractProxyApp = { ...contract, id: 'plain@prod', hosts: ['plain.example'], scheme: 'http' }
 	const dir = mkdtempSync(join(tmpdir(), 'fabrika-caddy-'))
 	let caddy: ReturnType<typeof Bun.spawn> | undefined
 
 	beforeAll(async () => {
-		const config = buildCaddyConfig({ apps: [contract, unreachable] }, {
+		const config = buildCaddyConfig({ apps: [contract, unreachable, plain] }, {
 			authUpstream: `127.0.0.1:${auth.port}`,
 			listen: [`127.0.0.1:${port}`],
 			healthListen: [`127.0.0.1:${freePort()}`],
 		})
 		writeFileSync(join(dir, 'caddy.json'), JSON.stringify(config))
 		caddy = Bun.spawn([CADDY, 'run', '--config', join(dir, 'caddy.json')], {
-			env: { ...process.env, HOME: dir, XDG_DATA_HOME: dir, XDG_CONFIG_HOME: dir, [proxySecretVariable('notes@prod')]: SECRET },
+			env: {
+				...process.env,
+				HOME: dir,
+				XDG_DATA_HOME: dir,
+				XDG_CONFIG_HOME: dir,
+				[proxySecretVariable('notes@prod')]: SECRET,
+				[proxySecretVariable('plain@prod')]: SECRET,
+			},
 			stdout: 'ignore',
 			stderr: 'pipe',
 		})
@@ -318,6 +329,16 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		expect(answers.map((answer) => answer.status)).toEqual([200, 200, 400])
 		for (const answer of answers) {
 			expect(answer.headers.get('Strict-Transport-Security')).toBe(STRICT_TRANSPORT_SECURITY)
+		}
+	})
+
+	test("the application's own HSTS is replaced on an https host and dropped on an http one, on an answer and a download", async () => {
+		for (const path of ['/api/pinned', '/api/files.avatar/pinned']) {
+			const https = await rawRequest(port, { Connection: 'close' }, path)
+			expect(https.headers.get('Strict-Transport-Security')).toBe(STRICT_TRANSPORT_SECURITY)
+			const http = await rawRequest(port, { Connection: 'close' }, path, 'plain.example')
+			expect(http.status).toBe(200)
+			expect(http.headers.get('Strict-Transport-Security')).toBeNull()
 		}
 	})
 

@@ -151,8 +151,11 @@ fails, the Worker answers a fixed `502` with the same treatment, never the error
 **HSTS** follows the manifest scheme: every answer of an `https` application host, downloads, redirects and
 the proxy's own failures included, carries `Strict-Transport-Security: max-age=31536000`, and an `http` host
 (the local stack) none. Only the proxy knows the public scheme, so the framework's in-process policy has no
-transport header. No `includeSubDomains` and no `preload`: applications share parent domains. An answer that
-belongs to no application host carries none.
+transport header. No `includeSubDomains` and no `preload`: applications share parent domains. A refusal before the
+request is read (a non-canonical path, a missing method) carries the base policy and the transport header of the
+host it names; the Cloudflare Worker's 503 when it cannot initialize carries the named host's treatment. The
+application's own `Strict-Transport-Security` never passes: an `https` policy replaces it, and on an `http` host it
+is deleted. An answer that belongs to no application host carries none.
 
 The policy:
 

@@ -104,7 +104,9 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   auth service's denials carry the one `@fabrika/proxy-core` set. Caddy's own failures (a dial to the app or the
   auth service refused) answer through the server's `errors` routes: per contract app host its policy, a download
   endpoint's its file treatment, any other host the base policy, with Caddy's status and no body. Both policy and
-  file treatment carry HSTS on an `https` entry (`appHeaderPolicy`, `appFileTreatment`). An installation service's answers are
+  file treatment carry HSTS on an `https` entry (`appHeaderPolicy`, `appFileTreatment`), whose `set` replaces the
+  application's own; an `http` entry deletes `TRANSPORT_HEADERS` instead (`removedHeaders`): a named delete runs
+  after the set, so `https` cannot list it. An installation service's answers are
   untouched: IAM and Control set their own per-response CSPs.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
   different denials. Both deny; only the second is an incident — including on the human path, where a

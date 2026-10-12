@@ -47,7 +47,15 @@ import {
 	REQUEST_ID_HEADER,
 } from './constants'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
-import { appFileTreatment, appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, BASE_HEADER_POLICY, type HeaderPolicy } from './headers'
+import {
+	appFileTreatment,
+	appHeaderPolicy,
+	applyFileTreatment,
+	applyHeaderPolicy,
+	BASE_HEADER_POLICY,
+	type HeaderPolicy,
+	transportPolicy,
+} from './headers'
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
 import { formatOAuthBearerChallenge, isApplicationEntry, type ManifestEndpointRow, type ProxyApp, type ProxyManifest } from './manifest'
@@ -128,7 +136,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			const read = readForwardedRequest(request, requestId)
 			if (!read.ok) {
 				const status = read.reason === 'non_canonical_path' ? 400 : 403
-				return withPolicy(denied(logger, { requestId }, { outcome: 'deny', status, reason: read.reason }), BASE_HEADER_POLICY)
+				return withPolicy(denied(logger, { requestId }, { outcome: 'deny', status, reason: read.reason }), earlyPolicy(request, url))
 			}
 			const forwarded = read.request
 
@@ -181,7 +189,23 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
 			// error can stringify a URL, a header or a body, any of which may carry a credential.
 			logger.error('verify failed', { requestId })
-			return withPolicy(textResponse(403, 'forbidden'), BASE_HEADER_POLICY)
+			return withPolicy(textResponse(403, 'forbidden'), earlyPolicy(request, null))
+		}
+	}
+
+	/**
+	 * A refusal before the request is read: the base policy, plus the transport header of the application host it
+	 * names, when the forwarded host (and the pinned app) resolves to one. Nothing of the host decides anything else.
+	 */
+	function earlyPolicy(request: Request, verifyUrl: URL | null): HeaderPolicy {
+		try {
+			const host = request.headers.get(FORWARDED_HOST_HEADER) ?? request.headers.get('Host') ?? ''
+			const resolved = selectApp(verifyUrl ?? new URL(request.url), host, byId, byHost)
+			return resolved === null || !isApplicationEntry(resolved.app)
+				? BASE_HEADER_POLICY
+				: [...BASE_HEADER_POLICY, ...transportPolicy(resolved.app.scheme)]
+		} catch {
+			return BASE_HEADER_POLICY
 		}
 	}
 }

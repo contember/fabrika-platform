@@ -676,8 +676,15 @@ describe('a contract app — the response headers', () => {
 		if (download?.handler !== 'reverse_proxy') throw new Error('expected the upstream')
 		expect(download.headers?.response?.set?.['Strict-Transport-Security']).toEqual([hsts])
 		expect(policyValues(policy)['Strict-Transport-Security']).toEqual([hsts])
-		const local = buildCaddyConfig({ apps: [{ ...contract, scheme: 'http' }] }, OPTIONS)
-		expect(JSON.stringify(local)).not.toContain('Strict-Transport-Security')
+		// An http entry sets none and deletes the application's own, on an answer and a download.
+		const local = rawSubrouteOf(defined(buildCaddyConfig({ apps: [{ ...contract, scheme: 'http' }] }, OPTIONS).apps.http.servers['proxy']?.routes[0]))
+			.routes.slice(-2)
+		for (const route of local) {
+			const response = upstreamOf(route).headers?.response
+			expect(response?.set?.['Strict-Transport-Security']).toBeUndefined()
+			expect(response?.delete).toContain('Strict-Transport-Security')
+		}
+		expect(upstreamOf(defaultRoute).headers?.response?.delete).not.toContain('Strict-Transport-Security')
 		expect(policyValues(FILE_TREATMENT)['Strict-Transport-Security']).toBeUndefined()
 	})
 

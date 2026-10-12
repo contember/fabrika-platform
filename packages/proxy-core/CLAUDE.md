@@ -42,7 +42,10 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   (a 404 or 405 on the service itself included); the allow (a 204 to Caddy) and the liveness probe carry
   none. `appHeaderPolicy` and `appFileTreatment` add HSTS (`transportPolicy`) for an `https` entry, never for
   `http`; `headerPolicy`, `FILE_TREATMENT` and `BASE_HEADER_POLICY` never carry it, because only the manifest
-  knows the public scheme. A producer of the proxy's answers uses the `app…` forms. `applyHeaderPolicy` also deletes `REMOVED_RESPONSE_HEADERS`; the Caddy config uses the same list. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
+  knows the public scheme. A producer of the proxy's answers uses the `app…` forms. A refusal before the request is
+  read gets the base policy plus the transport of the application host it names (`earlyPolicy`). `applyHeaderPolicy`
+  also deletes `REMOVED_RESPONSE_HEADERS` and `TRANSPORT_HEADERS` before it sets the policy, so an application's own
+  HSTS never passes on `http`; the Caddy config uses the same lists. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
   accepts `*` in a host, so `isPolicyOrigin` checks the host itself), at most `MAX_CSP_ORIGINS` (16) per
   directive — the same bound the contract build applies.
 - **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname

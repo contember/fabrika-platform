@@ -45,6 +45,7 @@ import {
 	type HeaderPolicy,
 	INLINE_FILE_TYPES,
 	REMOVED_RESPONSE_HEADERS,
+	TRANSPORT_HEADERS,
 } from '@fabrika/proxy-core/headers'
 import { type ContractProxyApp, isApplicationEntry, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
@@ -455,15 +456,23 @@ function contractUpstream(
 			},
 			upstream({
 				set: headerValues(appFileTreatment(app)),
-				delete: [...REMOVED_RESPONSE_HEADERS],
+				delete: removedHeaders(app),
 				replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'attachment' }] },
 			}),
 		],
 	}
 	const answer: CaddyRoute = {
-		handle: [INFORMATIONAL_WITHOUT_HEADERS, upstream({ set: headerValues(policy), delete: [...REMOVED_RESPONSE_HEADERS] })],
+		handle: [INFORMATIONAL_WITHOUT_HEADERS, upstream({ set: headerValues(policy), delete: removedHeaders(app) })],
 	}
 	return [...(downloads.length === 0 ? [] : [download]), answer]
+}
+
+/**
+ * What a contract app's answer loses. A named delete runs after the set in one `HeaderOps`, so the transport header is
+ * deleted only where the policy sets none (an `http` entry); on `https` the set replaces the application's own.
+ */
+function removedHeaders(app: ContractProxyApp): string[] {
+	return [...REMOVED_RESPONSE_HEADERS, ...(app.scheme === 'https' ? [] : TRANSPORT_HEADERS)]
 }
 
 /**

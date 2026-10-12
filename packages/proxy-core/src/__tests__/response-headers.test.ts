@@ -5,7 +5,16 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { appFileTreatment, appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy } from '../headers'
+import {
+	appFileTreatment,
+	appHeaderPolicy,
+	applyFileTreatment,
+	applyHeaderPolicy,
+	BASE_HEADER_POLICY,
+	FILE_TREATMENT,
+	type HeaderPolicy,
+	headerPolicy,
+} from '../headers'
 import type { ProxyApp } from '../manifest'
 import { createVerifyService } from '../service'
 import { anonymousRow, contractAppWith, endpointRow, FakeIam, installationAppWith, ISSUER, serviceRow, signToken, verifyRequest } from './helpers'
@@ -111,7 +120,32 @@ describe('the transport header of an application host', () => {
 		expect((await local(verifyRequest({ path: '/api/unknown' }))).headers.get('Strict-Transport-Security')).toBeNull()
 		const installation = verifyWith(new FakeIam(), installationAppWith([serviceRow('/*', ['machine'])]))
 		expect((await installation(verifyRequest({ path: '/x' }))).headers.get('Strict-Transport-Security')).toBeNull()
-		expect((await verifyWith(new FakeIam())(verifyRequest({ method: null }))).headers.get('Strict-Transport-Security')).toBeNull()
+		const unknownHost = await verifyWith(new FakeIam())(verifyRequest({ path: '/api//me', host: 'elsewhere.example' }))
+		expect(unknownHost.status).toBe(400)
+		expect(unknownHost.headers.get('Strict-Transport-Security')).toBeNull()
+	})
+
+	test('a refusal before the request is read carries the transport header of the host it names', async () => {
+		const verify = verifyWith(new FakeIam())
+		const nonCanonical = await verify(verifyRequest({ path: '/api//me' }))
+		const unread = await verify(verifyRequest({ method: null }))
+		expect([nonCanonical.status, unread.status]).toEqual([400, 403])
+		for (const answer of [nonCanonical, unread]) {
+			expectHeaders(answer, [...BASE_HEADER_POLICY, ['Strict-Transport-Security', HSTS]])
+		}
+		const local = verifyWith(new FakeIam(), { ...CONTRACT, scheme: 'http' })
+		expect((await local(verifyRequest({ path: '/api//me' }))).headers.get('Strict-Transport-Security')).toBeNull()
+	})
+
+	test("the application's own HSTS never survives: an http host's answer and download policies drop it", () => {
+		for (const policy of [appHeaderPolicy({ ...CONTRACT, scheme: 'http' }), appFileTreatment({ scheme: 'http' })]) {
+			const headers = new Headers({ 'Strict-Transport-Security': 'max-age=999; includeSubDomains' })
+			applyHeaderPolicy(headers, policy)
+			expect(headers.get('Strict-Transport-Security')).toBeNull()
+		}
+		const https = new Headers({ 'Strict-Transport-Security': 'max-age=999; includeSubDomains' })
+		applyFileTreatment(https, appFileTreatment(CONTRACT))
+		expect(https.get('Strict-Transport-Security')).toBe(HSTS)
 	})
 
 	test('the policy and the file treatment of an entry add it only for https; the fixed definitions never carry it', () => {

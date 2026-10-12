@@ -722,17 +722,46 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		expect(answers[1]?.headers.get('Content-Security-Policy')).toBe("sandbox; default-src 'none'")
 	})
 
-	test('an http host gets no HSTS', async () => {
-		const handler = createCloudflareProxyHandler(contractEnvironment(await keyIam(), [], 'http'))
-		const answer = await handler(
-			new Request(`http://${HOST}/api/me`, {
-				method: 'POST',
-				body: '{}',
-				headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' },
-			}),
+	test("an http host gets no HSTS, and the application's own is dropped on an answer and a download", async () => {
+		const pinning: CloudflareProxyEnv = {
+			...contractEnvironment(await keyIam(), [], 'http'),
+			APP: { fetch: () => Promise.resolve(new Response('ok', { headers: { 'Strict-Transport-Security': 'max-age=999; includeSubDomains' } })) },
+		}
+		const handler = createCloudflareProxyHandler(pinning)
+		const answers = [
+			await handler(
+				new Request(`http://${HOST}/api/me`, {
+					method: 'POST',
+					body: '{}',
+					headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' },
+				}),
+			),
+			await handler(new Request(`http://${HOST}/api/files.avatar/photo`, { headers: { Authorization: 'Bearer px_key' } })),
+		]
+		for (const answer of answers) {
+			expect(answer.status).toBe(200)
+			expect(answer.headers.get('Strict-Transport-Security')).toBeNull()
+		}
+	})
+
+	test("a Worker that cannot serve answers its fixed 503 with the named application's treatment", async () => {
+		const withoutIam = createCloudflareProxyHandler({ ...contractEnvironment(new FakeIam(), []), IAM: undefined })
+		const withoutIssuer = createCloudflareProxyHandler({ ...contractEnvironment(new FakeIam(), []), FABRIKA_IAM_ISSUER: '' })
+		for (const handler of [withoutIam, withoutIssuer]) {
+			const answer = await handler(new Request(`https://${HOST}/api/me`))
+			expect(answer.status).toBe(503)
+			expect(await answer.text()).toBe('proxy unavailable')
+			expect(answer.headers.get('Strict-Transport-Security')).toBe(STRICT_TRANSPORT_SECURITY)
+			expect(answer.headers.get('Content-Security-Policy')).toBe(POLICY[0]?.[1] ?? '')
+		}
+		const unknownHost = await withoutIam(new Request('https://elsewhere.example/'))
+		expect(unknownHost.status).toBe(503)
+		expect(unknownHost.headers.get('Strict-Transport-Security')).toBeNull()
+		const noManifest = await createCloudflareProxyHandler({ ...contractEnvironment(new FakeIam(), []), FABRIKA_PROXY_MANIFEST_JSON: '' })(
+			new Request(`https://${HOST}/api/me`),
 		)
-		expect(answer.status).toBe(200)
-		expect(answer.headers.get('Strict-Transport-Security')).toBeNull()
+		expect(noManifest.status).toBe(503)
+		expect(noManifest.headers.get('Strict-Transport-Security')).toBeNull()
 	})
 
 	test("the decision's own denial carries the application's policy", async () => {

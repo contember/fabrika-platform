@@ -122,6 +122,12 @@ export function transportPolicy(scheme: PublicScheme): HeaderPolicy {
 	return scheme === 'https' ? [['Strict-Transport-Security', STRICT_TRANSPORT_SECURITY]] : []
 }
 
+/**
+ * The transport headers the policy owns: an `https` entry's policy sets them, and every other answer loses the
+ * application's own, so an `http` host never pins a browser to a scheme it does not serve.
+ */
+export const TRANSPORT_HEADERS: readonly string[] = ['Strict-Transport-Security']
+
 /** The policy of a contract application's manifest entry, its transport header included. */
 export function appHeaderPolicy(app: { readonly csp: CspOrigins; readonly operationsOrigin?: string; readonly scheme: PublicScheme }): HeaderPolicy {
 	return Object.freeze([...headerPolicy(app.csp, app.operationsOrigin ?? null), ...transportPolicy(app.scheme)])
@@ -157,9 +163,9 @@ export function fileDisposition(contentType: string | null): 'inline' | 'attachm
 	return contentType !== null && INLINE_FILE_TYPES.includes(contentType) ? 'inline' : 'attachment'
 }
 
-/** Whatever the handler or an asset server set for these names is replaced, and the removed headers are dropped. */
+/** Whatever the handler or an asset server set for these names is replaced; the removed and transport headers are dropped first. */
 export function applyHeaderPolicy(headers: Headers, policy: HeaderPolicy): void {
-	for (const name of REMOVED_RESPONSE_HEADERS) {
+	for (const name of [...REMOVED_RESPONSE_HEADERS, ...TRANSPORT_HEADERS]) {
 		headers.delete(name)
 	}
 	for (const [name, value] of policy) {
