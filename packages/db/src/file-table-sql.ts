@@ -48,17 +48,20 @@ export function fileTableName(collection: string): string | null {
 export function tableOf(collection: string): string {
 	const table = fileTableName(collection)
 	if (table === null) {
-		throw new QueryRefusedError(`the file collection '${collection}' needs a lowercase snake_case name of at most ${MAX_COLLECTION_LENGTH} characters`)
+		throw new QueryRefusedError(
+			'invalid_name',
+			`the file collection '${collection}' needs a lowercase snake_case name of at most ${MAX_COLLECTION_LENGTH} characters`,
+		)
 	}
 	return table
 }
 
 function sqlType(column: FileColumn): string {
 	if (!isPlainIdentifier(column.column)) {
-		throw new QueryRefusedError('an owner column must match ^[a-z_][a-z0-9_]*$')
+		throw new QueryRefusedError('invalid_name', 'an owner column must match ^[a-z_][a-z0-9_]*$')
 	}
 	if (column.type !== 'text' && column.type !== 'uuid') {
-		throw new QueryRefusedError("an owner column's type must be 'text' or 'uuid'")
+		throw new QueryRefusedError('invalid_name', "an owner column's type must be 'text' or 'uuid'")
 	}
 	return column.type.toUpperCase()
 }
@@ -73,13 +76,13 @@ function sqlType(column: FileColumn): string {
 export function fileTableSql(collection: string, owner: FileOwner): string {
 	const table = tableOf(collection)
 	if (!isPlainIdentifier(owner.table)) {
-		throw new QueryRefusedError('the owner table must match ^[a-z_][a-z0-9_]*$')
+		throw new QueryRefusedError('invalid_name', 'the owner table must match ^[a-z_][a-z0-9_]*$')
 	}
 	const keyType = sqlType(owner.key)
 	const chain = owner.chain.map((link) => ({ column: link.column, type: sqlType(link) }))
 	const taken = chain.find((link) => FILE_COLUMNS.includes(link.column))
 	if (taken !== undefined) {
-		throw new QueryRefusedError(`the owner column ${taken.column} has the name of a file column (${FILE_COLUMNS.join(', ')})`)
+		throw new QueryRefusedError('invalid_name', `the owner column ${taken.column} has the name of a file column (${FILE_COLUMNS.join(', ')})`)
 	}
 	const fileColumns = ['owner_id', ...chain.map((link) => link.column)].join(', ')
 	const ownerColumns = [owner.key.column, ...chain.map((link) => link.column)].join(', ')

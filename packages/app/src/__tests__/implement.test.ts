@@ -8,7 +8,8 @@ import { ENDPOINT_HEADER, requirementDigest } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
-import { createCapabilityIssuer } from '../implement/capability'
+import { CAPABILITY_REFUSALS, createCapabilityIssuer } from '../implement/capability'
+import { SERVER_FAULTS } from '../implement/faults'
 import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
@@ -325,7 +326,7 @@ describe('capabilities are bound to their request', () => {
 		})
 		finish()
 		expect(resultOf(await first)).toEqual({ id: N1, title: 'first' })
-		expect(logged.join('\n')).toContain('not a capability the framework minted')
+		expect(logged).toEqual([`fabrika: api.me: capability_refused: not_minted: ${CAPABILITY_REFUSALS.not_minted}`])
 	})
 
 	test('a Ref of one live request is refused in another request of the same runtime', async () => {
@@ -363,7 +364,7 @@ describe('capabilities are bound to their request', () => {
 		})
 		finish()
 		expect(resultOf(await first)).toEqual({ id: N1, title: 'first' })
-		expect(logged.join('\n')).toContain('not to the one running now')
+		expect(logged).toEqual([`fabrika: api.me: capability_refused: foreign_work: ${CAPABILITY_REFUSALS.foreign_work}`])
 	})
 
 	test('a value the framework did not mint is refused', () => {
@@ -450,7 +451,7 @@ describe('union projection', () => {
 			expect(sent.status).toBe(500)
 			expect(sent.body).toEqual(INTERNAL)
 		})
-		expect(logged).toEqual(["fabrika: api.short: framework_fault: 'api.short' returned a value no branch of its output union accepts"])
+		expect(logged).toEqual([`fabrika: api.short: framework_fault: output_refused: ${SERVER_FAULTS.output_refused}`])
 	})
 })
 

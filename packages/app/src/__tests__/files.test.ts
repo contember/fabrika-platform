@@ -425,7 +425,7 @@ describe.skipIf(!hasPostgres)('every answer of the download endpoint carries the
 			expect(response.headers.get('Content-Disposition')).toBe('attachment')
 			expect(await response.json()).toEqual({ error: { type: 'internal', message: 'Internal error' } })
 			expect(log.mock.calls.map((call) => String(call[0]))).toEqual([
-				"fabrika: files.attachments.download: framework_fault: the object of a file in 'attachments' is missing from storage",
+				"fabrika: files.attachments.download: framework_fault: file_object_missing: a file's object is missing from storage",
 			])
 		} finally {
 			log.mockRestore()

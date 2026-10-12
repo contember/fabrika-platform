@@ -21,6 +21,7 @@ repository an example is a workspace under `examples/<name>/`, laid out the same
 		"@fabrika/db": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",
 		"@fabrika/proxy-core": "^0.0.4",
+		"@sentry/browser": "10.69.0",
 		"kysely": "0.29.6",
 		"zod": "^3.25.76"
 	},
@@ -37,7 +38,8 @@ repository an example is a workspace under `examples/<name>/`, laid out the same
 - The name is not under `@fabrika/*` (that scope is the platform's), and every `@fabrika/*` version is a registry
   range, never `workspace:*`. The checker refuses both (`package-replacement`). Inside the fabrika-platform repository
   Bun still links the workspace copies.
-- `kysely` is there for the generated schema's types.
+- `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
+  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
   `@fabrika/*` import fails and tsc reports a cascade of implicit `any`s that are not your bugs.
 

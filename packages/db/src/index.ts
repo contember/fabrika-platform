@@ -13,7 +13,7 @@ export type {
 	ScopedSelect,
 } from './description'
 // `ConflictError` and `NotFoundError` stay internal: an application throws `@fabrika/app`'s, and the framework reads these by name.
-export { CapabilityError, DatabaseError, LeaseLostError, PolicyError, QueryRefusedError } from './errors'
+export { CapabilityError, DatabaseError, LeaseLostError, PolicyError, QUERY_REFUSALS, type QueryRefusal, QueryRefusedError } from './errors'
 export { FILE_TABLE_PREFIX, type FileColumn, type FileColumnType, type FileOwner, fileTableName, fileTableSql } from './file-table-sql'
 export type {
 	AnyDbIndex,

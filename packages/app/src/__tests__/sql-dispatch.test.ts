@@ -263,7 +263,8 @@ describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
 		const id = await seedDeal()
 		const title = 'a-bound-value-never-logged'
 		const log = await failed(async () => send(app, '/api/deals.retitle', { token: await reader(), body: { id, title, expectVersion: 1 } }))
-		expect(log).toContain("api.deals.retitle: query_refused: ctx.sql: sql: 'read' runs queries only, and the statement holds UPDATE at line 1")
+		// The reason tells the author why; the statement and its values stay out of the log.
+		expect(log).toContain("api.deals.retitle: query_refused: sql_read_only: sql: 'read' runs queries only; declare sql: 'write'")
 		expect(log).not.toContain(title)
 		expect(log).not.toContain(id)
 		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
@@ -281,15 +282,15 @@ describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
 		}
 		const keeping = send(app, '/api/deals.keep', { token: await reader(), body: { id } })
 		await kept.promise
-		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toMatch(
-			/ctx\.sql of \S+ was used from other work/,
+		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain(
+			'capability_refused: foreign_work',
 		)
 		expect(await failed(async () => send(other.app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain(
-			'was used from other work',
+			'capability_refused: foreign_work',
 		)
 		done.resolve()
 		expect(resultOf(await keeping)).toEqual({ ok: true })
-		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain('after its invocation ended')
+		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain('capability_refused: ended')
 	})
 })
 

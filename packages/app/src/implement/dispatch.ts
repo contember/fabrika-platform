@@ -319,17 +319,21 @@ export class ContractRuntime {
 		}
 		const named = header === null ? null : parseEndpointHeader(header)
 		if (named === null) {
-			throw new ServerFault(`'${served.row.id}' was reached without the proxy's endpoint decision`, 503)
+			throw new ServerFault('endpoint_decision_missing', `'${served.row.id}' was reached without the proxy's endpoint decision`, 503)
 		}
 		if (named.id !== served.row.id || named.digest !== this.#parts.digests.get(served.row.id)) {
-			throw new ServerFault(`the proxy applied '${named.id}' with other rules than this version serves '${served.row.id}' with`, 503)
+			throw new ServerFault(
+				'endpoint_decision_mismatch',
+				`the proxy applied '${named.id}' with other rules than this version serves '${served.row.id}' with`,
+				503,
+			)
 		}
 	}
 
 	#assets(): SpaAssets {
 		const assets = this.#parts.assets
 		if (assets === null) {
-			throw new ServerFault('no asset server serves the SPA')
+			throw new ServerFault('facility_unbound', 'no asset server serves the SPA')
 		}
 		return assets
 	}
@@ -343,7 +347,7 @@ export class ContractRuntime {
 		const verified = await this.#parts.verifier.verify(token, this.#parts.audience)
 		if (!verified.ok) {
 			if (verified.reason === 'unavailable') {
-				throw new ServerFault('the IAM key set could not be fetched; nothing was checked', 503)
+				throw new ServerFault('key_set_unavailable', 'the IAM key set could not be fetched; nothing was checked', 503)
 			}
 			throw new UnauthorizedError('The credential does not verify')
 		}
@@ -395,7 +399,7 @@ export class ContractRuntime {
 			}
 			const output = z.safeParse(served.output, projectOutput(served, result))
 			if (!output.success) {
-				throw new ServerFault(`'${served.row.id}' returned a value its output schema refuses`)
+				throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
 			}
 			await invocation?.commit(request.signal)
 			return jsonResponse({ result: output.data }, 200)
@@ -407,7 +411,7 @@ export class ContractRuntime {
 	#data(): DataAccess {
 		const data = this.#parts.data
 		if (data === null) {
-			throw new ServerFault('a site reaches data through ctx.db, and boot bound no @fabrika/db layer')
+			throw new ServerFault('facility_unbound', 'a site reaches data through ctx.db, and boot bound no @fabrika/db layer')
 		}
 		return data
 	}
@@ -423,7 +427,7 @@ export class ContractRuntime {
 		const from = access?.form === 'on' ? access.from : null
 		const raw = from === null ? undefined : params[from]
 		if (from === null || raw === undefined) {
-			throw new ServerFault(`'${served.row.id}' names no path parameter for its access form`)
+			throw new ServerFault('contract_inconsistent', `'${served.row.id}' names no path parameter for its access form`)
 		}
 		const frame = new RequestFrame(crypto.randomUUID())
 		try {
@@ -464,7 +468,7 @@ export class ContractRuntime {
 			return directory
 		}
 		if (membership === null) {
-			throw new ServerFault(`'${row.id}' manages members or links, and boot bound no IAM membership transport`)
+			throw new ServerFault('facility_unbound', `'${row.id}' manages members or links, and boot bound no IAM membership transport`)
 		}
 		const members = facilities.members === 'manage' ? { members: memberManagement(membership) } : directory
 		const links = facilities.links.length === 0
@@ -526,7 +530,7 @@ export class ContractRuntime {
 			}
 			case 'creates': {
 				if (membership === null) {
-					throw new ServerFault(`'${row.id}' creates a scope, and boot bound no IAM membership transport`)
+					throw new ServerFault('facility_unbound', `'${row.id}' creates a scope, and boot bound no IAM membership transport`)
 				}
 				const value = await createScope(membership)
 				return { context: { created: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, new Map()) }, input }
@@ -598,7 +602,10 @@ export class ContractRuntime {
 		}
 		const input = strictInput(served.row, served.input, stripped(served, payload))
 		if (binding.scope.type !== served.dimension) {
-			throw new ServerFault(`binding '${binding.id}' reaches a '${binding.scope.type}', and '${served.webhook}' is bound to '${served.dimension}'`)
+			throw new ServerFault(
+				'webhook_binding_mismatch',
+				`binding '${binding.id}' reaches a '${binding.scope.type}', and '${served.webhook}' is bound to '${served.dimension}'`,
+			)
 		}
 		const chain = await this.#chain(binding.scope.type, binding.scope.value)
 		if (chain === null) {
@@ -607,11 +614,11 @@ export class ContractRuntime {
 		// Asked before the delivery is recorded: a delivery that cannot run is not one GitHub must not redeliver.
 		const authority = await served.credential.authority()
 		if (!authority.ok) {
-			throw new ServerFault(`the key of webhook '${served.webhook}' gives it no authority: ${authority.reason}`, 503)
+			throw new ServerFault('workload_unauthorized', `the key of webhook '${served.webhook}' gives it no authority: ${authority.reason}`, 503)
 		}
 		const unheld = served.actions.find((action) => !permits([...authority.perms], action))
 		if (unheld !== undefined) {
-			throw new ServerFault(`the token IAM signed for the key of webhook '${served.webhook}' does not carry '${unheld}'`, 503)
+			throw new ServerFault('workload_unauthorized', `the token IAM signed for the key of webhook '${served.webhook}' does not carry '${unheld}'`, 503)
 		}
 		const key = await deliveryKey(binding.id, body)
 		const now = Date.now()
@@ -656,7 +663,7 @@ export class ContractRuntime {
 	#framework(): FrameworkTables {
 		const framework = this.#parts.framework
 		if (framework === null) {
-			throw new ServerFault('no data layer serves the framework tables')
+			throw new ServerFault('facility_unbound', 'no data layer serves the framework tables')
 		}
 		return framework
 	}
@@ -707,7 +714,7 @@ function projectOutput(served: Extract<ServedEndpoint, { kind: 'procedure' }>, r
 		return project(served.output, result)
 	} catch (error) {
 		if (error instanceof ProjectionRefusedError) {
-			throw new ServerFault(`'${served.row.id}' returned a value no branch of its output union accepts`)
+			throw new ServerFault('output_refused', `'${served.row.id}' returned a value no branch of its output union accepts`)
 		}
 		throw error
 	}
@@ -739,7 +746,7 @@ function admitContentType(row: EndpointRow, request: Request): void {
 function maxBytesOf(row: EndpointRow): number {
 	const limit = row.admission?.maxBytes
 	if (limit === null || limit === undefined) {
-		throw new ServerFault(`'${row.id}' declares no body limit`)
+		throw new ServerFault('contract_inconsistent', `'${row.id}' declares no body limit`)
 	}
 	return limit
 }
@@ -839,8 +846,7 @@ export function errorResponse(error: unknown, where: string): Response {
 		return toErrorResponse(error)
 	}
 	if (error instanceof CapabilityLimitError) {
-		// The framework's own text: the limit and the action, never a scope value.
-		console.error(`fabrika: ${where}: ${error.message}`)
+		console.error(`fabrika: ${where}: capability_limit: the caller holds the action in more scope values than one list may carry`)
 		return toErrorResponse(new ForbiddenError(`The caller holds the action in more scope values than one list may carry (${MAX_WITHIN_VALUES})`))
 	}
 	const name = error instanceof Error ? error.name : ''

@@ -252,6 +252,7 @@ repository an example is a workspace under `examples/<name>/`, laid out the same
 		"@fabrika/db": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",
 		"@fabrika/proxy-core": "^0.0.4",
+		"@sentry/browser": "10.69.0",
 		"kysely": "0.29.6",
 		"zod": "^3.25.76"
 	},
@@ -268,7 +269,8 @@ repository an example is a workspace under `examples/<name>/`, laid out the same
 - The name is not under `@fabrika/*` (that scope is the platform's), and every `@fabrika/*` version is a registry
   range, never `workspace:*`. The checker refuses both (`package-replacement`). Inside the fabrika-platform repository
   Bun still links the workspace copies.
-- `kysely` is there for the generated schema's types.
+- `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
+  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
   `@fabrika/*` import fails and tsc reports a cascade of implicit `any`s that are not your bugs.
 
@@ -916,7 +918,10 @@ handler decides what to answer. Any thrown value with a numeric `httpStatus` bel
 `HttpError` of `@fabrika/app`, such as `ForbiddenError`, or a plain object of those fields) answers its own status
 with its message; throw the three business errors for the application's own refusals.
 
-A 500 answers a fixed message; the server log has one line that names what was refused. A `DatabaseError` carries
+A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>: <code>: <reason>: <text>`, with a
+fixed failure code and, for a framework refusal, its reason and the reason's fixed text (`sql_read_only`,
+`undeclared_reach`, `unknown_column` …), never a value or your error's message. With an Operations DSN the same 500
+is a `RequestFailed` issue in Operations. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.
 
 ---

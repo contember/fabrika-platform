@@ -441,10 +441,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A 5xx is reported as a fixed code** (`implement/failures.ts`): `framework_fault`, `unavailable`,
   `capability_refused`, `query_refused`, `handler_status` (a thrown 5xx status) or `handler_failed`, chosen by
   `instanceof` against the framework's own classes, never by `name`. The server log gets one line,
-  `fabrika: <endpoint>: <code>`, plus the text of a framework refusal (`ServerFault`, `CapabilityRefusedError`,
-  `QueryRefusedError`), which names declarations and never a value; any other error contributes nothing, its name
-  included. With an Operations DSN it is also one `RequestFailed` event (logger `fabrika.requests`): fingerprint
-  `fabrika-request-failed`/endpoint/code, tags endpoint, code, status and the proxy's request id when it is a bounded
+  `fabrika: <endpoint>: <code>`, plus a framework failure's `reason` and its fixed catalog text (`SERVER_FAULTS`,
+  `CAPABILITY_REFUSALS`, `@fabrika/db`'s `QUERY_REFUSALS`); never a message, which can quote request data, and nothing
+  of any other error, its name included. Each of those classes takes its reason first: a new failure picks one. With an Operations DSN it is also one `RequestFailed` event (logger `fabrika.requests`): fingerprint
+  `fabrika-request-failed`/endpoint/code, tags endpoint, code, reason, status and the proxy's request id when it is a bounded
   token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the error's name or message, the
   input, a header or a row: an application or a driver writes those. The delivery is not awaited; the Worker adapter
   hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).

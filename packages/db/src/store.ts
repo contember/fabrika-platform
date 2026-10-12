@@ -392,7 +392,7 @@ export function updatingRef(context: TableContext, capability: unknown, dimensio
 export function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
 	const scope = childScope(context)
 	if (typeof key !== 'string' || key.length === 0) {
-		throw new QueryRefusedError(`a ${context.model.name} row is addressed by its parent Ref and its ${scope.key}`)
+		throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its parent Ref and its ${scope.key}`)
 	}
 	const grant = refGrant(context, parent, scope.parent.dimension, operation)
 	return allOf([equals(context.model.name, scope.key, key), parentPredicate(context, grant)])
@@ -438,14 +438,14 @@ function storeRunner(context: TableContext): Runner {
 export function readValues(values: unknown, allowed: NameSet, what: 'insert' | 'update', model: TableModel): Map<string, Primitive | null> {
 	const table = model.name
 	if (typeof values !== 'object' || values === null || isArray(values)) {
-		throw new QueryRefusedError(`${what} takes an object of column values`)
+		throw new QueryRefusedError('invalid_argument', `${what} takes an object of column values`)
 	}
 	const prototype: unknown = prototypeOf(values)
 	if (prototype !== OBJECT_PROTOTYPE && prototype !== null) {
-		throw new QueryRefusedError(`${what} takes a plain object literal, not an instance of a class`)
+		throw new QueryRefusedError('invalid_argument', `${what} takes a plain object literal, not an instance of a class`)
 	}
 	if (ownSymbols(values).length > 0) {
-		throw new QueryRefusedError(`${what} takes column names as keys, not symbols`)
+		throw new QueryRefusedError('invalid_argument', `${what} takes column names as keys, not symbols`)
 	}
 	const keys = ownNames(values)
 	const descriptors: PropertyDescriptor[] = []
@@ -453,11 +453,11 @@ export function readValues(values: unknown, allowed: NameSet, what: 'insert' | '
 		const key = keys[index] ?? ''
 		const descriptor = ownDescriptor(values, key)
 		if (descriptor === undefined || !hasOwn(descriptor, 'value')) {
-			throw new QueryRefusedError(`${table}.${key} is an accessor; ${what} takes plain values`)
+			throw new QueryRefusedError('invalid_argument', `${table}.${key} is an accessor; ${what} takes plain values`)
 		}
 		if (!inSet(allowed, key)) {
 			const columns = namesOf(allowed).join(', ') || 'none'
-			throw new QueryRefusedError(`${key} is not an ${what} column of ${table} (${what} columns: ${columns})`)
+			throw new QueryRefusedError('unknown_column', `${key} is not an ${what} column of ${table} (${what} columns: ${columns})`)
 		}
 		descriptors[index] = descriptor
 	}
@@ -469,7 +469,7 @@ export function readValues(values: unknown, allowed: NameSet, what: 'insert' | '
 			continue
 		}
 		if (value !== null && !isPrimitive(value)) {
-			throw new QueryRefusedError(`${table}.${key} takes a plain value (string, number, bigint, boolean, Date or null)`)
+			throw new QueryRefusedError('invalid_argument', `${table}.${key} takes a plain value (string, number, bigint, boolean, Date or null)`)
 		}
 		copied.set(key, typeof value === 'string' ? temporalText(model, key, value) : value)
 	}
@@ -492,6 +492,7 @@ export function updateValues(values: unknown, allowed: NameSet, model: TableMode
 	const changes = readValues(values, allowed, 'update', model)
 	if (changes.size === 0) {
 		throw new QueryRefusedError(
+			'invalid_argument',
 			`update sets no column of ${model.name}; set at least one (update columns: ${namesOf(allowed).join(', ') || 'none'})`,
 		)
 	}
@@ -516,7 +517,7 @@ export function versionArgument(context: TableContext, options: readonly unknown
 	const first = options[0]
 	const expected: unknown = typeof first === 'object' && first !== null ? Reflect.get(first, 'expectVersion') : undefined
 	if (typeof expected !== 'number' || !isSafeInteger(expected)) {
-		throw new QueryRefusedError(`${context.model.name} has a version column; update and remove take { expectVersion: number }`)
+		throw new QueryRefusedError('version_required', `${context.model.name} has a version column; update and remove take { expectVersion: number }`)
 	}
 	return BinaryOperationNode.create(column(context.model.name, version), OperatorNode.create('='), ValueNode.create(expected))
 }
@@ -624,7 +625,7 @@ export async function insertRow<O>(
 		}
 		const [row] = await transaction.run<O>(insertNode(context.model.name, values, answer(context)), guard(context, 'InsertQueryNode', undefined))
 		if (row === undefined) {
-			throw new QueryRefusedError(`the insert into ${context.model.name} returned no row`)
+			throw new QueryRefusedError('unexpected_row', `the insert into ${context.model.name} returned no row`)
 		}
 		checkVersion(context, row)
 		return row
@@ -747,19 +748,22 @@ function aggregateColumns(context: TableContext, spec: AggregateInput): Aggregat
 		}
 		const names = parseList(value, (name) => {
 			if (!inSet(context.shape.visible, name)) {
-				throw new QueryRefusedError(`${String(name)} is not a column of ${context.model.name} (columns: ${context.model.visible.join(', ')})`)
+				throw new QueryRefusedError(
+					'unknown_column',
+					`${String(name)} is not a column of ${context.model.name} (columns: ${context.model.visible.join(', ')})`,
+				)
 			}
 			return name
 		})
 		if (names === undefined) {
-			throw new QueryRefusedError(`aggregate ${field} takes a plain array of column names`)
+			throw new QueryRefusedError('invalid_argument', `aggregate ${field} takes a plain array of column names`)
 		}
 		return names
 	}
 	const count = spec.count === true
 	const columns = { groupBy: list('groupBy', spec.groupBy), count, sum: list('sum', spec.sum), min: list('min', spec.min), max: list('max', spec.max) }
 	if (!count && columns.sum.length === 0 && columns.min.length === 0 && columns.max.length === 0) {
-		throw new QueryRefusedError('aggregate needs count, sum, min or max')
+		throw new QueryRefusedError('invalid_argument', 'aggregate needs count, sum, min or max')
 	}
 	return columns
 }
@@ -769,12 +773,12 @@ function aggregateFilter<Row>(context: TableContext, where: AggregateSpec<Row>['
 		return undefined
 	}
 	if (typeof where !== 'function') {
-		throw new QueryRefusedError('aggregate where takes a callback')
+		throw new QueryRefusedError('invalid_argument', 'aggregate where takes a callback')
 	}
 	const start = startSelect<Row, NoColumns>(context.shape)
 	const state = finishSelect(where(start), start)
 	if (state.columns !== undefined || state.orderBy.length > 0 || state.limit !== undefined || state.offset !== undefined || state.joins.length > 0) {
-		throw new QueryRefusedError('aggregate where takes where conditions only')
+		throw new QueryRefusedError('invalid_argument', 'aggregate where takes where conditions only')
 	}
 	return state
 }
@@ -786,7 +790,7 @@ export async function aggregateRows<Row, O>(
 	spec: AggregateSpec<Row>,
 ): Promise<O[]> {
 	if (typeof spec !== 'object' || spec === null) {
-		throw new QueryRefusedError('aggregate takes { groupBy, count, sum, min, max, where }')
+		throw new QueryRefusedError('invalid_argument', 'aggregate takes { groupBy, count, sum, min, max, where }')
 	}
 	const columns = aggregateColumns(context, spec)
 	const filter = aggregateFilter(context, spec.where)
@@ -1011,7 +1015,7 @@ function probeOf(context: TableContext): TableProbe {
 			return childObjectPredicate(context, capability, key, operation)
 		}
 		if (key !== undefined) {
-			throw new QueryRefusedError(`a ${context.model.name} row is addressed by its Ref alone`)
+			throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its Ref alone`)
 		}
 		return objectPredicate(context, capability, operation)
 	}
@@ -1114,7 +1118,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	function contextFor(table: string, mode: 'dimension' | 'child'): TableContext {
 		const model = typeof table === 'string' ? modelOf(models, table) : undefined
 		if (model === undefined || model.scope.mode !== mode) {
-			throw new QueryRefusedError(`${String(table)} is not a ${mode} table`)
+			throw new QueryRefusedError('unknown_table', `${String(table)} is not a ${mode} table`)
 		}
 		return contextOf(model)
 	}
@@ -1141,7 +1145,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		probe(table: string): TableProbe {
 			const mode = modelOf(models, table)?.scope.mode
 			if (mode !== 'dimension' && mode !== 'child') {
-				throw new QueryRefusedError(`${String(table)} is not a dimension or child table; no store reaches it`)
+				throw new QueryRefusedError('unknown_table', `${String(table)} is not a dimension or child table; no store reaches it`)
 			}
 			return probeOf(contextFor(table, mode))
 		},
@@ -1165,7 +1169,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			contextOf(table: string): TableContext {
 				const model = modelOf(models, table)
 				if (model === undefined) {
-					throw new QueryRefusedError(`${String(table)} is not a table of src/db/tables.ts`)
+					throw new QueryRefusedError('unknown_table', `${String(table)} is not a table of src/db/tables.ts`)
 				}
 				return contextOf(model)
 			},
@@ -1239,7 +1243,7 @@ function inboxProblems(models: TableModels, form: string, fields: readonly strin
 async function appendToInbox(models: TableModels, runtime: DataLayerRuntime, form: string, values: Readonly<Record<string, unknown>>): Promise<void> {
 	const inbox = inboxOf(models, form)
 	if (inbox === undefined) {
-		throw new QueryRefusedError(`no table is the inbox of ${form}`)
+		throw new QueryRefusedError('unknown_table', `no table is the inbox of ${form}`)
 	}
 	const row = readValues(values, inbox.columns, 'insert', inbox)
 	await sessionOf(runtime).run(insertNode(inbox.name, row, undefined), {
@@ -1266,7 +1270,7 @@ export function ownerOf(models: TableModels, dimension: string): TableModel | un
 function locatedOwner(models: TableModels, dimension: unknown): TableModel {
 	const owner = typeof dimension === 'string' ? ownerOf(models, dimension) : undefined
 	if (owner === undefined) {
-		throw new QueryRefusedError(`no table owns the dimension ${String(dimension)}, so nothing locates it`)
+		throw new QueryRefusedError('unknown_table', `no table owns the dimension ${String(dimension)}, so nothing locates it`)
 	}
 	return owner
 }
@@ -1280,7 +1284,7 @@ async function locateObject(
 ): Promise<ReadonlyMap<string, string> | null> {
 	const owner = locatedOwner(models, dimension)
 	if (typeof id !== 'string' || id.length === 0) {
-		throw new QueryRefusedError(`a ${dimension} is located by its ${keyOf(owner)}, a non-empty string`)
+		throw new QueryRefusedError('row_address', `a ${dimension} is located by its ${keyOf(owner)}, a non-empty string`)
 	}
 	const key = keyOf(owner)
 	const scope = equals(owner.name, key, id)

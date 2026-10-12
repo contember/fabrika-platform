@@ -3,8 +3,11 @@
 
 import { HttpError } from '@fabrika/app'
 import { boot } from '@fabrika/app/implement'
+import { QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { describe, expect, test } from 'bun:test'
+import { CAPABILITY_REFUSALS, CapabilityRefusedError } from '../implement/capability'
 import { FailureReports, MAX_FAILURE_REPORTS_PER_MINUTE } from '../implement/failures'
+import { SERVER_FAULTS, ServerFault } from '../implement/faults'
 import { implement } from '../implement/implement'
 import type { OperationsReport } from '../jobs/report'
 import { contract } from './fixtures/implement/fabrika.contract'
@@ -111,13 +114,29 @@ describe('a request that answers 5xx', () => {
 		expect(logged).toEqual(['fabrika: api.me: handler_failed'])
 	})
 
-	test("an application's 5xx status is handler_status; a framework fault keeps its own text in the log only", async () => {
+	test("an application's 5xx status is handler_status; a name dressed as a framework class is no framework failure", async () => {
 		const status = await run(new HttpError(502, 'upstream', `upstream said ${SECRET}`))
 		expect(status.status).toBe(502)
 		expect(eventOf(status.envelopes[0])['tags']).toMatchObject({ code: 'handler_status', status: '502' })
 		expect(status.logged).toEqual(['fabrika: api.me: handler_status'])
 		const dressed = await run(Object.assign(new Error(SECRET), { name: 'ServerFault' }))
 		expect(dressed.logged).toEqual(['fabrika: api.me: handler_failed'])
+	})
+
+	test.each([
+		['a data-layer refusal', () => new QueryRefusedError('unknown_column', `${SECRET} is not a column of notes`), 'query_refused', 'unknown_column'],
+		['a capability refusal', () => new CapabilityRefusedError('ended', `the Ref of ${SECRET} has ended`), 'capability_refused', 'ended'],
+		['a framework fault', () => new ServerFault('output_refused', `returned ${SECRET}`), 'framework_fault', 'output_refused'],
+	])('%s whose message quotes request data logs and reports its reason and catalog text only', async (_name, make, code, reason) => {
+		const texts: Record<string, string> = { ...QUERY_REFUSALS, ...CAPABILITY_REFUSALS, ...SERVER_FAULTS }
+		const reported = await run(make())
+		expect(reported.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
+		expect(reported.envelopes).toHaveLength(1)
+		expect(reported.envelopes.join('\n')).not.toContain(SECRET)
+		expect(eventOf(reported.envelopes[0])['tags']).toMatchObject({ code, reason })
+		const logged = await run(make(), {})
+		expect(logged.envelopes).toEqual([])
+		expect(logged.logged).toEqual([`fabrika: api.me: ${code}: ${reason}: ${texts[reason]}`])
 	})
 
 	test('a 4xx sends nothing', async () => {

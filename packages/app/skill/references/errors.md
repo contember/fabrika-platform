@@ -79,5 +79,8 @@ handler decides what to answer. Any thrown value with a numeric `httpStatus` bel
 `HttpError` of `@fabrika/app`, such as `ForbiddenError`, or a plain object of those fields) answers its own status
 with its message; throw the three business errors for the application's own refusals.
 
-A 500 answers a fixed message; the server log has one line that names what was refused. A `DatabaseError` carries
+A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>: <code>: <reason>: <text>`, with a
+fixed failure code and, for a framework refusal, its reason and the reason's fixed text (`sql_read_only`,
+`undeclared_reach`, `unknown_column` …), never a value or your error's message. With an Operations DSN the same 500
+is a `RequestFailed` issue in Operations. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.

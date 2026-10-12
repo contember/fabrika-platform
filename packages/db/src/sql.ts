@@ -21,7 +21,7 @@ import {
 import { z } from 'zod/v4'
 import { freeze, hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
 import { runApplicationStatement, type Session, type SqlParameter } from './database'
-import { QueryRefusedError, SqlRowError } from './errors'
+import { type QueryRefusal, QueryRefusedError, SqlRowError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import { dayText } from './temporal'
 
@@ -103,8 +103,8 @@ const NO_DECLARED_FUNCTIONS: ReadonlySet<string> = new Set()
 
 const ALLOWED_STATEMENTS = "SELECT, WITH, VALUES or TABLE, and INSERT, UPDATE or DELETE on a site that declares sql: 'write'"
 
-function refuse(message: string): never {
-	throw new QueryRefusedError(`ctx.sql: ${message}`)
+function refuse(reason: QueryRefusal, message: string): never {
+	throw new QueryRefusedError(reason, `ctx.sql: ${message}`)
 }
 
 const isPunct = (token: SqlToken | undefined, char: string): boolean => token?.kind === 'punct' && token.char === char
@@ -114,13 +114,13 @@ const isDigit = (token: SqlToken | undefined): boolean => token?.kind === 'punct
 function templateParts(text: unknown): readonly string[] {
 	const raw: unknown = isArray(text) && hasOwn(text, 'raw') ? ownDescriptor(text, 'raw')?.value : undefined
 	if (!isArray(text) || !Object.isFrozen(text) || !isArray(raw) || !Object.isFrozen(raw) || raw.length !== text.length) {
-		refuse('it is a tagged template: write ctx.sql(Row)`select …`, never call it with a string or an array')
+		refuse('sql_template', 'it is a tagged template: write ctx.sql(Row)`select …`, never call it with a string or an array')
 	}
 	const parts: string[] = []
 	for (let index = 0; index < text.length; index++) {
 		const part: unknown = text[index]
 		if (typeof part !== 'string') {
-			refuse('the template has an invalid escape sequence')
+			refuse('sql_template', 'the template has an invalid escape sequence')
 		}
 		parts.push(part)
 	}
@@ -133,7 +133,7 @@ function statementText(parts: readonly string[]): string {
 	for (let index = 1; index < parts.length; index++) {
 		const part = parts[index] ?? ''
 		if (/^[0-9]/.test(part)) {
-			refuse(`a digit right after the value \${…} number ${index} would join its placeholder; put a space between them`)
+			refuse('sql_template', `a digit right after the value \${…} number ${index} would join its placeholder; put a space between them`)
 		}
 		text += `$${index}${part}`
 	}
@@ -178,61 +178,67 @@ function readRefusal(tokens: readonly SqlToken[]): string | undefined {
 export function classifySql(parts: readonly string[], mode: SqlMode, schema: string): string {
 	for (const part of parts) {
 		if (/\$[0-9]/.test(part)) {
-			refuse('the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
+			refuse('sql_template', 'the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
 		}
 	}
 	const text = statementText(parts)
 	const { tokens: all, unterminated } = lexSql(text)
 	if (unterminated !== undefined) {
-		refuse(`a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
+		refuse('sql_template', `a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
 	}
 	if (placeholderCount(all) !== parts.length - 1) {
-		refuse('a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value')
+		refuse(
+			'sql_template',
+			'a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value',
+		)
 	}
 	const statements = topLevelStatements(text)
 	const [statement] = statements
 	if (statement === undefined) {
-		refuse('the template holds no statement')
+		refuse('sql_statement', 'the template holds no statement')
 	}
 	if (statements.length > 1) {
-		refuse(`it runs one statement, and the template holds ${statements.length}; call ctx.sql once for each`)
+		refuse('sql_statement', `it runs one statement, and the template holds ${statements.length}; call ctx.sql once for each`)
 	}
 	const tokens = statement.tokens
 	const first = upperWord(tokens[0]) ?? ''
 	if (!READ_STATEMENTS.has(first) && !WRITE_STATEMENTS.has(first)) {
-		refuse(`${statementKind(tokens)} is refused; it runs ${ALLOWED_STATEMENTS}`)
+		refuse('sql_statement', `${statementKind(tokens)} is refused; it runs ${ALLOWED_STATEMENTS}`)
 	}
 	const writes = mode === 'read' ? (WRITE_STATEMENTS.has(first) ? `${first} at line ${statement.line}` : readRefusal(tokens)) : undefined
 	if (writes !== undefined) {
-		refuse(`sql: 'read' runs queries only, and the statement holds ${writes}; declare sql: 'write' on a mutation, a job or a webhook`)
+		refuse('sql_read_only', `sql: 'read' runs queries only, and the statement holds ${writes}; declare sql: 'write' on a mutation, a job or a webhook`)
 	}
 	const nested = nestedStatement(tokens) ?? parenthesizedTarget(tokens)
 	if (nested !== undefined) {
-		refuse(`${nested.statement} at line ${nested.line} is refused inside another statement`)
+		refuse('sql_statement', `${nested.statement} at line ${nested.line} is refused inside another statement`)
 	}
 	const into = selectInto(tokens)
 	if (into !== undefined) {
-		refuse(`SELECT … INTO at line ${into.line} creates a table; select the rows and insert them with INSERT INTO … SELECT`)
+		refuse('sql_statement', `SELECT … INTO at line ${into.line} creates a table; select the rows and insert them with INSERT INTO … SELECT`)
 	}
 	if (unicodeIdentifier(tokens) !== undefined) {
-		refuse('a U&"…" name is refused: write the name plainly')
+		refuse('sql_name', 'a U&"…" name is refused: write the name plainly')
 	}
 	const framework = frameworkReference(tokens)
 	if (framework !== undefined) {
-		refuse(`'${framework.name}' at line ${framework.line} is the framework's; ctx.sql reaches only the application's own tables`)
+		refuse('sql_name', `'${framework.name}' at line ${framework.line} is the framework's; ctx.sql reaches only the application's own tables`)
 	}
 	for (const reference of nameReferences(tokens)) {
 		if (reference.role !== 'call' && reference.name.startsWith('pg_')) {
-			refuse(`'${reference.name}' at line ${reference.line} is a catalog name; ctx.sql reaches only the application's own tables`)
+			refuse('sql_name', `'${reference.name}' at line ${reference.line} is a catalog name; ctx.sql reaches only the application's own tables`)
 		}
 	}
 	const foreign = dmlForeignSchema(tokens, schema)
 	if (foreign !== undefined) {
-		refuse(`the schema '${foreign}' is outside the application's; write its tables' names unqualified`)
+		refuse('sql_name', `the schema '${foreign}' is outside the application's; write its tables' names unqualified`)
 	}
 	const call = refusedFunctionCall(tokens, schema, NO_DECLARED_FUNCTIONS)
 	if (call !== undefined) {
-		refuse(`${call.qualifier === undefined ? '' : `${call.qualifier}.`}${call.name}(…) at line ${call.line} is not a reviewed built-in function`)
+		refuse(
+			'sql_function',
+			`${call.qualifier === undefined ? '' : `${call.qualifier}.`}${call.name}(…) at line ${call.line} is not a reviewed built-in function`,
+		)
 	}
 	return text
 }
@@ -244,7 +250,7 @@ function arrayElement(item: unknown): string {
 	if (typeof item === 'number' && Number.isFinite(item)) {
 		return String(item)
 	}
-	return refuse('a list value holds only strings and finite numbers')
+	return refuse('invalid_value', 'a list value holds only strings and finite numbers')
 }
 
 /** A value as the driver binds it. Unprepared, `Bun.SQL` mis-binds a JS array and sends a `Date` as `Date#toString()`. */
@@ -253,16 +259,17 @@ function parameterOf(value: unknown, position: number): SqlParameter {
 		return value
 	}
 	if (typeof value === 'number') {
-		return Number.isFinite(value) ? value : refuse(`the value \${…} number ${position} is not a finite number`)
+		return Number.isFinite(value) ? value : refuse('invalid_value', `the value \${…} number ${position} is not a finite number`)
 	}
 	if (value instanceof Date) {
-		return Number.isNaN(value.getTime()) ? refuse(`the value \${…} number ${position} is an invalid Date`) : value.toISOString()
+		return Number.isNaN(value.getTime()) ? refuse('invalid_value', `the value \${…} number ${position} is an invalid Date`) : value.toISOString()
 	}
 	const items = parseList(value, arrayElement)
 	if (items !== undefined) {
 		return `{${items.join(',')}}`
 	}
 	return refuse(
+		'invalid_value',
 		`the value \${…} number ${position} is ${
 			value === undefined ? 'undefined' : 'an object'
 		}; bind a string, number, boolean, bigint, Date, null or a plain list (JSON as JSON.stringify(v) with ::jsonb)`,
@@ -427,12 +434,12 @@ function checkConjunct(tokens: readonly SqlToken[], index: number): void {
 		const word = upperWord(token)
 		if (isPunct(token, ')')) depth++
 		else if (isPunct(token, '(')) {
-			if (depth === 0) refuse(`ctx.sql.scope(…) at line ${line} stands inside parentheses; ${CONJUNCT_FORM}`)
+			if (depth === 0) refuse('sql_scope', `ctx.sql.scope(…) at line ${line} stands inside parentheses; ${CONJUNCT_FORM}`)
 			depth--
 		} else if (depth === 0 && word !== undefined && SCOPE_CLAUSES.has(word)) start = position
 		else if (depth === 0 && endsClause(tokens, position)) break
 	}
-	if (start === -1) refuse(`ctx.sql.scope(…) at line ${line} stands outside a WHERE or JOIN … ON clause; ${CONJUNCT_FORM}`)
+	if (start === -1) refuse('sql_scope', `ctx.sql.scope(…) at line ${line} stands outside a WHERE or JOIN … ON clause; ${CONJUNCT_FORM}`)
 	const next = afterPlaceholder(tokens, index)
 	let end = tokens.length
 	depth = 0
@@ -450,15 +457,18 @@ function checkConjunct(tokens: readonly SqlToken[], index: number): void {
 		if (isPunct(token, '(')) depth++
 		else if (isPunct(token, ')')) depth--
 		else if (depth === 0 && upperWord(token) === 'OR') {
-			refuse(`the clause that holds ctx.sql.scope(…) at line ${line} has an OR at its top level, which reaches past the scope; ${CONJUNCT_FORM}`)
+			refuse(
+				'sql_scope',
+				`the clause that holds ctx.sql.scope(…) at line ${line} has an OR at its top level, which reaches past the scope; ${CONJUNCT_FORM}`,
+			)
 		} else if (depth === 0 && upperWord(token) === 'BETWEEN') {
-			refuse(`put BETWEEN … AND … in parentheses in the clause that holds ctx.sql.scope(…) at line ${line}`)
+			refuse('sql_scope', `put BETWEEN … AND … in parentheses in the clause that holds ctx.sql.scope(…) at line ${line}`)
 		}
 	}
 	const before = upperWord(tokens[index - 1])
 	const after = next === end ? 'END' : upperWord(tokens[next])
 	if ((index - 1 !== start && before !== 'AND') || (after !== 'END' && after !== 'AND')) {
-		refuse(`ctx.sql.scope(…) at line ${line} must stand alone, joined by AND; ${CONJUNCT_FORM}`)
+		refuse('sql_scope', `ctx.sql.scope(…) at line ${line} must stand alone, joined by AND; ${CONJUNCT_FORM}`)
 	}
 }
 
@@ -469,15 +479,18 @@ function checkConjunct(tokens: readonly SqlToken[], index: number): void {
 function checkInterpolations(parts: readonly string[], values: readonly unknown[]): void {
 	for (const part of parts) {
 		if (/\$[0-9]/.test(part)) {
-			refuse('the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
+			refuse('sql_template', 'the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
 		}
 	}
 	const { tokens, unterminated } = lexSql(statementText(parts))
 	if (unterminated !== undefined) {
-		refuse(`a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
+		refuse('sql_template', `a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
 	}
 	if (placeholderCount(tokens) !== parts.length - 1) {
-		refuse('a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value')
+		refuse(
+			'sql_template',
+			'a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value',
+		)
 	}
 	let interpolation = 0
 	for (let index = 0; index + 1 < tokens.length; index++) {
@@ -502,7 +515,7 @@ function expandScopes(site: SqlSite, parts: readonly string[], values: readonly 
 			continue
 		}
 		if (fragment.site !== site) {
-			refuse('a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
+			refuse('sql_scope', 'a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
 		}
 		expanded[expanded.length - 1] += fragment.parts[0] ?? ''
 		for (let position = 0; position < fragment.values.length; position++) {
@@ -536,7 +549,7 @@ export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: Scope
 		site.check()
 		if (!(row instanceof z.core.$ZodType)) {
 			site.fail()
-			refuse('ctx.sql(Row) takes the zod schema of one row')
+			refuse('invalid_argument', 'ctx.sql(Row) takes the zod schema of one row')
 		}
 		return async (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]): Promise<z.output<S>[]> => {
 			site.check()
@@ -546,7 +559,7 @@ export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: Scope
 				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1))
 				const session = await site.session()
 				if (session.readOnly && site.mode === 'write') {
-					refuse('this invocation is read-only')
+					refuse('read_only', 'this invocation is read-only')
 				}
 				const rows = await runApplicationStatement(session, statement, parameters)
 				return rows.map((value, index) => parseRow(row, value, index))
@@ -558,7 +571,7 @@ export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: Scope
 		try {
 			const name = alias ?? table
 			if (!isPlainIdentifier(table) || !isPlainIdentifier(name)) {
-				refuse('ctx.sql.scope(capability, table, alias?) takes a table name and an alias of lowercase letters, digits and _')
+				refuse('invalid_argument', 'ctx.sql.scope(capability, table, alias?) takes a table name and an alias of lowercase letters, digits and _')
 			}
 			return scopeFragment(site, scopeOf(capability, table), name)
 		} catch (error) {

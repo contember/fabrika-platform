@@ -256,11 +256,11 @@ export class FileCollections {
 		const file = await collection.table.find(target)
 		const object = await this.#store.read(file.objectKey)
 		if (object === null) {
-			throw new ServerFault(`the object of a file in '${collection.name}' is missing from storage`)
+			throw new ServerFault('file_object_missing', `the object of a file in '${collection.name}' is missing from storage`)
 		}
 		if (object.size !== file.size) {
 			await object.body.cancel()
-			throw new ServerFault(`the object of a file in '${collection.name}' has another size than its row records`)
+			throw new ServerFault('file_object_mismatch', `the object of a file in '${collection.name}' has another size than its row records`)
 		}
 		return new FileDownload({ body: object.body, size: file.size, contentType: file.contentType, name: file.originalName })
 	}
@@ -268,7 +268,7 @@ export class FileCollections {
 	async #remove(collection: Collection, target: unknown): Promise<{ readonly id: string }> {
 		const grant = this.#capabilities.resolve(target)
 		if (grant.kind !== 'ref') {
-			throw new ServerFault(`files '${collection.name}' remove was handed a Within`)
+			throw new ServerFault('contract_inconsistent', `files '${collection.name}' remove was handed a Within`)
 		}
 		await collection.table.markRemoved(target, new Date())
 		await this.#sweep(collection)

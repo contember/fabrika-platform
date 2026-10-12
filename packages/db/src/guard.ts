@@ -92,7 +92,7 @@ interface Visit {
 /** Refuses any operation tree outside the allowlist. Runs on the final tree, immediately before it is compiled. */
 export function assertAllowedTree(root: OperationNode, context: GuardContext): void {
 	if (root.kind !== context.root) {
-		throw new QueryRefusedError(`expected a ${context.root}, got ${String(root.kind)}`)
+		throw new QueryRefusedError('statement_shape', `expected a ${context.root}, got ${String(root.kind)}`)
 	}
 	const allowed = ROOT_PROPERTIES[context.root]
 	const keys = ownKeys(root)
@@ -100,7 +100,7 @@ export function assertAllowedTree(root: OperationNode, context: GuardContext): v
 		const key = keys[index] ?? ''
 		const lockModifier = key === 'endModifiers' && context.lock !== undefined && context.root === 'SelectQueryNode'
 		if (read(root, key) !== undefined && !inSet(allowed, key) && !lockModifier) {
-			throw new QueryRefusedError(`${context.root}.${key} is not allowed`)
+			throw new QueryRefusedError('statement_shape', `${context.root}.${key} is not allowed`)
 		}
 	}
 	checkRoot(root, context)
@@ -114,12 +114,12 @@ function checkRoot(root: OperationNode, context: GuardContext): void {
 		? read(root, 'table')
 		: soleFrom(read(root, 'from'))
 	if (tableName(target) !== context.table) {
-		throw new QueryRefusedError(`the statement must address ${context.table} only`)
+		throw new QueryRefusedError('statement_shape', `the statement must address ${context.table} only`)
 	}
 	const where = read(root, 'where')
 	if (context.scope === undefined) {
 		if (context.root !== 'InsertQueryNode' || where !== undefined) {
-			throw new QueryRefusedError('a statement without its scope predicate is not allowed')
+			throw new QueryRefusedError('scope_predicate', 'a statement without its scope predicate is not allowed')
 		}
 		return
 	}
@@ -127,7 +127,7 @@ function checkRoot(root: OperationNode, context: GuardContext): void {
 	const scoped = predicate === context.scope
 		|| (kindOf(predicate) === 'AndNode' && read(predicate, 'right') === context.scope && kindOf(read(predicate, 'left')) === 'ParensNode')
 	if (!scoped) {
-		throw new QueryRefusedError('the scope predicate must be the top-level conjunct of WHERE')
+		throw new QueryRefusedError('scope_predicate', 'the scope predicate must be the top-level conjunct of WHERE')
 	}
 	const scope = context.scope
 	const membership = (leaf: unknown) => isScopeMembership(leaf, context.table)
@@ -137,6 +137,7 @@ function checkRoot(root: OperationNode, context: GuardContext): void {
 		|| (kindOf(scope) === 'ParensNode' && kindOf(read(scope, 'node')) === 'OrNode' && isTreeOf(read(scope, 'node'), 'OrNode', membership))
 	if (!shaped) {
 		throw new QueryRefusedError(
+			'scope_predicate',
 			'the scope predicate must be true, an AND of column = value, or a parenthesized OR of column in (values), over the statement table',
 		)
 	}
@@ -194,7 +195,7 @@ function isBoundValue(node: unknown): boolean {
 function soleFrom(from: unknown): unknown {
 	const froms = read(from, 'froms')
 	if (!isArray(froms) || froms.length !== 1) {
-		throw new QueryRefusedError('exactly one table in FROM')
+		throw new QueryRefusedError('statement_shape', 'exactly one table in FROM')
 	}
 	return froms[0]
 }
@@ -214,7 +215,7 @@ function walk(node: OperationNode, parent: Visit | undefined, context: GuardCont
 			if (isOperationNode(child)) {
 				walk(child, { node, key, up: parent }, context)
 			} else if (typeof child === 'object' && child !== null) {
-				throw new QueryRefusedError(`unexpected structure under ${node.kind}.${key}`)
+				throw new QueryRefusedError('statement_shape', `unexpected structure under ${node.kind}.${key}`)
 			}
 		}
 	}
@@ -223,12 +224,12 @@ function walk(node: OperationNode, parent: Visit | undefined, context: GuardCont
 function checkNode(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
 	if (inSet(ROOT_KINDS, node.kind)) {
 		if (parent !== undefined) {
-			throw new QueryRefusedError('subqueries are not allowed')
+			throw new QueryRefusedError('statement_shape', 'subqueries are not allowed')
 		}
 		return
 	}
 	if (!inSet(NODE_KINDS, node.kind)) {
-		throw new QueryRefusedError(`${String(node.kind)} is not allowed`)
+		throw new QueryRefusedError('statement_shape', `${String(node.kind)} is not allowed`)
 	}
 	switch (node.kind) {
 		case 'RawNode':
@@ -239,17 +240,17 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			return checkCast(node, parent, context)
 		case 'DataTypeNode':
 			if (parent?.node.kind !== 'CastNode' || parent.key !== 'dataType' || read(node, 'dataType') !== 'text') {
-				throw new QueryRefusedError('a data type appears only as the text of a selected column')
+				throw new QueryRefusedError('statement_shape', 'a data type appears only as the text of a selected column')
 			}
 			return
 		case 'SchemableIdentifierNode':
 			if (read(node, 'schema') !== undefined) {
-				throw new QueryRefusedError('schema-qualified tables are not allowed')
+				throw new QueryRefusedError('statement_shape', 'schema-qualified tables are not allowed')
 			}
 			return
 		case 'IdentifierNode':
 			if (!isPlainAlias(read(node, 'name'))) {
-				throw new QueryRefusedError('identifiers must be plain names')
+				throw new QueryRefusedError('statement_shape', 'identifiers must be plain names')
 			}
 			return
 		case 'TableNode':
@@ -258,7 +259,7 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			return checkJoin(node, context)
 		case 'ReferenceNode':
 			if (read(node, 'table') === undefined) {
-				throw new QueryRefusedError('column references must be table-qualified')
+				throw new QueryRefusedError('statement_shape', 'column references must be table-qualified')
 			}
 			return
 		case 'ColumnNode':
@@ -266,12 +267,12 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 				parent === undefined
 				|| !(parent.node.kind === 'ReferenceNode' || parent.node.kind === 'InsertQueryNode' || parent.node.kind === 'ColumnUpdateNode')
 			) {
-				throw new QueryRefusedError('unqualified column')
+				throw new QueryRefusedError('statement_shape', 'unqualified column')
 			}
 			return
 		case 'SelectAllNode':
 			if (parent?.node.kind !== 'AggregateFunctionNode' || read(parent.node, 'func') !== 'count') {
-				throw new QueryRefusedError('select * is not allowed; name the columns')
+				throw new QueryRefusedError('statement_shape', 'select * is not allowed; name the columns')
 			}
 			return
 		case 'OperatorNode':
@@ -281,7 +282,7 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 				!inSet(AGGREGATES, read(node, 'func')) || read(node, 'distinct') === true || read(node, 'filter') !== undefined
 				|| read(node, 'over') !== undefined
 			) {
-				throw new QueryRefusedError('aggregate function not allowed')
+				throw new QueryRefusedError('statement_shape', 'aggregate function not allowed')
 			}
 			return
 		case 'ValueNode':
@@ -300,14 +301,14 @@ function checkOperator(node: OperationNode, parent: Visit | undefined): void {
 	if (operator === '+' && parent?.up?.node.kind === 'ColumnUpdateNode') {
 		return
 	}
-	throw new QueryRefusedError('operator not allowed')
+	throw new QueryRefusedError('statement_shape', 'operator not allowed')
 }
 
 function checkValue(node: OperationNode): void {
 	const value = read(node, 'value')
 	if (read(node, 'immediate') === true) {
 		if (value !== null && typeof value !== 'boolean') {
-			throw new QueryRefusedError('inline values are allowed for null and booleans only')
+			throw new QueryRefusedError('statement_shape', 'inline values are allowed for null and booleans only')
 		}
 		return
 	}
@@ -315,7 +316,7 @@ function checkValue(node: OperationNode): void {
 	const plain = type === 'string' || type === 'number' || type === 'bigint' || type === 'boolean' || value === null || value instanceof Date
 	if (!plain) {
 		// Bun.SQL mis-binds a JS array and stores a bound JSON string as a JSON string, so only scalars are bound.
-		throw new QueryRefusedError('only plain values are bound as parameters')
+		throw new QueryRefusedError('statement_shape', 'only plain values are bound as parameters')
 	}
 }
 
@@ -326,7 +327,7 @@ function checkLock(node: OperationNode, parent: Visit | undefined, context: Guar
 	const plain = expected !== undefined && read(node, 'modifier') === expected && read(node, 'of') === undefined
 		&& read(node, 'rawModifier') === undefined
 	if (!onRoot || !plain) {
-		throw new QueryRefusedError('row locks are not allowed')
+		throw new QueryRefusedError('statement_shape', 'row locks are not allowed')
 	}
 }
 
@@ -335,7 +336,7 @@ function checkCast(node: OperationNode, parent: Visit | undefined, context: Guar
 	const selected = parent?.node.kind === 'AliasNode' && parent.key === 'node' && parent.up?.node.kind === 'SelectionNode'
 		&& parent.up.up?.node.kind === 'SelectQueryNode' && parent.up.up.up === undefined && parent.up.up.key === 'selections'
 	if (context.root !== 'SelectQueryNode' || !selected || !isOwnColumn(read(node, 'expression'), context.table)) {
-		throw new QueryRefusedError('a cast appears only as the text of a selected column of the statement table')
+		throw new QueryRefusedError('statement_shape', 'a cast appears only as the text of a selected column of the statement table')
 	}
 }
 
@@ -346,7 +347,7 @@ function checkRaw(node: OperationNode, parent: Visit | undefined): void {
 	const isPlainDirection = isArray(fragments) && fragments.length === 1 && (fragments[0] === 'asc' || fragments[0] === 'desc')
 	const hasNoParameters = isArray(parameters) && parameters.length === 0
 	if (!isDirection || !isPlainDirection || !hasNoParameters) {
-		throw new QueryRefusedError('raw SQL is not allowed')
+		throw new QueryRefusedError('statement_shape', 'raw SQL is not allowed')
 	}
 }
 
@@ -360,20 +361,20 @@ function checkTable(node: OperationNode, parent: Visit | undefined, context: Gua
 	if (name !== undefined && foreignKeyOf(context, name) !== undefined && (isJoinTarget || isColumnQualifier)) {
 		return
 	}
-	throw new QueryRefusedError(`table ${String(name)} is not reachable from ${context.table}`)
+	throw new QueryRefusedError('statement_shape', `table ${String(name)} is not reachable from ${context.table}`)
 }
 
 function checkJoin(node: OperationNode, context: GuardContext): void {
 	const child = tableName(read(node, 'table'))
 	const pairs = child === undefined ? undefined : foreignKeyOf(context, child)
 	if (context.root !== 'SelectQueryNode' || read(node, 'joinType') !== 'InnerJoin' || child === undefined || pairs === undefined) {
-		throw new QueryRefusedError('only inner joins to declared children are allowed')
+		throw new QueryRefusedError('statement_shape', 'only inner joins to declared children are allowed')
 	}
 	const on = read(read(node, 'on'), 'on')
 	const withConditions = kindOf(on) === 'AndNode' && kindOf(read(on, 'right')) === 'ParensNode'
 	const matches = isForeignKey(on, child, context.table, pairs) || (withConditions && isForeignKey(read(on, 'left'), child, context.table, pairs))
 	if (!matches) {
-		throw new QueryRefusedError(`the join of ${child} must be ON its composite foreign key`)
+		throw new QueryRefusedError('statement_shape', `the join of ${child} must be ON its composite foreign key`)
 	}
 }
 
@@ -426,7 +427,7 @@ function read(node: unknown, key: string): unknown {
 		return undefined
 	}
 	if (!hasOwn(descriptor, 'value')) {
-		throw new QueryRefusedError(`accessor properties are not allowed in an operation tree (${key})`)
+		throw new QueryRefusedError('statement_shape', `accessor properties are not allowed in an operation tree (${key})`)
 	}
 	return descriptor.value
 }

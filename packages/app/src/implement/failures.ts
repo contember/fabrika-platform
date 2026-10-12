@@ -1,12 +1,12 @@
-// A request that answered 5xx: one server log line and, with an Operations DSN, one error event. The event carries a
-// fixed failure code and bounded identifiers only, never the error's name or message: application code and drivers
-// write those, and either may quote request data or a credential. The log line adds the text of a framework refusal.
+// A request that answered 5xx: one server log line and, with an Operations DSN, one error event. Both carry fixed codes
+// and bounded identifiers only, never an error's name or message: application code, drivers and even the framework's
+// own refusals can put request data there. A framework failure adds its reason and the reason's catalog text.
 
-import { QueryRefusedError } from '@fabrika/db/framework'
+import { QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { isStructuralError } from '../errors'
 import type { OperationsReporter } from '../jobs/report'
-import { CapabilityRefusedError } from './capability'
-import { ServerFault } from './faults'
+import { CAPABILITY_REFUSALS, CapabilityRefusedError } from './capability'
+import { SERVER_FAULTS, ServerFault } from './faults'
 
 export type RequestFailureCode =
 	| 'framework_fault'
@@ -37,9 +37,18 @@ export function failureCode(error: unknown): RequestFailureCode {
 	return isStructuralError(error) ? 'handler_status' : 'handler_failed'
 }
 
-/** The framework's own failures, whose text names declarations and refused forms, never a value. */
-function isFrameworkRefusal(error: unknown): error is Error {
-	return error instanceof ServerFault || error instanceof CapabilityRefusedError || error instanceof QueryRefusedError
+/** A framework failure's reason and the fixed text its catalog gives it; `null` for any other thrown value. */
+export function failureReason(error: unknown): { readonly reason: string; readonly text: string } | null {
+	if (error instanceof ServerFault) {
+		return { reason: error.reason, text: SERVER_FAULTS[error.reason] }
+	}
+	if (error instanceof CapabilityRefusedError) {
+		return { reason: error.reason, text: CAPABILITY_REFUSALS[error.reason] }
+	}
+	if (error instanceof QueryRefusedError) {
+		return { reason: error.reason, text: QUERY_REFUSALS[error.reason] }
+	}
+	return null
 }
 
 export interface RequestFailure {
@@ -66,12 +75,15 @@ export class FailureReports {
 	/** Never rejects. The returned delivery may outlive the response; a runtime with `waitUntil` keeps it alive. */
 	record(failure: RequestFailure): Promise<void> {
 		const code = failureCode(failure.error)
-		const detail = isFrameworkRefusal(failure.error) ? `${code}: ${failure.error.message}` : code
-		console.error(`fabrika: ${failure.endpoint}: ${detail}`)
+		const why = failureReason(failure.error)
+		console.error(`fabrika: ${failure.endpoint}: ${code}${why === null ? '' : `: ${why.reason}: ${why.text}`}`)
 		if (this.#reporter === null || !this.#admit()) {
 			return Promise.resolve()
 		}
 		const tags: Record<string, string> = { endpoint: failure.endpoint, code, status: String(failure.status) }
+		if (why !== null) {
+			tags['reason'] = why.reason
+		}
 		if (failure.requestId !== null && REQUEST_ID.test(failure.requestId)) {
 			tags['request'] = failure.requestId
 		}

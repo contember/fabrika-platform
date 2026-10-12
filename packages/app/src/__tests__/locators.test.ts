@@ -170,7 +170,9 @@ describe.skipIf(!hasPostgres)('locators generated from the table policies', () =
 			const sent = await send(app, '/api/notes.list', { token: overCap, body: {} })
 			expect(sent.status).toBe(403)
 			expect(errorType(sent)).toBe('forbidden')
-			expect(log.mock.calls.map((call) => String(call[0])).join('\n')).toContain(`a Within carries at most ${MAX_WITHIN_VALUES}`)
+			expect(log.mock.calls.map((call) => String(call[0])).join('\n')).toContain(
+				'capability_limit: the caller holds the action in more scope values than one list may carry',
+			)
 		} finally {
 			log.mockRestore()
 		}

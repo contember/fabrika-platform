@@ -70,7 +70,7 @@ function invocation(kind: DataKind) {
 		principal: 'user:alice',
 		check() {
 			if (transaction.ended) {
-				throw new QueryRefusedError('this invocation has ended')
+				throw new QueryRefusedError('ended', 'this invocation has ended')
 			}
 		},
 		session: () => transaction.session(),

@@ -115,7 +115,7 @@ export class ScopedSelect<Row, Selected, Children> {
 
 	constructor(token: symbol, state: SelectState, shape: TableShape) {
 		if (token !== selectToken) {
-			throw new QueryRefusedError('a query description is created by the store only')
+			throw new QueryRefusedError('invalid_argument', 'a query description is created by the store only')
 		}
 		this.#state = Object.freeze(state)
 		this.#shape = shape
@@ -131,7 +131,7 @@ export class ScopedSelect<Row, Selected, Children> {
 	columns<const C extends Columns<Row>>(columns: readonly C[]): ScopedSelect<Row, Pick<Row, C>, Children> {
 		const names = parseList(columns, (name) => this.#column(name))
 		if (names === undefined || names.length === 0) {
-			throw new QueryRefusedError('columns needs a non-empty plain array of column names')
+			throw new QueryRefusedError('invalid_argument', 'columns needs a non-empty plain array of column names')
 		}
 		return this.#next({ columns: names })
 	}
@@ -150,12 +150,12 @@ export class ScopedSelect<Row, Selected, Children> {
 		const parsed = parseList(conditions, (condition) => {
 			const parts = parseList(condition, (part) => part)
 			if (parts === undefined || parts.length !== 3) {
-				throw new QueryRefusedError('whereAny takes [column, operator, value] conditions, each a plain array')
+				throw new QueryRefusedError('invalid_argument', 'whereAny takes [column, operator, value] conditions, each a plain array')
 			}
 			return this.#parseCondition(parts[0], parts[1], parts[2])
 		})
 		if (parsed === undefined || parsed.length === 0) {
-			throw new QueryRefusedError('whereAny needs a non-empty plain array of [column, operator, value] conditions')
+			throw new QueryRefusedError('invalid_argument', 'whereAny needs a non-empty plain array of [column, operator, value] conditions')
 		}
 		return this.#withCondition({ kind: 'any', conditions: parsed })
 	}
@@ -167,7 +167,7 @@ export class ScopedSelect<Row, Selected, Children> {
 
 	orderBy(column: Columns<Row>, direction: 'asc' | 'desc' = 'asc'): ScopedSelect<Row, Selected, Children> {
 		if (direction !== 'asc' && direction !== 'desc') {
-			throw new QueryRefusedError(`orderBy direction must be 'asc' or 'desc'`)
+			throw new QueryRefusedError('list_page', `orderBy direction must be 'asc' or 'desc'`)
 		}
 		return this.#next({ orderBy: [...this.#state.orderBy, { column: this.#column(column), direction }] })
 	}
@@ -188,12 +188,12 @@ export class ScopedSelect<Row, Selected, Children> {
 		const join = typeof child === 'string' ? ownEntry(this.#shape.joinable, child) : undefined
 		if (join === undefined) {
 			const children = ownKeys(this.#shape.joinable).join(', ') || 'none'
-			throw new QueryRefusedError(`${String(child)} is not a joinable child of ${this.#state.table} (joinable: ${children})`)
+			throw new QueryRefusedError('unknown_table', `${String(child)} is not a joinable child of ${this.#state.table} (joinable: ${children})`)
 		}
 		const start = startSelect<Children[C], NoColumns>(join.shape)
 		const select = finishSelect(build(start), start)
 		if (select.joins.length > 0 || select.orderBy.length > 0 || select.limit !== undefined || select.offset !== undefined) {
-			throw new QueryRefusedError('a joined child takes columns and where conditions only')
+			throw new QueryRefusedError('invalid_argument', 'a joined child takes columns and where conditions only')
 		}
 		return this.#next({ joins: [...this.#state.joins, { join, select }] })
 	}
@@ -222,11 +222,12 @@ export function columnOf(shape: TableShape, name: unknown): string {
 	const columns = namesOf(shape.visible).join(', ')
 	if (typeof name !== 'string') {
 		throw new QueryRefusedError(
+			'invalid_argument',
 			`a column is named by a string, not by ${typeof name === 'object' ? 'an expression' : typeof name} (columns: ${columns})`,
 		)
 	}
 	if (!isPlainIdentifier(name) || !inSet(shape.visible, name)) {
-		throw new QueryRefusedError(`${name} is not a column of ${shape.table} (columns: ${columns})`)
+		throw new QueryRefusedError('unknown_column', `${name} is not a column of ${shape.table} (columns: ${columns})`)
 	}
 	return name
 }
@@ -236,34 +237,34 @@ export function parseCondition(shape: TableShape, column: unknown, operator: unk
 	const name = columnOf(shape, column)
 	if (operator === 'contains') {
 		if (typeof value !== 'string') {
-			throw new QueryRefusedError('contains takes a string')
+			throw new QueryRefusedError('invalid_argument', 'contains takes a string')
 		}
 		return { kind: 'contains', column: name, text: value }
 	}
 	if (!isOperator(operator)) {
-		throw new QueryRefusedError(`operator ${String(operator)} is not allowed (allowed: ${OPERATOR_LIST.join(', ')}, contains)`)
+		throw new QueryRefusedError('invalid_argument', `operator ${String(operator)} is not allowed (allowed: ${OPERATOR_LIST.join(', ')}, contains)`)
 	}
 	const allowed = operator
 	if (allowed === 'in' || allowed === 'not in') {
 		const list = parseList(value, (item) => {
 			if (!isPrimitive(item)) {
-				throw new QueryRefusedError(`${allowed} takes plain values only`)
+				throw new QueryRefusedError('invalid_argument', `${allowed} takes plain values only`)
 			}
 			return item
 		})
 		if (list === undefined || list.length === 0) {
-			throw new QueryRefusedError(`${allowed} needs a non-empty plain array of values`)
+			throw new QueryRefusedError('invalid_argument', `${allowed} needs a non-empty plain array of values`)
 		}
 		return { kind: 'compare', column: name, operator: allowed, value: list }
 	}
 	if (allowed === 'is' || allowed === 'is not') {
 		if (value !== null) {
-			throw new QueryRefusedError(`${allowed} takes null only`)
+			throw new QueryRefusedError('invalid_argument', `${allowed} takes null only`)
 		}
 		return { kind: 'compare', column: name, operator: allowed, value: null }
 	}
 	if (!isPrimitive(value)) {
-		throw new QueryRefusedError('where takes a plain value (string, number, bigint, boolean or Date), not an expression')
+		throw new QueryRefusedError('invalid_argument', 'where takes a plain value (string, number, bigint, boolean or Date), not an expression')
 	}
 	return { kind: 'compare', column: name, operator: allowed, value }
 }
@@ -285,12 +286,12 @@ export function startSelect<Row, Children>(shape: TableShape): ScopedSelect<Row,
 /** The description a callback returned; it must derive from the one it received. */
 export function finishSelect<Row, Children>(built: unknown, start: ScopedSelect<Row, Row, Children>): SelectState {
 	if (!(built instanceof ScopedSelect)) {
-		throw new QueryRefusedError('the query callback must return the description it received')
+		throw new QueryRefusedError('invalid_argument', 'the query callback must return the description it received')
 	}
 	const state = readState(built)
 	const expected = readState(start)
 	if (state.origin !== expected.origin || readShape(built) !== readShape(start)) {
-		throw new QueryRefusedError('the query callback must return the description it received, not one from another query')
+		throw new QueryRefusedError('invalid_argument', 'the query callback must return the description it received, not one from another query')
 	}
 	return state
 }
@@ -302,7 +303,7 @@ export function isPrimitive(value: unknown): value is Primitive {
 
 function count(value: unknown, what: string): number {
 	if (typeof value !== 'number' || !isSafeInteger(value) || value < 0) {
-		throw new QueryRefusedError(`${what} must be a non-negative integer`)
+		throw new QueryRefusedError('invalid_argument', `${what} must be a non-negative integer`)
 	}
 	return value
 }

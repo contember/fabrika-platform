@@ -173,10 +173,10 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 export function boundTo(frame: RequestFrame, ended: () => boolean, handle = 'a ctx.db handle'): () => void {
 	return () => {
 		if (frame.ended || ended()) {
-			throw new CapabilityRefusedError(`${handle} of ${frame.id} was used after its invocation ended; never keep a handle past its handler`)
+			throw new CapabilityRefusedError('ended', `${handle} of ${frame.id} was used after its invocation ended; never keep a handle past its handler`)
 		}
 		if (!isActiveRequest(frame)) {
-			throw new CapabilityRefusedError(`${handle} of ${frame.id} was used from other work; never share a handle`)
+			throw new CapabilityRefusedError('foreign_work', `${handle} of ${frame.id} was used from other work; never share a handle`)
 		}
 	}
 }
@@ -221,7 +221,7 @@ export class Invocation {
 	async commit(signal: AbortSignal | null): Promise<void> {
 		if (signal?.aborted === true) {
 			await this.#transaction.rollback()
-			throw new ServerFault(`request ${this.#frame.id} was cancelled before its transaction committed; nothing it wrote is kept`)
+			throw new ServerFault('request_cancelled', `request ${this.#frame.id} was cancelled before its transaction committed; nothing it wrote is kept`)
 		}
 		await this.#transaction.commit()
 	}

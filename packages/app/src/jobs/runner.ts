@@ -369,16 +369,19 @@ function jobContext(
 	const principal: JobPrincipal = Object.freeze({ kind: 'job', id: `job:${job.name}`, job: job.name })
 	const check = (action: string, dimension: string): void => {
 		if (frame.ended) {
-			throw new CapabilityRefusedError(`attempt ${frame.id} of job '${job.name}' has ended; it mints no capability`)
+			throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it mints no capability`)
 		}
 		if (!job.artifact.actions.includes(action)) {
-			throw new CapabilityRefusedError(`job '${job.name}' does not declare this action (actions: ${job.artifact.actions.join(', ')})`)
+			throw new CapabilityRefusedError(
+				'undeclared_action',
+				`job '${job.name}' does not declare this action (actions: ${job.artifact.actions.join(', ')})`,
+			)
 		}
 		if (!permits([...perms], action)) {
-			throw new CapabilityRefusedError(`the token IAM signed for the key of job '${job.name}' does not carry this action`)
+			throw new CapabilityRefusedError('undeclared_action', `the token IAM signed for the key of job '${job.name}' does not carry this action`)
 		}
 		if (!Object.hasOwn(context.artifact.dimensions, dimension)) {
-			throw new CapabilityRefusedError(`job '${job.name}' named a dimension the contract does not declare`)
+			throw new CapabilityRefusedError('undeclared_dimension', `job '${job.name}' named a dimension the contract does not declare`)
 		}
 	}
 	return Object.freeze({
@@ -394,7 +397,7 @@ function jobContext(
 		async ref<const Act extends string, const Dim extends string>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>> {
 			check(action, dimension)
 			if (typeof id !== 'string' || id === '') {
-				throw new CapabilityRefusedError(`job '${job.name}' named an object without an id`)
+				throw new CapabilityRefusedError('missing_id', `job '${job.name}' named an object without an id`)
 			}
 			const database = context.database
 			const chain = database === null || !context.ownedDimensions.has(dimension) ? new Map<string, string>() : await database.locate(dimension, id)

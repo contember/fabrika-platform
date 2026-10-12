@@ -156,7 +156,7 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		const { app } = start()
 		const id = await seedDeal()
 		const log = await failed(async () => send(app, '/api/deals.retitle', { token: await reader(), body: { id, title: 'written', expectVersion: 1 } }))
-		expect(log).toContain("deals is declared unscoped: 'read', so update needs unscoped: { deals: 'write' }")
+		expect(log).toContain('query_refused: undeclared_reach')
 		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
 	})
 
@@ -203,13 +203,15 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		}
 		const keeping = send(app, '/api/deals.keep', { token: await reader(), body: { id } })
 		await kept.promise
-		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain('was used from other work')
+		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain(
+			'capability_refused: foreign_work',
+		)
 		expect(await failed(async () => send(other.app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain(
-			'was used from other work',
+			'capability_refused: foreign_work',
 		)
 		done.resolve()
 		expect(resultOf(await keeping)).toEqual({ ok: true })
-		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain('after its invocation ended')
+		expect(await failed(async () => send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toContain('capability_refused: ended')
 	})
 })
 

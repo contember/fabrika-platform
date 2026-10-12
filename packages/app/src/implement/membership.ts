@@ -94,7 +94,7 @@ function refusal(failure: MembershipFailure): Error {
 		case 'invitations_disabled':
 			return new HttpError(409, 'invitations_disabled', 'This installation sends no email, so it cannot invite an address; assign an existing principal')
 		case 'delivery_failed':
-			return new ServerFault('IAM could not deliver the invitation', 503)
+			return new ServerFault('iam_unavailable', 'IAM could not deliver the invitation', 503)
 		case 'invalid_request':
 			return new HttpError(400, 'invalid_request', failure.message)
 	}
@@ -106,7 +106,7 @@ async function ask<T extends { readonly ok: true }>(work: () => Promise<T | Memb
 	try {
 		result = await work()
 	} catch {
-		throw new ServerFault(`IAM could not be asked to ${operation}`, 503)
+		throw new ServerFault('iam_unavailable', `IAM could not be asked to ${operation}`, 503)
 	}
 	if (!result.ok) {
 		throw refusal(result)
@@ -116,7 +116,7 @@ async function ask<T extends { readonly ok: true }>(work: () => Promise<T | Memb
 
 function delegationOf(request: MembershipRequest): string {
 	if (request.delegation === null) {
-		throw new ServerFault("the request reached a membership endpoint without the proxy's delegation grant", 503)
+		throw new ServerFault('delegation_missing', "the request reached a membership endpoint without the proxy's delegation grant", 503)
 	}
 	return request.delegation
 }
@@ -125,7 +125,7 @@ function delegationOf(request: MembershipRequest): string {
 function refGrant(request: MembershipRequest, ref: unknown): RefGrant {
 	const grant = request.capabilities.resolve(ref)
 	if (grant.kind !== 'ref' || grant.dimension !== request.dimension || grant.action !== request.action) {
-		throw new CapabilityRefusedError(`pass the ctx.target of this request: a Ref of '${request.dimension}' for '${request.action}'`)
+		throw new CapabilityRefusedError('wrong_target', `pass the ctx.target of this request: a Ref of '${request.dimension}' for '${request.action}'`)
 	}
 	return grant
 }
@@ -138,7 +138,7 @@ function scopeOf(grant: RefGrant): Scope {
 export async function createScope(request: MembershipRequest): Promise<string> {
 	const created = await ask(() => request.iam.createScope(request.caller, delegationOf(request), request.dimension), 'create a scope')
 	if (created.scope.type !== request.dimension) {
-		throw new ServerFault(`IAM created a '${created.scope.type}' for a request to create a '${request.dimension}'`)
+		throw new ServerFault('iam_answer_mismatch', `IAM created a '${created.scope.type}' for a request to create a '${request.dimension}'`)
 	}
 	return created.scope.value
 }
@@ -172,7 +172,7 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 	return Object.freeze({
 		async list(): Promise<readonly DirectoryMember[]> {
 			if (request === null) {
-				throw new ServerFault(`'${endpoint}' lists members, and the runtime adapter supplies no IAM membership transport`, 503)
+				throw new ServerFault('facility_unbound', `'${endpoint}' lists members, and the runtime adapter supplies no IAM membership transport`, 503)
 			}
 			const listed = await ask(() => request.iam.listMembers(request.caller, scopeOf(refGrant(request, target))), 'list members')
 			return Object.freeze(
@@ -204,7 +204,10 @@ export function linkIssuing(
 			const grant = refGrant(request, ref)
 			const mount = mounts.find((candidate) => candidate.name === options.mount)
 			if (mount === undefined) {
-				throw new ServerFault(`'${options.mount}' is not a link mount this endpoint issues (allowed: ${mounts.map((m) => m.name).join(', ')})`)
+				throw new ServerFault(
+					'link_mount',
+					`'${options.mount}' is not a link mount this endpoint issues (allowed: ${mounts.map((m) => m.name).join(', ')})`,
+				)
 			}
 			const chain: Scope[] = [scopeOf(grant)]
 			for (const container of containers) {

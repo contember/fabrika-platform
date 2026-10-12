@@ -52,7 +52,7 @@ function guard(root: GuardContext['root'], table: string, scope: OperationNode |
 function text(row: Readonly<Record<string, unknown>>, column: string): string {
 	const value = row[column]
 	if (typeof value !== 'string') {
-		throw new QueryRefusedError(`${WEBHOOK_BINDINGS_TABLE}.${column} came back as ${typeof value}`)
+		throw new QueryRefusedError('unexpected_row', `${WEBHOOK_BINDINGS_TABLE}.${column} came back as ${typeof value}`)
 	}
 	return value
 }

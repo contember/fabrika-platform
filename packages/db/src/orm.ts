@@ -9,7 +9,7 @@ import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, 
 import type { CapabilityGrant, RefGrant } from './capability'
 import type { InvocationTransaction, Session } from './database'
 import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
-import { CapabilityError, NotFoundError, QueryRefusedError } from './errors'
+import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } from './errors'
 import { linksPredicate, linkValues } from './links'
 import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
@@ -111,7 +111,7 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 		sql: (site: SqlSite) =>
 			sqlTag(site, parts.runtime().database.schema, (capability, table) => {
 				if (!hasOwn(parts.models, table)) {
-					throw new QueryRefusedError(`ctx.sql.scope: ${table} is not a table of src/db/tables.ts`)
+					throw new QueryRefusedError('unknown_table', `ctx.sql.scope: ${table} is not a table of src/db/tables.ts`)
 				}
 				return scopeTerms(parts.contextOf(table), capability)
 			}),
@@ -134,10 +134,10 @@ function bound<A extends unknown[], R>(site: DataSite, method: (...args: A) => P
 }
 
 /** A method this site may not call: it throws the message its type gives, whatever the arguments. */
-function refused(site: DataSite, message: string): () => Promise<never> {
+function refused(site: DataSite, reason: QueryRefusal, message: string): () => Promise<never> {
 	return async () => {
 		site.check()
-		throw new QueryRefusedError(message)
+		throw new QueryRefusedError(reason, message)
 	}
 }
 
@@ -158,7 +158,7 @@ function writing<A extends unknown[], R>(
 	method: (...args: A) => Promise<R>,
 ): (...args: A) => Promise<R> {
 	const refusal = writeRefusal(site, operation)
-	return refusal === undefined ? bound(site, method) : refused(site, refusal)
+	return refusal === undefined ? bound(site, method) : refused(site, 'read_only', refusal)
 }
 
 /** Whether the table names `action`: one of its table actions, or a column's own write action. */
@@ -234,7 +234,7 @@ function handlesOf(parts: DataLayerParts, site: DataSite): DataHandles {
 /** Adds one table's handle; a table named like a target member would shadow it, so it is refused instead. */
 function addTable(handle: Record<string, unknown>, table: string, rows: object): void {
 	if (hasOwn(handle, table)) {
-		throw new QueryRefusedError(`the table ${table} has the name of a ctx.db.target member; rename the table`)
+		throw new QueryRefusedError('invalid_name', `the table ${table} has the name of a ctx.db.target member; rename the table`)
 	}
 	setOwn(handle, table, rows)
 }
@@ -269,7 +269,8 @@ function scopeTarget(parts: DataLayerParts, site: DataSite, run: Runner, capabil
 
 function unownedTarget(site: DataSite, dimension: string): Record<string, unknown> {
 	const message = `no table owns the dimension ${dimension}, so ctx.db.target has no row of its own`
-	return { get: refused(site, message), getForUpdate: refused(site, message), update: refused(site, message), remove: refused(site, message) }
+	const refuse = refused(site, 'unknown_table', message)
+	return { get: refuse, getForUpdate: refuse, update: refuse, remove: refuse }
 }
 
 /** The predicate of the target object, over the whole chain its `Ref` carries. */
@@ -303,25 +304,25 @@ function targetRow(
 		return row
 	})
 	const getForUpdate = site.kind === 'job'
-		? refused(site, 'a job writes inside ctx.transaction((tx) => …): use tx.db there')
+		? refused(site, 'read_only', 'a job writes inside ctx.transaction((tx) => …): use tx.db there')
 		: site.kind === 'query'
-		? refused(site, 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
+		? refused(site, 'read_only', 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
 		: form === 'on'
 		? lock
-		: refused(site, 'getForUpdate locks one object: declare access with on')
+		: refused(site, 'row_address', 'getForUpdate locks one object: declare access with on')
 	const update = form === 'on'
 		? writing(site, 'update', async (values: unknown, ...options: unknown[]) => {
 			const grant = updatingRef(context, capability, dimension)
 			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model)
 			return updateRow(context, run, { scope: targetPredicate(context, grant) }, changes, versionArgument(context, options))
 		})
-		: refused(site, onOnly('update'))
+		: refused(site, 'row_address', onOnly('update'))
 	const remove = form === 'on'
 		? writing(site, 'remove', async (...options: unknown[]) => {
 			const scope = objectPredicate(context, capability, 'delete')
 			await removeRow(context, run, { scope }, versionArgument(context, options))
 		})
-		: refused(site, onOnly('remove'))
+		: refused(site, 'row_address', onOnly('remove'))
 	return { get, getForUpdate, update, remove }
 }
 
@@ -337,7 +338,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 		get: bound(site, async (id: unknown) => {
 			const grant = namedRef(context, capability, parent)
 			if (typeof id !== 'string' || id.length === 0) {
-				throw new QueryRefusedError(`a ${context.model.name} row is addressed by its ${key}, a non-empty string`)
+				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its ${key}, a non-empty string`)
 			}
 			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
 			return selectOne(context, run, scope, visibleFor(context.model, grant.action))
@@ -345,7 +346,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 		insert: writing(site, 'insert', async (values: unknown) => insertIntoChild(context, run, capability, values)),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			if (typeof id !== 'string' || id.length === 0) {
-				throw new QueryRefusedError(`a ${context.model.name} row is addressed by its parent Ref and its ${key}`)
+				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its parent Ref and its ${key}`)
 			}
 			const grant = updatingRef(context, capability, parent)
 			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model)
@@ -434,13 +435,13 @@ function unscopedTables(parts: DataLayerParts, site: DataSite, run: Runner): obj
 		const table = declared[index] ?? ''
 		const mode = site.unscoped[table]
 		if (table.startsWith(FRAMEWORK_PREFIX)) {
-			throw new QueryRefusedError(`${table} is a framework table; unscoped reaches only the tables of src/db/tables.ts`)
+			throw new QueryRefusedError('framework_table', `${table} is a framework table; unscoped reaches only the tables of src/db/tables.ts`)
 		}
 		if (modelOf(parts.models, table) === undefined) {
-			throw new QueryRefusedError(`unscoped declares ${table}, which is not a table of src/db/tables.ts`)
+			throw new QueryRefusedError('unknown_table', `unscoped declares ${table}, which is not a table of src/db/tables.ts`)
 		}
 		if (mode !== 'read' && mode !== 'write') {
-			throw new QueryRefusedError(`unscoped declares ${table} as ${String(mode)}; the modes are 'read' and 'write'`)
+			throw new QueryRefusedError('undeclared_reach', `unscoped declares ${table} as ${String(mode)}; the modes are 'read' and 'write'`)
 		}
 		setOwn(handle, table, unscopedRows(parts.contextOf(table), site, run, mode))
 	}
@@ -455,17 +456,17 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 	const keyed = model.scope.mode === 'dimension' || model.scope.mode === 'child'
 	const byKey = (id: unknown): OperationNode => {
 		if (!keyed) {
-			throw new QueryRefusedError(`${table} has no key; read it with list`)
+			throw new QueryRefusedError('row_address', `${table} has no key; read it with list`)
 		}
 		if (typeof id !== 'string' || id.length === 0) {
-			throw new QueryRefusedError(`a ${table} row is addressed by its ${keyOf(model)}, a non-empty string`)
+			throw new QueryRefusedError('row_address', `a ${table} row is addressed by its ${keyOf(model)}, a non-empty string`)
 		}
 		return equals(table, keyOf(model), id)
 	}
 	const write = <A extends unknown[], R>(operation: 'insert' | 'update' | 'remove', method: (...args: A) => Promise<R>) => {
 		if (mode === 'read') {
 			const verb = operation === 'remove' ? 'remove' : operation
-			return refused(site, `${table} is declared unscoped: 'read', so ${verb} needs unscoped: { ${table}: 'write' }`)
+			return refused(site, 'undeclared_reach', `${table} is declared unscoped: 'read', so ${verb} needs unscoped: { ${table}: 'write' }`)
 		}
 		return writing(site, operation, method)
 	}
@@ -501,7 +502,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 async function insertUnscoped(context: TableContext, run: Runner, principal: string, values: unknown): Promise<unknown> {
 	const model = context.model
 	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
-		throw new QueryRefusedError(`${model.name} is a ${model.scope.mode} table, which no handler writes`)
+		throw new QueryRefusedError('read_only', `${model.name} is a ${model.scope.mode} table, which no handler writes`)
 	}
 	const chain: string[] = []
 	for (let index = 0; index < model.chain.length; index++) {
@@ -513,7 +514,10 @@ async function insertUnscoped(context: TableContext, run: Runner, principal: str
 		const name = chain[index] ?? ''
 		const value = row.get(name)
 		if (typeof value !== 'string' || value.length === 0) {
-			throw new QueryRefusedError(`an unscoped insert into ${model.name} names its containment: ${name} (containment columns: ${chain.join(', ')})`)
+			throw new QueryRefusedError(
+				'invalid_argument',
+				`an unscoped insert into ${model.name} names its containment: ${name} (containment columns: ${chain.join(', ')})`,
+			)
 		}
 	}
 	row.set(keyOf(model), Bun.randomUUIDv7())
@@ -539,7 +543,7 @@ function readOptions(options: unknown, allowed: readonly string[], what: string)
 		return {}
 	}
 	if (typeof options !== 'object' || options === null) {
-		throw new QueryRefusedError(`${what} takes { ${allowed.join(', ')} }`)
+		throw new QueryRefusedError('invalid_argument', `${what} takes { ${allowed.join(', ')} }`)
 	}
 	const fields = nameSet(allowed)
 	const keys = ownNames(options)
@@ -548,10 +552,10 @@ function readOptions(options: unknown, allowed: readonly string[], what: string)
 		const key = keys[index] ?? ''
 		const descriptor = ownDescriptor(options, key)
 		if (!inSet(fields, key)) {
-			throw new QueryRefusedError(`${key} is not an option of ${what} (options: ${allowed.join(', ')})`)
+			throw new QueryRefusedError('invalid_argument', `${key} is not an option of ${what} (options: ${allowed.join(', ')})`)
 		}
 		if (descriptor === undefined || !hasOwn(descriptor, 'value')) {
-			throw new QueryRefusedError(`${what}.${key} is an accessor; ${what} takes plain values`)
+			throw new QueryRefusedError('invalid_argument', `${what}.${key} is an accessor; ${what} takes plain values`)
 		}
 		setOwn(read, key, descriptor.value)
 	}
@@ -569,12 +573,12 @@ function conditionsOf(shape: TableShape, where: unknown): (Compare | Contains)[]
 	const conditions = parseList(where, (condition) => {
 		const parts = parseList(condition, (part) => part)
 		if (parts === undefined || parts.length !== 3) {
-			throw new QueryRefusedError('where takes [column, operator, value] conditions, each a plain array')
+			throw new QueryRefusedError('invalid_argument', 'where takes [column, operator, value] conditions, each a plain array')
 		}
 		return parseCondition(shape, parts[0], parts[1], parts[2])
 	})
 	if (conditions === undefined) {
-		throw new QueryRefusedError('where takes a plain array of [column, operator, value] conditions')
+		throw new QueryRefusedError('invalid_argument', 'where takes a plain array of [column, operator, value] conditions')
 	}
 	return conditions
 }
@@ -584,12 +588,12 @@ function orderOf(shape: TableShape, orderBy: unknown, tiebreak: readonly string[
 		const parts = parseList(term, (part) => part)
 		const direction = parts?.[1]
 		if (parts === undefined || parts.length !== 2 || (direction !== 'asc' && direction !== 'desc')) {
-			throw new QueryRefusedError("orderBy takes [column, 'asc' | 'desc'] terms, each a plain array")
+			throw new QueryRefusedError('list_page', "orderBy takes [column, 'asc' | 'desc'] terms, each a plain array")
 		}
 		return { column: columnOf(shape, parts[0]), direction }
 	})
 	if (terms === undefined) {
-		throw new QueryRefusedError("orderBy takes a plain array of [column, 'asc' | 'desc'] terms")
+		throw new QueryRefusedError('list_page', "orderBy takes a plain array of [column, 'asc' | 'desc'] terms")
 	}
 	const order = [...terms]
 	const named = nameSet(terms.map((term) => term.column))
@@ -608,7 +612,7 @@ function limitOf(limit: unknown): number {
 		return DEFAULT_LIST_LIMIT
 	}
 	if (typeof limit !== 'number' || !isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
-		throw new QueryRefusedError(`limit must be an integer from 1 to ${MAX_LIST_LIMIT}`)
+		throw new QueryRefusedError('list_page', `limit must be an integer from 1 to ${MAX_LIST_LIMIT}`)
 	}
 	return limit
 }
@@ -627,7 +631,7 @@ function encodeCursor(row: Readonly<Record<string, unknown>>, order: readonly Or
 		if (typeof value === 'string' || value === null) {
 			return value
 		}
-		throw new QueryRefusedError(`${name} came back as ${typeof value} text, which a list cannot page by`)
+		throw new QueryRefusedError('list_page', `${name} came back as ${typeof value} text, which a list cannot page by`)
 	})
 	return Buffer.from(JSON.stringify(values)).toString('base64url')
 }
@@ -648,7 +652,7 @@ function withoutCursor(row: Readonly<Record<string, unknown>>, order: readonly O
 
 /** The cursor `after` names, parsed at the boundary: one plain value per order column. */
 function decodeCursor(after: unknown, order: readonly OrderColumn[]): readonly CursorValue[] {
-	const refused = () => new QueryRefusedError('after takes the next cursor of a page of this same list')
+	const refused = () => new QueryRefusedError('list_page', 'after takes the next cursor of a page of this same list')
 	if (typeof after !== 'string' || after.length === 0) {
 		throw refused()
 	}

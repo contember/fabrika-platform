@@ -142,7 +142,7 @@ function guard(root: GuardContext['root'], table: string, scope: OperationNode |
 function text(table: string, row: Readonly<Record<string, unknown>>, name: string): string {
 	const value = ownEntry(row, name)
 	if (typeof value !== 'string') {
-		throw new QueryRefusedError(`${table}.${name} came back as ${typeof value}`)
+		throw new QueryRefusedError('unexpected_row', `${table}.${name} came back as ${typeof value}`)
 	}
 	return value
 }
@@ -151,7 +151,7 @@ function text(table: string, row: Readonly<Record<string, unknown>>, name: strin
 function integer(table: string, row: Readonly<Record<string, unknown>>, name: string): number {
 	const value = Number(ownEntry(row, name))
 	if (!Number.isSafeInteger(value) || value < 0) {
-		throw new QueryRefusedError(`${table}.${name} is not a non-negative integer`)
+		throw new QueryRefusedError('unexpected_row', `${table}.${name} is not a non-negative integer`)
 	}
 	return value
 }

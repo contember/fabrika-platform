@@ -78,7 +78,7 @@ function invocation(kind: DataKind, unscoped: Readonly<Record<string, UnscopedMo
 		principal: 'user:alice',
 		check() {
 			if (transaction.ended) {
-				throw new QueryRefusedError('this invocation has ended')
+				throw new QueryRefusedError('ended', 'this invocation has ended')
 			}
 		},
 		session: () => transaction.session(),

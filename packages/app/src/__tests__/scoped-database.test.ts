@@ -156,7 +156,7 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 			const holding = send(app, '/api/notes.keep', { token: await editorOf(W1), body: { id } })
 			await keptNow
 			const log = await refusedCapability(async () => send(app, '/api/notes.reuse', { token: await editorOf(W2), body: {} }))
-			expect(log).toContain('not to the one running now')
+			expect(log).toContain('capability_refused: foreign_work')
 			release()
 			expect(resultOf(await holding)).toEqual({ kept: true })
 		} finally {
@@ -168,7 +168,7 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 		const id = await seedNote('w1', 'expired')
 		expect(resultOf(await send(app, '/api/notes.keep', { token: await editorOf(W1), body: { id } }))).toEqual({ kept: true })
 		const log = await refusedCapability(async () => send(app, '/api/notes.reuse', { token: await editorOf(W1), body: {} }))
-		expect(log).toContain('which has ended')
+		expect(log).toContain('capability_refused: ended')
 	})
 
 	test('a note moved after its Ref was minted is 404: the Ref carries the old workspace, and a fresh one the new', async () => {

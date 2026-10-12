@@ -20,7 +20,7 @@ class ParameterCompiler extends PostgresQueryCompiler {
 
 function timestampText(date: Date): string {
 	if (Number.isNaN(date.getTime())) {
-		throw new QueryRefusedError('an invalid Date cannot be bound')
+		throw new QueryRefusedError('invalid_value', 'an invalid Date cannot be bound')
 	}
 	return date.toISOString()
 }
@@ -51,7 +51,7 @@ const MAX_APP_ID_LENGTH = 59
  */
 export function applicationSchema(appId: string): string {
 	if (!APP_ID.test(appId) || appId.length > MAX_APP_ID_LENGTH) {
-		throw new QueryRefusedError('the application id must be lowercase letters, digits and -, at most 59 characters')
+		throw new QueryRefusedError('invalid_name', 'the application id must be lowercase letters, digits and -, at most 59 characters')
 	}
 	return `app_${appId.replaceAll('-', '_')}`
 }
@@ -88,7 +88,7 @@ export class Database {
 	 */
 	static postgres(options: PostgresOptions): Database {
 		if (!isPlainIdentifier(options.schema)) {
-			throw new QueryRefusedError('the schema must match ^[a-z_][a-z0-9_]*$')
+			throw new QueryRefusedError('invalid_name', 'the schema must match ^[a-z_][a-z0-9_]*$')
 		}
 		const pool = new SQL({ url: options.url, adapter: 'postgres', prepare: false, max: options.max ?? 10, connection: { search_path: options.schema } })
 		return new Database(new Kysely<LooseDB>({ dialect: new PostgresJSDialect({ postgres: pool }) }), options.schema)
@@ -185,7 +185,7 @@ export class Session {
 
 	async #execute<O>(compiled: CompiledQuery<O>): Promise<{ readonly rows: O[] }> {
 		if (this.#hooks.open?.() === false) {
-			throw new QueryRefusedError('the transaction of this session has ended; it runs nothing more')
+			throw new QueryRefusedError('ended', 'the transaction of this session has ended; it runs nothing more')
 		}
 		try {
 			return await this.#executor.executeQuery(compiled)
@@ -198,7 +198,7 @@ export class Session {
 	async run<O>(node: RootOperationNode, context: GuardContext): Promise<O[]> {
 		assertAllowedTree(node, context)
 		if (this.#readOnly && (context.root !== 'SelectQueryNode' || context.lock !== undefined)) {
-			throw new QueryRefusedError('this request is read-only: it reads, and no operation may write or lock a row')
+			throw new QueryRefusedError('read_only', 'this request is read-only: it reads, and no operation may write or lock a row')
 		}
 		// CompiledQuery's row type is a phantom: this is the one place where generated row types meet the wire.
 		const compiled: CompiledQuery<O> = compiler.compileQuery(node, createQueryId())
@@ -240,7 +240,7 @@ export class Session {
 					const result = await untilAborted(work(new Session(transaction, undefined, this.#readOnly, hooks)), signal)
 					// A failure the work caught: Postgres would answer the COMMIT of an aborted transaction with a silent ROLLBACK.
 					if (failed) {
-						throw new QueryRefusedError('a statement of this transaction failed, so nothing it wrote commits')
+						throw new QueryRefusedError('statement_failed', 'a statement of this transaction failed, so nothing it wrote commits')
 					}
 					return result
 				} catch (error) {
@@ -317,7 +317,7 @@ export class InvocationTransaction {
 	/** The session the invocation's statements run in; the first call opens the transaction. */
 	session(): Promise<Session> {
 		if (this.#ended) {
-			return Promise.reject(new QueryRefusedError('this invocation has ended; its data handles run only while its handler runs'))
+			return Promise.reject(new QueryRefusedError('ended', 'this invocation has ended; its data handles run only while its handler runs'))
 		}
 		this.#opened ??= this.#open()
 		return this.#opened
@@ -355,14 +355,14 @@ export class InvocationTransaction {
 	 */
 	async commit(): Promise<void> {
 		if (this.#ended) {
-			throw new QueryRefusedError('this invocation has already ended')
+			throw new QueryRefusedError('ended', 'this invocation has already ended')
 		}
 		this.#ended = true
 		const run = this.#run
 		if (this.#failed) {
 			this.#decision.resolve('rollback')
 			await this.#released
-			throw new QueryRefusedError('a statement of this invocation failed, so nothing it wrote commits')
+			throw new QueryRefusedError('statement_failed', 'a statement of this invocation failed, so nothing it wrote commits')
 		}
 		if (run === undefined) {
 			return

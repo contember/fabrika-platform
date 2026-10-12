@@ -462,7 +462,7 @@ function isCredentialed(row: EndpointRow | undefined): row is CredentialedEndpoi
 /** `frameworkProblems` refused a webhook without the framework tables, so this answers only after a bug. */
 function frameworkOf(framework: FrameworkTables | null): FrameworkTables {
 	if (framework === null) {
-		throw new ServerFault('a webhook was served without the framework tables')
+		throw new ServerFault('facility_unbound', 'a webhook was served without the framework tables')
 	}
 	return framework
 }

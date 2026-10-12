@@ -53,7 +53,7 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 	}
 	return {
 		sql: sqlTag(site, SCHEMA, () => {
-			throw new QueryRefusedError('no table reaches this tag')
+			throw new QueryRefusedError('unknown_table', 'no table reaches this tag')
 		}),
 		sent: () => sent,
 	}
@@ -320,7 +320,7 @@ function invocation(mode: SqlMode, readOnly = false) {
 	const transaction: InvocationTransaction = data.invocation(readOnly)
 	const check = () => {
 		if (transaction.ended) {
-			throw new QueryRefusedError('ctx.sql was used after its invocation ended')
+			throw new QueryRefusedError('ended', 'ctx.sql was used after its invocation ended')
 		}
 	}
 	const site: DataSite = { kind: readOnly ? 'query' : 'mutation', unscoped: {}, principal: 'user:alice', check, session: () => transaction.session() }

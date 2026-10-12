@@ -51,7 +51,7 @@ export function equals(table: string, name: string, value: Primitive): Operation
 export function allOf(nodes: readonly OperationNode[]): OperationNode {
 	const [first, ...rest] = nodes
 	if (first === undefined) {
-		throw new QueryRefusedError('an empty conjunction')
+		throw new QueryRefusedError('statement_shape', 'an empty conjunction')
 	}
 	return rest.reduce<OperationNode>((left, right) => AndNode.create(left, right), first)
 }
@@ -60,7 +60,7 @@ export function allOf(nodes: readonly OperationNode[]): OperationNode {
 export function anyOf(nodes: readonly OperationNode[]): OperationNode {
 	const [first, ...rest] = nodes
 	if (first === undefined) {
-		throw new QueryRefusedError('an empty disjunction')
+		throw new QueryRefusedError('statement_shape', 'an empty disjunction')
 	}
 	return rest.length === 0 ? first : ParensNode.create(rest.reduce<OperationNode>((left, right) => OrNode.create(left, right), first))
 }
@@ -106,7 +106,7 @@ function conditionNode(table: string, condition: Condition): OperationNode {
 		case 'any': {
 			const [first, ...rest] = condition.conditions.map((item) => item.kind === 'compare' ? compareNode(table, item) : containsNode(table, item))
 			if (first === undefined) {
-				throw new QueryRefusedError('whereAny needs at least one condition')
+				throw new QueryRefusedError('statement_shape', 'whereAny needs at least one condition')
 			}
 			return ParensNode.create(rest.reduce<OperationNode>((left, right) => OrNode.create(left, right), first))
 		}
@@ -254,7 +254,7 @@ export function updateNode(
 		updates.push(ColumnUpdateNode.create(ColumnNode.create(bump), next))
 	}
 	if (updates.length === 0) {
-		throw new QueryRefusedError('nothing to update')
+		throw new QueryRefusedError('statement_shape', 'nothing to update')
 	}
 	const node: UpdateQueryNode = { kind: 'UpdateQueryNode', table: TableNode.create(table), updates, where, returning: answer }
 	return Object.freeze(node)

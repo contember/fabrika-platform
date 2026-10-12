@@ -16,7 +16,7 @@ const DAY_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/
 const MS_PER_DAY = 86_400_000
 
 function refused(where: string): QueryRefusedError {
-	return new QueryRefusedError(`${where} holds a date outside 0001-01-01 to 9999-12-31, which the layer cannot read as YYYY-MM-DD`)
+	return new QueryRefusedError('invalid_value', `${where} holds a date outside 0001-01-01 to 9999-12-31, which the layer cannot read as YYYY-MM-DD`)
 }
 
 /**
@@ -73,7 +73,7 @@ function isCalendarDay(year: number, month: number, day: number): boolean {
 export function dayInput(value: string, where: string): string {
 	const [year, month, day] = value.split('-').map(Number)
 	if (!DAY_TEXT.test(value) || year === undefined || month === undefined || day === undefined || !isCalendarDay(year, month, day)) {
-		throw new QueryRefusedError(`${where} takes a day as YYYY-MM-DD text, such as 2026-10-12`)
+		throw new QueryRefusedError('invalid_value', `${where} takes a day as YYYY-MM-DD text, such as 2026-10-12`)
 	}
 	return value
 }
@@ -85,7 +85,7 @@ export function timestampInput(value: string, where: string): string {
 	const valid = match !== null && isCalendarDay(Number(year), Number(month), Number(day)) && Number(hour) < 24 && Number(minute) < 60
 		&& Number(second) < 60 && Number(offsetHour) < 16 && Number(offsetMinute) < 60
 	if (!valid) {
-		throw new QueryRefusedError(`${where} takes a Date or ISO 8601 text with Z or an offset, such as 2026-10-12T08:30:00.000Z`)
+		throw new QueryRefusedError('invalid_value', `${where} takes a Date or ISO 8601 text with Z or an offset, such as 2026-10-12T08:30:00.000Z`)
 	}
 	return value
 }

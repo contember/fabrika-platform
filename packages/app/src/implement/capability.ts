@@ -17,9 +17,29 @@ import {
 } from '@fabrika/db/capability'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
+/** Why a capability or a handle was refused, as a closed catalog with the fixed text a log may print. */
+export const CAPABILITY_REFUSALS = {
+	not_minted: 'a value the framework did not mint was used as a capability; pass the ctx.target or ctx.within of this request',
+	ended: 'a capability or handle was used after its request, invocation or attempt ended',
+	foreign_work: 'a capability or handle was used from other work than the request it belongs to',
+	wrong_target: "an IAM request was not passed this request's ctx.target",
+	undeclared_action: "the job's declaration or its token does not carry the action",
+	undeclared_dimension: 'the job named a dimension the contract does not declare',
+	missing_id: 'the job named an object without an id',
+} as const
+
+export type CapabilityRefusal = keyof typeof CAPABILITY_REFUSALS
+
 /** A capability that is forged, from a request that has ended, or from another request than the current one. */
 export class CapabilityRefusedError extends Error {
 	override readonly name = 'CapabilityRefusedError'
+	/** What a log may say; the message is for the author's own run. */
+	readonly reason: CapabilityRefusal
+
+	constructor(reason: CapabilityRefusal, message: string) {
+		super(message)
+		this.reason = reason
+	}
 }
 
 /** A `Within` that would carry more scope values than one statement may bind; the caller is refused, not truncated. */
@@ -169,7 +189,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		chain: ReadonlyMap<string, string>,
 	) {
 		if (token !== MINT) {
-			throw new CapabilityRefusedError('a Ref is minted by the framework only; declare the access form in fabrika.contract.ts')
+			throw new CapabilityRefusedError('not_minted', 'a Ref is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
 		this.#dimension = dimension
 		this.#action = action
@@ -238,7 +258,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		containers: readonly ContainerGrant[],
 	) {
 		if (token !== MINT) {
-			throw new CapabilityRefusedError('a Within is minted by the framework only; declare the access form in fabrika.contract.ts')
+			throw new CapabilityRefusedError('not_minted', 'a Within is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
 		const held = values === 'all' ? freeze([]) : containerGrantsOf(containers)
 		let count = values === 'all' ? 0 : values.length
@@ -351,15 +371,18 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 		resolve(capability: unknown): CapabilityGrant {
 			const bound = readRef(capability) ?? readWithin(capability)
 			if (bound === undefined || bound.issuer !== issuer) {
-				throw new CapabilityRefusedError('not a capability the framework minted: pass the ctx.target or ctx.within of this request')
+				throw new CapabilityRefusedError('not_minted', 'not a capability the framework minted: pass the ctx.target or ctx.within of this request')
 			}
 			const { grant, frame } = bound
 			const what = `${grant.kind === 'ref' ? 'Ref' : 'Within'} of '${grant.dimension}' for '${grant.action}'`
 			if (frame.ended) {
-				throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, which has ended; never keep a capability past its request`)
+				throw new CapabilityRefusedError('ended', `the ${what} belongs to request ${frame.id}, which has ended; never keep a capability past its request`)
 			}
 			if (currentRequest.getStore() !== frame) {
-				throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, not to the one running now; never share a capability`)
+				throw new CapabilityRefusedError(
+					'foreign_work',
+					`the ${what} belongs to request ${frame.id}, not to the one running now; never share a capability`,
+				)
 			}
 			return grant
 		},

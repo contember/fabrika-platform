@@ -123,7 +123,7 @@ const SQL_STATE = `select now() as now, ${STATE_COLUMNS} from ${T} where job = $
 
 function record(row: unknown): Readonly<Record<string, unknown>> {
 	if (typeof row !== 'object' || row === null) {
-		throw new QueryRefusedError(`${T} answered a row that is not an object`)
+		throw new QueryRefusedError('unexpected_row', `${T} answered a row that is not an object`)
 	}
 	return Object.fromEntries(Object.entries(row))
 }
@@ -135,7 +135,7 @@ async function rows(session: Session, text: string, parameters: readonly (string
 function integer(row: Readonly<Record<string, unknown>>, name: string): number {
 	const value = row[name]
 	if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
-		throw new QueryRefusedError(`${T}.${name} came back as ${typeof value}`)
+		throw new QueryRefusedError('unexpected_row', `${T}.${name} came back as ${typeof value}`)
 	}
 	return value
 }
@@ -143,7 +143,7 @@ function integer(row: Readonly<Record<string, unknown>>, name: string): number {
 function text(row: Readonly<Record<string, unknown>>, name: string): string {
 	const value = row[name]
 	if (typeof value !== 'string') {
-		throw new QueryRefusedError(`${T}.${name} came back as ${typeof value}`)
+		throw new QueryRefusedError('unexpected_row', `${T}.${name} came back as ${typeof value}`)
 	}
 	return value
 }
@@ -154,7 +154,7 @@ function date(row: Readonly<Record<string, unknown>>, name: string): Date | null
 		return null
 	}
 	if (!(value instanceof Date)) {
-		throw new QueryRefusedError(`${T}.${name} came back as ${typeof value}`)
+		throw new QueryRefusedError('unexpected_row', `${T}.${name} came back as ${typeof value}`)
 	}
 	return value
 }
@@ -162,7 +162,7 @@ function date(row: Readonly<Record<string, unknown>>, name: string): Date | null
 function requiredDate(row: Readonly<Record<string, unknown>>, name: string): Date {
 	const value = date(row, name)
 	if (value === null) {
-		throw new QueryRefusedError(`${T}.${name} came back as null`)
+		throw new QueryRefusedError('unexpected_row', `${T}.${name} came back as null`)
 	}
 	return value
 }
@@ -170,10 +170,10 @@ function requiredDate(row: Readonly<Record<string, unknown>>, name: string): Dat
 function stateOf(row: Readonly<Record<string, unknown>>): JobLeaseState {
 	const { holder, last_status: status, last_duration_ms: duration } = row
 	if ((holder !== null && typeof holder !== 'string') || (duration !== null && typeof duration !== 'number')) {
-		throw new QueryRefusedError(`${T} came back in another shape than its migration declares`)
+		throw new QueryRefusedError('unexpected_row', `${T} came back in another shape than its migration declares`)
 	}
 	if (status !== null && status !== 'succeeded' && status !== 'failed') {
-		throw new QueryRefusedError(`${T}.last_status is not succeeded or failed`)
+		throw new QueryRefusedError('unexpected_row', `${T}.last_status is not succeeded or failed`)
 	}
 	return Object.freeze({
 		generation: integer(row, 'generation'),
@@ -192,7 +192,7 @@ function stateOf(row: Readonly<Record<string, unknown>>): JobLeaseState {
 
 function milliseconds(value: number, what: string): number {
 	if (!Number.isSafeInteger(value) || value < 1) {
-		throw new QueryRefusedError(`${what} must be a whole number of milliseconds of at least 1`)
+		throw new QueryRefusedError('invalid_argument', `${what} must be a whole number of milliseconds of at least 1`)
 	}
 	return value
 }

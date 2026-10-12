@@ -3,9 +3,47 @@ export class CapabilityError extends Error {
 	override name = 'CapabilityError'
 }
 
+/**
+ * Why the layer refused, as a closed catalog: a server log names the reason and its fixed text, never the message,
+ * which can quote a value the request sent.
+ */
+export const QUERY_REFUSALS = {
+	invalid_argument: 'a data-layer call took an argument of another shape than its type declares',
+	invalid_value: 'a value cannot be bound: an invalid or out-of-range date, or a non-finite number',
+	invalid_name: 'a configured name (application, schema, file collection or owner column) breaks its naming rule',
+	unknown_column: 'a column the table does not declare, or one this operation may not set',
+	unknown_table: 'a table src/db/tables.ts does not declare, or one no store, join or locator reaches',
+	framework_table: "a framework table or a catalog name: application data reaches only the application's own tables",
+	row_address: 'a row is addressed otherwise than its table declares (its Ref, its parent Ref and key, or its key)',
+	version_required: 'the table has a version column, so update and remove take expectVersion',
+	read_only: 'a read-only request, query or table was asked to write or lock a row',
+	ended: 'the transaction, invocation or handle has ended or belongs to other work',
+	statement_failed: 'a statement of this transaction failed, so nothing it wrote commits',
+	unexpected_row: 'the database answered a row in another shape than its migration declares',
+	statement_shape: 'the compiled statement has a form the guard does not admit',
+	scope_predicate: 'the scope predicate is missing or is not a top-level conjunct',
+	list_page: 'a list limit, cursor or order outside what a page admits',
+	undeclared_reach: 'the site reaches data it did not declare (sql or unscoped, or their mode)',
+	sql_template: 'ctx.sql was not called as one tagged template whose values are interpolated whole',
+	sql_statement: 'ctx.sql runs one statement of an admitted kind, and none inside another',
+	sql_read_only: "sql: 'read' runs queries only; declare sql: 'write' on a mutation, a job or a webhook",
+	sql_name: 'ctx.sql names a framework, catalog or foreign-schema object, or writes a name in U& form',
+	sql_function: 'ctx.sql calls a function that is not a reviewed built-in',
+	sql_scope: 'ctx.sql.scope(…) stands alone, joined by AND, in a WHERE or JOIN … ON clause of its own invocation',
+} as const
+
+export type QueryRefusal = keyof typeof QUERY_REFUSALS
+
 /** A query description or an operation tree outside what the layer allows. */
 export class QueryRefusedError extends Error {
 	override name = 'QueryRefusedError'
+	/** What a log may say; the message is for the author's own run and may quote a value. */
+	readonly reason: QueryRefusal
+
+	constructor(reason: QueryRefusal, message: string) {
+		super(message)
+		this.reason = reason
+	}
 }
 
 /** A `ctx.sql` row its row schema refuses: the handler's bug. The message names the column, never its value. */
