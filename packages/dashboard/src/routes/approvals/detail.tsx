@@ -1,9 +1,10 @@
 import { createPage, Link } from '@buzola/router'
 import { useState } from 'react'
+import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, RunStatus } from '../../components/Status'
-import { api, ApiError, type ApprovalDto } from '../../lib/api'
+import { type AccessChangeDto, api, ApiError, type ApprovalDto } from '../../lib/api'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 
 // One access change (ADR-0050): the plain-language lines of the diff against the environment's active snapshot, and
@@ -73,15 +74,16 @@ export default createPage()
 					</div>
 				</section>
 
-				<ChangeList title="Widens access" icon="alert" changes={widening.map((change) => change.line)} />
-				<ChangeList title="Narrows access" icon="check" changes={narrowing.map((change) => change.line)} />
+				<ChangeList title="Widens access" icon="alert" changes={widening} />
+				<ChangeList title="Narrows access" icon="check" changes={narrowing} />
 
 				{waiting && <Decision approval={approval} onDone={invalidate} />}
 			</>
 		)
 	})
 
-function ChangeList({ title, icon, changes }: { title: string; icon: 'alert' | 'check'; changes: readonly string[] }) {
+/** One side of the change; a line that steps off the paved road is marked for closer review. */
+export function ChangeList({ title, icon, changes }: { title: string; icon: 'alert' | 'check'; changes: readonly AccessChangeDto[] }) {
 	if (changes.length === 0) return null
 	return (
 		<section>
@@ -90,7 +92,17 @@ function ChangeList({ title, icon, changes }: { title: string; icon: 'alert' | '
 				<h2>{title}</h2>
 			</div>
 			<ul className="change-list">
-				{changes.map((line) => <li key={line}>{line}</li>)}
+				{changes.map((change) => (
+					<li key={change.line}>
+						{change.line}
+						{change.review === 'closer' && (
+							<>
+								{' '}
+								<CloserReview />
+							</>
+						)}
+					</li>
+				))}
 			</ul>
 		</section>
 	)

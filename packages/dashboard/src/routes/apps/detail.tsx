@@ -1,6 +1,7 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { BuildConfigSection } from '../../components/app-detail/BuildConfigSection'
+import { DeviationsSection } from '../../components/app-detail/DeviationsSection'
 import { EnvironmentsSection } from '../../components/app-detail/EnvironmentsSection'
 import { RecentRunsSection } from '../../components/app-detail/RecentRunsSection'
 import { SecretsSection } from '../../components/app-detail/SecretsSection'
@@ -76,6 +77,7 @@ export default createPage()
 				</section>
 				<BuildConfigSection app={app} onDone={invalidate} />
 				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
+				<DeviationsSection envs={envs} />
 				<SecretsSection appId={app.id} secrets={secrets} envs={envs} onDone={invalidate} />
 				<VariablesSection appId={app.id} vars={vars} envs={envs} onDone={invalidate} />
 				<RecentRunsSection runs={runs} />
