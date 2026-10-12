@@ -33,10 +33,13 @@ export const github = app.webhook('/hooks/github', {
 - `boundTo` is a dimension with `members`. A holder of its `members.manage` binds an org to a GitHub account with the
   generated `POST /api/webhooks.github.bind` (`{ scope, account: 'installation:<id>' | 'repository:<id>' }`), which
   answers the secret and the URL once. The generated tests need a fixture for it (`references/tests.md`).
-- The framework checks the signature, the account and the input (undeclared fields are dropped), and runs a delivery
-  at most once per body. `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
-- A delivery runs in one transaction. A handler that throws commits nothing and runs again on GitHub's redelivery, so
-  an external effect after the data work keys its idempotency on `ctx.delivery.key`.
+- The framework checks the signature, the account and the input (undeclared fields are dropped).
+  `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
+- It records the delivery key (a digest of the binding and the body) before the handler runs, and answers a body it
+  already ran in the last 30 days without running it again. A handler that throws commits nothing, and the key is
+  forgotten, so GitHub's redelivery runs it again from nothing. A process that dies after the record and before the
+  commit keeps the key and loses the delivery. So make every effect idempotent, and key an external effect after the
+  data work on `ctx.delivery.key`; never rely on exactly one run.
 
 ## Share links
 
@@ -89,9 +92,17 @@ export const shared = app.link('/s', {
 
 ## Connectors: another application's data
 
-A consumer imports an owner's export. `bunx fabrika connect add catalog/products@1 --consumer=tasks --env=prod`
-vendors the snapshot into `fabrika/connect/` (generated; `fabrika connect pull` refreshes it). The kit takes it, and
-an endpoint that calls it declares `connect`:
+A consumer imports an owner's export. The snapshot comes from Control, so this step needs an operator's credential,
+not the application's: `FABRIKA_CONTROL_URL` (or `--url=<control origin>`) and `FABRIKA_CONTROL_KEY`, a machine key
+that holds `deploy.read` on the consumer, both in the shell that runs the command only. Ask the human for them; they
+are CLI credentials, never application variables, and never committed.
+
+```bash
+bunx fabrika connect add catalog/products@1 --consumer=tasks --env=prod    # writes fabrika/connect/catalog.products.v1.ts
+bunx fabrika connect pull catalog/products@1 --consumer=tasks --env=prod   # refreshes it from what the owner approved now
+```
+
+The kit takes the snapshot, and an endpoint that calls it declares `connect`:
 
 ```ts src/app-kit.ts
 import { defineApp } from '@fabrika/app/contract'
@@ -112,7 +123,10 @@ const BySku = z.strictObject({
 	orgId: z.string().min(1).max(100),
 	sku: z.string().min(1).max(64),
 })
-const ProductName = z.strictObject({ name: z.nullable(z.string()) })
+const ProductName = z.strictObject({
+	name: z.nullable(z.string()),
+	status: z.enum(['found', 'missing', 'unavailable']),
+})
 
 export const products = app.group({ callers: ['human'] }, (r) => ({
 	name: r.query({
@@ -123,15 +137,17 @@ export const products = app.group({ callers: ['human'] }, (r) => ({
 	})
 		.handle(async ({ input, ctx }) => {
 			const product = await ctx.connect.catalog.get({ sku: input.sku })
-			return {
-				name: product.outcome === 'ok' ? (product.value?.name ?? null) : null,
-			}
+			if (product.outcome !== 'ok') return { name: null, status: 'unavailable' }
+			return product.value === null
+				? { name: null, status: 'missing' }
+				: { name: product.value.name, status: 'found' }
 		}),
 }))
 ```
 
-- A call never throws for the owner's answer: it resolves to an outcome, `ok`, `denied`, `invalid_input`,
-  `unavailable`, `timeout` or `contract_violation`. Handle every one besides `ok`.
+- A call never throws for the owner's answer and never becomes an HTTP error by itself: it resolves to an outcome,
+  `ok`, `denied`, `invalid_input`, `unavailable`, `timeout` or `contract_violation`. Decide what each one answers, as
+  the example does: a missing product and an unreachable owner are different answers.
 - Exports are read-only and carry no per-user data. When the export you need does not exist, ask the owner
   application's maintainer. The platform writes `FABRIKA_CONNECT_*`; never read or set them.
 

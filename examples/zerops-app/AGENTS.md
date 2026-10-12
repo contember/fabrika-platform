@@ -143,11 +143,12 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   (`ctx.db.within.<table>`). `ctx.target.value` is the id; there is no `.id`.
 - A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), or comes typed from
   `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
-- A mutation answers `Saved` (`{ id, version }`). `update` takes the columns it changes; `update` and `remove` take
-  `{ expectVersion }`, and a stale version is 409.
+- On a versioned table `insert` and `update` answer `Saved` (`{ id, version }`), and `update` and `remove` take
+  `{ expectVersion }` (a stale one is 409). `remove` answers nothing, so its endpoint answers `{ id }`. A table without
+  `version` answers `{ id }` and takes no version. `update` takes the columns it changes, at least one.
 - A precondition reads with `getForUpdate()` and throws `ConflictError`; the rule (`canClose`) is a pure function
-  of `logic.ts`. Throw only `ConflictError`, `NotFoundError` and `BadRequestError` of `@fabrika/app`; anything else
-  is a 500.
+  of `logic.ts`. For a business error throw `ConflictError` (409), `NotFoundError` (404) or `BadRequestError` (400) of
+  `@fabrika/app`. Its other `HttpError`s keep their status; any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
 - Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
@@ -155,15 +156,17 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 
 ## Off the road: declare it
 
-| What the handler needs         | Declare on the endpoint         | It gets                   |
-| ------------------------------ | ------------------------------- | ------------------------- |
-| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)    | `` ctx.sql(Row)`…` ``     |
-| rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>` |
-| another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`    |
-| a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`         |
-| a trigger, function or view    | its migration                   | —                         |
+| What the handler needs         | Declare on the endpoint         | It gets                                            |
+| ------------------------------ | ------------------------------- | -------------------------------------------------- |
+| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)    | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope` |
+| rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>`                          |
+| another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`                             |
+| a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
+| a trigger, function or view    | its migration                   | —                                                  |
 
-A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration marked
+Scope every raw statement with `${ctx.sql.scope(ctx.target, '<table>', '<alias>')}`: it binds the capability's whole
+predicate, chain included, as the handles apply it. A deviation is fine: declare it, and do not contort the code to
+avoid it. The approver sees every declaration marked
 "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only where
 they are declared. A query or an export declares only `'read'`.
 
@@ -216,7 +219,7 @@ Read the one you need before you write that part. Together they are one applicat
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
 - An application with share links, `creates` or member management fails its generated endpoint tests: the test kit
-  has no IAM stand-in yet. Ask the human before you add one.
+  stands in for IAM's member directory only. Ask the human before you add one.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
@@ -554,8 +557,9 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `where: input.status === undefined ? [] : [['status', '=', input.status]]`. There is no `is null` and no OR:
   write that in `ctx.sql`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
-- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` answers rows whose `count` and
-  `sum_<column>` are strings (Postgres `bigint`): convert them with `Number(…)`.
+- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` answers rows whose `count` is a
+  string (Postgres `bigint`): convert it with `Number(…)`. `sum_<column>` is text for an integer or `numeric` column,
+  a number for a floating-point one, and `null` over no rows; `min_`/`max_` are `null` over no rows too.
 
 ## Business rules: `logic.ts`
 
@@ -740,7 +744,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 					count(*) filter (where t.status <> 'done')::int as open,
 					count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
 				from tasks t
-				where t.org_id = ${ctx.target.value}
+				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
 					and (${status}::text is null or t.status::text = ${status})
 				group by t.assignee
 				order by t.assignee`
@@ -756,11 +760,17 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 ```
 
 - Every `${…}` is a bound parameter, never SQL text. Do not put one inside quotes or a comment.
-- **Scope the statement yourself**: `ctx.sql` has no scope predicate. Bind the capability's value
-  (`where t.org_id = ${ctx.target.value}`); the generated tests check that an `in` endpoint with `sql` leaks nothing
-  of another scope.
-- Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `count(*)` and `sum`
-  as text: cast them (`::int`), or the row is refused.
+- **Scope every statement with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.** `ctx.sql` has no scope
+  predicate of its own. The fragment is the capability's whole predicate on that table, as bound values: for a `Ref`
+  (`ctx.target` of `on` or `in`) the object's column and every link of its chain, so a project moved to another org
+  is out; for a `Within` (`ctx.within` of `over`) its values, each container grant on its own column, every row for a
+  global grant and none for an empty one. Write one per table the statement reads (`join projects p on … and
+  ${ctx.sql.scope(ctx.target, 'projects', 'p')}`). A table the capability does not reach is refused. Never scope by
+  hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in` endpoint with `sql`
+  leaks nothing of another scope.
+- Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
+  as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
+  fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
 - An optional filter is `(${value}::text is null or <column> = ${value})`.
 - One statement: `select`, `with`, `values`, plus `insert`, `update` and `delete` on a `'write'` site (a mutation, a
   job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, another schema, any
@@ -881,15 +891,19 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-| Answer | Comes from                                                                                                                           |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 400    | the input does not match its schema; `BadRequestError`                                                                               |
-| 401    | no valid credential. In a test, the caller is missing                                                                                |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                      |
-| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                              |
-| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                 |
-| 500    | any other throw, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
-| 503    | IAM or a connector owner cannot be asked                                                                                             |
+| Answer | Comes from                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | the input does not match its schema; `BadRequestError`                                                                                                                    |
+| 401    | no valid credential. In a test, the caller is missing                                                                                                                     |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                           |
+| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                   |
+| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                      |
+| 500    | a throw that is not an `HttpError` of `@fabrika/app`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
+| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                             |
+
+A connector call is not an HTTP answer: it resolves to an outcome (`references/webhooks-links-connectors.md`), and the
+handler decides what to answer. An `HttpError` of `@fabrika/app` other than the three business errors (such as
+`ForbiddenError`) keeps its own status.
 
 A 500 answers a fixed message; the server log has one line that names what was refused. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.
@@ -903,11 +917,14 @@ contract with generated endpoints: no handler, no storage client, no URL of your
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
+import { comments } from './src/comments/endpoints'
+import { members } from './src/members/endpoints'
 import { projects } from './src/projects/endpoints'
+import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks }),
+	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
 	files: {
 		attachments: c.files({
 			owner: 'tasks',
@@ -1027,12 +1044,15 @@ export const markOverdue = app.cron('15 * * * *', {
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
+import { comments } from './src/comments/endpoints'
+import { members } from './src/members/endpoints'
 import { markOverdue } from './src/overdue/endpoints'
 import { projects } from './src/projects/endpoints'
+import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks }),
+	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
 	jobs: { markOverdue },
 	health: c.health('/healthz'),
 }))
@@ -1368,6 +1388,13 @@ if (postgres !== null) {
 				.toEqual({ id: task.id, version: 3 })
 		})
 
+		test("the member directory lists the org's members", async () => {
+			const listed = await memberApi.members.list({ orgId: 'acme' })
+			expect(listed.items.map((item) => item.principalId).sort()).toEqual(
+				[owner.id, member.id].sort(),
+			)
+		})
+
 		test('a caller of another org reaches nothing', async () => {
 			const project = await ownerApi.projects.create({
 				orgId: 'acme',
@@ -1396,6 +1423,11 @@ if (postgres !== null) {
   registers no test. A skip proves nothing: run with the variable set.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. `kind:
   'machine'` presents a `px_` key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- A member directory (`ctx.members.list()`) answers from the kit's own callers: everyone `testCaller` gave a
+  membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
+  `members.manage` holder). To list someone, make them a caller:
+  `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
+  management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`.
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
@@ -1439,10 +1471,13 @@ export const github = app.webhook('/hooks/github', {
 - `boundTo` is a dimension with `members`. A holder of its `members.manage` binds an org to a GitHub account with the
   generated `POST /api/webhooks.github.bind` (`{ scope, account: 'installation:<id>' | 'repository:<id>' }`), which
   answers the secret and the URL once. The generated tests need a fixture for it (`references/tests.md`).
-- The framework checks the signature, the account and the input (undeclared fields are dropped), and runs a delivery
-  at most once per body. `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
-- A delivery runs in one transaction. A handler that throws commits nothing and runs again on GitHub's redelivery, so
-  an external effect after the data work keys its idempotency on `ctx.delivery.key`.
+- The framework checks the signature, the account and the input (undeclared fields are dropped).
+  `ctx.refs['<action>']` is a `Ref` of the bound org for each declared action.
+- It records the delivery key (a digest of the binding and the body) before the handler runs, and answers a body it
+  already ran in the last 30 days without running it again. A handler that throws commits nothing, and the key is
+  forgotten, so GitHub's redelivery runs it again from nothing. A process that dies after the record and before the
+  commit keeps the key and loses the delivery. So make every effect idempotent, and key an external effect after the
+  data work on `ctx.delivery.key`; never rely on exactly one run.
 
 ## Share links
 
@@ -1495,9 +1530,17 @@ export const shared = app.link('/s', {
 
 ## Connectors: another application's data
 
-A consumer imports an owner's export. `bunx fabrika connect add catalog/products@1 --consumer=tasks --env=prod`
-vendors the snapshot into `fabrika/connect/` (generated; `fabrika connect pull` refreshes it). The kit takes it, and
-an endpoint that calls it declares `connect`:
+A consumer imports an owner's export. The snapshot comes from Control, so this step needs an operator's credential,
+not the application's: `FABRIKA_CONTROL_URL` (or `--url=<control origin>`) and `FABRIKA_CONTROL_KEY`, a machine key
+that holds `deploy.read` on the consumer, both in the shell that runs the command only. Ask the human for them; they
+are CLI credentials, never application variables, and never committed.
+
+```bash
+bunx fabrika connect add catalog/products@1 --consumer=tasks --env=prod    # writes fabrika/connect/catalog.products.v1.ts
+bunx fabrika connect pull catalog/products@1 --consumer=tasks --env=prod   # refreshes it from what the owner approved now
+```
+
+The kit takes the snapshot, and an endpoint that calls it declares `connect`:
 
 ```ts src/app-kit.ts
 import { defineApp } from '@fabrika/app/contract'
@@ -1518,7 +1561,10 @@ const BySku = z.strictObject({
 	orgId: z.string().min(1).max(100),
 	sku: z.string().min(1).max(64),
 })
-const ProductName = z.strictObject({ name: z.nullable(z.string()) })
+const ProductName = z.strictObject({
+	name: z.nullable(z.string()),
+	status: z.enum(['found', 'missing', 'unavailable']),
+})
 
 export const products = app.group({ callers: ['human'] }, (r) => ({
 	name: r.query({
@@ -1529,15 +1575,17 @@ export const products = app.group({ callers: ['human'] }, (r) => ({
 	})
 		.handle(async ({ input, ctx }) => {
 			const product = await ctx.connect.catalog.get({ sku: input.sku })
-			return {
-				name: product.outcome === 'ok' ? (product.value?.name ?? null) : null,
-			}
+			if (product.outcome !== 'ok') return { name: null, status: 'unavailable' }
+			return product.value === null
+				? { name: null, status: 'missing' }
+				: { name: product.value.name, status: 'found' }
 		}),
 }))
 ```
 
-- A call never throws for the owner's answer: it resolves to an outcome, `ok`, `denied`, `invalid_input`,
-  `unavailable`, `timeout` or `contract_violation`. Handle every one besides `ok`.
+- A call never throws for the owner's answer and never becomes an HTTP error by itself: it resolves to an outcome,
+  `ok`, `denied`, `invalid_input`, `unavailable`, `timeout` or `contract_violation`. Decide what each one answers, as
+  the example does: a missing product and an unreachable owner are different answers.
 - Exports are read-only and carry no per-user data. When the export you need does not exist, ask the owner
   application's maintainer. The platform writes `FABRIKA_CONNECT_*`; never read or set them.
 

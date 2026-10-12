@@ -1419,3 +1419,16 @@ ADR-0022 or ADR-0050.
   test holds the two equal); the seed's limits (text markers break a `CHECK`, use an `ENUM`; a required foreign key
   outside the chain) in `tests.md`. The name rules are stated as defense in depth with the runtime role as the
   boundary (WU12 landed), so the skill has no "until WU12".
+- **WU10 review round 1.** (1) The release staged every `skill/SKILL.md` and threw on the builder's, which has no
+  version: only `@fabrika/app`'s skill is staged (`stagePackage`, `stagedAppSkill`), and the whole public set is
+  staged in a witness. (2) **Raw SQL is sound by construction:** `${ctx.sql.scope(capability, table, alias?)}`
+  (`packages/db/src/sql.ts`, `scopeTerms` in `store.ts`) renders the capability's whole predicate as bound values — a
+  `Ref`'s object and every chain link, a `Within`'s values and container grants, `(true)` for `all`, `(false)` when
+  empty — and refuses a table it does not reach; the fragment is a private class bound to its site, the one
+  interpolation that is not a single parameter. The access fixture's reports written with it pass the in+sql leak
+  case, and the skill shows it as the way to scope a statement. (3) The staged reference files' `@fabrika/*` ranges
+  are the released version. (5) `testKit` answers a member directory from its own callers when no `membership` is
+  given (`testing/directory.ts`); a contract that writes through IAM still gets none, so `boot` still names the
+  transport. (4, 6–10) The skill states the connector CLI's Control credentials, the webhook's 30-day replay window
+  and crash gap, connector outcomes as no HTTP answer, sums' types and nulls, the `HttpError` statuses, and the
+  versioned and unversioned write answers.

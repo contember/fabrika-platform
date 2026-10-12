@@ -93,8 +93,9 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `where: input.status === undefined ? [] : [['status', '=', input.status]]`. There is no `is null` and no OR:
   write that in `ctx.sql`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
-- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` answers rows whose `count` and
-  `sum_<column>` are strings (Postgres `bigint`): convert them with `Number(…)`.
+- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` answers rows whose `count` is a
+  string (Postgres `bigint`): convert it with `Number(…)`. `sum_<column>` is text for an integer or `numeric` column,
+  a number for a floating-point one, and `null` over no rows; `min_`/`max_` are `null` over no rows too.
 
 ## Business rules: `logic.ts`
 
@@ -279,7 +280,7 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 					count(*) filter (where t.status <> 'done')::int as open,
 					count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
 				from tasks t
-				where t.org_id = ${ctx.target.value}
+				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
 					and (${status}::text is null or t.status::text = ${status})
 				group by t.assignee
 				order by t.assignee`
@@ -295,11 +296,17 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 ```
 
 - Every `${…}` is a bound parameter, never SQL text. Do not put one inside quotes or a comment.
-- **Scope the statement yourself**: `ctx.sql` has no scope predicate. Bind the capability's value
-  (`where t.org_id = ${ctx.target.value}`); the generated tests check that an `in` endpoint with `sql` leaks nothing
-  of another scope.
-- Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `count(*)` and `sum`
-  as text: cast them (`::int`), or the row is refused.
+- **Scope every statement with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.** `ctx.sql` has no scope
+  predicate of its own. The fragment is the capability's whole predicate on that table, as bound values: for a `Ref`
+  (`ctx.target` of `on` or `in`) the object's column and every link of its chain, so a project moved to another org
+  is out; for a `Within` (`ctx.within` of `over`) its values, each container grant on its own column, every row for a
+  global grant and none for an empty one. Write one per table the statement reads (`join projects p on … and
+  ${ctx.sql.scope(ctx.target, 'projects', 'p')}`). A table the capability does not reach is refused. Never scope by
+  hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in` endpoint with `sql`
+  leaks nothing of another scope.
+- Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
+  as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
+  fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
 - An optional filter is `(${value}::text is null or <column> = ${value})`.
 - One statement: `select`, `with`, `values`, plus `insert`, `update` and `delete` on a `'write'` site (a mutation, a
   job or a webhook). Refused before anything is sent: DDL, `SET`, `COPY`, transaction control, another schema, any

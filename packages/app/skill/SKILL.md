@@ -151,11 +151,12 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   (`ctx.db.within.<table>`). `ctx.target.value` is the id; there is no `.id`.
 - A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), or comes typed from
   `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
-- A mutation answers `Saved` (`{ id, version }`). `update` takes the columns it changes; `update` and `remove` take
-  `{ expectVersion }`, and a stale version is 409.
+- On a versioned table `insert` and `update` answer `Saved` (`{ id, version }`), and `update` and `remove` take
+  `{ expectVersion }` (a stale one is 409). `remove` answers nothing, so its endpoint answers `{ id }`. A table without
+  `version` answers `{ id }` and takes no version. `update` takes the columns it changes, at least one.
 - A precondition reads with `getForUpdate()` and throws `ConflictError`; the rule (`canClose`) is a pure function
-  of `logic.ts`. Throw only `ConflictError`, `NotFoundError` and `BadRequestError` of `@fabrika/app`; anything else
-  is a 500.
+  of `logic.ts`. For a business error throw `ConflictError` (409), `NotFoundError` (404) or `BadRequestError` (400) of
+  `@fabrika/app`. Its other `HttpError`s keep their status; any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
 - Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
@@ -163,15 +164,17 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 
 ## Off the road: declare it
 
-| What the handler needs         | Declare on the endpoint         | It gets                   |
-| ------------------------------ | ------------------------------- | ------------------------- |
-| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)    | `` ctx.sql(Row)`…` ``     |
-| rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>` |
-| another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`    |
-| a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`         |
-| a trigger, function or view    | its migration                   | —                         |
+| What the handler needs         | Declare on the endpoint         | It gets                                            |
+| ------------------------------ | ------------------------------- | -------------------------------------------------- |
+| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)    | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope` |
+| rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>`                          |
+| another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`                             |
+| a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
+| a trigger, function or view    | its migration                   | —                                                  |
 
-A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration marked
+Scope every raw statement with `${ctx.sql.scope(ctx.target, '<table>', '<alias>')}`: it binds the capability's whole
+predicate, chain included, as the handles apply it. A deviation is fine: declare it, and do not contort the code to
+avoid it. The approver sees every declaration marked
 "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only where
 they are declared. A query or an export declares only `'read'`.
 
@@ -224,7 +227,7 @@ Read the one you need before you write that part. Together they are one applicat
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
 - An application with share links, `creates` or member management fails its generated endpoint tests: the test kit
-  has no IAM stand-in yet. Ask the human before you add one.
+  stands in for IAM's member directory only. Ask the human before you add one.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.

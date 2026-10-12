@@ -41,12 +41,15 @@ export const markOverdue = app.cron('15 * * * *', {
 
 ```ts fabrika.contract.ts
 import { app } from './src/app-kit'
+import { comments } from './src/comments/endpoints'
+import { members } from './src/members/endpoints'
 import { markOverdue } from './src/overdue/endpoints'
 import { projects } from './src/projects/endpoints'
+import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks }),
+	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
 	jobs: { markOverdue },
 	health: c.health('/healthz'),
 }))

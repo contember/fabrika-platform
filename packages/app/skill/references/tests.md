@@ -122,6 +122,13 @@ if (postgres !== null) {
 				.toEqual({ id: task.id, version: 3 })
 		})
 
+		test("the member directory lists the org's members", async () => {
+			const listed = await memberApi.members.list({ orgId: 'acme' })
+			expect(listed.items.map((item) => item.principalId).sort()).toEqual(
+				[owner.id, member.id].sort(),
+			)
+		})
+
 		test('a caller of another org reaches nothing', async () => {
 			const project = await ownerApi.projects.create({
 				orgId: 'acme',
@@ -150,6 +157,11 @@ if (postgres !== null) {
   registers no test. A skip proves nothing: run with the variable set.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. `kind:
   'machine'` presents a `px_` key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- A member directory (`ctx.members.list()`) answers from the kit's own callers: everyone `testCaller` gave a
+  membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
+  `members.manage` holder). To list someone, make them a caller:
+  `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
+  management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`.
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
