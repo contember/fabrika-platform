@@ -960,3 +960,9 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   dimension (every candidate), which has no table scope a capability writes; the recipe says to ask.
 - **WU10b — `fromPage`** (`@fabrika/app`): `fromPage(Schema, page)` is `{ items: page.items.map(fromRow), next }`. The
   CRM's six list handlers use it: 400 → 386 hand-written server lines; 160 tests pass.
+- **WU10b review round 1.** (1) The intake job's batch took the first 50 undelivered rows and skipped a spent budget
+  only at its reservation, so 50 spent rows starved the rest; the query filters on the budget before its limit, in the
+  WU15 fixture and the recipe (`intake.test.ts`: 50 spent rows, then one that gets its link). (2) The skill's overdue
+  job re-checks its whole filter under the lock (`isOverdue` in `logic.ts`, with its test); the CRM's needs none, its
+  `due_on` is not writable. (3) The policy probe's stand-in forms collided with an inbox form named `probe`; the probe
+  now binds `withoutInboxes(tables)` (`@fabrika/db/testing`) and declares no form.
