@@ -4,7 +4,7 @@ import { type AppInput, type CreatePolicyInput, type OkResponse, type PolicyDto,
 import { contractPatternsProblem } from '../contract-rules'
 import { type RoleRow } from '../db'
 import { BUILTIN_ROLES } from '../roles'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 import { knownApps, rolePermissions } from './grant-support'
 
 function toPolicyDto(row: RoleRow): PolicyDto {
@@ -79,20 +79,15 @@ export async function createPolicyUseCase(c: AdminContext, input: CreatePolicyIn
 	if (existing) {
 		return fail(409, `a role with key '${key}' already exists`)
 	}
-	const row = await c.services.repositories.appSchema.upsertRole({
-		app,
-		roleKey: key,
-		name: parsed.name,
-		description: parsed.description,
-		permissions: parsed.permissions,
-		origin: 'custom',
-	})
-	await adminAudit(c, {
-		action: 'iam.policy.create',
-		resourceType: 'policy',
-		resourceId: `${app}/${key}`,
-		metadata: { app, key, permissions: parsed.permissions },
-	})
+	const row = await c.services.repositories.appSchema.upsertRole(
+		{ app, roleKey: key, name: parsed.name, description: parsed.description, permissions: parsed.permissions, origin: 'custom' },
+		adminEvent(c, {
+			action: 'iam.policy.create',
+			resourceType: 'policy',
+			resourceId: `${app}/${key}`,
+			metadata: { app, key, permissions: parsed.permissions },
+		}),
+	)
 	return toPolicyDto(row)
 }
 
@@ -110,20 +105,15 @@ export async function updatePolicyUseCase(c: AdminContext, input: UpdatePolicyIn
 	if (!parsed.ok) {
 		return fail(400, parsed.message)
 	}
-	const row = await c.services.repositories.appSchema.upsertRole({
-		app,
-		roleKey: key,
-		name: parsed.name,
-		description: parsed.description,
-		permissions: parsed.permissions,
-		origin: 'custom',
-	})
-	await adminAudit(c, {
-		action: 'iam.policy.update',
-		resourceType: 'policy',
-		resourceId: `${app}/${key}`,
-		metadata: { app, key, permissions: parsed.permissions },
-	})
+	const row = await c.services.repositories.appSchema.upsertRole(
+		{ app, roleKey: key, name: parsed.name, description: parsed.description, permissions: parsed.permissions, origin: 'custom' },
+		adminEvent(c, {
+			action: 'iam.policy.update',
+			resourceType: 'policy',
+			resourceId: `${app}/${key}`,
+			metadata: { app, key, permissions: parsed.permissions },
+		}),
+	)
 	return toPolicyDto(row)
 }
 
@@ -137,12 +127,10 @@ export async function deletePolicyUseCase(c: AdminContext, input: { app: string;
 	if (existing?.origin !== 'custom') {
 		return fail(404, 'custom policy not found')
 	}
-	await c.services.repositories.appSchema.deleteRole(app, key)
-	await adminAudit(c, {
-		action: 'iam.policy.delete',
-		resourceType: 'policy',
-		resourceId: `${app}/${key}`,
-		metadata: { app, key },
-	})
+	await c.services.repositories.appSchema.deleteRole(
+		app,
+		key,
+		adminEvent(c, { action: 'iam.policy.delete', resourceType: 'policy', resourceId: `${app}/${key}`, metadata: { app, key } }),
+	)
 	return { ok: true }
 }

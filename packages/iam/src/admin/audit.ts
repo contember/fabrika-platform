@@ -39,6 +39,7 @@ function toAuthLogDto(row: AuthLogRow): AuthLogDto {
 		credentialId: row.credential_id,
 		decision: row.decision,
 		reason: row.reason,
+		privileged: row.privileged === 1,
 		createdAt: row.created_at,
 	}
 }

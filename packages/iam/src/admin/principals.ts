@@ -13,7 +13,7 @@ import {
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import { resolvePermissionsAt } from '../resolve'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 import { toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
 
@@ -118,19 +118,17 @@ export async function invitePrincipalUseCase(c: AdminContext, input: InviteReque
 	let principal: PrincipalRow
 	try {
 		// The mailbox is what identifies the human; the spelling the admin typed survives as the label.
-		principal = await c.services.repositories.principals.inviteUser(normalizedEmail, email)
+		principal = await c.services.repositories.principals.inviteUser(
+			normalizedEmail,
+			email,
+			(principalId) => adminEvent(c, { action: 'iam.principal.invite', resourceType: 'principal', resourceId: principalId, metadata: { email } }),
+		)
 	} catch (cause) {
 		if ((await c.services.repositories.passwords.lookupActionUser(normalizedEmail)).status !== 'missing') {
 			return fail(409, 'a user with this email already exists')
 		}
 		throw cause
 	}
-	await adminAudit(c, {
-		action: 'iam.principal.invite',
-		resourceType: 'principal',
-		resourceId: principal.id,
-		metadata: { email },
-	})
 	return toPrincipalListItem(principal)
 }
 
@@ -140,12 +138,17 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 	if (!row) {
 		return fail(404, 'principal not found')
 	}
+	// Recorded only when it changes something: disabling a disabled principal is not a change.
 	if (disabled) {
-		await c.services.repositories.principals.disablePrincipal(id)
-		await adminAudit(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id })
+		await c.services.repositories.principals.disablePrincipal(
+			id,
+			adminEvent(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id }),
+		)
 	} else {
-		await c.services.repositories.principals.enablePrincipal(id)
-		await adminAudit(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id })
+		await c.services.repositories.principals.enablePrincipal(
+			id,
+			adminEvent(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id }),
+		)
 	}
 	const updated = await c.services.repositories.principals.getPrincipalById(id)
 	if (!updated) return fail(404, 'principal not found')

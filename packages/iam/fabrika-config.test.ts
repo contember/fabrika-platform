@@ -19,6 +19,8 @@ const ENV_NAMES = [
 	'FABRIKA_IAM_HOSTNAME',
 	'FABRIKA_IAM_ADMIN_AUDIENCES',
 	'FABRIKA_IAM_OAUTH_CONFIG',
+	'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
+	'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_RESEND_API_KEY',
@@ -57,6 +59,8 @@ describe('IAM resource graph', () => {
 		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
 			'FABRIKA_IAM_OAUTH_CONFIG',
+			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
+			'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
@@ -136,6 +140,20 @@ describe('IAM resource graph', () => {
 		expect(named.options.vars?.['ADMIN_AUDIENCES']).toBe('vozka,second-gateway')
 	})
 
+	test('passes the retention settings only where the deploy names them', () => {
+		const unset = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
+		expect(unset.options.vars?.['AUTH_LOG_RETENTION_DAYS']).toBeUndefined()
+		expect(unset.options.vars?.['AUDIT_RETENTION_DAYS']).toBeUndefined()
+
+		const named = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+			...REMOTE_SOURCE,
+			FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '14',
+			FABRIKA_IAM_AUDIT_RETENTION_DAYS: '365',
+		})
+		expect(named.options.vars?.['AUTH_LOG_RETENTION_DAYS']).toBe('14')
+		expect(named.options.vars?.['AUDIT_RETENTION_DAYS']).toBe('365')
+	})
+
 	test('supports password-only authentication without OIDC configuration', () => {
 		const source = {
 			FABRIKA_IAM_OIDC_ENABLED: 'false',
@@ -151,6 +169,8 @@ describe('IAM resource graph', () => {
 		expect(iamPipelineVars(source)).toEqual([
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
 			'FABRIKA_IAM_OAUTH_CONFIG',
+			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
+			'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',

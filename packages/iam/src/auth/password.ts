@@ -11,7 +11,7 @@ import { hashToken } from '../secret'
 import { type Config, type Services } from '../services'
 import { handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
 import { authError, methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
-import { issueSession } from './sessions'
+import { issueSession, refuseLogin } from './sessions'
 
 const LOGIN_WINDOW_SECONDS = 15 * 60
 
@@ -160,17 +160,15 @@ export async function handlePasswordLogin(
 			recordLoginFailure(services, globalKey, GLOBAL_MAX_ATTEMPTS),
 		])
 	}
-	ctx.waitUntil(
-		services.repositories.audit.writeAuthLog({
+	return refuseLogin(
+		services,
+		{
 			requestId,
-			app: 'propustka',
-			kind: 'authenticate',
 			principalId: lookup.status === 'found' ? lookup.principal.id : null,
-			decision: 'deny',
 			reason: blocked ? 'password_throttled' : 'password_invalid',
-		}),
+		},
+		() => loginPage({ ...retry, error: 'Invalid email or password.' }),
 	)
-	return loginPage({ ...retry, error: 'Invalid email or password.' })
 }
 
 async function recordLoginFailure(services: Services, loginKeyHash: string, maxAttempts: number): Promise<void> {

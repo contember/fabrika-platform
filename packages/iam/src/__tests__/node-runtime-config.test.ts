@@ -96,4 +96,25 @@ describe('the IAM Bun runtime environment', () => {
 		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is required')
 		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('FABRIKA_EMAIL_PROVIDER must be none or resend')
 	})
+
+	test('maps the retention settings, and a bad value refuses the boot', async () => {
+		const runtime = createRuntime({
+			...base,
+			FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
+			FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '14',
+			FABRIKA_IAM_AUDIT_RETENTION_DAYS: '365',
+		})
+		try {
+			expect(runtime.env.AUTH_LOG_RETENTION_DAYS).toBe('14')
+			expect(runtime.env.AUDIT_RETENTION_DAYS).toBe('365')
+		} finally {
+			await runtime.shutdown()
+		}
+
+		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL }
+		expect(() => createRuntime({ ...source, FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '30d' })).toThrow(
+			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS must be a whole number',
+		)
+		expect(() => createRuntime({ ...source, FABRIKA_IAM_AUDIT_RETENTION_DAYS: '0' })).toThrow('FABRIKA_IAM_AUDIT_RETENTION_DAYS must be a whole number')
+	})
 })

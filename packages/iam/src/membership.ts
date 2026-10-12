@@ -37,7 +37,15 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { resolveCaller } from './auth'
 import { contractGrantProblem } from './contract-rules'
-import { type AppScopeRow, type DelegatedEndpointRow, type InvitationRow, type PrincipalRow, principalStatus, type RoleRow } from './db'
+import {
+	type AppScopeRow,
+	type AuditEventInput,
+	type DelegatedEndpointRow,
+	type InvitationRow,
+	type PrincipalRow,
+	principalStatus,
+	type RoleRow,
+} from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env, RequestContext } from './env'
 import { invitationEmail } from './invitation-email'
@@ -191,19 +199,13 @@ async function roleAuthorityProblem(
 	return contract === null ? null : invalid(contract)
 }
 
-/** Record a decided change. Kept alive past the answer, and a failed write is logged, never surfaced. */
-function audit(
-	services: Services,
-	ctx: RequestContext,
+/** The record of a change the caller made. The repository writes it in the change's own transaction. */
+function memberEvent(
 	caller: MemberCaller,
 	requestId: string,
 	event: { action: string; resourceType: string; resourceId: string; metadata?: unknown },
-): void {
-	ctx.waitUntil(
-		services.repositories.audit
-			.writeAuditEvent({ requestId, principalId: caller.principal.id, principalLabel: caller.principal.label, app: caller.app, ...event })
-			.catch((err: unknown) => logError('membership audit write failed', err)),
-	)
+): AuditEventInput {
+	return { requestId, principalId: caller.principal.id, principalLabel: caller.principal.label, app: caller.app, ...event }
 }
 
 function scopeId(scope: Scope): string {
@@ -272,13 +274,15 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
 	})
 	if (contract !== null) return invalid(contract)
 	const scope: Scope = { type: input.dimension, value: uuidv7() }
-	await services.repositories.membership.createScope({ app: caller.app, scope, createdBy: caller.principal.id, roleKey: role.role_key })
-	audit(services, ctx, caller, input.requestId, {
-		action: 'iam.scope.create',
-		resourceType: 'scope',
-		resourceId: scopeId(scope),
-		metadata: { role: role.role_key, endpoint: spent.endpoint.endpoint },
-	})
+	await services.repositories.membership.createScope(
+		{ app: caller.app, scope, createdBy: caller.principal.id, roleKey: role.role_key },
+		memberEvent(caller, input.requestId, {
+			action: 'iam.scope.create',
+			resourceType: 'scope',
+			resourceId: scopeId(scope),
+			metadata: { role: role.role_key, endpoint: spent.endpoint.endpoint },
+		}),
+	)
 	return { ok: true, scope, role: role.role_key }
 }
 
@@ -310,30 +314,23 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 		if (target === null || target.type !== 'user') {
 			return NOT_FOUND
 		}
-		const created = await services.repositories.membership.grantMembershipRole({
-			app: caller.app,
-			principalId: target.id,
-			roleKey: role.role_key,
-			scope: input.scope,
-			grantedBy: caller.principal.id,
-		})
-		if (created !== null) {
-			audit(services, ctx, caller, input.requestId, {
+		await services.repositories.membership.grantMembershipRole(
+			{ app: caller.app, principalId: target.id, roleKey: role.role_key, scope: input.scope, grantedBy: caller.principal.id },
+			memberEvent(caller, input.requestId, {
 				action: 'iam.member.assign',
 				resourceType: 'scope',
 				resourceId: scopeId(input.scope),
 				metadata: { principalId: target.id, role: role.role_key },
-			})
-		}
+			}),
+		)
 		return { ok: true, assigned: { principalId: target.id, role: role.role_key } }
 	}
 
-	return invite(services, ctx, caller, input, role, input.member.email)
+	return invite(services, caller, input, role, input.member.email)
 }
 
 async function invite(
 	services: Services,
-	ctx: RequestContext,
 	caller: MemberCaller,
 	input: AssignMemberInput,
 	role: RoleRow,
@@ -355,7 +352,13 @@ async function invite(
 		email,
 		invitedBy: caller.principal.id,
 		expiresAt: unixNow() + INVITATION_TTL_SECONDS,
-	})
+	}, (invitationId) =>
+		memberEvent(caller, input.requestId, {
+			action: 'iam.member.invite',
+			resourceType: 'scope',
+			resourceId: scopeId(input.scope),
+			metadata: { invitationId, role: role.role_key },
+		}))
 	if (created) {
 		const url = new URL(INVITATION_ACCEPT_PATH, services.config.issuer)
 		// A fragment never reaches an access log; the page copies it into its POST form in the browser.
@@ -371,15 +374,17 @@ async function invite(
 			}))
 		} catch (err) {
 			logError(`invitation email failed for request '${input.requestId}'`, err)
-			await services.repositories.membership.deleteInvitation(invitation.id)
+			await services.repositories.membership.deleteInvitation(
+				invitation.id,
+				memberEvent(caller, input.requestId, {
+					action: 'iam.member.uninvite',
+					resourceType: 'scope',
+					resourceId: scopeId(input.scope),
+					metadata: { invitationId: invitation.id, role: role.role_key, reason: 'delivery_failed' },
+				}),
+			)
 			return { ok: false, reason: 'delivery_failed' }
 		}
-		audit(services, ctx, caller, input.requestId, {
-			action: 'iam.member.invite',
-			resourceType: 'scope',
-			resourceId: scopeId(input.scope),
-			metadata: { invitationId: invitation.id, role: role.role_key },
-		})
 	}
 	return { ok: true, invited: { invitationId: invitation.id, role: invitation.role_key, expiresAt: invitation.expires_at } }
 }
@@ -409,14 +414,15 @@ export async function revokeMember(services: Services, env: CallerEnv, ctx: Requ
 		const role = await services.repositories.appSchema.getRole(caller.app, invitation.role_key)
 		const authority = role === null ? null : await roleAuthorityProblem(services, actor, input.scope, role)
 		if (authority !== null) return authority
-		if (await services.repositories.membership.revokeInvitation(invitation.id)) {
-			audit(services, ctx, caller, input.requestId, {
+		await services.repositories.membership.revokeInvitation(
+			invitation.id,
+			memberEvent(caller, input.requestId, {
 				action: 'iam.member.uninvite',
 				resourceType: 'scope',
 				resourceId: scopeId(input.scope),
 				metadata: { invitationId: invitation.id, role: invitation.role_key },
-			})
-		}
+			}),
+		)
 		return { ok: true }
 	}
 
@@ -439,29 +445,24 @@ export async function revokeMember(services: Services, env: CallerEnv, ctx: Requ
 		if (authority !== null) return authority
 	}
 
-	const creator = manage.dimension.creator_role
-	const ordered = [...roles].sort((a, b) => Number(b.role_key === creator) - Number(a.role_key === creator))
-	const removed: string[] = []
-	for (const role of ordered) {
-		if (role.role_key === creator) {
-			if (!(await services.repositories.membership.deleteCreatorGrantUnlessLast(caller.app, target, role.role_key, input.scope))) {
-				const stillHeld = (await services.repositories.membership.listRoleGrantsAt(caller.app, target, input.scope))
-					.some((grant) => grant.role_key === role.role_key)
-				if (stillHeld) return { ok: false, reason: 'last_creator' }
-				continue
-			}
-			removed.push(role.role_key)
-		} else if (await services.repositories.membership.deleteRoleGrant(caller.app, target, role.role_key, input.scope)) {
-			removed.push(role.role_key)
-		}
+	if (roles.length === 0) {
+		return { ok: true }
 	}
-	if (removed.length > 0) {
-		audit(services, ctx, caller, input.requestId, {
-			action: 'iam.member.revoke',
-			resourceType: 'scope',
-			resourceId: scopeId(input.scope),
-			metadata: { principalId: target, roles: removed },
-		})
+	const creator = manage.dimension.creator_role
+	const removed = await services.repositories.membership.revokeMemberRoles(
+		{ app: caller.app, principalId: target, scope: input.scope, roles: roles.map((role) => role.role_key), creatorRole: creator },
+		(roleKey) =>
+			memberEvent(caller, input.requestId, {
+				action: 'iam.member.revoke',
+				resourceType: 'scope',
+				resourceId: scopeId(input.scope),
+				metadata: { principalId: target, role: roleKey },
+			}),
+	)
+	if (creator !== null && roles.some((role) => role.role_key === creator) && !removed.includes(creator)) {
+		const stillHeld = (await services.repositories.membership.listRoleGrantsAt(caller.app, target, input.scope))
+			.some((grant) => grant.role_key === creator)
+		if (stillHeld) return { ok: false, reason: 'last_creator' }
 	}
 	return { ok: true }
 }
@@ -527,7 +528,12 @@ export type AcceptInvitationOutcome =
  * against its permissions now, and its assigning role once more inside the write that consumes the
  * invitation, so an invitation outlives no revocation of the person who sent it.
  */
-export async function acceptInvitation(services: Services, principal: PrincipalRow, token: string): Promise<AcceptInvitationOutcome> {
+export async function acceptInvitation(
+	services: Services,
+	principal: PrincipalRow,
+	token: string,
+	requestId: string,
+): Promise<AcceptInvitationOutcome> {
 	const invitation = await services.repositories.membership.getInvitationByHash(await hashToken(token))
 	const now = unixNow()
 	if (invitation === null || invitation.accepted_at !== null || invitation.revoked_at !== null || invitation.expires_at <= now) {
@@ -548,7 +554,16 @@ export async function acceptInvitation(services: Services, principal: PrincipalR
 		return { ok: false, reason: 'not_allowed' }
 	}
 	const assigners = role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
-	const accepted = await services.repositories.membership.acceptInvitation(invitation, principal.id, assigners)
+	const accepted = await services.repositories.membership.acceptInvitation(invitation, principal.id, assigners, {
+		requestId,
+		principalId: principal.id,
+		principalLabel: principal.label,
+		app: invitation.app,
+		action: 'iam.member.accept',
+		resourceType: 'scope',
+		resourceId: scopeId(scope),
+		metadata: { invitationId: invitation.id, role: invitation.role_key },
+	})
 	if (accepted !== 'accepted') {
 		return { ok: false, reason: accepted === 'not_allowed' ? 'not_allowed' : 'invalid' }
 	}
@@ -611,17 +626,17 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 		expiresAt,
 		grants: grants.map((action) => ({ action, scopeType: object.type, scopeValue: object.value })),
 		link: { mount: mount.mount, chain: input.chain.map((scope) => ({ type: scope.type, value: scope.value })) },
-	})
+	}, (credentialId) =>
+		memberEvent(caller, input.requestId, {
+			action: 'iam.link.issue',
+			resourceType: 'credential',
+			resourceId: credentialId,
+			metadata: { mount: mount.mount, chain: input.chain, days: input.days },
+		}))
 	if (id === null) {
 		// A reconcile removed the mount between the checks above and the write.
 		return invalid(`unknown link mount '${input.mount}'`)
 	}
-	audit(services, ctx, caller, input.requestId, {
-		action: 'iam.link.issue',
-		resourceType: 'credential',
-		resourceId: id,
-		metadata: { mount: mount.mount, chain: input.chain, days: input.days },
-	})
 	return { ok: true, key, id, expiresAt }
 }
 
@@ -645,13 +660,14 @@ export async function revokeLink(services: Services, env: CallerEnv, ctx: Reques
 		}
 		if (!manager) return NOT_ALLOWED
 	}
-	if (await services.repositories.credentials.revokeCredential(credential.id)) {
-		audit(services, ctx, caller, input.requestId, {
+	await services.repositories.credentials.revokeCredential(
+		credential.id,
+		memberEvent(caller, input.requestId, {
 			action: 'iam.link.revoke',
 			resourceType: 'credential',
 			resourceId: credential.id,
 			metadata: { mount: credential.link_mount },
-		})
-	}
+		}),
+	)
 	return { ok: true }
 }

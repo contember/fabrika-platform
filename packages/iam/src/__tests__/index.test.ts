@@ -114,8 +114,9 @@ class SqliteD1 implements D1Database {
 
 	async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
 		const out: D1Result<T>[] = []
+		// D1 answers every statement of a batch with its rows, so a RETURNING inside one is readable.
 		for (const s of statements) {
-			out.push(await s.run<T>())
+			out.push(await s.all<T>())
 		}
 		return out
 	}

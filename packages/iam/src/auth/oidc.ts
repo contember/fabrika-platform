@@ -9,7 +9,7 @@ import { readCookie, serializeCookie } from './cookies'
 import { type Handoff, handoffOf, handoffRedirectOr, readHandoff } from './handoff'
 import { authError, redirectHeaders, safeRedirect } from './http'
 import { type AuthEnv, authErrorEndingFlight, decodeFlight, encodeFlight, OIDC_COOKIE, OIDC_TTL_SECONDS } from './oidc-flight'
-import { issueSession } from './sessions'
+import { issueSession, refuseLogin } from './sessions'
 
 export async function handleOidcStart(request: Request, services: Services, env: AuthEnv): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
@@ -95,7 +95,7 @@ export async function handleCallback(
 		const known = (await services.repositories.principals.getUserByExternalId(identity.sub))
 			?? (await services.repositories.principals.getUserByEmail(identity.email))
 		if (!known) {
-			return refuse('login refused (not allowed)', 403)
+			return refuseLogin(services, { requestId, principalId: null, reason: 'oidc_not_admitted' }, () => refuse('login refused (not allowed)', 403))
 		}
 	}
 
@@ -103,7 +103,11 @@ export async function handleCallback(
 	// keyed on the IdP `sub` and verified email.
 	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email)
 	if (!resolved.ok) {
-		return refuse(`login refused (${resolved.reason})`, 403)
+		return refuseLogin(
+			services,
+			{ requestId, principalId: null, reason: `oidc_${resolved.reason}` },
+			() => refuse(`login refused (${resolved.reason})`, 403),
+		)
 	}
 
 	// Re-validate the handoff on the way back: the flight is ours (signature-checked), but the registry

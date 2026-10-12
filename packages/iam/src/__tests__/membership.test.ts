@@ -358,10 +358,10 @@ describe('members.assign by email: an invitation only the verified mailbox can a
 		const invitee = await f.person('invitee')
 		const principal = await f.repositories.principals.getPrincipalById(invitee.id)
 		if (principal === null) throw new Error('fixture')
-		const accepted = await acceptInvitation(f.services, principal, email.lastToken())
+		const accepted = await acceptInvitation(f.services, principal, email.lastToken(), 'accept-req')
 		expect(accepted.ok).toBe(true)
 		expect(await rolesOf(f, invitee, scope)).toEqual(['editor'])
-		expect(await acceptInvitation(f.services, principal, email.lastToken())).toEqual({ ok: false, reason: 'invalid' })
+		expect(await acceptInvitation(f.services, principal, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'invalid' })
 	})
 
 	test('a principal that does not own the mailbox cannot accept, even holding the link', async () => {
@@ -372,7 +372,7 @@ describe('members.assign by email: an invitation only the verified mailbox can a
 		await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })
 		const forwardedTo = await f.repositories.principals.getPrincipalById((await f.person('colleague')).id)
 		if (forwardedTo === null) throw new Error('fixture')
-		expect(await acceptInvitation(f.services, forwardedTo, email.lastToken())).toEqual({ ok: false, reason: 'wrong_principal' })
+		expect(await acceptInvitation(f.services, forwardedTo, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'wrong_principal' })
 	})
 
 	test('an invitation expires', async () => {
@@ -388,7 +388,7 @@ describe('members.assign by email: an invitation only the verified mailbox can a
 		const realNow = Date.now
 		Date.now = () => realNow() + 8 * 24 * 60 * 60 * 1000
 		try {
-			expect(await acceptInvitation(f.services, late, email.lastToken())).toEqual({ ok: false, reason: 'invalid' })
+			expect(await acceptInvitation(f.services, late, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'invalid' })
 		} finally {
 			Date.now = realNow
 		}
@@ -406,7 +406,7 @@ describe('members.assign by email: an invitation only the verified mailbox can a
 		await f.repositories.membership.deleteRoleGrant(APP, owner.id, 'owner', scope)
 		const invitee = await f.repositories.principals.getPrincipalById((await f.person('invitee')).id)
 		if (invitee === null) throw new Error('fixture')
-		expect(await acceptInvitation(f.services, invitee, email.lastToken())).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 
 	test('without an email service an address cannot be invited, and an existing principal still can be assigned', async () => {
@@ -474,7 +474,7 @@ describe('members.revoke', () => {
 		expect(await revoke(f, owner, scope, { invitationId: invited.invited.invitationId })).toEqual({ ok: true })
 		const invitee = await f.repositories.principals.getPrincipalById((await f.person('invitee')).id)
 		if (invitee === null) throw new Error('fixture')
-		expect(await acceptInvitation(f.services, invitee, email.lastToken())).toEqual({ ok: false, reason: 'invalid' })
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'invalid' })
 	})
 })
 
@@ -797,7 +797,7 @@ describe('review round 1', () => {
 		const invitee = await f.repositories.principals.getPrincipalById(person.id)
 		if (invitee === null) throw new Error('fixture')
 		removing.removeBeforeAcceptance = { app: APP, principalId: owner.id, roleKey: 'owner', scope }
-		expect(await acceptInvitation(f.services, invitee, email.lastToken())).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
 		expect(await rolesOf(f, person, scope)).toEqual([])
 		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])
@@ -847,7 +847,7 @@ describe('review round 1', () => {
 		await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })
 		const principal = await f.repositories.principals.getPrincipalById(invitee.id)
 		if (principal === null) throw new Error('fixture')
-		expect((await acceptInvitation(f.services, principal, email.lastToken())).ok).toBe(true)
+		expect((await acceptInvitation(f.services, principal, email.lastToken(), 'accept-req')).ok).toBe(true)
 		expect(await rolesOf(f, invitee, scope)).toEqual(['editor'])
 	})
 })

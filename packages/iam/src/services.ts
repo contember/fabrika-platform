@@ -7,6 +7,7 @@ import type { Env } from './env'
 import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
 import { OidcClient } from './oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
+import { parseRetention, type Retention } from './retention'
 
 /**
  * Pre-wired services + parsed config for every request. Handlers take `Services`
@@ -53,6 +54,8 @@ export interface Config {
 	}
 	/** The OAuth authorization server for MCP clients; null = off. */
 	readonly oauth: OAuthConfig | null
+	/** How long the maintenance cron keeps `auth_log` and `audit_events`. */
+	readonly retention: Retention
 	// ── propustka-native auth ──
 	/** propustka's own origin — the `iss` of minted tokens and the OIDC redirect base. */
 	readonly issuer: string
@@ -134,6 +137,7 @@ export function buildServices(env: Env): Services {
 				password: { enabled: passwordEnabled },
 			},
 			oauth: parseOAuthConfig(env.OAUTH_CONFIG),
+			retention: parseRetention({ authLogDays: env.AUTH_LOG_RETENTION_DAYS, auditDays: env.AUDIT_RETENTION_DAYS }),
 			issuer: env.ISSUER,
 		},
 	}

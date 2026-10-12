@@ -11,16 +11,18 @@
 import type { Env, RequestContext } from './env'
 import { buildServices } from './services'
 
+const DAY_SECONDS = 24 * 60 * 60
+
 /**
- * Retention for the tables that grow without bound and are referenced by no foreign key. Everything
- * else — `audit_events` above all — is kept: an audit trail that expires is not one.
+ * Retention for the transient tables. `auth_log` and `audit_events` follow the operator's setting
+ * (`Config.retention`, `src/retention.ts`): `auth_log` defaults to 30 days, and `audit_events` are kept unless the
+ * operator set a retention.
  */
-export const AUTH_LOG_RETENTION_SECONDS = 30 * 24 * 60 * 60 // 30 days
 export const PASSWORD_TRANSIENT_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days
 export const INVITATION_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days past expiry
 
 /**
- * Prune old auth-log rows, password action tokens, login throttles, spent handoff codes and delegation
+ * Prune old auth-log rows, audit rows past an operator's retention, password action tokens, login throttles, spent handoff codes and delegation
  * grants, old invitations, and dead sessions. Registered through `waitUntil` because a Worker scheduled
  * handler that returns before its writes settle is cut off; in a process the supervised promise means a
  * failure is logged rather than fatal.
@@ -28,11 +30,13 @@ export const INVITATION_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days past expi
 export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = Date.now()): void {
 	const services = buildServices(env)
 	const nowSeconds = Math.floor(now / 1000)
+	const { authLogDays, auditDays } = services.config.retention
 	ctx.waitUntil(
 		Promise.all([
 			services.repositories.device.prune(nowSeconds),
 			services.repositories.oauth.prune(nowSeconds),
-			services.repositories.audit.pruneAuthLog(nowSeconds - AUTH_LOG_RETENTION_SECONDS),
+			services.repositories.audit.pruneAuthLog(nowSeconds - authLogDays * DAY_SECONDS),
+			auditDays === null ? Promise.resolve(0) : services.repositories.audit.pruneAuditEvents(nowSeconds - auditDays * DAY_SECONDS),
 			services.repositories.passwords.pruneActionTokens(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
 			services.repositories.passwords.pruneLoginThrottles(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
 			// Codes live two minutes and are single-use, so this only sweeps ones nobody redeemed.

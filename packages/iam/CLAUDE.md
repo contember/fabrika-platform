@@ -284,6 +284,31 @@ fails if that stops being true — it is the guard, not documentation of one.
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding
   the session cookie and the single-use handoff code.
+- **EVERY IAM-OWNED CHANGE WRITES ITS `audit_events` ROW IN THE CHANGE'S OWN BATCH** (`auditEventStatement`,
+  `repositories/audit.ts`). A use case builds the record (`adminEvent`, `memberEvent`) and hands it to the repository
+  that makes the change, or composes several repositories' statement builders into one `audit.commit([...])`. A failed
+  insert rolls the change back; never write a change's record afterwards or in `waitUntil`. A guarded change records
+  itself only where its guard holds: the record is an `INSERT … SELECT … WHERE <condition>`, and a condition read
+  BEFORE the change sits behind a row-locking no-op UPDATE first in the batch, or two concurrent Postgres
+  transactions both read it true (`durable-audit.test.ts` fails without the lock). A no-op — a held role, a revoked
+  session, a disabled principal — writes no row. A role revocation writes one row per role it removed.
+  `writeAuditEvent` alone is only for rows that record no change of IAM's: an application's `audit` event, an admin's
+  access, a failed email delivery. `IamRpc.audit` stays best-effort (backlog 71).
+- **A LOGIN, A REFUSED LOGIN AND A LOGOUT WRITE `auth_log` BEFORE THE ANSWER.** `createSession` takes the login's row and
+  `revokeSessionByHash` writes the `logout` row from the session it ends, each in the session's batch; a refused
+  password or OIDC login goes through `refuseLogin`. A row that cannot be written answers 503 and opens or ends no
+  session. A login of a principal holding `iam.admin` at IAM is `privileged = 1`. Mint rows (`mintToken`,
+  `mintFromKey`, the handoff exchange, the workload token) are not logins and stay in `waitUntil`.
+- **EVERY `/admin/*` REQUEST OF AN INSTALLATION ADMIN WRITES ONE `iam.admin.access` ROW BEFORE IT RUNS** (`admin/access.ts`),
+  reads included: method, route template, and for `/admin/rpc` the procedure (a well-formed name, else null), under
+  the app the admin's credential was verified for (the console gateway, or `propustka` for a `px_` key). A request whose
+  access cannot be recorded answers 503 and does not run. A REST path that matches no operation, and an RPC caller
+  without `iam.admin`, used no privileged access and are not recorded. A mutation therefore writes two rows: the
+  access and the change.
+- **RETENTION IS AN IAM SETTING, IN DAYS** (`src/retention.ts`, `Config.retention`): `AUTH_LOG_RETENTION_DAYS` (deploy
+  var `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`, default 30) and `AUDIT_RETENTION_DAYS` (`FABRIKA_IAM_AUDIT_RETENTION_DAYS`,
+  unset keeps every audit row). Anything but a whole number of days from 1 to 99999 fails the boot, in
+  `buildServices` and in `node/runtime.ts`.
 - **`Origin: null` IS the same-origin case here, and `Sec-Fetch-Site` is what proves it.** Every page
   this service renders sets `Referrer-Policy: no-referrer`, under which Fetch serializes a form POST's
   origin as `null` and sends no `Referer` — so comparing `Origin` against the issuer refused EVERY
@@ -394,4 +419,4 @@ fails if that stops being true — it is the guard, not documentation of one.
   the read, because filtering afterwards made `limit` mean nothing. `cron.test.ts` asserts a row count
   per table, so adding or dropping a table the sweep owns is a visible test change.
 - Background work goes through the `WaitUntil` port, so a Worker's `scheduled` writes settle and a
-  process logs a failure instead of dying on an unhandled rejection.
+  process logs a failure instead of dying on an unhandled rejection. A change's audit row is never background work.

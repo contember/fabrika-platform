@@ -32,6 +32,7 @@ import { generateRequestId } from '../request-id'
 import { resolvePermissionsAt } from '../resolve'
 import type { Services } from '../services'
 import { getSigner, verifyAccessToken } from '../signing'
+import { recordAdminAccess } from './access'
 import { type AdminContext, AdminUseCaseError, getAppSchema, provisionApiKey, putAppSchema, revokeApiKey } from './handlers'
 import { error } from './http'
 
@@ -68,6 +69,8 @@ export interface ResolvedAdmin {
 	type: PrincipalType
 	label: string | null
 	permissions: PermissionEntry[]
+	/** The app the admin's credential was verified for: a registered console gateway, or IAM itself for a `px_` key. */
+	audience: string
 }
 
 export type AdminResolution =
@@ -114,7 +117,7 @@ export async function resolveAdmin(
 			return { ok: false, status: 403, reason: 'disabled' }
 		}
 		const permissions = await resolvePermissionsAt(services, principal, IAM_APP)
-		return { ok: true, admin: { id: principal.id, type: principal.type, label: principal.label, permissions } }
+		return { ok: true, admin: { id: principal.id, type: principal.type, label: principal.label, permissions, audience: claims.aud } }
 	}
 
 	const res = await resolveCaller(services, env, { app: IAM_APP, credential: creds.bearer, requestId: creds.requestId })
@@ -131,7 +134,10 @@ export async function resolveAdmin(
 	if (res.caller.type === undefined) {
 		return { ok: false, status: 403, reason: 'not_allowed' }
 	}
-	return { ok: true, admin: { id: res.caller.id, type: res.caller.type, label: res.caller.label, permissions: res.caller.permissions } }
+	return {
+		ok: true,
+		admin: { id: res.caller.id, type: res.caller.type, label: res.caller.label, permissions: res.caller.permissions, audience: res.verifiedApp },
+	}
 }
 
 /**
@@ -162,6 +168,10 @@ export async function handleAdmin(
 			return error(403, 'admin permission required')
 		}
 
+		const operation = adminOperation(request.method, url)
+		if (operation instanceof Response) {
+			return operation
+		}
 		const c: AdminContext = {
 			services,
 			request,
@@ -171,8 +181,13 @@ export async function handleAdmin(
 			requestId: creds.requestId,
 			ctx,
 		}
-
-		return await dispatch(c)
+		try {
+			await recordAdminAccess(services, resolution.admin, creds.requestId, { method: request.method, route: operation.route })
+		} catch (err) {
+			logError('admin access could not be recorded', err)
+			return error(503, 'admin access could not be recorded')
+		}
+		return await operation.run(c)
 	} catch (err) {
 		if (err instanceof AdminUseCaseError) {
 			return error(err.httpStatus, err.message)
@@ -182,15 +197,20 @@ export async function handleAdmin(
 	}
 }
 
+/** A matched `/admin/*` operation: its route template, which the access row records, and its handler. */
+interface AdminOperation {
+	readonly route: string
+	run(c: AdminContext): Promise<Response>
+}
+
 /**
- * Path segments after `/admin/`. Returns the matched handler, or 404/405.
+ * Path segments after `/admin/`. Returns the matched operation, or the 404/405 answer.
  *
  * FOUR operations, and the list is closed. Anything an operator does — principals, grants, roles,
  * policies, share links, sessions, audit — is `/admin/rpc` and only `/admin/rpc`.
  */
-async function dispatch(c: AdminContext): Promise<Response> {
-	const method = c.request.method
-	const segments = decodedSegments(c.url.pathname.replace(/^\/admin\/?/, ''))
+function adminOperation(method: string, url: URL): AdminOperation | Response {
+	const segments = decodedSegments(url.pathname.replace(/^\/admin\/?/, ''))
 	if (segments === null) {
 		return error(404, 'not found')
 	}
@@ -200,25 +220,27 @@ async function dispatch(c: AdminContext): Promise<Response> {
 		// GET|PUT /admin/apps/:app/schema — read / reconcile an app's vocabulary. The PUT is
 		// `reconcileSchema` in the app SDK, called from a DEPLOY: it runs outside the installation with
 		// nothing but a URL and a key, so a service binding is not available to it.
-		case 'apps':
+		case 'apps': {
 			if (segments.length !== 3 || idOrSub === undefined || action !== 'schema') {
 				return error(404, 'not found')
 			}
-			if (method === 'GET') return getAppSchema(c, idOrSub)
-			if (method === 'PUT') return putAppSchema(c, idOrSub)
+			const route = '/admin/apps/:app/schema'
+			if (method === 'GET') return { route, run: (c) => getAppSchema(c, idOrSub) }
+			if (method === 'PUT') return { route, run: (c) => putAppSchema(c, idOrSub) }
 			return methodNotAllowed()
+		}
 
 		// POST /admin/api-keys, DELETE /admin/api-keys/:principalId — the first machine caller.
 		// Bootstrap runs before any console exists, from a shell script or a stack bring-up holding the
 		// provisioning key, so it cannot be a browser-shaped RPC call either.
 		case 'api-keys':
 			if (idOrSub === undefined) {
-				return method === 'POST' ? provisionApiKey(c) : methodNotAllowed()
+				return method === 'POST' ? { route: '/admin/api-keys', run: provisionApiKey } : methodNotAllowed()
 			}
 			if (segments.length !== 2) {
 				return error(404, 'not found')
 			}
-			return method === 'DELETE' ? revokeApiKey(c, idOrSub) : methodNotAllowed()
+			return method === 'DELETE' ? { route: '/admin/api-keys/:principalId', run: (c) => revokeApiKey(c, idOrSub) } : methodNotAllowed()
 
 		default:
 			return error(404, 'not found')

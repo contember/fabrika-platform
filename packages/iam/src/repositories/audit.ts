@@ -1,4 +1,4 @@
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlQueryResult, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 import { unixNow } from './sql'
 
@@ -33,13 +33,18 @@ export interface AuthLogRow {
 	id: number | string
 	request_id: string
 	app: string
-	kind: 'authenticate'
+	kind: AuthLogKind
 	principal_id: string | null
 	credential_id: string | null
 	decision: 'allow' | 'deny'
 	reason: string | null
 	created_at: number
+	/** 1 when the session's principal held the installation-admin action at login; 0 otherwise. */
+	privileged: number
 }
+
+/** A login attempt (`authenticate`) or the end of a session (`logout`). */
+export type AuthLogKind = 'authenticate' | 'logout'
 
 // Inputs that audit/auth-log writes accept (the Worker stamps ids/timestamps).
 export interface AuditEventInput {
@@ -58,61 +63,100 @@ export interface AuditEventInput {
 export interface AuthLogInput {
 	requestId: string
 	app: string
-	kind: 'authenticate'
+	kind: AuthLogKind
 	principalId: string | null
 	credentialId?: string | null
 	decision: 'allow' | 'deny'
 	reason?: string | null
+	/** The principal held the installation-admin action when this session was opened. */
+	privileged?: boolean
+}
+
+/**
+ * The condition, evaluated inside a change's own batch, under which that change's audit row is written: a
+ * guarded change records itself only where its guard holds. A guard read BEFORE the change must sit behind a
+ * row lock taken earlier in the batch, or two concurrent Postgres transactions both read it true.
+ */
+export interface AuditCondition {
+	readonly sql: string
+	readonly binds: readonly unknown[]
+}
+
+const AUDIT_COLUMNS =
+	'(id, request_id, principal_id, principal_label, credential_id, app, action, resource_type, resource_id, diff, metadata, created_at)'
+
+/**
+ * The INSERT of one audit row, for the batch of the change it records: the row and the change commit together, and
+ * a failed insert rolls the change back. Diff and metadata are stored JSON-encoded.
+ */
+export function auditEventStatement(db: SqlDatabase, event: AuditEventInput, when?: AuditCondition): SqlStatement {
+	const values = [
+		uuidv7(),
+		event.requestId,
+		event.principalId,
+		event.principalLabel,
+		event.credentialId ?? null,
+		event.app,
+		event.action,
+		event.resourceType,
+		event.resourceId ?? null,
+		event.diff === undefined ? null : JSON.stringify(event.diff),
+		event.metadata === undefined ? null : JSON.stringify(event.metadata),
+		unixNow(),
+	]
+	if (when === undefined) {
+		return db.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values)
+	}
+	return db
+		.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${when.sql}`)
+		.bind(...values, ...when.binds)
+}
+
+/**
+ * The INSERT of one `auth_log` row. `id` is deliberately omitted — the column is auto-assigned (SQLite rowid alias /
+ * Postgres identity; see the note on `auth_log` in migration 0001). Everything else, `created_at` included, is bound.
+ */
+export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlStatement {
+	return db
+		.prepare(`INSERT INTO auth_log
+			(request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		.bind(
+			input.requestId,
+			input.app,
+			input.kind,
+			input.principalId,
+			input.credentialId ?? null,
+			input.decision,
+			input.reason ?? null,
+			input.privileged === true ? 1 : 0,
+			unixNow(),
+		)
 }
 
 export class AuditRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
-	/** Write a domain audit event. Diff/metadata stored verbatim (JSON-encoded). */
+	/** Write an audit row that records no change of IAM's own, such as an application's event or an admin's access. */
 	async writeAuditEvent(input: AuditEventInput): Promise<void> {
-		const id = uuidv7()
-		await this.db
-			.prepare(`INSERT INTO audit_events
-				(id, request_id, principal_id, principal_label, credential_id, app, action, resource_type, resource_id, diff, metadata, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-			.bind(
-				id,
-				input.requestId,
-				input.principalId,
-				input.principalLabel,
-				input.credentialId ?? null,
-				input.app,
-				input.action,
-				input.resourceType,
-				input.resourceId ?? null,
-				input.diff === undefined ? null : JSON.stringify(input.diff),
-				input.metadata === undefined ? null : JSON.stringify(input.metadata),
-				unixNow(),
-			)
-			.run()
+		await auditEventStatement(this.db, input).run()
+	}
+
+	async writeAuthLog(input: AuthLogInput): Promise<void> {
+		await authLogStatement(this.db, input).run()
 	}
 
 	/**
-	 * `id` is deliberately omitted — the column is auto-assigned (SQLite rowid alias / Postgres
-	 * identity; see the note on `auth_log` in migration 0001). Everything else, `created_at`
-	 * included, is bound here.
+	 * Run a change of several repositories and its audit rows as ONE batch, in order. Every statement must come from
+	 * the database this repository holds; a composition root builds all repositories over one.
 	 */
-	async writeAuthLog(input: AuthLogInput): Promise<void> {
-		await this.db
-			.prepare(`INSERT INTO auth_log
-				(request_id, app, kind, principal_id, credential_id, decision, reason, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-			.bind(
-				input.requestId,
-				input.app,
-				input.kind,
-				input.principalId,
-				input.credentialId ?? null,
-				input.decision,
-				input.reason ?? null,
-				unixNow(),
-			)
-			.run()
+	commit<T = Record<string, unknown>>(statements: SqlStatement[]): Promise<SqlQueryResult<T>[]> {
+		return this.db.batch<T>(statements)
+	}
+
+	/** The statement form of `auditEventStatement`, for a use case that composes a `commit`. */
+	eventStatement(event: AuditEventInput, when?: AuditCondition): SqlStatement {
+		return auditEventStatement(this.db, event, when)
 	}
 
 	// ── Audit reads (admin) ───────────────────────────────────────────────────
@@ -204,6 +248,12 @@ export class AuditRepository {
 			.prepare('DELETE FROM auth_log WHERE created_at < ?')
 			.bind(olderThanSeconds)
 			.run()
+		return result.meta.changes ?? 0
+	}
+
+	/** Prune `audit_events` older than `olderThanSeconds` — only where the operator set an audit retention. */
+	async pruneAuditEvents(olderThanSeconds: number): Promise<number> {
+		const result = await this.db.prepare('DELETE FROM audit_events WHERE created_at < ?').bind(olderThanSeconds).run()
 		return result.meta.changes ?? 0
 	}
 }

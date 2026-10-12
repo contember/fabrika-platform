@@ -21,7 +21,17 @@ export {
 	type LinkMountRow,
 	type RoleRow,
 } from './repositories/app-schema'
-export { type AuditEventInput, type AuditEventRow, AuditRepository, type AuthLogInput, type AuthLogRow } from './repositories/audit'
+export {
+	type AuditCondition,
+	type AuditEventInput,
+	type AuditEventRow,
+	auditEventStatement,
+	AuditRepository,
+	type AuthLogInput,
+	type AuthLogKind,
+	type AuthLogRow,
+	authLogStatement,
+} from './repositories/audit'
 export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { GrantRepository, type GrantRow } from './repositories/grants'

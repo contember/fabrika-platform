@@ -8,6 +8,7 @@ import { normalizeEmailIdentity } from '../../email-identity'
 import type { OAuthConfig } from '../../oauth-config'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
+import { DEFAULT_AUTH_LOG_RETENTION_DAYS, type Retention } from '../../retention'
 import { hashToken } from '../../secret'
 import { type Config, DEFAULT_ADMIN_AUDIENCES, platformAudiencesFor, type Services } from '../../services'
 import { getSigner } from '../../signing'
@@ -187,6 +188,8 @@ export interface MakeServicesOptions {
 	issuer?: string
 	/** The OAuth authorization server config (`OAUTH_CONFIG`). Defaults to off. */
 	oauth?: OAuthConfig | null
+	/** `auth_log` and `audit_events` retention. Defaults to IAM's: 30 days, audit kept. */
+	retention?: Retention
 }
 
 /**
@@ -213,6 +216,7 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 			password: { enabled: options.authentication?.password ?? false },
 		},
 		oauth: options.oauth ?? null,
+		retention: options.retention ?? { authLogDays: DEFAULT_AUTH_LOG_RETENTION_DAYS, auditDays: null },
 		issuer,
 	}
 	return {

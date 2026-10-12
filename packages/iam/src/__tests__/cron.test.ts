@@ -12,15 +12,18 @@
 
 import type { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
-import { AUTH_LOG_RETENTION_SECONDS, INVITATION_RETENTION_SECONDS, PASSWORD_TRANSIENT_RETENTION_SECONDS, runIamMaintenance } from '../cron'
+import { INVITATION_RETENTION_SECONDS, PASSWORD_TRANSIENT_RETENTION_SECONDS, runIamMaintenance } from '../cron'
 import { createIamRepositories } from '../db'
 import type { Env } from '../env'
 import { hashToken } from '../secret'
+import { buildServices } from '../services'
 import { createHarness, type Harness, seedUser } from './helpers/harness'
 
 const NOW_MS = 1_800_000_000_000
 const NOW = Math.floor(NOW_MS / 1000)
 const DAY = 24 * 60 * 60
+/** IAM's default `auth_log` retention, 30 days. */
+const AUTH_LOG_RETENTION_SECONDS = 30 * DAY
 
 /** The tables the sweep is responsible for, and how to count them. */
 const SWEPT_TABLES = [
@@ -46,8 +49,9 @@ function counts(sqlite: Database): Record<string, number> {
 	return out
 }
 
-function env(h: Harness): Env {
+function env(h: Harness, overrides: Partial<Env> = {}): Env {
 	return {
+		...overrides,
 		DB: {
 			prepare: () => {
 				throw new Error('unused')
@@ -279,5 +283,55 @@ describe('runIamMaintenance', () => {
 			delegation_grants: 1,
 			membership_invitations: 1,
 		})
+	})
+})
+
+describe('retention settings', () => {
+	/** One `auth_log` and one `audit_events` row per age, in days before NOW. */
+	function seedAges(h: Harness, ages: number[]): void {
+		for (const age of ages) {
+			h.sqlite.run(
+				`INSERT INTO auth_log (request_id, app, kind, principal_id, credential_id, decision, reason, created_at)
+					VALUES (?, 'opice', 'authenticate', NULL, NULL, 'allow', NULL, ?)`,
+				[`req-${age}`, NOW - age * DAY],
+			)
+			h.sqlite.run(
+				`INSERT INTO audit_events (id, request_id, principal_id, principal_label, app, action, resource_type, created_at)
+					VALUES (?, ?, NULL, 'seed', 'opice', 'seed.event', 'seed', ?)`,
+				[`audit-${age}`, `req-${age}`, NOW - age * DAY],
+			)
+		}
+	}
+
+	async function sweep(h: Harness, overrides: Partial<Env>): Promise<{ authLog: number; audit: number }> {
+		const settled: Promise<unknown>[] = []
+		runIamMaintenance(env(h, overrides), { waitUntil: (promise) => settled.push(promise) }, NOW_MS)
+		await Promise.all(settled)
+		const count = (table: string) => h.sqlite.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1
+		return { authLog: count('auth_log'), audit: count('audit_events') }
+	}
+
+	test('by default auth_log keeps 30 days and every audit row stays', async () => {
+		const h = createHarness()
+		seedAges(h, [6, 8, 29, 31, 400])
+		expect(await sweep(h, {})).toEqual({ authLog: 3, audit: 5 })
+	})
+
+	test('auth_log is pruned at the configured number of days', async () => {
+		const h = createHarness()
+		seedAges(h, [6, 8, 29, 31, 400])
+		expect(await sweep(h, { AUTH_LOG_RETENTION_DAYS: '7' })).toEqual({ authLog: 1, audit: 5 })
+	})
+
+	test('audit_events are pruned only where the operator set a retention, at that value', async () => {
+		const h = createHarness()
+		seedAges(h, [6, 8, 29, 31, 400])
+		expect(await sweep(h, { AUDIT_RETENTION_DAYS: '30' })).toEqual({ authLog: 3, audit: 3 })
+	})
+
+	test.each(['0', '-1', '7.5', '30d', 'thirty', '100000'])('a retention of %p refuses the boot', (value) => {
+		const h = createHarness()
+		expect(() => buildServices(env(h, { AUTH_LOG_RETENTION_DAYS: value }))).toThrow('AUTH_LOG_RETENTION_DAYS must be a whole number of days')
+		expect(() => buildServices(env(h, { AUDIT_RETENTION_DAYS: value }))).toThrow('AUDIT_RETENTION_DAYS must be a whole number of days')
 	})
 })

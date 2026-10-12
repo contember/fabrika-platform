@@ -60,13 +60,13 @@ export async function handleAuth(
 		return handlePasswordAction(request, services, ctx, 'reset', requestId)
 	}
 	if (url.pathname === INVITATION_ACCEPT_PATH) {
-		return handleInvitation(request, services, ctx, requestId)
+		return handleInvitation(request, services, requestId)
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET
 		// stays usable — it renders the same-origin form that posts — because a cross-site
 		// `location = '…/auth/logout'` used to revoke the login and every app session under it.
-		if (request.method === 'POST') return handleLogout(request, services)
+		if (request.method === 'POST') return handleLogout(request, services, requestId)
 		if (request.method === 'GET') return logoutPage(safeRedirect(url.searchParams.get('redirect'), services.config))
 		return methodNotAllowed()
 	}

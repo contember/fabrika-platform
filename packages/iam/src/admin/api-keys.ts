@@ -10,11 +10,12 @@ import {
 	type RotateApiKeyInput,
 	type RotateApiKeyResponse,
 } from '@fabrika/iam-contract'
+import { uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
 import { contractGrantProblem } from '../contract-rules'
 import { principalStatus } from '../db'
 import { generateToken, hashToken } from '../secret'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
@@ -73,52 +74,57 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 	}
 
 	// Create the native service principal (external_id NULL — resolved by its `px_` key, not by a
-	// CF client_id) + its grant, then mint the bound credential. Shown once.
-	const principal = await c.services.repositories.principals.createService(label)
-	const grant = await c.services.repositories.grants.createGrant({
-		principalId: principal.id,
-		app,
-		roleKey: roleOrInline.roleKey,
-		permissions: roleOrInline.permissions,
-		scopeType: scope.scopeType,
-		scopeValue: scope.scopeValue,
-		grantedBy: c.admin.id,
-		expiresAt,
-	})
+	// CF client_id), its grant, the bound credential and their records, in one transaction. Shown once.
+	const principalId = uuidv7()
+	const grantId = uuidv7()
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
-	await c.services.repositories.credentials.createCredential({
-		tokenHash: await hashToken(apiKey),
-		label,
-		principalId: principal.id,
-		// The credential is bound to the SAME app as the grant it was provisioned for. `null` here is
-		// the operator's explicit "every app" choice, which is legal for a principal-bound credential
-		// because its permissions still resolve per app through that cross-app grant (SEC-2).
-		app,
-		issuedBy: c.admin.id,
-		expiresAt,
-		grants: [],
-	})
-	await adminAudit(c, {
-		action: 'iam.apikey.create',
-		resourceType: 'principal',
-		resourceId: principal.id,
-		metadata: { label, roleKey: roleOrInline.roleKey, permissions: roleOrInline.permissions, app },
-	})
-	await adminAudit(c, {
-		action: 'iam.grant.create',
-		resourceType: 'grant',
-		resourceId: grant.id,
-		metadata: {
-			principalId: principal.id,
+	const { principals, grants, credentials, audit } = c.services.repositories
+	await audit.commit([
+		principals.createServiceStatement(principalId, label),
+		grants.grantStatement(grantId, {
+			principalId,
+			app,
 			roleKey: roleOrInline.roleKey,
 			permissions: roleOrInline.permissions,
 			scopeType: scope.scopeType,
 			scopeValue: scope.scopeValue,
+			grantedBy: c.admin.id,
+			expiresAt,
+		}),
+		...credentials.credentialStatements(uuidv7(), {
+			tokenHash: await hashToken(apiKey),
+			label,
+			principalId,
+			// The credential is bound to the SAME app as the grant it was provisioned for. `null` here is
+			// the operator's explicit "every app" choice, which is legal for a principal-bound credential
+			// because its permissions still resolve per app through that cross-app grant (SEC-2).
 			app,
-		},
-	})
+			issuedBy: c.admin.id,
+			expiresAt,
+			grants: [],
+		}),
+		audit.eventStatement(adminEvent(c, {
+			action: 'iam.apikey.create',
+			resourceType: 'principal',
+			resourceId: principalId,
+			metadata: { label, roleKey: roleOrInline.roleKey, permissions: roleOrInline.permissions, app },
+		})),
+		audit.eventStatement(adminEvent(c, {
+			action: 'iam.grant.create',
+			resourceType: 'grant',
+			resourceId: grantId,
+			metadata: {
+				principalId,
+				roleKey: roleOrInline.roleKey,
+				permissions: roleOrInline.permissions,
+				scopeType: scope.scopeType,
+				scopeValue: scope.scopeValue,
+				app,
+			},
+		})),
+	])
 
-	const response: ProvisionApiKeyResponse = { principalId: principal.id, apiKey }
+	const response: ProvisionApiKeyResponse = { principalId, apiKey }
 	return response
 }
 
@@ -129,15 +135,15 @@ export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId:
 		return fail(404, 'service principal not found')
 	}
 
-	await c.services.repositories.grants.deleteGrantsForPrincipal(principalId)
-	await c.services.repositories.principals.disablePrincipal(principalId)
-	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
-	await adminAudit(c, {
-		action: 'iam.apikey.revoke',
-		resourceType: 'principal',
-		resourceId: principalId,
-		metadata: { label: principal.label },
-	})
+	const { principals, grants, credentials, audit } = c.services.repositories
+	await audit.commit([
+		grants.deleteGrantsForPrincipalStatement(principalId),
+		principals.disablePrincipalStatement(principalId),
+		credentials.revokeCredentialsForPrincipalStatement(principalId),
+		audit.eventStatement(
+			adminEvent(c, { action: 'iam.apikey.revoke', resourceType: 'principal', resourceId: principalId, metadata: { label: principal.label } }),
+		),
+	])
 	return { ok: true }
 }
 
@@ -168,23 +174,29 @@ export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyIn
 	// binding. `listCredentialsForPrincipal` is newest-first, so this is the live one.
 	const existing = (await c.services.repositories.credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)
 	const expiresAt = input.expiresAt !== undefined ? input.expiresAt : existing?.expires_at ?? null
-	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
-	await c.services.repositories.credentials.createCredential({
-		tokenHash: await hashToken(apiKey),
-		label: principal.label,
-		principalId,
-		app: existing?.app ?? null,
-		issuedBy: c.admin.id,
-		expiresAt,
-		grants: [],
-	})
-	await adminAudit(c, {
-		action: 'iam.apikey.rotate',
-		resourceType: 'principal',
-		resourceId: principalId,
-		metadata: { label: principal.label, expiresAt },
-	})
+	const { credentials, audit } = c.services.repositories
+	// The old keys go, the new one comes and the record is written in one transaction: a failure leaves the old key.
+	await audit.commit([
+		credentials.revokeCredentialsForPrincipalStatement(principalId),
+		...credentials.credentialStatements(uuidv7(), {
+			tokenHash: await hashToken(apiKey),
+			label: principal.label,
+			principalId,
+			app: existing?.app ?? null,
+			issuedBy: c.admin.id,
+			expiresAt,
+			grants: [],
+		}),
+		audit.eventStatement(
+			adminEvent(c, {
+				action: 'iam.apikey.rotate',
+				resourceType: 'principal',
+				resourceId: principalId,
+				metadata: { label: principal.label, expiresAt },
+			}),
+		),
+	])
 	const response: RotateApiKeyResponse = { principalId, apiKey }
 	return response
 }

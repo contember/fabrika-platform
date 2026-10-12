@@ -1,4 +1,5 @@
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type AuditEventInput, auditEventStatement } from './audit'
 
 /** One live membership transport key (the `membership_transport_keys` table); only its hash is stored. */
 export interface MembershipTransportKeyRow {
@@ -20,7 +21,10 @@ export class MembershipTransportKeyRepository {
 	 * Record a new key of `app` and delete every other key of it except `keep`, in one batch: the key the caller recorded
 	 * as active stays valid until the caller replaces it, and a key issued earlier and never recorded is gone.
 	 */
-	async issue(input: { app: string; keyHash: string; expiresAt: number; keep: string | null; now: number }): Promise<string> {
+	async issue(
+		input: { app: string; keyHash: string; expiresAt: number; keep: string | null; now: number },
+		audit?: (keyId: string) => AuditEventInput,
+	): Promise<string> {
 		const id = uuidv7()
 		await this.db.batch([
 			this.db
@@ -29,6 +33,7 @@ export class MembershipTransportKeyRepository {
 			this.db
 				.prepare('INSERT INTO membership_transport_keys (id, app, key_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
 				.bind(id, input.app, input.keyHash, input.expiresAt, input.now),
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit(id))]),
 		])
 		return id
 	}

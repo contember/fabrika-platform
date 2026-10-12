@@ -281,25 +281,17 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				}
 				const revoker = res.caller
 
-				const result = await revokeKey(services, input, { id: revoker.id, permissions: revoker.permissions }, res.verifiedApp)
-
-				// Audit only an actual state change (revoked === true); a no-op idempotent
+				// Recorded in the revocation's own transaction and only for an actual state change: a no-op idempotent
 				// revoke or a denied/not-found attempt writes no domain event.
-				if (result.ok && result.revoked) {
-					ctx.waitUntil(
-						services.repositories.audit.writeAuditEvent({
-							requestId: input.requestId,
-							principalId: revoker.id,
-							principalLabel: revoker.label ?? revoker.id,
-							app: res.verifiedApp,
-							action: 'iam.credential.revoke',
-							resourceType: 'credential',
-							resourceId: input.id,
-						}),
-					)
-				}
-
-				return result
+				return await revokeKey(services, input, { id: revoker.id, permissions: revoker.permissions }, res.verifiedApp, {
+					requestId: input.requestId,
+					principalId: revoker.id,
+					principalLabel: revoker.label ?? revoker.id,
+					app: res.verifiedApp,
+					action: 'iam.credential.revoke',
+					resourceType: 'credential',
+					resourceId: input.id,
+				})
 			} catch (err) {
 				logError(`revokeKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
@@ -330,31 +322,24 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				}
 				const issuer = res.caller
 				const app = res.verifiedApp
-				const { result, auditLabel } = await issueKey(services, input, { id: issuer.id, permissions: issuer.permissions }, app)
-
-				if (result.ok) {
-					// iam.credential.create audit — issuer, label, binding + grants; NEVER the plaintext token.
-					// `result.principalId` is the freshly-created service principal (service mode) or the
-					// self-bound principal; falls back to the requested binding for the standalone modes.
-					ctx.waitUntil(
-						services.repositories.audit.writeAuditEvent({
-							requestId: input.requestId,
-							principalId: issuer.id,
-							principalLabel: issuer.label ?? issuer.id,
-							app,
-							action: 'iam.credential.create',
-							resourceType: 'credential',
-							resourceId: result.id,
-							metadata: {
-								label: auditLabel ?? null,
-								principalId: result.principalId ?? input.principalId ?? null,
-								service: input.service !== undefined,
-								grants: input.service?.permissions ?? input.permissions ?? [],
-							},
-						}),
-					)
-				}
-
+				// iam.credential.create, in the key's own transaction — issuer, label, binding + grants; NEVER the
+				// plaintext token. `principalId` is the freshly-created service principal (service mode) or the
+				// self-bound principal; null for an anonymous key.
+				const { result } = await issueKey(services, input, { id: issuer.id, permissions: issuer.permissions }, app, (issued) => ({
+					requestId: input.requestId,
+					principalId: issuer.id,
+					principalLabel: issuer.label ?? issuer.id,
+					app,
+					action: 'iam.credential.create',
+					resourceType: 'credential',
+					resourceId: issued.credentialId,
+					metadata: {
+						label: input.service?.label ?? input.label ?? null,
+						principalId: issued.principalId ?? null,
+						service: input.service !== undefined,
+						grants: input.service?.permissions ?? input.permissions ?? [],
+					},
+				}))
 				return result
 			} catch (err) {
 				logError(`issueKey failed for request '${input.requestId}'`, err)

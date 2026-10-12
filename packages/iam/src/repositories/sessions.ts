@@ -1,6 +1,10 @@
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
+import { type AuditEventInput, auditEventStatement, type AuthLogInput, authLogStatement } from './audit'
 import { unixNow } from './sql'
+
+/** The logout row of a session: its principal comes from the session itself. */
+export type LogoutLogInput = Pick<AuthLogInput, 'requestId' | 'app' | 'reason'>
 
 /**
  * How a session's holder proved who they were. `local_dev` is the `LOCAL_DEV_LOGIN` bypass — it has a
@@ -28,7 +32,10 @@ export interface SessionRow {
 export class SessionRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
-	/** Create a session. Only the hash of the opaque cookie value is stored; returns the new id. */
+	/**
+	 * Create a session. Only the hash of the opaque cookie value is stored; returns the new id. A login passes its
+	 * `auth_log` row, written in the same batch: a session nobody logged is never opened.
+	 */
 	async createSession(input: {
 		tokenHash: string
 		principalId: string
@@ -40,14 +47,14 @@ export class SessionRepository {
 		app?: string | null
 		/** The IAM session this is derived from. Revoking that one revokes this. */
 		parentSessionId?: string | null
-	}): Promise<string> {
+	}, log?: AuthLogInput): Promise<string> {
 		const id = uuidv7()
 		const authenticationMethod = input.authenticationMethod ?? 'oidc'
 		// `password` is the only method with no upstream subject — the same pairing the row CHECK states.
 		if (authenticationMethod !== 'password' && input.idpSub == null) {
 			throw new Error(`A ${authenticationMethod} session requires an IdP subject`)
 		}
-		await this.db
+		const insert = this.db
 			.prepare(
 				`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -64,7 +71,7 @@ export class SessionRepository {
 				input.app ?? null,
 				input.parentSessionId ?? null,
 			)
-			.run()
+		await this.db.batch(log === undefined ? [insert] : [insert, authLogStatement(this.db, log)])
 		return id
 	}
 
@@ -103,13 +110,26 @@ export class SessionRepository {
 			.first<SessionRow>()
 	}
 
-	/** Revoke a session by the cookie's hash (logout). Idempotent — already-revoked → false. */
-	async revokeSessionByHash(tokenHash: string): Promise<boolean> {
-		const result = await this.db
-			.prepare('UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL')
-			.bind(unixNow(), tokenHash)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	/**
+	 * Revoke a session by the cookie's hash (logout). Idempotent — already-revoked → false. A logout passes its
+	 * `auth_log` row, written in the same batch and only when this call ended a live session; the row is locked first,
+	 * so two concurrent logouts log one.
+	 */
+	async revokeSessionByHash(tokenHash: string, log?: LogoutLogInput): Promise<boolean> {
+		const now = unixNow()
+		const revoke = this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL RETURNING id').bind(now, tokenHash)
+		if (log === undefined) {
+			return (await revoke.all()).results.length > 0
+		}
+		const [, , revoked] = await this.db.batch([
+			this.db.prepare('UPDATE sessions SET created_at = created_at WHERE token_hash = ?').bind(tokenHash),
+			this.db
+				.prepare(`INSERT INTO auth_log (request_id, app, kind, principal_id, credential_id, decision, reason, privileged, created_at)
+					SELECT ?, ?, 'logout', principal_id, NULL, 'allow', ?, 0, ? FROM sessions WHERE token_hash = ? AND revoked_at IS NULL`)
+				.bind(log.requestId, log.app, log.reason ?? null, now, tokenHash),
+			revoke,
+		])
+		return (revoked?.results.length ?? 0) > 0
 	}
 
 	/**
@@ -142,21 +162,49 @@ export class SessionRepository {
 	 * carries `parent_session_id`, and `getActiveSessionByHash`/`ById` join to the parent on every
 	 * lookup, so the child stops resolving the moment the parent's `revoked_at` is set (ADR-0022).
 	 */
-	async revokeSessionById(id: string): Promise<boolean> {
-		const result = await this.db
-			.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
-			.bind(unixNow(), id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async revokeSessionById(id: string, audit?: AuditEventInput): Promise<boolean> {
+		const revoke = this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING id').bind(unixNow(), id)
+		if (audit === undefined) {
+			return (await revoke.all()).results.length > 0
+		}
+		const [, , revoked] = await this.db.batch([
+			this.db.prepare('UPDATE sessions SET created_at = created_at WHERE id = ?').bind(id),
+			auditEventStatement(this.db, audit, { sql: 'EXISTS (SELECT 1 FROM sessions WHERE id = ? AND revoked_at IS NULL)', binds: [id] }),
+			revoke,
+		])
+		return (revoked?.results.length ?? 0) > 0
 	}
 
-	/** Revoke every live session a principal holds. Returns how many rows this call revoked. */
-	async revokeSessionsForPrincipal(principalId: string): Promise<number> {
-		const result = await this.db
-			.prepare('UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL')
+	/** How many unrevoked sessions a principal holds — the count an operator's "revoke all" records. */
+	async countUnrevokedSessions(principalId: string): Promise<number> {
+		const { results } = await this.db
+			.prepare('SELECT id FROM sessions WHERE principal_id = ? AND revoked_at IS NULL')
+			.bind(principalId)
+			.all<{ id: string }>()
+		return results.length
+	}
+
+	/**
+	 * Revoke every live session a principal holds. Returns how many rows this call revoked; `audit` is written only when
+	 * that is at least one. The live rows are locked first, so a concurrent revoke of the same sessions records nothing.
+	 */
+	async revokeSessionsForPrincipal(principalId: string, audit?: AuditEventInput): Promise<number> {
+		const revoke = this.db
+			.prepare('UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING id')
 			.bind(unixNow(), principalId)
-			.run()
-		return result.meta.changes ?? 0
+		if (audit === undefined) {
+			return (await revoke.all()).results.length
+		}
+		const statements: SqlStatement[] = [
+			this.db.prepare('UPDATE sessions SET created_at = created_at WHERE principal_id = ? AND revoked_at IS NULL').bind(principalId),
+			auditEventStatement(this.db, audit, {
+				sql: 'EXISTS (SELECT 1 FROM sessions WHERE principal_id = ? AND revoked_at IS NULL)',
+				binds: [principalId],
+			}),
+			revoke,
+		]
+		const [, , revoked] = await this.db.batch(statements)
+		return revoked?.results.length ?? 0
 	}
 
 	/** Prune expired or revoked sessions (cron). Returns the number removed. */

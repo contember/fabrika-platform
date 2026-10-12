@@ -3,7 +3,14 @@ import type { Scope } from '@fabrika/auth-core'
 import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
 import type { SqlDatabase } from '@fabrika/platform'
 import { handleAdmin } from '../../admin/router'
-import { type IamRepositories, type InvitationRow, MembershipRepository, type MembershipRepositoryOptions, type PrincipalRow } from '../../db'
+import {
+	type AuditEventInput,
+	type IamRepositories,
+	type InvitationRow,
+	MembershipRepository,
+	type MembershipRepositoryOptions,
+	type PrincipalRow,
+} from '../../db'
 import type { RequestContext } from '../../env'
 import type { InvitationAcceptance } from '../../repositories/membership'
 import { resolvePermissionsAt } from '../../resolve'
@@ -169,11 +176,16 @@ export class InviterRemovedBeforeAcceptance extends MembershipRepository {
 		super(db, options)
 	}
 
-	override async acceptInvitation(invitation: InvitationRow, principalId: string, assigners: readonly string[]): Promise<InvitationAcceptance> {
+	override async acceptInvitation(
+		invitation: InvitationRow,
+		principalId: string,
+		assigners: readonly string[],
+		audit?: AuditEventInput,
+	): Promise<InvitationAcceptance> {
 		const removal = this.removeBeforeAcceptance
 		if (removal !== null) {
 			await this.deleteRoleGrant(removal.app, removal.principalId, removal.roleKey, removal.scope)
 		}
-		return super.acceptInvitation(invitation, principalId, assigners)
+		return super.acceptInvitation(invitation, principalId, assigners, audit)
 	}
 }

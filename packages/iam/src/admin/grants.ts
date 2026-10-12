@@ -1,7 +1,7 @@
 import { type CreateGrantRequest, type GrantDto, type OkResponse } from '@fabrika/iam-contract'
 import { contractGrantProblem } from '../contract-rules'
 import { type GrantRow } from '../db'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
 
 export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantDto> {
@@ -34,11 +34,25 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	}
 	const values = { principalId, app, scopeType: scope.scopeType, scopeValue: scope.scopeValue, grantedBy: c.admin.id, expiresAt }
 	const roleKey = roleOrInline.roleKey
+	const record = (grantId: string) =>
+		adminEvent(c, {
+			action: 'iam.grant.create',
+			resourceType: 'grant',
+			resourceId: grantId,
+			metadata: {
+				principalId,
+				roleKey: roleOrInline.roleKey,
+				permissions: roleOrInline.permissions,
+				scopeType: scope.scopeType,
+				scopeValue: scope.scopeValue,
+				app,
+			},
+		})
 	let grant: GrantRow
 	if (roleKey === null) {
-		grant = await c.services.repositories.grants.createGrant({ ...values, permissions: roleOrInline.permissions })
+		grant = await c.services.repositories.grants.createGrant({ ...values, permissions: roleOrInline.permissions }, record)
 	} else {
-		const created = await c.services.repositories.grants.createRoleGrantUnlessHeld({ ...values, roleKey })
+		const created = await c.services.repositories.grants.createRoleGrantUnlessHeld({ ...values, roleKey }, record)
 		if (created === null) {
 			const held = await findHeldRoleGrant(c, { ...values, roleKey }).catch(() => undefined)
 			const naming = held === undefined ? '' : `: ${held.id}`
@@ -46,19 +60,6 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 		}
 		grant = created
 	}
-	await adminAudit(c, {
-		action: 'iam.grant.create',
-		resourceType: 'grant',
-		resourceId: grant.id,
-		metadata: {
-			principalId,
-			roleKey: roleOrInline.roleKey,
-			permissions: roleOrInline.permissions,
-			scopeType: scope.scopeType,
-			scopeValue: scope.scopeValue,
-			app,
-		},
-	})
 	const cache = new RoleKnownCache(c.services)
 	return toGrantDto(grant, cache)
 }
@@ -69,18 +70,20 @@ export async function deleteGrantUseCase(c: AdminContext, input: { id: string })
 	if (!grant) {
 		return fail(404, 'grant not found')
 	}
-	await c.services.repositories.grants.deleteGrant(id)
-	await adminAudit(c, {
-		action: 'iam.grant.revoke',
-		resourceType: 'grant',
-		resourceId: id,
-		metadata: {
-			principalId: grant.principal_id,
-			roleKey: grant.role_key,
-			scopeType: grant.scope_type,
-			scopeValue: grant.scope_value,
-		},
-	})
+	await c.services.repositories.grants.deleteGrant(
+		id,
+		adminEvent(c, {
+			action: 'iam.grant.revoke',
+			resourceType: 'grant',
+			resourceId: id,
+			metadata: {
+				principalId: grant.principal_id,
+				roleKey: grant.role_key,
+				scopeType: grant.scope_type,
+				scopeValue: grant.scope_value,
+			},
+		}),
+	)
 	return { ok: true }
 }
 

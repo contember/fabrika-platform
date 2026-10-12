@@ -1,4 +1,5 @@
 import { type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
+import { type AuditEventInput } from '../db'
 import { type RequestContext } from '../env'
 import { type Services } from '../services'
 
@@ -45,13 +46,15 @@ export function fail(status: number, message: string): never {
 	throw new AdminUseCaseError(status, message)
 }
 
-// Audit-event writes from admin actions happen on the request critical path so the
-// admin sees a consistent state, but the write itself is small; we await it.
-export function adminAudit(
+/**
+ * The record of a change the admin made. A use case hands it to the repository that makes the change, which writes it
+ * in the change's own transaction, so a committed change always has its row and a failed write fails the change.
+ */
+export function adminEvent(
 	c: AdminContext,
 	event: { action: string; resourceType: string; resourceId?: string | null; diff?: unknown; metadata?: unknown },
-): Promise<void> {
-	return c.services.repositories.audit.writeAuditEvent({
+): AuditEventInput {
+	return {
 		requestId: c.requestId,
 		principalId: c.admin.id,
 		principalLabel: c.admin.label ?? c.admin.id,
@@ -61,5 +64,5 @@ export function adminAudit(
 		resourceId: event.resourceId ?? null,
 		diff: event.diff,
 		metadata: event.metadata,
-	})
+	}
 }

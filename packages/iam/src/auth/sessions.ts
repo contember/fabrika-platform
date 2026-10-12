@@ -1,8 +1,11 @@
-import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { permits, SESSION_COOKIE } from '@fabrika/auth-core'
+import { ADMIN_ACTION, IAM_APP } from '../admin/router'
 import { sessionUsable } from '../auth'
 import { type AuthenticationMethod } from '../db'
 import { type RequestContext } from '../env'
+import { logError } from '../log'
 import { randomToken } from '../oidc'
+import { resolvePermissionsAt } from '../resolve'
 import { hashToken } from '../secret'
 import { type Services } from '../services'
 import { clearCookie, readCookie, serializeCookie } from './cookies'
@@ -33,6 +36,11 @@ export async function currentSession(request: Request, services: Services) {
 	return sessionUsable(session, services.config) ? session : null
 }
 
+/**
+ * Open a login: the session and its `auth_log` row are written in one batch, before the answer. A login that cannot
+ * be logged opens no session and answers 503. A principal holding the installation-admin action is logged
+ * `privileged`.
+ */
 export async function issueSession(
 	request: Request,
 	services: Services,
@@ -53,24 +61,28 @@ export async function issueSession(
 ): Promise<Response> {
 	const sessionToken = randomToken(32)
 	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
-	const sessionId = await services.repositories.sessions.createSession({
-		tokenHash: await hashToken(sessionToken),
-		principalId: input.principalId,
-		idpSub: input.idpSub,
-		email: input.email,
-		authenticationMethod: input.authenticationMethod,
-		expiresAt,
-	})
-	ctx.waitUntil(
-		services.repositories.audit.writeAuthLog({
+	let sessionId: string
+	try {
+		sessionId = await services.repositories.sessions.createSession({
+			tokenHash: await hashToken(sessionToken),
+			principalId: input.principalId,
+			idpSub: input.idpSub,
+			email: input.email,
+			authenticationMethod: input.authenticationMethod,
+			expiresAt,
+		}, {
 			requestId: input.requestId,
-			app: 'propustka',
+			app: IAM_APP,
 			kind: 'authenticate',
 			principalId: input.principalId,
 			decision: 'allow',
 			reason: input.reason,
-		}),
-	)
+			privileged: await isInstallationAdmin(services, input.principalId),
+		})
+	} catch (err) {
+		logError(`login could not be recorded for request '${input.requestId}'`, err)
+		return authError('login is unavailable', 503)
+	}
 
 	// The IAM cookie is set either way: it is what makes the NEXT handoff, to this or any other app,
 	// silent. What changes is where the browser goes — its own destination, or the app's callback.
@@ -84,15 +96,53 @@ export async function issueSession(
 }
 
 /**
+ * Answer a refused login after its `deny` row is in `auth_log`. A refusal that cannot be logged answers 503 instead,
+ * so no login attempt goes unrecorded.
+ */
+export async function refuseLogin(
+	services: Services,
+	entry: { requestId: string; principalId: string | null; reason: string },
+	answer: () => Response | Promise<Response>,
+): Promise<Response> {
+	try {
+		await services.repositories.audit.writeAuthLog({
+			requestId: entry.requestId,
+			app: IAM_APP,
+			kind: 'authenticate',
+			principalId: entry.principalId,
+			decision: 'deny',
+			reason: entry.reason,
+		})
+	} catch (err) {
+		logError(`a refused login could not be recorded for request '${entry.requestId}'`, err)
+		return authError('login is unavailable', 503)
+	}
+	return answer()
+}
+
+/** Whether the principal holds the installation-admin action at IAM — what marks its login privileged. */
+async function isInstallationAdmin(services: Services, principalId: string): Promise<boolean> {
+	const principal = await services.repositories.principals.getPrincipalById(principalId)
+	return principal !== null && permits(await resolvePermissionsAt(services, principal, IAM_APP), ADMIN_ACTION)
+}
+
+/**
  * Revoke the login and clear the cookie. Same-origin only, like every other mutating form here:
  * `px_session` is `SameSite=Lax`, so a cross-site top-level GET carried it, and because every app
  * session hangs off this one, that single request logged the human out of every host at once.
+ * The revocation and its `logout` row in `auth_log` are one batch; one that cannot be written answers 503
+ * and leaves the session as it was.
  */
-export async function handleLogout(request: Request, services: Services): Promise<Response> {
+export async function handleLogout(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const cookie = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
 	if (cookie) {
-		await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie))
+		try {
+			await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie), { requestId, app: IAM_APP, reason: 'logout' })
+		} catch (err) {
+			logError(`logout could not be recorded for request '${requestId}'`, err)
+			return authError('logout is unavailable', 503)
+		}
 	}
 	const url = new URL(request.url)
 	const headers = redirectHeaders(safeRedirect(url.searchParams.get('redirect'), services.config))

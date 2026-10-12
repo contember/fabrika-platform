@@ -2,7 +2,7 @@ import { type OkResponse, type PasswordActionDelivery, type PrincipalIdInput } f
 
 import { type PrincipalRow } from '../db'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 
 async function passwordUser(c: AdminContext, id: string, requireActive: boolean = true): Promise<PrincipalRow> {
 	if (!c.services.config.authentication.password.enabled) {
@@ -21,14 +21,13 @@ async function passwordDelivery(
 	principal: PrincipalRow,
 	purpose: 'enrollment' | 'reset',
 ): Promise<PasswordActionDelivery> {
-	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id })
+	const delivery = c.services.email === null ? 'manual' : 'email'
+	// The token, the enrollment opt-in and the record commit together; the email is an effect after that.
+	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id }, {
+		audit: adminEvent(c, { action: `iam.password.${purpose}.issue`, resourceType: 'principal', resourceId: principal.id, metadata: { delivery } }),
+		enableEnrollment: purpose === 'enrollment',
+	})
 	if (c.services.email === null) {
-		await adminAudit(c, {
-			action: `iam.password.${purpose}.issue`,
-			resourceType: 'principal',
-			resourceId: principal.id,
-			metadata: { delivery: 'manual', outcome: 'issued' },
-		})
 		return { delivery: 'manual', url: action.url, expiresAt: action.expiresAt }
 	}
 	if (action.message === null || principal.email === null) {
@@ -38,20 +37,12 @@ async function passwordDelivery(
 		await deliverPasswordAction(c.services, action)
 	} catch {
 		console.error('Password action email delivery failed')
-		await adminAudit(c, {
-			action: `iam.password.${purpose}.issue`,
-			resourceType: 'principal',
-			resourceId: principal.id,
-			metadata: { delivery: 'email', outcome: 'failed' },
-		})
+		// The outcome of an effect, not a change of IAM's: the token was recorded when it was issued.
+		await c.services.repositories.audit.writeAuditEvent(
+			adminEvent(c, { action: `iam.password.${purpose}.delivery_failed`, resourceType: 'principal', resourceId: principal.id }),
+		)
 		return fail(502, 'password action email delivery failed')
 	}
-	await adminAudit(c, {
-		action: `iam.password.${purpose}.issue`,
-		resourceType: 'principal',
-		resourceId: principal.id,
-		metadata: { delivery: 'email', outcome: 'sent' },
-	})
 	return { delivery: 'email', email: principal.email, expiresAt: action.expiresAt }
 }
 
@@ -59,7 +50,6 @@ export async function issuePasswordEnrollmentUseCase(c: AdminContext, input: Pri
 	const principal = await passwordUser(c, input.principalId)
 	const account = await c.services.repositories.passwords.getAccount(principal.id)
 	if (account?.state === 'enabled') return fail(409, 'password authentication is already enabled')
-	await c.services.repositories.passwords.enableEnrollment(principal.id)
 	return passwordDelivery(c, principal, 'enrollment')
 }
 
@@ -72,11 +62,9 @@ export async function issuePasswordResetUseCase(c: AdminContext, input: Principa
 
 export async function disablePasswordUseCase(c: AdminContext, input: PrincipalIdInput): Promise<OkResponse> {
 	const principal = await passwordUser(c, input.principalId, false)
-	await c.services.repositories.passwords.disableCredential(principal.id)
-	await adminAudit(c, {
-		action: 'iam.password.disable',
-		resourceType: 'principal',
-		resourceId: principal.id,
-	})
+	await c.services.repositories.passwords.disableCredential(
+		principal.id,
+		adminEvent(c, { action: 'iam.password.disable', resourceType: 'principal', resourceId: principal.id }),
+	)
 	return { ok: true }
 }

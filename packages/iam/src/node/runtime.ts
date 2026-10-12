@@ -15,6 +15,7 @@ import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { parseOAuthConfig } from '../oauth-config'
+import { parseRetention } from '../retention'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -82,6 +83,12 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	// Parsed here as well as per request in `buildServices`, for the same readiness-probe reason as above.
 	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'])
+	const authLogRetentionDays = source['FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS']
+	const auditRetentionDays = source['FABRIKA_IAM_AUDIT_RETENTION_DAYS']
+	parseRetention(
+		{ authLogDays: authLogRetentionDays, auditDays: auditRetentionDays },
+		{ authLogDays: 'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS', auditDays: 'FABRIKA_IAM_AUDIT_RETENTION_DAYS' },
+	)
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
@@ -102,6 +109,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		// gateway default) stays distinguishable from an explicit empty value (no JWT may administer).
 		ADMIN_AUDIENCES: source['FABRIKA_IAM_ADMIN_AUDIENCES'],
 		OAUTH_CONFIG: source['FABRIKA_IAM_OAUTH_CONFIG'] ?? '',
+		AUTH_LOG_RETENTION_DAYS: authLogRetentionDays,
+		AUDIT_RETENTION_DAYS: auditRetentionDays,
 		ENVIRONMENT: environment,
 		LOCAL_DEV_LOGIN: source['LOCAL_DEV_LOGIN'] ?? '',
 		ISSUER: issuer,

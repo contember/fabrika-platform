@@ -4,6 +4,7 @@ import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
 import { logError } from '../log'
+import { recordAdminAccess, rpcProcedureOf } from './access'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
@@ -213,6 +214,17 @@ export const adminRpcAuth = async (request: Request, ctx: IamAppContext, next: (
 
 		ctx.admin = resolution.admin
 		ctx.auth = authContext(resolution.admin)
+		// Every request of an installation admin is recorded before it runs, reads included. A caller without the
+		// action reaches no procedure (each requires it), so it used no privileged access.
+		if (permits(resolution.admin.permissions, ADMIN_ACTION)) {
+			const access = { method: request.method, route: '/admin/rpc', procedure: await rpcProcedureOf(request) }
+			try {
+				await recordAdminAccess(ctx.services, resolution.admin, ctx.requestId, access)
+			} catch (err) {
+				logError('admin access could not be recorded', err)
+				return Response.json({ error: { type: 'unavailable', message: 'admin access could not be recorded' } }, { status: 503 })
+			}
+		}
 		return await scrubInternalErrors(await next())
 	} catch (err) {
 		logError('admin RPC request failed', err)

@@ -1,7 +1,5 @@
 import { z } from 'zod'
 import { principalStatus } from '../db'
-import type { RequestContext } from '../env'
-import { logError } from '../log'
 import { acceptInvitation, INVITATION_ACCEPT_PATH } from '../membership'
 import { invitationOutcomePage, invitationPage } from '../password-pages'
 import type { Services } from '../services'
@@ -15,7 +13,7 @@ const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
  * one-time token, which never reaches a server log. Accepting is a POST from that page, same-origin
  * only, by the principal signed in HERE, on IAM's host — the mailbox's owner, proven by the token.
  */
-export async function handleInvitation(request: Request, services: Services, ctx: RequestContext, requestId: string): Promise<Response> {
+export async function handleInvitation(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (request.method === 'GET') {
 		return invitationPage()
 	}
@@ -45,7 +43,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 	if (principal === null || principalStatus(principal) === 'disabled') {
 		return invitationOutcomePage({ title: 'Invitation unavailable', text: 'This account cannot accept invitations.', status: 403 })
 	}
-	const outcome = await acceptInvitation(services, principal, token.data)
+	const outcome = await acceptInvitation(services, principal, token.data, requestId)
 	if (!outcome.ok) {
 		switch (outcome.reason) {
 			case 'invalid':
@@ -65,20 +63,6 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		}
 	}
 	const { invitation } = outcome
-	ctx.waitUntil(
-		services.repositories.audit
-			.writeAuditEvent({
-				requestId,
-				principalId: principal.id,
-				principalLabel: principal.label,
-				app: invitation.app,
-				action: 'iam.member.accept',
-				resourceType: 'scope',
-				resourceId: `${invitation.scope_type}:${invitation.scope_value}`,
-				metadata: { invitationId: invitation.id, role: invitation.role_key },
-			})
-			.catch((err: unknown) => logError('invitation audit write failed', err)),
-	)
 	return invitationOutcomePage({
 		title: 'Invitation accepted',
 		text: `You are now ${invitation.role_key} of a ${invitation.scope_type} of ${invitation.app}.`,

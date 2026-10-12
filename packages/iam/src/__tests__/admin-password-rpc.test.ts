@@ -141,7 +141,7 @@ describe('password administration RPC', () => {
 		const audit = h.sqlite.query<{ metadata: string | null }, []>(
 			"SELECT metadata FROM audit_events WHERE action = 'iam.password.enrollment.issue'",
 		).get()
-		expect(audit?.metadata).toBe('{"delivery":"manual","outcome":"issued"}')
+		expect(audit?.metadata).toBe('{"delivery":"manual"}')
 		expect(JSON.stringify(audit)).not.toContain(plaintextToken)
 
 		const enrollment = await createIamApp().fetch(
@@ -310,7 +310,7 @@ describe('password administration delivery and audit', () => {
 		const audit = h.sqlite.query<{ action: string; diff: string | null; metadata: string | null }, []>(
 			"SELECT action, diff, metadata FROM audit_events WHERE action = 'iam.password.enrollment.issue'",
 		).get()
-		expect(audit?.metadata).toBe('{"delivery":"email","outcome":"sent"}')
+		expect(audit?.metadata).toBe('{"delivery":"email"}')
 		expect(JSON.stringify(audit)).not.toContain('token=')
 		expect(JSON.stringify(audit)).not.toContain('test-derived-value')
 	})
@@ -353,7 +353,11 @@ describe('password administration delivery and audit', () => {
 		const audit = h.sqlite.query<{ metadata: string | null }, []>(
 			"SELECT metadata FROM audit_events WHERE action = 'iam.password.enrollment.issue'",
 		).get()
-		expect(audit?.metadata).toBe('{"delivery":"email","outcome":"failed"}')
+		expect(audit?.metadata).toBe('{"delivery":"email"}')
+		const failed = h.sqlite.query<{ n: number }, []>(
+			"SELECT COUNT(*) AS n FROM audit_events WHERE action = 'iam.password.enrollment.delivery_failed'",
+		).get()
+		expect(failed?.n).toBe(1)
 	})
 
 	test('reset works only for enabled accounts', async () => {

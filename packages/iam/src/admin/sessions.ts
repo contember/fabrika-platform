@@ -8,7 +8,7 @@ import {
 } from '@fabrika/iam-contract'
 import { type SessionRow } from '../db'
 
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 
 import { cursorOf, normalizeLimit } from './pagination'
 
@@ -76,22 +76,22 @@ export async function revokeSessionUseCase(c: AdminContext, input: SessionIdInpu
 	if (!session) {
 		return fail(404, 'session not found')
 	}
-	if (!(await c.services.repositories.sessions.revokeSessionById(input.id))) {
-		// Already revoked. Idempotent, and reported as such rather than as a failure.
-		return { revoked: 0 }
-	}
-	await adminAudit(c, {
-		action: 'iam.session.revoke',
-		resourceType: 'session',
-		resourceId: input.id,
-		metadata: {
-			principalId: session.principal_id,
-			authenticationMethod: session.authentication_method,
-			app: session.app,
-			parentSessionId: session.parent_session_id,
-		},
-	})
-	return { revoked: 1 }
+	const revoked = await c.services.repositories.sessions.revokeSessionById(
+		input.id,
+		adminEvent(c, {
+			action: 'iam.session.revoke',
+			resourceType: 'session',
+			resourceId: input.id,
+			metadata: {
+				principalId: session.principal_id,
+				authenticationMethod: session.authentication_method,
+				app: session.app,
+				parentSessionId: session.parent_session_id,
+			},
+		}),
+	)
+	// Already revoked: idempotent, reported as such rather than as a failure, and recorded nowhere.
+	return { revoked: revoked ? 1 : 0 }
 }
 
 /** Revoke every live session a principal holds — the "sign them out everywhere" answer. */
@@ -100,14 +100,11 @@ export async function revokeSessionsForPrincipalUseCase(c: AdminContext, input: 
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
-	const revoked = await c.services.repositories.sessions.revokeSessionsForPrincipal(input.principalId)
-	if (revoked > 0) {
-		await adminAudit(c, {
-			action: 'iam.session.revoke_all',
-			resourceType: 'principal',
-			resourceId: input.principalId,
-			metadata: { revoked },
-		})
-	}
+	// The recorded count is the unrevoked sessions this request saw; the row itself is written only when some went.
+	const unrevoked = await c.services.repositories.sessions.countUnrevokedSessions(input.principalId)
+	const revoked = await c.services.repositories.sessions.revokeSessionsForPrincipal(
+		input.principalId,
+		adminEvent(c, { action: 'iam.session.revoke_all', resourceType: 'principal', resourceId: input.principalId, metadata: { revoked: unrevoked } }),
+	)
 	return { revoked }
 }

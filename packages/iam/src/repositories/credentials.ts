@@ -1,7 +1,20 @@
 import type { Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
+import { type AuditEventInput, auditEventStatement } from './audit'
 import { unixNow } from './sql'
+
+/** What a new credential carries: its secret's hash, its binding and its inline grants. */
+export interface CreateCredentialInput {
+	tokenHash: string
+	label?: string | null
+	principalId?: string | null
+	/** The app the credential mints for. NULL = cross-app; illegal for an anonymous credential. */
+	app?: string | null
+	issuedBy: string
+	expiresAt?: number | null
+	grants: { action: string; scopeType?: string | null; scopeValue?: string | null }[]
+}
 
 /** A unified credential row (the `credentials` table). Only the secret's hash is stored. */
 export interface CredentialRow {
@@ -41,20 +54,17 @@ export class CredentialRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
 	/**
-	 * Insert a credential + its inline grant rows (if any) in one batch. Only the hash is stored.
-	 * `principalId` null = an anonymous (frozen-grant) credential; non-null = principal-bound.
+	 * Insert a credential + its inline grant rows (if any) in one batch, with `audit` when given. Only the hash is
+	 * stored. `principalId` null = an anonymous (frozen-grant) credential; non-null = principal-bound.
 	 */
-	async createCredential(input: {
-		tokenHash: string
-		label?: string | null
-		principalId?: string | null
-		/** The app the credential mints for. NULL = cross-app; illegal for an anonymous credential. */
-		app?: string | null
-		issuedBy: string
-		expiresAt?: number | null
-		grants: { action: string; scopeType?: string | null; scopeValue?: string | null }[]
-	}): Promise<string> {
+	async createCredential(input: CreateCredentialInput, audit?: (credentialId: string) => AuditEventInput): Promise<string> {
 		const id = uuidv7()
+		await this.db.batch([...this.credentialStatements(id, input), ...(audit === undefined ? [] : [auditEventStatement(this.db, audit(id))])])
+		return id
+	}
+
+	/** The INSERTs of one credential with a caller-generated id and its inline grants, for a batch with its record. */
+	credentialStatements(id: string, input: CreateCredentialInput): SqlStatement[] {
 		const statements: SqlStatement[] = [
 			this.db
 				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at)
@@ -77,8 +87,7 @@ export class CredentialRepository {
 					.bind(id, grant.action, grant.scopeType ?? null, grant.scopeValue ?? null),
 			)
 		}
-		await this.db.batch(statements)
-		return id
+		return statements
 	}
 
 	/**
@@ -86,17 +95,20 @@ export class CredentialRepository {
 	 * issued for, in one transaction. The first statement locks the mount row with the one row lock
 	 * SQLite and Postgres share (D1 runs a batch serially anyway): a reconcile that is deleting the row
 	 * makes this wait and then insert nothing, and one that comes later waits for this key and revokes
-	 * it. Returns the id, or null when the mount is gone.
+	 * it. Returns the id, or null when the mount is gone; `audit` is written exactly when the key is.
 	 */
-	async createLinkCredential(input: {
-		tokenHash: string
-		label: string
-		app: string
-		issuedBy: string
-		expiresAt: number
-		grants: { action: string; scopeType: string; scopeValue: string }[]
-		link: { mount: string; chain: Scope[] }
-	}): Promise<string | null> {
+	async createLinkCredential(
+		input: {
+			tokenHash: string
+			label: string
+			app: string
+			issuedBy: string
+			expiresAt: number
+			grants: { action: string; scopeType: string; scopeValue: string }[]
+			link: { mount: string; chain: Scope[] }
+		},
+		audit?: (credentialId: string) => AuditEventInput,
+	): Promise<string | null> {
 		const id = uuidv7()
 		const dimension = input.link.chain[0]?.type ?? ''
 		const statements: SqlStatement[] = [
@@ -133,6 +145,9 @@ export class CredentialRepository {
 						SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM credentials WHERE id = ?)`)
 					.bind(id, grant.action, grant.scopeType, grant.scopeValue, id),
 			)
+		}
+		if (audit !== undefined) {
+			statements.push(auditEventStatement(this.db, audit(id), { sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ?)', binds: [id] }))
 		}
 		const [, inserted] = await this.db.batch<{ id: string }>(statements)
 		return (inserted?.results.length ?? 0) > 0 ? id : null
@@ -220,21 +235,34 @@ export class CredentialRepository {
 		return results
 	}
 
-	/** Revoke a credential by id (idempotent — already-revoked → false). */
-	async revokeCredential(id: string): Promise<boolean> {
-		const result = await this.db
-			.prepare('UPDATE credentials SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
-			.bind(unixNow(), id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	/**
+	 * Revoke a credential by id (idempotent — already-revoked → false). `audit` is written only when this call revoked
+	 * it: the row is locked first, so a concurrent revoke waits and then finds it revoked.
+	 */
+	async revokeCredential(id: string, audit?: AuditEventInput): Promise<boolean> {
+		const revoke = this.db.prepare('UPDATE credentials SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING id').bind(unixNow(), id)
+		if (audit === undefined) {
+			return (await revoke.all()).results.length > 0
+		}
+		const [, , revoked] = await this.db.batch([
+			this.db.prepare('UPDATE credentials SET created_at = created_at WHERE id = ?').bind(id),
+			auditEventStatement(this.db, audit, { sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ? AND revoked_at IS NULL)', binds: [id] }),
+			revoke,
+		])
+		return (revoked?.results.length ?? 0) > 0
 	}
 
 	/** Revoke every active credential bound to a principal (key revoke / rotate). Returns the count. */
 	async revokeCredentialsForPrincipal(principalId: string): Promise<number> {
-		const result = await this.db
-			.prepare('UPDATE credentials SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL')
-			.bind(unixNow(), principalId)
-			.run()
+		const result = await this.revokeCredentialsForPrincipalStatement(principalId).run()
 		return result.meta.changes ?? 0
+	}
+
+	/** Revoke every active credential of a principal except `keep`, for a batch that also writes its record. */
+	revokeCredentialsForPrincipalStatement(principalId: string, keep: readonly string[] = []): SqlStatement {
+		const kept = keep.map(() => ' AND id <> ?').join('')
+		return this.db
+			.prepare(`UPDATE credentials SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL${kept}`)
+			.bind(unixNow(), principalId, ...keep)
 	}
 }

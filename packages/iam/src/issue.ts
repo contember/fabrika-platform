@@ -19,7 +19,8 @@ import {
 	type RevokeKeyInput,
 	type RevokeKeyResult,
 } from '@fabrika/auth-core'
-import type { CredentialGrantRow } from './db'
+import { uuidv7 } from '@fabrika/platform'
+import type { AuditEventInput, CredentialGrantRow } from './db'
 import { unixNow } from './repositories/sql'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
@@ -40,6 +41,9 @@ export interface IssueOutcome {
 	auditLabel?: string
 	problem?: string
 }
+
+/** The record of an issued key, given the ids the issuance generated; written in the key's own transaction. */
+export type IssueRecord = (issued: { credentialId: string; principalId: string | undefined }) => AuditEventInput
 
 const NOT_ALLOWED: IssueOutcome = { result: { ok: false, reason: 'not_allowed' } }
 
@@ -97,7 +101,7 @@ async function actionProblem(services: Services, app: string, actions: string[])
  * action must be an exact action of that app's catalog, and every key must expire within
  * `MAX_KEY_LIFETIME_SECONDS`.
  */
-export async function issueKey(services: Services, input: IssueKeyInput, issuer: Issuer, app: string): Promise<IssueOutcome> {
+export async function issueKey(services: Services, input: IssueKeyInput, issuer: Issuer, app: string, record?: IssueRecord): Promise<IssueOutcome> {
 	// Every mode: a self-bound key is a standing copy of a 300-second token, a service key a new
 	// principal, a share link frozen authority — none of them may outlive the bound (SEC-7).
 	const expiryProblem = keyExpiryProblem(input.expiresAt, unixNow())
@@ -121,27 +125,34 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 		if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 			return NOT_ALLOWED
 		}
-		const principal = await services.repositories.principals.createService(svc.label)
-		await services.repositories.grants.createGrant({
-			principalId: principal.id,
-			app,
-			permissions: svc.permissions,
-			scopeType: svc.scope?.type ?? null,
-			scopeValue: svc.scope?.value ?? null,
-			grantedBy: issuer.id,
-			expiresAt: input.expiresAt,
-		})
 		const token = `${API_KEY_PREFIX}${generateToken()}`
-		const id = await services.repositories.credentials.createCredential({
-			tokenHash: await hashToken(token),
-			label: svc.label,
-			principalId: principal.id,
-			app,
-			issuedBy: issuer.id,
-			expiresAt: input.expiresAt,
-			grants: [],
-		})
-		return { result: { ok: true, token, id, principalId: principal.id }, auditLabel: svc.label }
+		const principalId = uuidv7()
+		const id = uuidv7()
+		const { principals, grants: grantRepository, credentials, audit } = services.repositories
+		// The principal, its grant, its key and the record are one transaction: no half-issued service survives.
+		await audit.commit([
+			principals.createServiceStatement(principalId, svc.label),
+			grantRepository.grantStatement(uuidv7(), {
+				principalId,
+				app,
+				permissions: svc.permissions,
+				scopeType: svc.scope?.type ?? null,
+				scopeValue: svc.scope?.value ?? null,
+				grantedBy: issuer.id,
+				expiresAt: input.expiresAt,
+			}),
+			...credentials.credentialStatements(id, {
+				tokenHash: await hashToken(token),
+				label: svc.label,
+				principalId,
+				app,
+				issuedBy: issuer.id,
+				expiresAt: input.expiresAt,
+				grants: [],
+			}),
+			...(record === undefined ? [] : [audit.eventStatement(record({ credentialId: id, principalId }))]),
+		])
+		return { result: { ok: true, token, id, principalId }, auditLabel: svc.label }
 	}
 
 	// v1: binding is only to the issuer's OWN principal (a personal token). A standalone credential
@@ -171,7 +182,7 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 		issuedBy: issuer.id,
 		expiresAt: input.expiresAt,
 		grants: grants.map((g) => ({ action: g.action, scopeType: g.scope?.type ?? null, scopeValue: g.scope?.value ?? null })),
-	})
+	}, record === undefined ? undefined : (credentialId) => record({ credentialId, principalId: input.principalId }))
 	return { result: { ok: true, token, id, principalId: input.principalId }, auditLabel: input.label }
 }
 
@@ -193,7 +204,13 @@ function credentialGrantToKeyGrant(row: CredentialGrantRow): KeyGrant {
  * path (the api-keys page), so a non-issuer caller cannot revoke it by id here. Idempotent — a second
  * revoke returns `{ ok: true, revoked: false }`.
  */
-export async function revokeKey(services: Services, input: RevokeKeyInput, revoker: Issuer, app: string): Promise<RevokeKeyResult> {
+export async function revokeKey(
+	services: Services,
+	input: RevokeKeyInput,
+	revoker: Issuer,
+	app: string,
+	record?: AuditEventInput,
+): Promise<RevokeKeyResult> {
 	const cred = await services.repositories.credentials.getCredentialById(input.id)
 	if (!cred || cred.app !== app) {
 		return { ok: false, reason: 'not_found' }
@@ -207,6 +224,6 @@ export async function revokeKey(services: Services, input: RevokeKeyInput, revok
 			return { ok: false, reason: 'not_allowed' }
 		}
 	}
-	const revoked = await services.repositories.credentials.revokeCredential(cred.id)
+	const revoked = await services.repositories.credentials.revokeCredential(cred.id, record)
 	return { ok: true, revoked }
 }

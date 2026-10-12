@@ -11,7 +11,7 @@ import {
 import { type CredentialGrantRow, type CredentialRow } from '../db'
 import { issueKey } from '../issue'
 import { resolvePermissionsAt } from '../resolve'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 import { knownApps } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
@@ -81,17 +81,18 @@ export async function createShareLinkUseCase(c: AdminContext, input: IssueShareL
 	// An admin holding the cross-app `admin` role keeps `*` at every app; an app-scoped admin only
 	// delegates what they hold THERE, which is the whole point of naming the app.
 	const issuer = { id: c.admin.id, permissions: await effectiveIssuerPermissions(c, app) }
-	const { result, auditLabel, problem } = await issueKey(c.services, issueInput, issuer, app)
+	const record = ({ credentialId }: { credentialId: string }) =>
+		adminEvent(c, {
+			action: 'iam.credential.create',
+			resourceType: 'credential',
+			resourceId: credentialId,
+			metadata: { app, label: label ?? null, grants },
+		})
+	const { result, problem } = await issueKey(c.services, issueInput, issuer, app, record)
 	if (!result.ok) {
 		// Admin already gated: a `problem` is a malformed request, anything else the delegation rule.
 		return problem === undefined ? fail(403, `not allowed: ${result.reason}`) : fail(400, problem)
 	}
-	await adminAudit(c, {
-		action: 'iam.credential.create',
-		resourceType: 'credential',
-		resourceId: result.id,
-		metadata: { app, label: auditLabel ?? null, grants },
-	})
 	const issued: IssuedShareLinkResponse = { id: result.id, token: result.token }
 	return issued
 }
@@ -118,12 +119,9 @@ export async function revokeShareLinkUseCase(c: AdminContext, input: { id: strin
 	if (!cred || cred.principal_id !== null) {
 		return fail(404, 'share link not found')
 	}
-	await c.services.repositories.credentials.revokeCredential(id)
-	await adminAudit(c, {
-		action: 'iam.credential.revoke',
-		resourceType: 'credential',
-		resourceId: id,
-		metadata: { label: cred.label },
-	})
+	await c.services.repositories.credentials.revokeCredential(
+		id,
+		adminEvent(c, { action: 'iam.credential.revoke', resourceType: 'credential', resourceId: id, metadata: { label: cred.label } }),
+	)
 	return { ok: true }
 }

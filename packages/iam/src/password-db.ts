@@ -1,6 +1,7 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from './email-identity'
 import type { StoredPasswordHash } from './password-crypto'
+import { type AuditEventInput, auditEventStatement } from './repositories/audit'
 import type { PrincipalRow } from './repositories/principals'
 
 export type PasswordActionPurpose = 'enrollment' | 'reset'
@@ -57,6 +58,12 @@ function unixNow(): number {
 	return Math.floor(Date.now() / 1000)
 }
 
+/** An administrator's issuance of an action: its record, and for an enrollment the opt-in it turns on. */
+export interface AdminIssuance {
+	readonly audit: AuditEventInput
+	readonly enableEnrollment: boolean
+}
+
 async function firstRow<T>(statement: SqlStatement): Promise<T> {
 	const row = await statement.first<T>()
 	if (row === null) {
@@ -74,14 +81,17 @@ export class PasswordRepository {
 
 	/** Preserve the administrator's opt-in independently of enrollment token lifetime. */
 	async enableEnrollment(principalId: string): Promise<void> {
+		await this.enableEnrollmentStatement(principalId).run()
+	}
+
+	private enableEnrollmentStatement(principalId: string): SqlStatement {
 		const now = unixNow()
-		await this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
+		return this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
 			VALUES (?, 'pending', ?, ?)
 			ON CONFLICT (principal_id) DO UPDATE SET
 				state = CASE WHEN password_accounts.state = 'enabled' THEN 'enabled' ELSE 'pending' END,
 				updated_at = excluded.updated_at`)
 			.bind(principalId, now, now)
-			.run()
 	}
 
 	async getCredential(principalId: string): Promise<PasswordCredentialRow | null> {
@@ -155,7 +165,7 @@ export class PasswordRepository {
 	}
 
 	/** Remove password login and revoke only sessions that originated from a password. */
-	async disableCredential(principalId: string): Promise<void> {
+	async disableCredential(principalId: string, audit?: AuditEventInput): Promise<void> {
 		const now = unixNow()
 		await this.db.batch([
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
@@ -166,6 +176,7 @@ export class PasswordRepository {
 			this.db.prepare(`UPDATE password_action_tokens SET consumed_at = ?
 				WHERE principal_id = ? AND consumed_at IS NULL`).bind(now, principalId),
 			this.revokePasswordSessionsStatement(principalId, now),
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit)]),
 		])
 	}
 
@@ -186,14 +197,14 @@ export class PasswordRepository {
 		tokenHash: string
 		issuedBy?: string | null
 		expiresAt: number
-	}): Promise<string> {
+	}, issuance?: AdminIssuance): Promise<string> {
 		const id = uuidv7()
 		const now = unixNow()
 		try {
-			await this.replaceActionToken(id, now, input)
+			await this.replaceActionToken(id, now, input, issuance)
 		} catch {
 			// A concurrent issuer may win the active-token unique index; retry once for last-writer-wins.
-			await this.replaceActionToken(id, now, input)
+			await this.replaceActionToken(id, now, input, issuance)
 		}
 		return id
 	}
@@ -208,14 +219,17 @@ export class PasswordRepository {
 			issuedBy?: string | null
 			expiresAt: number
 		},
+		issuance: AdminIssuance | undefined,
 	): Promise<void> {
 		await this.db.batch([
+			...(issuance?.enableEnrollment === true ? [this.enableEnrollmentStatement(input.principalId)] : []),
 			this.db.prepare(`UPDATE password_action_tokens SET consumed_at = ?
 				WHERE principal_id = ? AND purpose = ? AND consumed_at IS NULL`).bind(now, input.principalId, input.purpose),
 			this.db.prepare(`INSERT INTO password_action_tokens
 				(id, principal_id, purpose, token_hash, issued_by, expires_at, consumed_at, consumption_id, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`)
 				.bind(id, input.principalId, input.purpose, input.tokenHash, input.issuedBy ?? null, input.expiresAt, now),
+			...(issuance === undefined ? [] : [auditEventStatement(this.db, issuance.audit)]),
 		])
 	}
 

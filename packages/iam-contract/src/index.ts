@@ -298,11 +298,14 @@ export interface AuthLogDto {
 	id: number
 	requestId: string
 	app: string
-	kind: 'authenticate'
+	/** A login attempt or a mint (`authenticate`), or the end of a session (`logout`). */
+	kind: 'authenticate' | 'logout'
 	principalId: string | null
 	credentialId: string | null
 	decision: 'allow' | 'deny'
 	reason: string | null
+	/** The login opened a session of an installation administrator. */
+	privileged: boolean
 	createdAt: number
 }
 

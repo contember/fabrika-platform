@@ -91,8 +91,8 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const invitee = await f.person(`invitee-${fixtureSeq}`)
 		const principal = await repositories.principals.getPrincipalById(invitee.id)
 		if (principal === null) throw new Error('fixture')
-		expect((await acceptInvitation(f.services, principal, email.lastToken())).ok).toBe(true)
-		expect(await acceptInvitation(f.services, principal, email.lastToken())).toEqual({ ok: false, reason: 'invalid' })
+		expect((await acceptInvitation(f.services, principal, email.lastToken(), 'accept-req')).ok).toBe(true)
+		expect(await acceptInvitation(f.services, principal, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'invalid' })
 
 		const listed = await listMembers(f.services, CALLER_ENV, f.ctx, { app: APP, credential: await owner.token(), requestId: 'pg-list', scope })
 		if (!listed.ok) throw new Error('expected a list')
@@ -185,7 +185,7 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const invitee = await repositories.principals.getPrincipalById((await f.person(`removed-invitee-${fixtureSeq}`)).id)
 		if (invitee === null) throw new Error('fixture')
 		removing.removeBeforeAcceptance = { app: APP, principalId: owner.id, roleKey: 'owner', scope }
-		expect(await acceptInvitation(f.services, invitee, email.lastToken())).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
 		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
 		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])

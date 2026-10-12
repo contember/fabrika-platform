@@ -3,7 +3,7 @@ import type { IssueMembershipKeyRequest, IssueMembershipKeyResponse } from '@fab
 import { keyExpiryProblem } from '../issue'
 import { unixNow } from '../repositories/sql'
 import { generateToken, hashToken } from '../secret'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 
 /**
  * Issue a fresh membership transport key for one application environment (`src/membership-http.ts`). The key the caller
@@ -27,12 +27,12 @@ export async function issueMembershipKeyUseCase(c: AdminContext, input: IssueMem
 		expiresAt: input.expiresAt,
 		keep: input.keep,
 		now,
-	})
-	await adminAudit(c, {
-		action: 'iam.membership-key.issue',
-		resourceType: 'membership_transport_key',
-		resourceId: id,
-		metadata: { app: input.app, expiresAt: input.expiresAt, kept: input.keep },
-	})
+	}, (keyId) =>
+		adminEvent(c, {
+			action: 'iam.membership-key.issue',
+			resourceType: 'membership_transport_key',
+			resourceId: keyId,
+			metadata: { app: input.app, expiresAt: input.expiresAt, kept: input.keep },
+		}))
 	return { key, id, expiresAt: input.expiresAt }
 }

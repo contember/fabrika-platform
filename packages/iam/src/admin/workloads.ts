@@ -1,10 +1,11 @@
 import { API_KEY_PREFIX } from '@fabrika/auth-core'
 import type { IssueWorkloadKeyRequest, IssueWorkloadKeyResponse, RevokeWorkloadKeysRequest, RevokeWorkloadKeysResponse } from '@fabrika/iam-contract'
+import { uuidv7 } from '@fabrika/platform'
 import { principalStatus } from '../db'
 import { keyExpiryProblem } from '../issue'
 import { unixNow } from '../repositories/sql'
 import { generateToken, hashToken } from '../secret'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 
 /** A job or a webhook name of a contract, as `buildArtifact` admits it. */
 const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
@@ -37,25 +38,29 @@ export async function issueWorkloadKeyUseCase(c: AdminContext, input: IssueWorkl
 	}
 	const previous = (await c.services.repositories.credentials.listCredentialsForPrincipal(principal.id)).filter((row) => row.revoked_at === null)
 	const key = `${API_KEY_PREFIX}${generateToken()}`
-	const credentialId = await c.services.repositories.credentials.createCredential({
-		tokenHash: await hashToken(key),
-		label: principal.label,
-		principalId: principal.id,
-		app: input.app,
-		issuedBy: c.admin.id,
-		expiresAt: input.expiresAt,
-		grants: [],
-	})
+	const credentialId = uuidv7()
 	const orphans = previous.filter((row) => row.id !== input.keep)
-	for (const orphan of orphans) {
-		await c.services.repositories.credentials.revokeCredential(orphan.id)
-	}
-	await adminAudit(c, {
-		action: 'iam.workload.key.issue',
-		resourceType: 'principal',
-		resourceId: principal.id,
-		metadata: { app: input.app, kind: input.kind, name: input.name, expiresAt: input.expiresAt, kept: input.keep, revoked: orphans.length },
-	})
+	const { credentials, audit } = c.services.repositories
+	// The orphans go, the new key comes and the record is written in one transaction. The recorded count is the
+	// orphans this request saw.
+	await audit.commit([
+		credentials.revokeCredentialsForPrincipalStatement(principal.id, input.keep === null ? [] : [input.keep]),
+		...credentials.credentialStatements(credentialId, {
+			tokenHash: await hashToken(key),
+			label: principal.label,
+			principalId: principal.id,
+			app: input.app,
+			issuedBy: c.admin.id,
+			expiresAt: input.expiresAt,
+			grants: [],
+		}),
+		audit.eventStatement(adminEvent(c, {
+			action: 'iam.workload.key.issue',
+			resourceType: 'principal',
+			resourceId: principal.id,
+			metadata: { app: input.app, kind: input.kind, name: input.name, expiresAt: input.expiresAt, kept: input.keep, revoked: orphans.length },
+		})),
+	])
 	return { key, credentialId, principalId: principal.id, expiresAt: input.expiresAt }
 }
 
@@ -66,14 +71,15 @@ export async function revokeWorkloadKeysUseCase(c: AdminContext, input: RevokeWo
 		return { revoked: 0 }
 	}
 	const live = (await c.services.repositories.credentials.listCredentialsForPrincipal(principalId)).filter((row) => row.revoked_at === null)
-	for (const row of live) {
-		await c.services.repositories.credentials.revokeCredential(row.id)
-	}
-	await adminAudit(c, {
-		action: 'iam.workload.key.revoke',
-		resourceType: 'principal',
-		resourceId: principalId,
-		metadata: { app: input.app, kind: input.kind, name: input.name, revoked: live.length },
-	})
+	const { credentials, audit } = c.services.repositories
+	await audit.commit([
+		credentials.revokeCredentialsForPrincipalStatement(principalId),
+		audit.eventStatement(adminEvent(c, {
+			action: 'iam.workload.key.revoke',
+			resourceType: 'principal',
+			resourceId: principalId,
+			metadata: { app: input.app, kind: input.kind, name: input.name, revoked: live.length },
+		})),
+	])
 	return { revoked: live.length }
 }

@@ -1,4 +1,5 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
+import { type AuditEventInput, auditEventStatement } from './audit'
 import { unixNow } from './sql'
 
 /** A single-use cross-host handoff code (`auth_codes`). Only its hash is stored. */
@@ -34,13 +35,16 @@ export class HandoffRepository {
 	 * ONE batch, like `reconcileAppSchema`: a failure between the DELETE and the INSERTs would leave
 	 * the app with no registered origin, which is a hard refusal on every cross-host sign-in.
 	 */
-	async setReturnOrigins(app: string, origins: readonly string[]): Promise<void> {
+	async setReturnOrigins(app: string, origins: readonly string[], audit?: AuditEventInput): Promise<void> {
 		const now = unixNow()
 		const statements: SqlStatement[] = [this.db.prepare('DELETE FROM app_return_origins WHERE app = ?').bind(app)]
 		for (const origin of origins) {
 			statements.push(
 				this.db.prepare('INSERT INTO app_return_origins (app, origin, created_at) VALUES (?, ?, ?)').bind(app, origin, now),
 			)
+		}
+		if (audit !== undefined) {
+			statements.push(auditEventStatement(this.db, audit))
 		}
 		await this.db.batch(statements)
 	}

@@ -1,5 +1,6 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from '../email-identity'
+import { type AuditEventInput, auditEventStatement } from './audit'
 import { firstRow, unixNow } from './sql'
 
 export interface PrincipalRow {
@@ -121,8 +122,8 @@ export class PrincipalRepository {
 		])
 	}
 
-	/** Invite a user by mailbox (external_id NULL = unclaimed), reserving it in the same transaction. */
-	async inviteUser(email: string, label: string = email): Promise<PrincipalRow> {
+	/** Invite a user by mailbox (external_id NULL = unclaimed), reserving it and writing `audit` in the same transaction. */
+	async inviteUser(email: string, label: string = email, audit?: (principalId: string) => AuditEventInput): Promise<PrincipalRow> {
 		const id = uuidv7()
 		const mailbox = normalizeEmailIdentity(email)
 		return this.insertUser([
@@ -131,6 +132,7 @@ export class PrincipalRepository {
 					VALUES (?, 'user', NULL, ?, ?, ?) RETURNING *`)
 				.bind(id, mailbox, label, unixNow()),
 			this.claimMailboxStatement(mailbox, id),
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit(id))]),
 		])
 	}
 
@@ -160,14 +162,16 @@ export class PrincipalRepository {
 	 * legacy CF service-token path still resolves existing services by their stored external_id.)
 	 */
 	async createService(label: string): Promise<PrincipalRow> {
-		const id = uuidv7()
+		return firstRow<PrincipalRow>(this.createServiceStatement(uuidv7(), label))
+	}
+
+	/** The INSERT of a native service principal with a caller-generated id, for a batch that also writes its key. */
+	createServiceStatement(id: string, label: string): SqlStatement {
 		const now = unixNow()
-		return firstRow<PrincipalRow>(
-			this.db
-				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
-					VALUES (?, 'service', NULL, NULL, ?, ?, ?) RETURNING *`)
-				.bind(id, label, now, now),
-		)
+		return this.db
+			.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
+				VALUES (?, 'service', NULL, NULL, ?, ?, ?) RETURNING *`)
+			.bind(id, label, now, now)
 	}
 
 	/**
@@ -246,20 +250,39 @@ export class PrincipalRepository {
 		return results
 	}
 
-	async disablePrincipal(id: string): Promise<boolean> {
-		const result = await this.db
-			.prepare('UPDATE principals SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL')
-			.bind(unixNow(), id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	/** Disable a principal. Returns whether this call disabled it; `audit` is written only then. */
+	disablePrincipal(id: string, audit?: AuditEventInput): Promise<boolean> {
+		return this.guardedUpdate(id, this.disablePrincipalStatement(id), 'disabled_at IS NULL', audit)
 	}
 
-	async enablePrincipal(id: string): Promise<boolean> {
-		const result = await this.db
-			.prepare('UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL')
-			.bind(id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	disablePrincipalStatement(id: string): SqlStatement {
+		return this.db.prepare('UPDATE principals SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL RETURNING id').bind(unixNow(), id)
+	}
+
+	/** Enable a principal. Returns whether this call enabled it; `audit` is written only then. */
+	enablePrincipal(id: string, audit?: AuditEventInput): Promise<boolean> {
+		return this.guardedUpdate(
+			id,
+			this.db.prepare('UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL RETURNING id').bind(id),
+			'disabled_at IS NOT NULL',
+			audit,
+		)
+	}
+
+	/**
+	 * Run an UPDATE … RETURNING guarded by `guard`, recording `audit` exactly when it matched: the row is locked first,
+	 * so a concurrent change of the same principal waits and then reads the guard false.
+	 */
+	private async guardedUpdate(id: string, update: SqlStatement, guard: string, audit: AuditEventInput | undefined): Promise<boolean> {
+		if (audit === undefined) {
+			return (await update.all()).results.length > 0
+		}
+		const [, , updated] = await this.db.batch([
+			this.db.prepare('UPDATE principals SET created_at = created_at WHERE id = ?').bind(id),
+			auditEventStatement(this.db, audit, { sql: `EXISTS (SELECT 1 FROM principals WHERE id = ? AND ${guard})`, binds: [id] }),
+			update,
+		])
+		return (updated?.results.length ?? 0) > 0
 	}
 
 	/** Hard-delete a principal (cancels an unclaimed invite; cascades grants). */

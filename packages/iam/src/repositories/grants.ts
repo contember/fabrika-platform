@@ -1,4 +1,5 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
+import { type AuditEventInput, auditEventStatement } from './audit'
 import { firstRow, unixNow } from './sql'
 
 /** A grant written for a workload principal: its authority is its declared actions, never a grant. */
@@ -115,10 +116,18 @@ export class GrantRepository {
 	 * action-pattern set, JSON-encoded here) — the caller MUST supply exactly one; the
 	 * DB CHECK rejects both/neither. `scopeType`/`scopeValue` are both-or-neither (both
 	 * null = global). The handler validates which is set; this layer just persists it.
+	 * `audit` is the change's record, written in the same batch.
 	 */
-	async createGrant(input: CreateGrantInput): Promise<GrantRow> {
+	async createGrant(input: CreateGrantInput, audit?: (grantId: string) => AuditEventInput): Promise<GrantRow> {
 		await this.refuseWorkload(input.principalId)
-		return firstRow<GrantRow>(this.insertGrant(input, ''))
+		const id = uuidv7()
+		if (audit === undefined) {
+			return firstRow<GrantRow>(this.grantStatement(id, input, ''))
+		}
+		const [created] = await this.db.batch<GrantRow>([this.grantStatement(id, input, ''), auditEventStatement(this.db, audit(id))])
+		const row = created?.results[0]
+		if (row === undefined) throw new Error('expected a row from a RETURNING statement, got none')
+		return row
 	}
 
 	/** Whether `principalId` is a job's, a webhook's or a connector's principal, which holds no grant. */
@@ -138,20 +147,34 @@ export class GrantRepository {
 	 * the one unique index this grant falls under (`idx_grants_uq_scoped` / `idx_grants_uq_global`), so
 	 * the statement itself decides on both engines and any other failure still throws.
 	 */
-	async createRoleGrantUnlessHeld(input: CreateGrantInput & { roleKey: string; permissions?: null }): Promise<GrantRow | null> {
+	async createRoleGrantUnlessHeld(
+		input: CreateGrantInput & { roleKey: string; permissions?: null },
+		audit?: (grantId: string) => AuditEventInput,
+	): Promise<GrantRow | null> {
 		await this.refuseWorkload(input.principalId)
 		const target = input.scopeValue == null
 			? `(principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL`
 			: `(principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL`
-		return this.insertGrant(input, `ON CONFLICT ${target} DO NOTHING`).first<GrantRow>()
+		const id = uuidv7()
+		const insert = this.grantStatement(id, input, `ON CONFLICT ${target} DO NOTHING`)
+		if (audit === undefined) {
+			return insert.first<GrantRow>()
+		}
+		// The id is this call's own, so the row is recorded exactly when this statement inserted it.
+		const [created] = await this.db.batch<GrantRow>([
+			insert,
+			auditEventStatement(this.db, audit(id), { sql: 'EXISTS (SELECT 1 FROM grants WHERE id = ?)', binds: [id] }),
+		])
+		return created?.results[0] ?? null
 	}
 
-	private insertGrant(input: CreateGrantInput, onConflict: string): SqlStatement {
+	/** The INSERT of one grant with a caller-generated id, for a batch that also writes its principal and record. */
+	grantStatement(id: string, input: CreateGrantInput, onConflict: string = ''): SqlStatement {
 		return this.db
 			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${onConflict} RETURNING *`)
 			.bind(
-				uuidv7(),
+				id,
 				input.principalId,
 				input.app ?? null,
 				input.roleKey ?? null,
@@ -164,13 +187,29 @@ export class GrantRepository {
 			)
 	}
 
-	async deleteGrant(id: string): Promise<boolean> {
-		const result = await this.db.prepare('DELETE FROM grants WHERE id = ?').bind(id).run()
-		return (result.meta.changes ?? 0) > 0
+	/**
+	 * Delete a grant. With `audit`, the record is written only when the grant still exists, behind a row lock, so two
+	 * concurrent deletes record one removal.
+	 */
+	async deleteGrant(id: string, audit?: AuditEventInput): Promise<boolean> {
+		const remove = this.db.prepare('DELETE FROM grants WHERE id = ? RETURNING id').bind(id)
+		if (audit === undefined) {
+			return (await remove.all()).results.length > 0
+		}
+		const [, , removed] = await this.db.batch([
+			this.db.prepare('UPDATE grants SET created_at = created_at WHERE id = ?').bind(id),
+			auditEventStatement(this.db, audit, { sql: 'EXISTS (SELECT 1 FROM grants WHERE id = ?)', binds: [id] }),
+			remove,
+		])
+		return (removed?.results.length ?? 0) > 0
 	}
 
 	/** Delete all grants for a principal (revocation). */
 	async deleteGrantsForPrincipal(principalId: string): Promise<void> {
-		await this.db.prepare('DELETE FROM grants WHERE principal_id = ?').bind(principalId).run()
+		await this.deleteGrantsForPrincipalStatement(principalId).run()
+	}
+
+	deleteGrantsForPrincipalStatement(principalId: string): SqlStatement {
+		return this.db.prepare('DELETE FROM grants WHERE principal_id = ?').bind(principalId)
 	}
 }

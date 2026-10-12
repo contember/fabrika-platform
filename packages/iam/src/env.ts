@@ -40,6 +40,16 @@ export interface Env {
 	 * means OAuth is off and its routes 404. Deploy var `FABRIKA_IAM_OAUTH_CONFIG`. Malformed fails the boot.
 	 */
 	OAUTH_CONFIG?: string
+	/**
+	 * Days the maintenance cron keeps `auth_log` rows; unset means 30. Deploy var
+	 * `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`. A value that is not a whole number of days fails the boot.
+	 */
+	AUTH_LOG_RETENTION_DAYS?: string
+	/**
+	 * Days the maintenance cron keeps `audit_events` rows; unset keeps them all. Deploy var
+	 * `FABRIKA_IAM_AUDIT_RETENTION_DAYS`. A value that is not a whole number of days fails the boot.
+	 */
+	AUDIT_RETENTION_DAYS?: string
 	/** `local` / `stage` / `prod`. */
 	ENVIRONMENT: string
 	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */

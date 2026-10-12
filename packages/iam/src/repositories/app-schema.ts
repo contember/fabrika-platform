@@ -1,6 +1,7 @@
 import type { WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
+import { type AuditEventInput, auditEventStatement } from './audit'
 import { firstRow, unixNow } from './sql'
 
 /** A role/policy bundle row (the `roles` table). `permissions` is a JSON array string. */
@@ -121,10 +122,9 @@ export class AppSchemaRepository {
 		description?: string | null
 		permissions: string[]
 		origin: 'app' | 'custom'
-	}): Promise<RoleRow> {
-		return firstRow<RoleRow>(
-			this.db
-				.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, created_at)
+	}, audit?: AuditEventInput): Promise<RoleRow> {
+		const upsert = this.db
+			.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, created_at)
 					VALUES (?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT (app, role_key) DO UPDATE SET
 						name = excluded.name,
@@ -132,21 +132,39 @@ export class AppSchemaRepository {
 						permissions = excluded.permissions,
 						origin = excluded.origin
 					RETURNING *`)
-				.bind(
-					input.app,
-					input.roleKey,
-					input.name,
-					input.description ?? null,
-					JSON.stringify(input.permissions),
-					input.origin,
-					unixNow(),
-				),
-		)
+			.bind(
+				input.app,
+				input.roleKey,
+				input.name,
+				input.description ?? null,
+				JSON.stringify(input.permissions),
+				input.origin,
+				unixNow(),
+			)
+		if (audit === undefined) {
+			return firstRow<RoleRow>(upsert)
+		}
+		const [written] = await this.db.batch<RoleRow>([upsert, auditEventStatement(this.db, audit)])
+		const row = written?.results[0]
+		if (row === undefined) throw new Error('expected a row from a RETURNING statement, got none')
+		return row
 	}
 
-	async deleteRole(app: string, roleKey: string): Promise<boolean> {
-		const result = await this.db.prepare('DELETE FROM roles WHERE app = ? AND role_key = ?').bind(app, roleKey).run()
-		return (result.meta.changes ?? 0) > 0
+	/**
+	 * Delete a role. `audit` is written only when the role still exists, behind a row lock, so two concurrent deletes
+	 * record one removal.
+	 */
+	async deleteRole(app: string, roleKey: string, audit?: AuditEventInput): Promise<boolean> {
+		const remove = this.db.prepare('DELETE FROM roles WHERE app = ? AND role_key = ? RETURNING role_key').bind(app, roleKey)
+		if (audit === undefined) {
+			return (await remove.all()).results.length > 0
+		}
+		const [, , removed] = await this.db.batch([
+			this.db.prepare('UPDATE roles SET created_at = created_at WHERE app = ? AND role_key = ?').bind(app, roleKey),
+			auditEventStatement(this.db, audit, { sql: 'EXISTS (SELECT 1 FROM roles WHERE app = ? AND role_key = ?)', binds: [app, roleKey] }),
+			remove,
+		])
+		return (removed?.results.length ?? 0) > 0
 	}
 
 	/** The app's action catalog as plain strings — the validation source for patterns. */
@@ -243,7 +261,7 @@ export class AppSchemaRepository {
 		links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
 		delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
 		workloads?: { kind: WorkloadKind; name: string; actions: string[] }[]
-	}): Promise<void> {
+	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
 			this.db.prepare('DELETE FROM app_scopes WHERE app = ?').bind(app),
@@ -379,6 +397,9 @@ export class AppSchemaRepository {
 						AND NOT EXISTS (SELECT 1 FROM app_scopes s WHERE s.app = ? AND s.members_list IS NOT NULL)`)
 				.bind(app, app, app, app),
 		)
+		if (audit !== undefined) {
+			statements.push(auditEventStatement(this.db, audit))
+		}
 
 		await this.db.batch(statements)
 	}

@@ -14,7 +14,7 @@ import type { z } from 'zod'
 import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
 import { parseStoredPermissions } from '../stored-permissions'
-import { adminAudit, type AdminContext, fail } from './context'
+import { type AdminContext, adminEvent, fail } from './context'
 import { dbRoleToDef, knownApps, rolePermissions } from './grant-support'
 import { error, json, readJson } from './http'
 
@@ -141,44 +141,46 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				+ 'Delete or re-scope those grants first.',
 		)
 	}
-	await c.services.repositories.appSchema.reconcileAppSchema({
-		app,
-		scopes: schema.scopes.map((s) => ({
-			scopeType: s.type,
-			label: s.label ?? null,
-			parentScope: s.in ?? null,
-			creatorRole: s.creator ?? null,
-			members: s.members ?? null,
-			directory: s.directory ?? null,
-		})),
-		actions: schema.actions.map((a) => ({ action: a.action, description: a.description ?? null })),
-		roles: Object.entries(schema.roles).map(([roleKey, def]) => ({
-			roleKey,
-			name: def.name,
-			description: def.description ?? null,
-			permissions: def.permissions,
-			memberScope: def.member?.scope ?? null,
-			assignableBy: def.member?.assignableBy ?? null,
-		})),
-		contract: schema.contract === true,
-		links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),
-		delegations: Object.entries(schema.delegations ?? {}).map(([endpoint, delegation]) => ({ endpoint, ...delegation })),
-		workloads: schema.workloads ?? [],
-	})
-	await adminAudit(c, {
-		action: 'iam.app.schema.reconcile',
-		resourceType: 'app',
-		resourceId: app,
-		metadata: {
-			scopes: schema.scopes.length,
-			actions: schema.actions.length,
-			roles: Object.keys(schema.roles),
+	await c.services.repositories.appSchema.reconcileAppSchema(
+		{
+			app,
+			scopes: schema.scopes.map((s) => ({
+				scopeType: s.type,
+				label: s.label ?? null,
+				parentScope: s.in ?? null,
+				creatorRole: s.creator ?? null,
+				members: s.members ?? null,
+				directory: s.directory ?? null,
+			})),
+			actions: schema.actions.map((a) => ({ action: a.action, description: a.description ?? null })),
+			roles: Object.entries(schema.roles).map(([roleKey, def]) => ({
+				roleKey,
+				name: def.name,
+				description: def.description ?? null,
+				permissions: def.permissions,
+				memberScope: def.member?.scope ?? null,
+				assignableBy: def.member?.assignableBy ?? null,
+			})),
 			contract: schema.contract === true,
-			links: Object.keys(schema.links ?? {}),
-			delegations: Object.keys(schema.delegations ?? {}),
-			workloads: (schema.workloads ?? []).map((workload) => `${workload.kind}:${workload.name}`),
+			links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),
+			delegations: Object.entries(schema.delegations ?? {}).map(([endpoint, delegation]) => ({ endpoint, ...delegation })),
+			workloads: schema.workloads ?? [],
 		},
-	})
+		adminEvent(c, {
+			action: 'iam.app.schema.reconcile',
+			resourceType: 'app',
+			resourceId: app,
+			metadata: {
+				scopes: schema.scopes.length,
+				actions: schema.actions.length,
+				roles: Object.keys(schema.roles),
+				contract: schema.contract === true,
+				links: Object.keys(schema.links ?? {}),
+				delegations: Object.keys(schema.delegations ?? {}),
+				workloads: (schema.workloads ?? []).map((workload) => `${workload.kind}:${workload.name}`),
+			},
+		}),
+	)
 	return json(await readAppSchemaDto(c, app))
 }
 
@@ -242,13 +244,11 @@ export async function setReturnOriginsUseCase(c: AdminContext, input: SetReturnO
 			origins.push(normalized)
 		}
 	}
-	await c.services.repositories.handoff.setReturnOrigins(input.app, origins)
-	await adminAudit(c, {
-		action: 'iam.app.return-origins.set',
-		resourceType: 'app',
-		resourceId: input.app,
-		metadata: { origins },
-	})
+	await c.services.repositories.handoff.setReturnOrigins(
+		input.app,
+		origins,
+		adminEvent(c, { action: 'iam.app.return-origins.set', resourceType: 'app', resourceId: input.app, metadata: { origins } }),
+	)
 	return { app: input.app, origins }
 }
 
