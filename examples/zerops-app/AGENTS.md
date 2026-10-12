@@ -342,7 +342,19 @@ export default serve(contract, { database: scoped(tables) })
 
 - Mounts: `c.rpc(prefix, groups)` once per prefix, `c.spa(prefix, { dir, access })`, `c.health('/healthz')` (required
   on Zerops), `c.form(path, { input, appendTo })` (an anonymous form that appends one row and runs no handler), a
-  webhook, a link mount. Sections: `files`, `jobs`, `exports`, `csp`. No path under `/__fabrika`.
+  webhook, a link mount. Sections: `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`,
+  `scriptSrc`, `frameSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). No path under
+  `/__fabrika`.
+- A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
+  every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
+  field the page hides; a filled one gets the same answer and writes nothing) and
+  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }`. A challenge needs the input field
+  `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set to the
+  form's mount name; the framework verifies it on the server (a failed token 400, an unreachable provider 503, no
+  row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
+  never the value; without it the application does not boot. Neither field reaches the inbox, so neither is a
+  column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
+  per-form limit: raise it, and use the challenge.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`.
