@@ -28,6 +28,7 @@ bun test src/__tests__/orm-types.test.ts        # the data mistakes of a kit han
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 bun test src/__tests__/scoped-database.test.ts  # a handler tree over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own target, seeds, link holder, runJob (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside form inboxes, a challenge and a scan (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc

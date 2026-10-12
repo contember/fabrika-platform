@@ -19,9 +19,11 @@ import type { IsolationWorlds, SampleValue, TestDatabase } from '@fabrika/db/tes
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
+import { compileContract } from '../contract/compile'
 import { GENERATED_MEMBER } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
-import type { ContractImplementation } from '../implement/implement'
+import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan'
+import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { TestCaller, TestGrant } from './caller'
 import { testKit } from './kit'
 
@@ -157,13 +159,48 @@ function worldValues(worlds: IsolationWorlds, world: 'own' | 'other'): string[] 
 	return [...new Set([row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.chain.map((link) => link.value), ...row.markers])]
 }
 
+/** The cases' scanner: a file it reads in full is clean, so a seeded upload of a `scan: true` collection is served. */
+const cleanScanner: FileScanner = {
+	async scan(objects, signal) {
+		const verdicts = new Map<string, ScanVerdict>()
+		for (const object of objects) {
+			try {
+				await new Response(await object.open(signal)).arrayBuffer()
+				verdicts.set(object.id, { kind: 'clean' })
+			} catch {
+				// No verdict: the file stays quarantined, and its case answers the 409 that shows it.
+			}
+		}
+		return { ok: true, verdicts }
+	},
+}
+
+/**
+ * The variables `boot` requires of `app` that a generated case never uses: each form challenge's secret, since no case
+ * submits a form. The kit's challenge stand-in refuses every token, so no verification leaves the process.
+ */
+function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationEnvironment {
+	const artifact = compileContract(app.contract, app.database?.tables ?? {})
+	return Object.fromEntries(
+		Object.values(artifact.mounts).flatMap((
+			mount,
+		) => (mount.kind === 'form' && mount.challenge !== undefined ? [[mount.challenge.secret, 'unused']] : [])),
+	)
+}
+
 /**
  * The endpoint access kit of `app`, whose data layer is `scoped(tables)`, over `postgres`. It boots `app` once, so the
  * application's layer is bound here and nowhere else in the process.
  */
 export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract>, tables: Tables<DB, P>, postgres: TestDatabase): EndpointAccessKit {
 	// The objects of the files the cases seed live in memory; their rows are the application's own tables.
-	const kit = testKit(app, { database: postgres.database, files: new MemoryFileObjects() })
+	const kit = testKit(app, {
+		database: postgres.database,
+		files: new MemoryFileObjects(),
+		scanner: cleanScanner,
+		env: unusedVariables(app),
+		challengeFetch: () => Promise.resolve(Response.json({ success: false, 'error-codes': ['invalid-input-response'] })),
+	})
 	const policies = tablePolicies(tables)
 	const tableNames = Object.keys(policies).sort()
 
@@ -267,7 +304,9 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			if (response.status !== 200) throw new Error(`files.${name}.upload: seeding a file of the ${world} scope answered ${response.status}`)
 			return uploadedSchema.parse(await response.json()).result.id
 		}
-		return { collection, worlds, own: await put('own'), other: await put('other') }
+		const seeded = { collection, worlds, own: await put('own'), other: await put('other') }
+		if (collection.scan === true) await kit.runJob(FILE_SCAN_JOB)
+		return seeded
 	}
 
 	/** Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two fresh scope values. */

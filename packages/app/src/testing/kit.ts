@@ -30,7 +30,7 @@ import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract } from '../contract/define'
 import type { RequestExecutionContext } from '../fetch'
-import type { FileScanner } from '../files/scan'
+import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
 import type { ChallengeFetch } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
@@ -95,10 +95,11 @@ export interface TestKit<C extends AnyContract> {
 	readonly iam: IamGateway
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
-	 * its key, its writes fenced. It first waits for the runs a form's `then` kicked, so it never races them. Needs the
-	 * application's data layer on Postgres.
+	 * its key, its writes fenced. It first waits for the runs a form's `then` kicked, so it never races them.
+	 * `FILE_SCAN_JOB` runs the scan of `scan: true` collections with the kit's `scanner`. Needs the application's data
+	 * layer on Postgres.
 	 */
-	runJob(name: JobName<C>, options?: JobRunOptions): Promise<JobRunResult>
+	runJob(name: JobName<C> | typeof FILE_SCAN_JOB, options?: JobRunOptions): Promise<JobRunResult>
 }
 
 /** The names of the contract's cron jobs. */
