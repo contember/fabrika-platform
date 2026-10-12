@@ -977,3 +977,17 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   three-argument `RowOf<DB, P, T>` of the root is renamed `PolicyRow` (store-internal). The probe app is
   `packages/app/src/__tests__/probe-tasks/` (`assign`, `close`, `update`, `mine` over org, `markOverdue` on the
   handles), run on Postgres by `probe-tasks.test.ts`; its vocabulary is named `notes` because the harness signs for it.
+- **WU13a review round 1.** (1) Transitive reach trusted an inherited chain column the database did not tie to the
+  owner (a task of an `o2` project carrying `org_id = o1` listed under `o1`). The parse now requires the containment
+  column and the inherited chain in one composite foreign key to the owner (`requireCoveringKey`), naming the key to add;
+  every committed fixture and example already had it, so no migration changed. (2) A `date` is selected as the
+  database's text (`cast(… as text)`, which the guard already admits as a selected own column); a `Date` that still
+  arrives (an aggregate's `min`/`max`, a store's joined column) must be an exact UTC midnight in 0001–9999, witnessed in
+  `Europe/Prague`, where Bun decodes `10000-01-01` as `9999-12-31T23:00Z`. `days.ts` is `temporal.ts` now. (3) The
+  column list gains `timestamps: [...]` (only where there are some): a write's text is strict ISO 8601 with `Z` or an
+  offset and a day's a real `YYYY-MM-DD`, checked in `readValues` before anything is sent. (4) `DbIndex<DB, P, V>` takes
+  the vocabulary (`defineApp` passes it, one edit in `contract/kit.ts`), so the types follow the chain past an unowned
+  dimension (`sparse-types.ts`). After the rebase onto WU8, `NoTablesIndex` (`contract/context.ts`) names `within`.
+- **WU13a, from WU10's integration.** The scaffold wrote a hidden-column case for a column with only a write action;
+  it now writes one only for a column with its own read action (`scaffold-cases.test.ts`). Not done: a generated
+  column-write case, which needs a probe mutation of the column's action in `@fabrika/app/testing/isolation`.
