@@ -98,6 +98,16 @@ if (postgres !== null) {
 	})
 
 	describe('the pipeline report', () => {
+		test('a stage total beyond a 32-bit integer is answered exactly', async () => {
+			const big = apiOf(inOrg('manager', 'initech'))
+			const { id: companyId } = await big.companies.create({ orgId: 'initech', name: 'Big Money', website: null })
+			for (const title of ['Huge', 'Huger']) {
+				await big.deals.create({ companyId, title, value: 1_500_000_000, stage: 'qualified', source: null })
+			}
+			const qualified = (await big.deals.pipeline()).stages.find((stage) => stage.stage === 'qualified')
+			expect(qualified).toEqual({ stage: 'qualified', count: 2, value: 3_000_000_000 })
+		})
+
 		test('counts and sums the deals of each stage in pipeline order, empty stages included, of the caller’s orgs only', async () => {
 			const before = await viewer.deals.pipeline()
 			await newDeal('Big', 'lead', 5000)

@@ -5,7 +5,7 @@ import { ConflictError, fromRow } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { ById, DEAL_STAGES, Done, MaybeText, Name, Next, OptionalText, Page, Person, Saved, Stage, Versioned } from '../schemas'
-import { isClosed } from './logic'
+import { isClosed, safeTotal } from './logic'
 
 const Deal = z.strictObject({
 	id: z.uuid(),
@@ -24,6 +24,7 @@ const EditDeal = z.strictObject({ id: z.uuid(), title: Name, value: z.int().min(
 const MoveDeal = z.strictObject({ id: z.uuid(), stage: Stage, expectVersion: z.int().positive() })
 const AssignDeal = z.strictObject({ id: z.uuid(), owner: Person, expectVersion: z.int().positive() })
 const StageTotal = z.strictObject({ stage: Stage, count: z.int(), value: z.int() })
+const StageSum = z.strictObject({ stage: Stage, count: z.int(), value: z.string().regex(/^-?[0-9]+$/) })
 const Pipeline = z.strictObject({ stages: z.array(StageTotal) })
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
@@ -35,12 +36,12 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 	// Every stage in pipeline order, an empty one included, in one statement: the reason this report is SQL.
 	pipeline: r.query({ output: Pipeline, access: { action: 'crm.read', over: 'org' }, sql: 'read' })
 		.handle(async ({ ctx }) => ({
-			stages: await ctx.sql(StageTotal)`
-				select s.stage, count(d.id)::int as count, coalesce(sum(d.value), 0)::int as value
+			stages: (await ctx.sql(StageSum)`
+				select s.stage, count(d.id)::int as count, coalesce(sum(d.value), 0) as value
 				from unnest(${[...DEAL_STAGES]}::deal_stage[]) as s (stage)
 				left join deals d on d.stage = s.stage and ${ctx.sql.scope(ctx.within, 'deals', 'd')}
 				group by s.stage
-				order by s.stage`,
+				order by s.stage`).map((row) => ({ ...row, value: safeTotal(row.value) })),
 		})),
 	get: r.query({ input: ById, output: Deal, access: { action: 'crm.read', on: 'deal', from: 'id' } })
 		.handle(async ({ ctx }) => fromRow(Deal, await ctx.db.target.get())),
@@ -63,8 +64,5 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			ctx.db.target.update({ owner: input.owner.principalId, owner_label: input.owner.label }, { expectVersion: input.expectVersion })
 		),
 	remove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'deal', from: 'id' } })
-		.handle(async ({ input, ctx }) => {
-			await ctx.db.target.remove({ expectVersion: input.expectVersion })
-			return { id: ctx.target.value }
-		}),
+		.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),
 }))

@@ -21,8 +21,5 @@ export const companies = app.group({ callers: ['human'] }, (r) => ({
 	edit: r.mutation({ input: EditCompany, output: Saved, access: { action: 'crm.write', on: 'company', from: 'id' } })
 		.handle(({ input, ctx }) => ctx.db.target.update({ name: input.name, website: input.website }, { expectVersion: input.expectVersion })),
 	remove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'company', from: 'id' } })
-		.handle(async ({ input, ctx }) => {
-			await ctx.db.target.remove({ expectVersion: input.expectVersion })
-			return { id: ctx.target.value }
-		}),
+		.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),
 }))

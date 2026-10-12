@@ -33,16 +33,18 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 		.handle(({ input, ctx }) => ctx.db.target.update({ done: input.done }, { expectVersion: input.expectVersion })),
 }))
 
-/** Marks open tasks past their due day, at most 500 an hour; the next run takes the rest, and a retry lists again. */
+/** Marks every open task past its due day, hourly. A retried attempt lists again, so it marks no task twice. */
 export const overdue = app.cron('15 * * * *', { actions: ['crm.read', 'tasks.write'], scope: 'app', timeout: '5m', retries: 2 })
 	.handle(async ({ ctx }) => {
 		const today = new Date().toISOString().slice(0, 10)
-		const due = await ctx.db.over(ctx.within('crm.read', 'deal')).tasks.list({
-			where: [['done', '=', false], ['overdue', '=', false], ['due_on', '<', today]],
-			limit: 500,
-		})
-		for (const task of due.items) {
-			const ref = await ctx.ref('tasks.write', 'task', task.id)
-			await ctx.transaction((tx) => tx.db.on(ref).update({ overdue: true }, { expectVersion: task.version }))
-		}
+		const open = ctx.db.over(ctx.within('crm.read', 'deal')).tasks
+		let after: string | undefined
+		do {
+			const page = await open.list({ where: [['done', '=', false], ['overdue', '=', false], ['due_on', '<', today]], limit: 100, after })
+			for (const task of page.items) {
+				const ref = await ctx.ref('tasks.write', 'task', task.id)
+				await ctx.transaction((tx) => tx.db.on(ref).update({ overdue: true }, { expectVersion: task.version }))
+			}
+			after = page.next ?? undefined
+		} while (after !== undefined)
 	})

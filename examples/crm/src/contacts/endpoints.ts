@@ -21,8 +21,5 @@ export const contacts = app.group({ callers: ['human'] }, (r) => ({
 	edit: r.mutation({ input: EditContact, output: Saved, access: { action: 'crm.write', on: 'contact', from: 'id' } })
 		.handle(({ input: { expectVersion, ...contact }, ctx }) => ctx.db.target.update(contact, { expectVersion })),
 	remove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'contact', from: 'id' } })
-		.handle(async ({ input, ctx }) => {
-			await ctx.db.target.remove({ expectVersion: input.expectVersion })
-			return { id: ctx.target.value }
-		}),
+		.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),
 }))
