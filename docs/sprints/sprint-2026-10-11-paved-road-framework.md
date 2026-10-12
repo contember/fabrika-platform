@@ -739,7 +739,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   | migrations                                                                    |                 115 |                            117 |
   | authored tests (+ fixtures)                                                   |                 236 |                      349 (+ 2) |
 
-  Pass: 399 ≤ 400 with 30 RPC endpoints against the baseline's 25, and no file that only mirrors another (the
+  Pass: 399 ≤ 400 with 28 RPC endpoints (33 endpoints in all: 3 file endpoints, the SPA, the health check) against the baseline's 25 RPC endpoints, and no file that only mirrors another (the
   handler tree, `database.ts` and the stores are gone). 383 lines without comments and blank lines. The margin is thin:
   the 400 needed cutting restating comments, one-line schemas through a shared `MaybeText`, and destructuring edit
   inputs (`({ input: { expectVersion, ...contact } })`: a handler's input omits the access form's `from` field, so the
@@ -777,3 +777,22 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `--isolate`) a second `Bun.build` with an `onLoad` plugin in one process fails with `EISDIR reading file` on workspace
   sources, whichever example builds second (Bun 1.3.14; two builds in a plain `bun` script pass). Each example's SPA
   bundle test builds once, so one process per example sidesteps it.
+- **WU11 review round 1.** (2) The `overdue` job read one page of 500 and reported success with tasks left; it pages
+  through every task (100 a page) with the `overdue = false` filter and versioned, fenced writes.
+  `src/tasks/__tests__/overdue.test.ts` marks 130 tasks whose first attempt times out once it has committed some (its
+  `JobClock` fires the deadline then): the run succeeds on attempt 2, every task is at version 2, and a second run
+  changes nothing. A raw-SQL fault trigger was refused by `fabrika-check` in a test (`forbidden-global` for `bun`'s
+  `SQL`, `env-read`), so the clock is the only fault an application test can inject. (4) `deals.pipeline` cast each
+  sum to `INTEGER`, so two deals of 1.5e9 broke it; the sum stays `bigint`, arrives as text
+  (`z.string().regex(…)`) and `safeTotal` (`src/deals/logic.ts`) refuses one past 2^53 − 1 instead of rounding (a
+  3e9 case in `deals.test.ts`, the edges in `logic.test.ts`). (3) `TRIAL.md`: a copy is renamed
+  `fabrika-example-crm-trial-<group>` (two workspaces of one name stop `bun install`), the SPA's script, build line and
+  `web/**/*` include go with it, and group C's contract comment drops the job; checked for C beside `examples/crm`
+  (136 tests). (5) 28 RPC endpoints, 33 in all, not 30. Server lines are 400 (the job's loop and `safeTotal`, with the
+  three `remove` handlers on one line each). 157 tests.
+- **WU11 — owner/assignee validation waits for WU22.** `deals.assign` and `tasks.create` take the principal and label
+  from the input, so an outsider or a forged label persists. No endpoint below the org can check membership:
+  `ctx.members` exists only where the action is the org's `members.list` and the access is `on`/`in` the org; on a
+  deal it is `Unavailable<"the dimension deal declares no members">`. Framework finding: the paved road has no member
+  lookup beside a write capability on a nested scope. WU22 adds it; WU11 then validates the picked principal through it
+  and takes the label from the directory.
