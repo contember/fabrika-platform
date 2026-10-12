@@ -69,7 +69,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	mine: r.query({
 		input: MyTasks,
 		output: TaskPage,
-		access: { action: 'tasks.read', over: 'org' },
+		access: { action: 'tasks.read', over: 'project' },
 	})
 		.handle(async ({ input, ctx }) => {
 			const page = await ctx.db.within.tasks.list({
@@ -118,7 +118,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 			const member = input.assignee === null
 				? null
 				: await ctx.members.get(input.assignee)
-			if (input.assignee !== null && member === null) {
+			if (input.assignee !== null && (member === null || member.disabled)) {
 				throw new BadRequestError('the assignee is not a member of the org')
 			}
 			return ctx.db.target.update({
@@ -155,9 +155,10 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 
 - The access form gives the handler its data: `on` one object by id (`ctx.db.target` is its row; another scope's is
   404), `in` a container (`ctx.db.target.<table>.list` and `.insert`), `over` lists across the caller's scopes
-  (`ctx.db.within.<table>`). `ctx.target.value` is the id; there is no `.id`.
-- A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), or comes typed from
-  `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
+  (`ctx.db.within.<table>`), named by the nearest dimension of the rows' chain (tasks lie in a project).
+  `ctx.target.value` is the id; there is no `.id`.
+- A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), a list's page through
+  `fromPage(Schema, page)`, or comes typed from `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
 - On a versioned table `insert` and `update` answer `Saved` (`{ id, version }`), and `update` and `remove` take
   `{ expectVersion }` (a stale one is 409). `remove` answers nothing, so its endpoint answers `{ id }`. A table without
   `version` answers `{ id }` and takes no version. `update` takes the columns it changes, at least one.
@@ -222,23 +223,28 @@ bunx fabrika-check .                                        # refusals fail; hin
 bun test --isolate                                          # needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 ```
 
-`FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still change an
-uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's "allowed form" and
-use it; fix hints too. `references/errors.md` explains the findings and the type errors.
+A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
+Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
+`bunx dprint fmt <files>` and `bunx biome lint <files>`, never `biome check` (its formatter fights dprint), and never a
+generated file. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
+change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
+"allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
 ## References
 
 Read the one you need before you write that part. Together they are one application to copy from:
 `app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
-`endpoint.md` (access forms, handles, lists, `fromRow`, `ctx.sql`, CSV downloads, members), `tests.md` (generated
-tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime answers), `jobs.md`, `files.md` and
-`webhooks-links-connectors.md`, all under `references/`.
+`endpoint.md` (access forms, which `over`, the caller's scopes, handles, lists, `fromRow`, `ctx.sql`, audited CSV
+downloads, members), `tests.md` (generated tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime
+answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. `public-intake.md` is an application of its own: a public page,
+a form, a job that issues links and e-mails them, a link holder's files, HR's review with its history.
 
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- An application with share links, `creates` or member management fails its generated endpoint tests: the test kit
-  stands in for IAM's member directory only. Ask the human before you add one.
+- An application with an endpoint that issues share links, `creates` or member management fails its generated
+  endpoint tests: the test kit stands in for IAM's member directory only. Ask the human before you add one. A job that
+  issues links (`references/public-intake.md`) keeps them passing.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.

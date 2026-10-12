@@ -61,7 +61,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	mine: r.query({
 		input: MyTasks,
 		output: TaskPage,
-		access: { action: 'tasks.read', over: 'org' },
+		access: { action: 'tasks.read', over: 'project' },
 	})
 		.handle(async ({ input, ctx }) => {
 			const page = await ctx.db.within.tasks.list({
@@ -110,7 +110,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 			const member = input.assignee === null
 				? null
 				: await ctx.members.get(input.assignee)
-			if (input.assignee !== null && member === null) {
+			if (input.assignee !== null && (member === null || member.disabled)) {
 				throw new BadRequestError('the assignee is not a member of the org')
 			}
 			return ctx.db.target.update({
@@ -147,9 +147,10 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 
 - The access form gives the handler its data: `on` one object by id (`ctx.db.target` is its row; another scope's is
   404), `in` a container (`ctx.db.target.<table>.list` and `.insert`), `over` lists across the caller's scopes
-  (`ctx.db.within.<table>`). `ctx.target.value` is the id; there is no `.id`.
-- A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), or comes typed from
-  `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
+  (`ctx.db.within.<table>`), named by the nearest dimension of the rows' chain (tasks lie in a project).
+  `ctx.target.value` is the id; there is no `.id`.
+- A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), a list's page through
+  `fromPage(Schema, page)`, or comes typed from `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
 - On a versioned table `insert` and `update` answer `Saved` (`{ id, version }`), and `update` and `remove` take
   `{ expectVersion }` (a stale one is 409). `remove` answers nothing, so its endpoint answers `{ id }`. A table without
   `version` answers `{ id }` and takes no version. `update` takes the columns it changes, at least one.
@@ -214,23 +215,28 @@ bunx fabrika-check .                                        # refusals fail; hin
 bun test --isolate                                          # needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 ```
 
-`FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still change an
-uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's "allowed form" and
-use it; fix hints too. `references/errors.md` explains the findings and the type errors.
+A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
+Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
+`bunx dprint fmt <files>` and `bunx biome lint <files>`, never `biome check` (its formatter fights dprint), and never a
+generated file. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
+change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
+"allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
 ## References
 
 Read the one you need before you write that part. Together they are one application to copy from:
 `app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
-`endpoint.md` (access forms, handles, lists, `fromRow`, `ctx.sql`, CSV downloads, members), `tests.md` (generated
-tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime answers), `jobs.md`, `files.md` and
-`webhooks-links-connectors.md`, all under `references/`.
+`endpoint.md` (access forms, which `over`, the caller's scopes, handles, lists, `fromRow`, `ctx.sql`, audited CSV
+downloads, members), `tests.md` (generated tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime
+answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. `public-intake.md` is an application of its own: a public page,
+a form, a job that issues links and e-mails them, a link holder's files, HR's review with its history.
 
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- An application with share links, `creates` or member management fails its generated endpoint tests: the test kit
-  stands in for IAM's member directory only. Ask the human before you add one.
+- An application with an endpoint that issues share links, `creates` or member management fails its generated
+  endpoint tests: the test kit stands in for IAM's member directory only. Ask the human before you add one. A job that
+  issues links (`references/public-intake.md`) keeps them passing.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
@@ -342,9 +348,11 @@ export default serve(contract, { database: scoped(tables) })
 
 - Mounts: `c.rpc(prefix, groups)` once per prefix, `c.spa(prefix, { dir, access })`, `c.health('/healthz')` (required
   on Zerops), `c.form(path, { input, appendTo, then? })` (an anonymous form that appends one row and runs no handler), a
-  webhook, a link mount. Sections: `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`,
-  `scriptSrc`, `frameSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). No path under
-  `/__fabrika`.
+  webhook, a link mount. An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
+  anyone opens without signing in (a landing page, a public form): the approver sees it as "for anyone". A public SPA
+  at `/` answers every `GET` no more specific endpoint serves; give a member SPA its own prefix (`/app`). Sections:
+  `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`, `scriptSrc`, `frameSrc`: exact
+  `https://` origins, each with a `purpose`, at most 16 each). No path under `/__fabrika`.
 - A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
   every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
   field the page hides; a filled one gets the same answer and writes nothing) and
@@ -354,7 +362,7 @@ export default serve(contract, { database: scoped(tables) })
   row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
   never the value; without it the application does not boot. Neither field reaches the inbox, so neither is a
   column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
-  per-form limit: raise it, and use the challenge.
+  per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
   once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
   and never waits for it. Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
@@ -363,7 +371,8 @@ export default serve(contract, { database: scoped(tables) })
   kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
-  `process.env`.
+  `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
+  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`).
 
 ## The deploy surface (Zerops)
 
@@ -558,8 +567,12 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
 - A schema module holds literal consts only. An endpoint module may declare its own consts too.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
-- An edit endpoint takes every field it sets as required. An update that sets no column is a 500, and the generated
-  tests send no optional field.
+- Optional or nullable: on a create, a field the caller may leave out is `.optional()` and the handler writes
+  `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
+  `z.nullable(…)` (`EditTask.dueOn`). An update that sets no column is a 500, and the generated cases send no optional
+  field and `null` for a nullable one (`references/tests.md`).
+- A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
+  `api.members.orgs()`.
 
 ## The access forms and their handles
 
@@ -574,11 +587,33 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
   for a `human` caller) and `ctx.requestId`.
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
-- `over` reaches every table whose chain holds the dimension: `over: 'org'` lists tasks two levels down.
+- Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
+  together: the second one finds the version moved.
 - A capability reads its own target, whatever its action: `tasks.assign` reads the task it assigns. A column with
   its own read action is left out for every other action.
 - Never use `{ member: true }` for application data. `callers` is `['human']`, `['machine']` or both; every group of
   one mount names the same callers.
+
+### Which dimension `over` names
+
+`over` names the nearest dimension of the listed rows' chain: the dimension the table's rows lie in (tasks lie in a
+project: `over: 'project'`; projects lie in an org: `over: 'org'`), a child table's parent (`task_comments`:
+`over: 'task'`), or a top-level table's own dimension. The caller's grants on that dimension and on every dimension
+containing it count; a grant held only below it does not.
+
+- A farther dimension reaches fewer rows: `over: 'org'` on tasks ignores a grant held on one project, which answers
+  403. With roles granted only in the org, both list the same rows today, so the difference shows only later.
+- The dimension is part of the endpoint's requirement, and the approver's diff shows any change of a requirement as a
+  widening. Choose it by this rule when you write the endpoint; do not change it to pass a test.
+- `ctx.db.within` reaches every table whose chain holds the dimension, so `over: 'org'` also types tasks two levels
+  down. The rule still names `project` for a list of tasks.
+
+### The caller's scopes: `ctx.within.values`
+
+`ctx.within.values` is the list of values of the `over` dimension in which the caller holds the action, or `'all'`
+for a global grant (an operator's or an auditor's role granted without a scope), which cannot be listed.
+`ctx.within.containers` holds the grants on dimensions above it. `orgs` below answers "the orgs I work in", for a
+picker of the org a new project goes into; an `'all'` caller types the org instead.
 
 ## Lists
 
@@ -589,15 +624,30 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `where: input.status === undefined ? [] : [['status', '=', input.status]]`. There is no `is null` and no OR:
   write that in `ctx.sql`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
-- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` answers rows whose `count` is a
-  string (Postgres `bigint`): convert it with `Number(…)`. `sum_<column>` is text for an integer or `numeric` column,
-  a number for a floating-point one, and `null` over no rows; `min_`/`max_` are `null` over no rows too.
+- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` takes lists of column names
+  and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
+  `min_<column>`, `max_<column>` per listed column. Over a `deals` table, `{ groupBy: ['stage'], count: true, sum:
+  ['value'] }` answers `{ stage, count, sum_value }` per stage.
+  `sum_<column>` is text for an integer or `numeric` column, a number for a floating-point one, and `null` over no
+  rows; `min_`/`max_` are `null` over no rows too.
+- Convert such text with a checked conversion, never a bare `Number(…)` on a sum: past 2^53 − 1 a number rounds
+  silently. `exactInteger` in `logic.ts` below refuses instead; a count is far from that limit, so `Number(…)` is
+  fine there. Or keep the sum a string in the output (`z.string().regex(/^-?[0-9]+$/)`).
 
 ## Business rules: `logic.ts`
 
 ```ts src/tasks/logic.ts
 export const canClose = (status: 'open' | 'doing' | 'done'): boolean =>
 	status === 'doing'
+
+/** A `bigint` sum Postgres answers as text; one past 2^53 - 1 is refused, never rounded. */
+export const exactInteger = (text: string): number => {
+	const value = Number(text)
+	if (!Number.isSafeInteger(value)) {
+		throw new RangeError('the total is beyond the safe integer range')
+	}
+	return value
+}
 ```
 
 `logic.ts` takes and answers plain values: no `ctx`, no handle, no row it was not given. Test it without a database.
@@ -605,7 +655,7 @@ export const canClose = (status: 'open' | 'doing' | 'done'): boolean =>
 ## A slice of its own
 
 ```ts src/projects/endpoints.ts
-import { fromRow } from '@fabrika/app'
+import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { Cursor, Saved } from '../schemas'
@@ -634,16 +684,15 @@ export const projects = app.group({ callers: ['human'] }, (r) => ({
 		output: ProjectPage,
 		access: { action: 'tasks.read', in: 'org', from: 'orgId' },
 	})
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.target.projects.list({
-				orderBy: [['name', 'asc']],
-				after: input.after,
-			})
-			return {
-				items: page.items.map((row) => fromRow(Project, row)),
-				next: page.next,
-			}
-		}),
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Project,
+				await ctx.db.target.projects.list({
+					orderBy: [['name', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
 	create: r.mutation({
 		input: NewProject,
 		output: Saved,
@@ -658,7 +707,7 @@ export const projects = app.group({ callers: ['human'] }, (r) => ({
 A child table is reached through its parent's `on` endpoint. A table without `version` answers `{ id }`:
 
 ```ts src/comments/endpoints.ts
-import { fromRow } from '@fabrika/app'
+import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { Cursor } from '../schemas'
@@ -686,16 +735,15 @@ export const comments = app.group({ callers: ['human'] }, (r) => ({
 		output: CommentPage,
 		access: { action: 'tasks.read', on: 'task', from: 'taskId' },
 	})
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.target.task_comments.list({
-				orderBy: [['created_at', 'asc']],
-				after: input.after,
-			})
-			return {
-				items: page.items.map((row) => fromRow(Comment, row)),
-				next: page.next,
-			}
-		}),
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Comment,
+				await ctx.db.target.task_comments.list({
+					orderBy: [['created_at', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
 	add: r.mutation({
 		input: NewComment,
 		output: Added,
@@ -713,7 +761,8 @@ A procedure is served at `POST /api/<group>.<endpoint>`.
 ## Rows and outputs
 
 - `fromRow(Schema, row)` turns snake_case columns into the schema's camelCase fields, a `Date` into ISO text, drops a
-  column the schema does not declare, and parses the rest.
+  column the schema does not declare, and parses the rest. `fromPage(Schema, page)` does it for every row of a
+  `list` answer and keeps its `next`: the whole handler of a list is `fromPage(Item, await ….list({ … }))`.
 - `RowOf<typeof tables, '<table>'>` (`@fabrika/db/tables`) is the row a table's read action reads, for a function that
   takes one: `const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)`.
 
@@ -727,7 +776,7 @@ import type { DbHandle } from '@fabrika/app/contract'
 import type { app } from '../app-kit'
 
 export const statusCounts = async (
-	within: DbHandle<typeof app, 'over', 'org', 'tasks.read'>,
+	within: DbHandle<typeof app, 'over', 'project', 'tasks.read'>,
 ) => {
 	const rows = await within.tasks.aggregate({ groupBy: ['status'], count: true })
 	const count = (status: 'open' | 'doing' | 'done') =>
@@ -748,13 +797,14 @@ Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bu
 import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { OrgInput, TaskStatus } from '../schemas'
+import { TaskStatus } from '../schemas'
 import { statusCounts } from './queries'
 
 const Workload = z.strictObject({
 	orgId: z.string().min(1).max(100),
 	status: TaskStatus.optional(),
 })
+const ByProject = z.strictObject({ projectId: z.uuid() })
 const WorkloadRow = z.strictObject({
 	assignee: z.nullable(z.string()),
 	open: z.int(),
@@ -796,25 +846,26 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 			return { rows }
 		}),
 	counts: r.query({
-		input: OrgInput,
 		output: Counts,
-		access: { action: 'tasks.read', over: 'org' },
+		access: { action: 'tasks.read', over: 'project' },
 	})
 		.handle(({ ctx }) => statusCounts(ctx.db.within)),
-	exportTasks: r.query({
-		input: OrgInput,
+	exportProject: r.mutation({
+		input: ByProject,
 		output: TaskExport,
-		access: { action: 'tasks.read', over: 'org' },
+		access: { action: 'tasks.read', in: 'project', from: 'projectId' },
 		sql: 'read',
 	})
-		.handle(({ ctx }) =>
-			ctx.sql(TaskExportRow)`
+		.handle(async ({ ctx }) => {
+			const rows = await ctx.sql(TaskExportRow)`
 				select t.title, t.status, t.assignee, t.due_on::text as due_on
 				from tasks t
-				where ${ctx.sql.scope(ctx.within, 'tasks', 't')}
+				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
 				order by t.title
 				limit 10000`
-		),
+			await ctx.db.target.project_exports.insert({ row_count: rows.length })
+			return rows
+		}),
 }))
 ```
 
@@ -846,8 +897,8 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 ## A file download: `attachment`
 
 `output: attachment({ format: 'csv', filename, row, maxBytes, maxRows? })` (`@fabrika/app/contract`) makes the endpoint
-answer a file: the handler returns the rows (an array of `row`), and the framework writes the CSV. `exportTasks` above
-is one.
+answer a file: the handler returns the rows (an array of `row`), and the framework writes the CSV. `exportProject`
+above is one.
 
 - `row` is a `z.strictObject` of scalar fields (string, number, boolean, enum, literal; nullable or optional); its
   field names are the header line, in their order. `filename` is fixed (`[A-Za-z0-9._-]`, ending in `.csv`).
@@ -856,10 +907,13 @@ is one.
   write CSV by hand.
 - `maxBytes` (at most 16 MiB) and `maxRows` (10 000 unless declared, at most 100 000) bound the file; a cell holds at
   most 32 767 characters. Past a limit the call fails with a 500 and sends no file. Bound the rows in the query too.
-- **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows. The file is
-  encoded before the transaction commits, so a file over its limit keeps no log row.
-- The SPA calls `download(api.reports.exportTasks, { orgId })` from `@fabrika/app/client`: it saves the file and
-  answers it as a `File`. `api.reports.exportTasks` is not a function. A refusal is an `RpcError`.
+- **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows: `exportProject`
+  inserts a `project_exports` row (who, when, how many rows) in the invocation's one transaction. The file is encoded
+  before the transaction commits, so a file over its limit keeps no log row, and no file leaves without its row. The
+  log table lies in the scope the export reads (a child of `projects`), so the export's own capability writes it.
+- A mutation may declare `sql: 'read'`: its statements only read, and its handles still write.
+- The SPA calls `download(api.reports.exportProject, { projectId })` from `@fabrika/app/client`: it saves the file and
+  answers it as a `File`. `api.reports.exportProject` is not a function. A refusal is an `RpcError`.
 - An export (`app.export`) answers JSON only; an `attachment()` is for an RPC or a link procedure.
 
 ## Rows outside the capability: `unscoped`
@@ -879,6 +933,8 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   the endpoint's own action on the org itself, so `tasks.assign` validates the person it assigns without a second
   action; a caller who holds the action only on a project is refused (403). Use it for every picked person: store
   `member.principalId` and `member.label`, never a label from the input.
+- `disabled` is a person an operator disabled in IAM: still a member, but unable to sign in. Refuse to assign one
+  (`assign` in `SKILL.md`), and leave them out of a picker.
 - The approver sees each endpoint that reads a directory ("looks up one member of `org`"): a new one widens.
 - With the directory's `members.list` action (`tasks.read` here) also `ctx.members.list()`, answering
   `{ principalId, label, roles, disabled }` per member, for an assignee picker. IAM checks that action on the org
@@ -900,6 +956,7 @@ const Member = z.strictObject({
 	label: z.nullable(z.string()),
 })
 const Members = z.strictObject({ items: z.array(Member) })
+const MyOrgs = z.strictObject({ all: z.boolean(), orgs: z.array(z.string()) })
 
 export const members = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -908,11 +965,22 @@ export const members = app.group({ callers: ['human'] }, (r) => ({
 		access: { action: 'tasks.read', in: 'org', from: 'orgId' },
 	})
 		.handle(async ({ ctx }) => ({
-			items: (await ctx.members.list()).map((member) => ({
-				principalId: member.principalId,
-				label: member.label,
-			})),
+			items: (await ctx.members.list())
+				.filter((member) => !member.disabled)
+				.map((member) => ({
+					principalId: member.principalId,
+					label: member.label,
+				})),
 		})),
+	orgs: r.query({
+		output: MyOrgs,
+		access: { action: 'tasks.read', over: 'org' },
+	})
+		.handle(({ ctx }) =>
+			ctx.within.values === 'all'
+				? { all: true, orgs: [] }
+				: { all: false, orgs: [...ctx.within.values].sort() }
+		),
 }))
 ```
 
@@ -931,24 +999,24 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                  | Means                                                                                                                | Fix                                                                                    |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                             | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
-| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                    | the message names the field                                                            |
-| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                    | another name; a registry range such as `^0.0.4`                                        |
-| `generated-test-hash` | a generated test is missing, edited or stale                                                                         | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint  | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
-| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                           | the handles, or `sql: 'read'` and `ctx.sql`                                            |
-| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                         | the handles, a file collection, a connector                                            |
-| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` as a value in a server module | the handles; state lives in a table, not in a global                                   |
-| `env-read`            | `process.env`, `Bun.env`                                                                                             | `defineDeps(build)`, which receives the application's variables                        |
-| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                           | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
-| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                               | fix the type; `fromRow` parses a row into a schema's type                              |
-| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                      | log a short fixed message                                                              |
-| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                | `bunx fabrika db new <slug>`                                                           |
-| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                  | import them only from `*.test.ts` or `__tests__/`                                      |
-| `spa-server-import`   | the SPA loads a server module                                                                                        | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
-| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                            | run the test                                                                           |
+| Rule                  | Means                                                                                                               | Fix                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                            | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
+| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                   | the message names the field                                                            |
+| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                   | another name; a registry range such as `^0.0.4`                                        |
+| `generated-test-hash` | a generated test is missing, edited or stale                                                                        | `bunx fabrika db test-scaffold`, and commit what it writes                             |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
+| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                          | the handles, or `sql: 'read'` and `ctx.sql`                                            |
+| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                        | the handles, a file collection, a connector                                            |
+| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module           | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id  |
+| `env-read`            | `process.env`, `Bun.env`                                                                                            | `defineDeps(build)`, which receives the application's variables                        |
+| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                          | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
+| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                              | fix the type; `fromRow` parses a row into a schema's type                              |
+| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                     | log a short fixed message                                                              |
+| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                               | `bunx fabrika db new <slug>`                                                           |
+| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                 | import them only from `*.test.ts` or `__tests__/`                                      |
+| `spa-server-import`   | the SPA loads a server module                                                                                       | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
+| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                           | run the test                                                                           |
 
 The hints:
 
@@ -988,15 +1056,20 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-| Answer | Comes from                                                                                                                                                                                      |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                          |
-| 401    | no valid credential. In a test, the caller is missing                                                                                                                                           |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself      |
-| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                         |
-| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                            |
-| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
-| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                   |
+| Answer | Comes from                                                                                                                                                                                                              |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                                                  |
+| 401    | no valid credential. In a test, the caller is missing                                                                                                                                                                   |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself; a path no endpoint declares |
+| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                                                 |
+| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                                                    |
+| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`)                         |
+| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                                           |
+
+An undeclared path is 403 at the proxy, also for a signed-in caller who holds every action: the proxy serves only the
+contract's endpoints, picks the most specific one, and never falls through to a broader one. A test that asks for a
+route you did not declare (an edit that does not exist) expects 403, not 404. An unknown procedure that reaches the
+application under an RPC prefix is 404, but the proxy stops it first.
 
 A connector call is not an HTTP answer: it resolves to an outcome (`references/webhooks-links-connectors.md`), and the
 handler decides what to answer. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` (an
@@ -1057,7 +1130,9 @@ first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–
 
 `scan: true` on a collection holds every upload `quarantined` until ClamAV answers clean; on Zerops the platform
 installs ClamAV and runs the scan job. The download answers 409 `quarantined` until then and 404 once the file is
-`rejected`; the list shows each file's `status`, so show it rather than a broken link.
+`rejected`; the list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
+`kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
+own seeded files.
 
 - A scanning collection admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
   400 `empty`.
@@ -1150,7 +1225,7 @@ Background work is a cron job: `app.cron(schedule, { actions, scope: 'app' })` w
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
 
-/** Marks every open task past its due day, hourly. A retried attempt lists again, so it marks no task twice. */
+/** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
 export const markOverdue = app.cron('15 * * * *', {
 	actions: ['tasks.read', 'tasks.write'],
 	scope: 'app',
@@ -1159,7 +1234,7 @@ export const markOverdue = app.cron('15 * * * *', {
 })
 	.handle(async ({ ctx }) => {
 		const today = new Date().toISOString().slice(0, 10)
-		const tasks = ctx.db.over(ctx.within('tasks.read', 'org')).tasks
+		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
 		let after: string | undefined
 		do {
 			const page = await tasks.list({
@@ -1173,9 +1248,14 @@ export const markOverdue = app.cron('15 * * * *', {
 			})
 			for (const task of page.items) {
 				const ref = await ctx.ref('tasks.write', 'task', task.id)
-				await ctx.transaction((tx) =>
-					tx.db.on(ref).update({ overdue: true }, { expectVersion: task.version })
-				)
+				await ctx.transaction(async (tx) => {
+					const locked = await tx.db.on(ref).getForUpdate()
+					if (locked.status !== 'done' && !locked.overdue) {
+						await tx.db.on(ref).update({ overdue: true }, {
+							expectVersion: locked.version,
+						})
+					}
+				})
 			}
 			after = page.next ?? undefined
 		} while (after !== undefined)
@@ -1205,7 +1285,11 @@ export const contract = app.contract((c) => ({
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
 - An attempt that fails or outlives `timeout` (default 15 minutes) is retried up to `retries` times, so every write is
-  idempotent: re-read the state, and use `expectVersion`, as above.
+  idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
+  transaction, decide again on what it answers, and write with its `version`. The listed row is already old: someone
+  may have closed the task since, and writing with the listed version fails the whole attempt with a 409.
+- Paging over a filter the job's own writes change is safe: `after` is a keyset cursor on the key, so a row that
+  leaves the filter (`overdue` is now true) moves no other row to an earlier page.
 - A bulk write declares `sql: 'write'` on the job and runs `tx.sql` inside the transaction:
 
   ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
@@ -1213,9 +1297,729 @@ export const contract = app.contract((c) => ({
   `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
-- A job cannot create scopes or manage members. It issues share links only when it declares `issues: '<link mount>'`
-  and its actions hold the mount's `issuedBy` and every grant: `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>',
-  id), { mount, days })`, and `ctx.links.revoke(id)` for a link it issued. It is a widening for closer review.
+- A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
+  links only when it declares `issues: '<link mount>'` and its actions hold the mount's `issuedBy` and every grant:
+  `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
+  a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
+  inbox, the record, the link and its e-mail, each step recorded before the next.
+- `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
+  each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
+
+---
+
+# references/public-intake.md — the public intake recipe
+
+A visitor who has no account submits a form on a public page, confirms the e-mail address through a link, attaches
+files, and asks for a new link when the first one is lost. HR reviews the records. This file is an application of its
+own (`intake`); its `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
+
+Every piece lets in someone who is not signed in, so ask the human before you build it, and say what each one lets the
+visitor do. The visitor never reaches a handler without a credential:
+
+1. **A public page** (`c.spa('/', { access: { public: true } })`) holds the form. It reads no data.
+2. **A form** appends one row to its inbox table and answers `{ received: true }`, for a new and a known address
+   alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
+   a known address would tell a stranger who registered.
+3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
+4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
+5. **A second form** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
+
+## The vocabulary, the migrations and the policies
+
+```ts src/vocabulary.ts
+import { defineVocabulary } from '@fabrika/app/contract'
+
+export const vocabulary = defineVocabulary({
+	app: 'intake',
+	dimensions: { candidate: {} },
+	actions: {
+		'candidates.read': 'Read candidate records and their files',
+		'candidates.review': 'Move a candidate through the review',
+		'candidates.verify': "Confirm a candidate's e-mail address",
+		'candidates.attach': 'Attach files to a candidate record',
+		'candidates.invite': "Issue a candidate's portal link",
+		'candidates.process': 'Register candidates and send their links',
+	},
+	roles: {
+		hr: { grants: ['candidates.read', 'candidates.review'] },
+	},
+})
+```
+
+- `candidate` is a top-level dimension with no members: a candidate is a record, not a scope people are invited to.
+- `hr` has no `member`, so an administrator grants it in IAM, usually without a scope (a global grant).
+- The link's holder and the job get their actions from the link mount and the job's `actions`, not from a role.
+
+```sql db/migrations/20261013090000_intake.sql
+CREATE TYPE candidate_status AS ENUM ('new', 'screening', 'interview', 'hired', 'rejected');
+CREATE TYPE link_state AS ENUM ('due', 'issued', 'sent');
+
+-- The link delivery is the intake job's own state: each step is recorded here before the next effect starts.
+CREATE TABLE candidates (
+	id UUID PRIMARY KEY,
+	email TEXT NOT NULL UNIQUE,
+	name TEXT NOT NULL,
+	status candidate_status NOT NULL DEFAULT 'new',
+	verified_at TIMESTAMPTZ,
+	link_state link_state NOT NULL DEFAULT 'due',
+	link_id TEXT,
+	revoke_link_id TEXT,
+	sends INTEGER NOT NULL DEFAULT 0,
+	window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	created_by TEXT NOT NULL,
+	version INTEGER NOT NULL
+);
+
+-- The review's history: one row per decision, written in the decision's own transaction.
+CREATE TABLE candidate_events (
+	id UUID PRIMARY KEY,
+	candidate_id UUID NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
+	status candidate_status NOT NULL,
+	note TEXT,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
+
+-- The forms' inboxes: a column per input field, except the honeypot and the challenge token.
+CREATE TABLE registrations (
+	email TEXT NOT NULL,
+	name TEXT NOT NULL
+);
+CREATE TABLE resend_requests (
+	email TEXT NOT NULL
+);
+```
+
+```sql db/migrations/20261013090100_attachments.sql
+CREATE TABLE fabrika_files_attachments (
+	id UUID PRIMARY KEY,
+	owner_id UUID,
+	status TEXT NOT NULL CONSTRAINT fabrika_files_attachments_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
+	object_key TEXT NOT NULL UNIQUE,
+	size BIGINT,
+	content_type TEXT NOT NULL,
+	sha256 TEXT,
+	original_name TEXT,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL,
+	deleted_at TIMESTAMPTZ,
+	object_version TEXT,
+	scan_attempts INTEGER NOT NULL DEFAULT 0,
+	scan_after TIMESTAMPTZ,
+	FOREIGN KEY (owner_id) REFERENCES candidates (id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+CREATE INDEX fabrika_files_attachments_owner ON fabrika_files_attachments (owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
+CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_after) WHERE status = 'quarantined';
+```
+
+The file table is `fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })`
+(`references/files.md`): a top-level owner has no chain.
+
+```ts src/db/tables.ts
+import { defineTables } from '@fabrika/db/tables'
+import { vocabulary } from '../vocabulary'
+import { columns } from './schema.generated'
+
+export const tables = defineTables(vocabulary, columns)({
+	candidates: {
+		scope: { dimension: 'candidate' },
+		actions: {
+			read: 'candidates.read',
+			insert: 'candidates.process',
+			update: 'candidates.verify',
+		},
+		insert: ['email', 'name'],
+		update: ['verified_at'],
+		version: 'version',
+		createdBy: 'created_by',
+		columns: {
+			status: { write: 'candidates.review' },
+			link_state: { read: 'candidates.process' },
+			link_id: { read: 'candidates.process' },
+			revoke_link_id: { read: 'candidates.process' },
+			sends: { read: 'candidates.process' },
+			window_started_at: { read: 'candidates.process' },
+		},
+	},
+	candidate_events: {
+		scope: { child: 'candidates' },
+		actions: { read: 'candidates.read', insert: 'candidates.review' },
+		insert: ['status', 'note'],
+		createdBy: 'created_by',
+	},
+	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
+	resend_requests: { scope: { inbox: 'resend', read: 'candidates.process' } },
+})
+```
+
+- `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
+  declares the reach reads it.
+- The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
+
+## The contract
+
+```ts src/schemas.ts
+import { z } from 'zod/v4'
+
+export const CandidateStatus = z.enum([
+	'new',
+	'screening',
+	'interview',
+	'hired',
+	'rejected',
+])
+export const Register = z.strictObject({
+	email: z.email().max(200),
+	name: z.string().min(1).max(200),
+	website: z.optional(z.string().max(200)),
+	challengeToken: z.string().max(4096),
+})
+export const Resend = z.strictObject({ email: z.email().max(200) })
+export const Me = z.strictObject({
+	name: z.string(),
+	email: z.string(),
+	verified: z.boolean(),
+})
+export const Verified = z.strictObject({ verifiedAt: z.iso.datetime() })
+```
+
+```ts fabrika.contract.ts
+import { app } from './src/app-kit'
+import { candidates } from './src/candidates/endpoints'
+import { intake } from './src/intake/endpoints'
+import { portal } from './src/portal/endpoints'
+import { Register, Resend } from './src/schemas'
+
+export const contract = app.contract((c) => ({
+	site: c.spa('/', { dir: 'dist/site', access: { public: true } }),
+	register: c.form('/register', {
+		input: Register,
+		appendTo: 'registrations',
+		maxBytes: 4096,
+		honeypot: 'website',
+		challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' },
+	}),
+	resend: c.form('/resend', {
+		input: Resend,
+		appendTo: 'resend_requests',
+		maxBytes: 1024,
+	}),
+	portal,
+	api: c.rpc('/api', { candidates }),
+	hr: c.spa('/hr', {
+		dir: 'dist/hr',
+		access: { action: 'candidates.read', over: 'candidate' },
+	}),
+	files: {
+		attachments: c.files({
+			owner: 'candidates',
+			read: 'candidates.read',
+			write: 'candidates.attach',
+			delete: 'candidates.review',
+			maxBytes: 10485760,
+			types: ['application/pdf'],
+			maxPerOwner: 5,
+			link: true,
+			scan: true,
+		}),
+	},
+	jobs: { intake },
+	health: c.health('/healthz'),
+}))
+```
+
+- **The public page.** `access: { public: true }` serves the SPA to anyone, without a token, and takes no other key.
+  At `/` it answers every `GET` that no more specific endpoint serves, so the HR SPA (`/hr`) and the link's SPA (`/p`)
+  keep their own. The approver sees it as "for anyone, without signing in". Put nothing on it that only members may
+  read: the page calls no procedure.
+- **The form's abuse control.** `honeypot` names an optional string field the page hides: a filled one gets the same
+  answer and writes no row. `challenge` makes the framework verify the Turnstile token in `challengeToken` before it
+  writes the row (a failed token 400, an unreachable provider 503, no row either way) and adds Turnstile's origin to
+  the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the application does not boot.
+  `rate: { perClient, perForm }` (per minute, 10 and 100 by default) answers 429 past either limit.
+- **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
+  every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
+  expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
+- **Other origins** the pages load (an image host, an API the browser calls) go in the contract's `csp` section:
+  `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc` and
+  `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
+- **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): its
+  download answers 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
+
+<!-- WU15b: when a form may name its job (`then: 'intake'`), add it to the register and resend forms here, and drop the
+"within a minute" sentence below. -->
+
+## The job: inbox → record → link → e-mail
+
+```ts src/mail.ts
+import { defineDeps } from '@fabrika/app/implement'
+
+export interface Mailer {
+	/** Sends the link to `to`; throws when the provider refuses, and gives up once `signal` aborts. */
+	sendLink(to: string, url: string, signal: AbortSignal): Promise<void>
+}
+
+/** Read when a mail is sent: the generated tests boot the application without its variables. */
+const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
+	const value = env[name]
+	if (typeof value !== 'string' || value === '') {
+		throw new Error(`the application variable ${name} is not set`)
+	}
+	return value
+}
+
+export const mailer = defineDeps((env): Mailer => ({
+	async sendLink(to, url, signal) {
+		const origin = variable(env, 'INTAKE_ORIGIN')
+		const response = await fetch(variable(env, 'MAIL_API_URL'), {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				to,
+				subject: 'Confirm your address',
+				text: `Open ${origin}${url} to confirm your address.`,
+			}),
+			signal,
+		})
+		if (!response.ok) {
+			throw new Error(`the mail provider answered ${response.status}`)
+		}
+	},
+}))
+```
+
+```ts src/app.ts
+import { serve } from '@fabrika/app/implement'
+import { scoped } from '@fabrika/db'
+import { contract } from '../fabrika.contract'
+import { tables } from './db/tables'
+import { mailer } from './mail'
+
+export default serve(contract, { database: scoped(tables), deps: mailer })
+```
+
+```ts src/intake/endpoints.ts
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+import { mailer } from '../mail'
+
+const Registration = z.strictObject({ email: z.string(), name: z.string() })
+const Ask = z.strictObject({ email: z.string() })
+const Id = z.strictObject({ id: z.string() })
+const Due = z.strictObject({
+	id: z.string(),
+	email: z.string(),
+	linkState: z.enum(['due', 'issued', 'sent']),
+	linkId: z.nullable(z.string()),
+	revokeLinkId: z.nullable(z.string()),
+})
+
+/** A link lives a week; an address gets at most three e-mails a day, failed deliveries included. */
+const LINK_DAYS = 7
+const SENDS_PER_DAY = 3
+
+export const intake = app.cron('* * * * *', {
+	actions: [
+		'candidates.process',
+		'candidates.invite',
+		'candidates.read',
+		'candidates.verify',
+		'candidates.attach',
+	],
+	scope: 'app',
+	retries: 0,
+	sql: 'write',
+	issues: 'portal',
+})
+	.handle(async ({ ctx }) => {
+		const mail = mailer.get()
+		// A registration becomes a candidate once; the form told the visitor nothing either way.
+		await ctx.transaction(async (tx) => {
+			const rows = await tx.sql(Registration)`
+				delete from registrations returning email, name`
+			for (const row of rows) {
+				await tx.sql(Id)`
+					insert into candidates (id, email, name, created_by, version)
+					values (${crypto.randomUUID()}, ${row.email}, ${row.name}, ${ctx.principal.id}, 1)
+					on conflict (email) do nothing
+					returning id`
+			}
+		})
+		// A resend supersedes the sent link of an unverified candidate while its budget has an e-mail left.
+		await ctx.transaction(async (tx) => {
+			for (
+				const ask of await tx.sql(Ask)`delete from resend_requests returning email`
+			) {
+				await tx.sql(Id)`
+					update candidates
+					set link_state = 'due', revoke_link_id = link_id, link_id = null
+					where email = ${ask.email} and verified_at is null and link_state = 'sent'
+						and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
+					returning id`
+			}
+		})
+		const due = await ctx.transaction((tx) =>
+			tx.sql(Due)`
+				select id, email, link_state, link_id, revoke_link_id
+				from candidates where link_state <> 'sent' order by id limit 50`
+		)
+		for (const candidate of due) {
+			// The e-mail is charged before any effect; without one left, the row waits as it is.
+			const reserved = await ctx.transaction((tx) =>
+				tx.sql(Id)`
+					update candidates set
+						sends = case when window_started_at < now() - interval '1 day' then 1 else sends + 1 end,
+						window_started_at = case when window_started_at < now() - interval '1 day'
+							then now() else window_started_at end
+					where id = ${candidate.id}
+						and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
+					returning id`
+			)
+			if (reserved.length === 0) continue
+			// A link issued but not known to be e-mailed, or one a resend superseded, ends first.
+			const superseded = candidate.linkState === 'issued'
+				? candidate.linkId
+				: candidate.revokeLinkId
+			if (superseded !== null) {
+				ctx.signal.throwIfAborted()
+				await ctx.links.revoke(superseded)
+				await ctx.transaction((tx) =>
+					tx.sql(Id)`
+						update candidates set link_state = 'due', link_id = null, revoke_link_id = null
+						where id = ${candidate.id} returning id`
+				)
+			}
+			ctx.signal.throwIfAborted()
+			const ref = await ctx.ref('candidates.invite', 'candidate', candidate.id)
+			const link = await ctx.links.issue(ref, { mount: 'portal', days: LINK_DAYS })
+			await ctx.transaction((tx) =>
+				tx.sql(Id)`
+					update candidates set link_state = 'issued', link_id = ${link.id}
+					where id = ${candidate.id} returning id`
+			)
+			ctx.signal.throwIfAborted()
+			await mail.sendLink(candidate.email, link.url, ctx.signal)
+			await ctx.transaction((tx) =>
+				tx.sql(Id)`
+					update candidates set link_state = 'sent'
+					where id = ${candidate.id} and link_id = ${link.id} returning id`
+			)
+		}
+	})
+```
+
+The job keeps three invariants. Keep them when you change it:
+
+- **The budget is charged first.** Each delivery reserves one e-mail of the address's daily budget, in its own
+  transaction, before any effect. A delivery that fails after the e-mail left is still counted, so a provider that
+  times out cannot make the job mail one address without end.
+- **Each step is recorded before the next effect.** Revoke a superseded link, then record it; issue, then record the
+  link's id (`issued`); send, then record `sent`. A run that stops anywhere (a crash, a refused e-mail, IAM down) is
+  finished by the next run: an `issued` row's link is revoked and replaced, so exactly one live link was e-mailed. The
+  e-mail is at least once. The link's key is never stored: only the job saw it.
+- **An effect starts only while the attempt is live.** `ctx.signal.throwIfAborted()` runs before each IAM call and the
+  e-mail, and the e-mail takes `ctx.signal`. The runner aborts a timed-out attempt before the next one starts, so no
+  effect of a stale attempt follows the next one's. `ctx.links` itself refuses to call IAM for an ended attempt.
+
+More on the job:
+
+- **`issues: 'portal'`** gives the job `ctx.links.issue(ref, { mount, days })` and `ctx.links.revoke(id)` for the
+  links it issued. Its `actions` must hold the mount's `issuedBy` and every grant of the mount, or the contract is
+  refused: IAM lets an issuer delegate only what it holds. The link is bound to one candidate (the `Ref`), and the
+  approver sees the job's `issues` marked "needs closer review".
+- **`sql: 'write'`** is the declared reach into the inboxes: `delete … returning` takes each row exactly once. A job is
+  app-wide, so its statements need no scope fragment (`tx.sql.scope` of its `Within` is every row).
+- **The latency.** The e-mail leaves on the job's next run, within a minute at `* * * * *`. `retries: 0`: the next
+  minute's run is the retry, and it finishes whatever a stopped run left.
+- **A revoked link** still works until the token the proxy holds for it expires, at most 5 minutes. Revocation is the
+  stop at IAM; it is not instant.
+- The e-mail goes through `deps` (`src/mail.ts`), built from application variables the human sets (`INTAKE_ORIGIN`,
+  `MAIL_API_URL`, `MAIL_API_KEY`). `link.url` is `/p/#<key>`: the key is in the fragment, which no server and no
+  `Referer` sees.
+
+## The visitor's link: verify once, attach files
+
+```ts src/portal/endpoints.ts
+import { app } from '../app-kit'
+import { Me, Verified } from '../schemas'
+
+export const portal = app.link('/p', {
+	spa: 'dist/portal',
+	dimension: 'candidate',
+	grants: ['candidates.read', 'candidates.verify', 'candidates.attach'],
+	issuedBy: 'candidates.invite',
+	maxDays: 7,
+	procedures: (l) => ({
+		me: l.query({ output: Me, access: { action: 'candidates.read' } })
+			.handle(async ({ ctx }) => {
+				const row = await ctx.db.target.get()
+				return {
+					name: row.name,
+					email: row.email,
+					verified: row.verified_at !== null,
+				}
+			}),
+		verify: l.mutation({
+			output: Verified,
+			access: { action: 'candidates.verify' },
+		})
+			.handle(async ({ ctx }) => {
+				const row = await ctx.db.target.getForUpdate()
+				if (row.verified_at !== null) {
+					return { verifiedAt: row.verified_at.toISOString() }
+				}
+				const now = new Date()
+				await ctx.db.target.update({ verified_at: now }, {
+					expectVersion: row.version,
+				})
+				return { verifiedAt: now.toISOString() }
+			}),
+	}),
+})
+```
+
+- **Single use is the application's state.** `verify` sets `verified_at` once, under `getForUpdate`; a second call
+  answers the same time. IAM counts no uses: the proxy honors a token it holds without asking IAM.
+- A link procedure acts on the link's own object: no `from`, no id in the input. A key of another candidate reaches
+  only that candidate's record, and a key whose candidate is gone answers 404.
+- `link: true` on the collection serves the holder `POST /p/api/files.attachments.upload?name=<name>` (the body is the
+  file), `POST /p/api/files.attachments.list` (`{ limit?, after? }`) and `GET /p/api/files.attachments/:fileId`, for
+  the link's candidate only: another candidate's file id answers 404. The mount must grant the collection's `write`
+  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`.
+
+```ts web/portal/main.ts
+import { createClient, RpcError, shareKey } from '@fabrika/app/client'
+import { contract } from '../../fabrika.contract'
+
+const key = shareKey()
+const portal = key === null ? null : createClient(contract, 'portal', { key })
+
+export const confirm = async (status: HTMLElement): Promise<void> => {
+	if (portal === null) {
+		status.textContent = 'This link holds no key.'
+		return
+	}
+	try {
+		const me = await portal.me()
+		await portal.verify()
+		status.textContent = `${me.name}, your address is confirmed.`
+	} catch (error) {
+		status.textContent = error instanceof RpcError
+			? 'This link no longer works: ask for a new one.'
+			: 'Failed'
+	}
+}
+
+export const attach = async (file: File): Promise<string> => {
+	if (key === null) return 'This link holds no key.'
+	const response = await fetch(
+		`/p/api/files.attachments.upload?name=${encodeURIComponent(file.name)}`,
+		{
+			method: 'POST',
+			headers: { Authorization: `Bearer ${key}`, 'Content-Type': file.type },
+			body: file,
+		},
+	)
+	return response.ok ? 'Received: it is being checked.' : 'Refused.'
+}
+```
+
+The public page sends the form with a plain `fetch`: a form has no typed client, and its answer never depends on the
+data.
+
+```ts web/site/register.ts
+export const register = async (
+	form: HTMLFormElement,
+	challengeToken: string,
+): Promise<boolean> => {
+	const data = new FormData(form)
+	const field = (name: string) => {
+		const value = data.get(name)
+		return typeof value === 'string' ? value : ''
+	}
+	const response = await fetch('/register', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			email: field('email'),
+			name: field('name'),
+			website: field('website'),
+			challengeToken,
+		}),
+	})
+	return response.ok
+}
+```
+
+- The page renders the Turnstile widget with its public site key and `action` set to the form's mount name
+  (`register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
+- The resend form is the same call to `/resend` with `{ email }`. It answers the same for an unknown, a verified and a
+  rate-limited address; the job decides.
+- Build each SPA into its `dir` (`dist/site`, `dist/portal`, `dist/hr`): one `Bun.build` per `index.html` in
+  `build-web.ts`.
+
+## HR: the list, the review and its history
+
+```ts src/candidates/logic.ts
+type Status = 'new' | 'screening' | 'interview' | 'hired' | 'rejected'
+
+const NEXT: Readonly<Record<Status, readonly Status[]>> = {
+	new: ['screening', 'rejected'],
+	screening: ['interview', 'rejected'],
+	interview: ['hired', 'rejected'],
+	hired: [],
+	rejected: [],
+}
+
+export const canMove = (from: Status, to: Status): boolean =>
+	NEXT[from].includes(to)
+```
+
+```ts src/candidates/endpoints.ts
+import { ConflictError, fromPage, fromRow } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+import { CandidateStatus } from '../schemas'
+import { canMove } from './logic'
+
+const Cursor = z.string().max(500)
+const Candidate = z.strictObject({
+	id: z.uuid(),
+	name: z.string(),
+	email: z.string(),
+	status: CandidateStatus,
+	verifiedAt: z.nullable(z.iso.datetime()),
+	version: z.int(),
+})
+const CandidatePage = z.strictObject({
+	items: z.array(Candidate),
+	next: z.nullable(z.string()),
+})
+const Event = z.strictObject({
+	status: CandidateStatus,
+	note: z.nullable(z.string()),
+	createdBy: z.string(),
+	createdAt: z.iso.datetime(),
+})
+const History = z.strictObject({
+	items: z.array(Event),
+	next: z.nullable(z.string()),
+})
+const ListCandidates = z.strictObject({
+	status: CandidateStatus.optional(),
+	after: Cursor.optional(),
+})
+const ById = z.strictObject({ id: z.uuid() })
+const HistoryOf = z.strictObject({ id: z.uuid(), after: Cursor.optional() })
+const Decide = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	status: CandidateStatus,
+	note: z.nullable(z.string().max(2000)),
+})
+const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+
+export const candidates = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({
+		input: ListCandidates,
+		output: CandidatePage,
+		access: { action: 'candidates.read', over: 'candidate' },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Candidate,
+				await ctx.db.within.candidates.list({
+					where: input.status === undefined
+						? []
+						: [['status', '=', input.status]],
+					orderBy: [['name', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
+	get: r.query({
+		input: ById,
+		output: Candidate,
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ ctx }) => fromRow(Candidate, await ctx.db.target.get())),
+	history: r.query({
+		input: HistoryOf,
+		output: History,
+		access: { action: 'candidates.read', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Event,
+				await ctx.db.target.candidate_events.list({
+					orderBy: [['created_at', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
+	decide: r.mutation({
+		input: Decide,
+		output: Saved,
+		access: { action: 'candidates.review', on: 'candidate', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const candidate = await ctx.db.target.getForUpdate()
+			if (!canMove(candidate.status, input.status)) {
+				throw new ConflictError(
+					`a ${candidate.status} candidate does not move to ${input.status}`,
+				)
+			}
+			await ctx.db.target.candidate_events.insert({
+				status: input.status,
+				note: input.note,
+			})
+			return ctx.db.target.update({ status: input.status }, {
+				expectVersion: input.expectVersion,
+			})
+		}),
+}))
+```
+
+- **Application history is a table on the paved road.** `decide` writes its `candidate_events` row through the
+  handle, in the invocation's one transaction: the status and its history row commit together or not at all, and
+  `created_by` is the caller. There is no framework audit API; never write history from a job or after the answer.
+- **An audited export** is a mutation that inserts its log row and returns the rows of an `attachment()` output
+  (`references/endpoint.md`). Its log row needs a table that lies in the scope the export reads; a list of every
+  candidate (`over: 'candidate'`) has none, so ask the human where that log belongs before you add the export.
+- `over: 'candidate'` lists every candidate a caller holds `candidates.read` on. HR holds it globally, so
+  `ctx.within.values` is `'all'`.
+- The generated case of `decide` sends the first status (`new`) to a record that is `new`, which `canMove` refuses
+  with 409. Give it an input in `src/__tests__/endpoint-access.fixtures.ts`:
+
+```ts src/__tests__/endpoint-access.fixtures.ts
+export const fixtures = {
+	'api.candidates.decide': {
+		id: '00000000-0000-4000-8000-000000000000',
+		expectVersion: 1,
+		status: 'screening',
+		note: null,
+	},
+}
+```
+
+## Tests
+
+- The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
+  link procedure as a holder of a key bound to a seeded candidate. They pass here because only the job issues links;
+  an endpoint that `issues` needs IAM in its tests (`SKILL.md`, "Not built yet").
+- Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
+  'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }
+  })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
+- The job asks IAM to issue and revoke links, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an
+  `IamMembershipRpc` of your own that answers `issueLink` and `revokeLink`. A test of a form passes `env: {
+  TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`. Test each stop of a
+  delivery (a refused e-mail, IAM down, a crash after each step): the next run must leave exactly one live, e-mailed
+  link.
 
 ---
 
@@ -1312,6 +2116,17 @@ CREATE TABLE task_comments (
 	FOREIGN KEY (task_id, project_id, org_id) REFERENCES tasks (id, project_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX task_comments_task ON task_comments (task_id);
+
+CREATE TABLE project_exports (
+	id UUID PRIMARY KEY,
+	project_id UUID NOT NULL,
+	org_id TEXT NOT NULL,
+	row_count INTEGER NOT NULL,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	FOREIGN KEY (project_id, org_id) REFERENCES projects (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+CREATE INDEX project_exports_project ON project_exports (project_id);
 ```
 
 - `bunx fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
@@ -1394,6 +2209,12 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['body'],
 		createdBy: 'created_by',
 	},
+	project_exports: {
+		scope: { child: 'projects' },
+		actions: { read: 'tasks.read', insert: 'tasks.read' },
+		insert: ['row_count'],
+		createdBy: 'created_by',
+	},
 })
 ```
 
@@ -1407,6 +2228,9 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
+- An audit or history table is an ordinary child table that a handler writes in its own transaction:
+  `project_exports` logs each export of a project's tasks, so its insert action is the export's read action
+  (`references/endpoint.md`). There is no framework audit API.
 
 ---
 
@@ -1448,8 +2272,13 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   sets neither a column that places the row nor a text column.
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
-  type. A `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the
-  containment chain cannot be filled: give it a default or make it nullable.
+  type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A
+  `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the containment chain
+  cannot be filled: give it a default or make it nullable.
+- A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
+  value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
+  (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the
+  state, or give the whole input in `fixtures`.
 
 ## Your own tests
 
@@ -1545,6 +2374,17 @@ if (postgres !== null) {
 			)
 		})
 
+		test('a member lists its orgs; a global grant lists none and says all', async () => {
+			expect(await memberApi.members.orgs()).toEqual({
+				all: false,
+				orgs: ['acme'],
+			})
+			const auditor = createClient(contract, 'api', {
+				fetch: kit.browser(kit.testCaller([{ action: 'tasks.read' }])),
+			})
+			expect(await auditor.members.orgs()).toEqual({ all: true, orgs: [] })
+		})
+
 		test('a caller of another org reaches nothing', async () => {
 			const project = await ownerApi.projects.create({
 				orgId: 'acme',
@@ -1571,15 +2411,25 @@ if (postgres !== null) {
 
 - `testDatabase` migrates a throwaway schema; without `FABRIKA_TEST_POSTGRES_URL` it answers `null` and the file
   registers no test. A skip proves nothing: run with the variable set.
-- `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. `kind:
-  'machine'` presents a `px_` key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
+  membership role is granted in one value of its scope; an action without `scope` is a global grant, for which
+  `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`
+  key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
+  path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
 - A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`
   gave a membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
   `members.manage` holder). To list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
+- The kit's directory answers every member as enabled: it cannot make a disabled one. Test the `disabled` branch of a
+  pure function in `logic.ts` instead.
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
-- An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`.
+- An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
+  without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
+  `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`.
+- `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
+  where it is used, not in `build` (`references/public-intake.md`).
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
   process. Import the test kits from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.
@@ -1677,6 +2527,15 @@ export const shared = app.link('/s', {
 - The share SPA reads the key with `shareKey()` of `@fabrika/app/client` and calls
   `createClient(contract, 'shared', { key })`. Never read `location.hash`.
 - Issue the link after the data work: IAM does not roll back with the transaction.
+- `ctx.links.issue` answers `{ id, url, expiresAt }`. Keep the `id` (never the key) to end the link later with
+  `ctx.links.revoke(id)`, which the same `issues` declaration gives; its issuer or a holder of `members.manage` on its
+  chain may. A revoked link still works until the proxy's token for it expires, at most 5 minutes.
+- A link procedure acts on the link's own object (`ctx.db.target`), with no `from` and no id in its input. A link
+  that should work once records its use in the row: a `verify` sets `verified_at` once under `getForUpdate`, and a
+  second call answers the same. IAM counts no uses.
+- A cron job may issue links too (`issues` on `app.cron`, `references/jobs.md`): a visitor without an account gets a
+  link by e-mail from a job that drains a form's inbox. `references/public-intake.md` is that recipe end to end, with
+  the files a link holder uploads (`link: true`, `references/files.md`).
 
 ## Connectors: another application's data
 

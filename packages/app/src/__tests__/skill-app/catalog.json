@@ -521,6 +521,66 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "project_exports",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "project_exports",
+			"column_name": "project_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "project_exports",
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "project_exports",
+			"column_name": "row_count",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "project_exports",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "project_exports",
+			"column_name": "created_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
 			"table_name": "projects",
 			"column_name": "id",
 			"type_name": "uuid",
@@ -780,6 +840,19 @@
 			"referenced_table": "fabrika_webhook_bindings",
 			"referenced_columns": [
 				"id"
+			]
+		},
+		{
+			"table_name": "project_exports",
+			"constraint_name": "project_exports_project_id_org_id_fkey",
+			"columns": [
+				"project_id",
+				"org_id"
+			],
+			"referenced_table": "projects",
+			"referenced_columns": [
+				"id",
+				"org_id"
 			]
 		},
 		{

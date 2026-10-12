@@ -36,8 +36,13 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   sets neither a column that places the row nor a text column.
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
-  type. A `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the
-  containment chain cannot be filled: give it a default or make it nullable.
+  type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A
+  `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the containment chain
+  cannot be filled: give it a default or make it nullable.
+- A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
+  value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
+  (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the
+  state, or give the whole input in `fixtures`.
 
 ## Your own tests
 
@@ -133,6 +138,17 @@ if (postgres !== null) {
 			)
 		})
 
+		test('a member lists its orgs; a global grant lists none and says all', async () => {
+			expect(await memberApi.members.orgs()).toEqual({
+				all: false,
+				orgs: ['acme'],
+			})
+			const auditor = createClient(contract, 'api', {
+				fetch: kit.browser(kit.testCaller([{ action: 'tasks.read' }])),
+			})
+			expect(await auditor.members.orgs()).toEqual({ all: true, orgs: [] })
+		})
+
 		test('a caller of another org reaches nothing', async () => {
 			const project = await ownerApi.projects.create({
 				orgId: 'acme',
@@ -159,15 +175,25 @@ if (postgres !== null) {
 
 - `testDatabase` migrates a throwaway schema; without `FABRIKA_TEST_POSTGRES_URL` it answers `null` and the file
   registers no test. A skip proves nothing: run with the variable set.
-- `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. `kind:
-  'machine'` presents a `px_` key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
+  membership role is granted in one value of its scope; an action without `scope` is a global grant, for which
+  `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`
+  key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
+  path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
 - A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`
   gave a membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
   `members.manage` holder). To list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
+- The kit's directory answers every member as enabled: it cannot make a disabled one. Test the `disabled` branch of a
+  pure function in `logic.ts` instead.
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
-- An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`.
+- An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
+  without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
+  `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`.
+- `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
+  where it is used, not in `build` (`references/public-intake.md`).
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
   process. Import the test kits from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.

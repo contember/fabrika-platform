@@ -103,9 +103,11 @@ export default serve(contract, { database: scoped(tables) })
 
 - Mounts: `c.rpc(prefix, groups)` once per prefix, `c.spa(prefix, { dir, access })`, `c.health('/healthz')` (required
   on Zerops), `c.form(path, { input, appendTo, then? })` (an anonymous form that appends one row and runs no handler), a
-  webhook, a link mount. Sections: `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`,
-  `scriptSrc`, `frameSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). No path under
-  `/__fabrika`.
+  webhook, a link mount. An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
+  anyone opens without signing in (a landing page, a public form): the approver sees it as "for anyone". A public SPA
+  at `/` answers every `GET` no more specific endpoint serves; give a member SPA its own prefix (`/app`). Sections:
+  `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`, `scriptSrc`, `frameSrc`: exact
+  `https://` origins, each with a `purpose`, at most 16 each). No path under `/__fabrika`.
 - A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
   every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
   field the page hides; a filled one gets the same answer and writes nothing) and
@@ -115,7 +117,7 @@ export default serve(contract, { database: scoped(tables) })
   row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
   never the value; without it the application does not boot. Neither field reaches the inbox, so neither is a
   column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
-  per-form limit: raise it, and use the challenge.
+  per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
   once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
   and never waits for it. Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
@@ -124,7 +126,8 @@ export default serve(contract, { database: scoped(tables) })
   kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
-  `process.env`.
+  `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
+  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`).
 
 ## The deploy surface (Zerops)
 

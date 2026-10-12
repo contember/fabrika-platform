@@ -91,6 +91,17 @@ CREATE TABLE task_comments (
 	FOREIGN KEY (task_id, project_id, org_id) REFERENCES tasks (id, project_id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX task_comments_task ON task_comments (task_id);
+
+CREATE TABLE project_exports (
+	id UUID PRIMARY KEY,
+	project_id UUID NOT NULL,
+	org_id TEXT NOT NULL,
+	row_count INTEGER NOT NULL,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	FOREIGN KEY (project_id, org_id) REFERENCES projects (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+CREATE INDEX project_exports_project ON project_exports (project_id);
 ```
 
 - `bunx fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
@@ -173,6 +184,12 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['body'],
 		createdBy: 'created_by',
 	},
+	project_exports: {
+		scope: { child: 'projects' },
+		actions: { read: 'tasks.read', insert: 'tasks.read' },
+		insert: ['row_count'],
+		createdBy: 'created_by',
+	},
 })
 ```
 
@@ -186,3 +203,6 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
+- An audit or history table is an ordinary child table that a handler writes in its own transaction:
+  `project_exports` logs each export of a project's tasks, so its insert action is the export's read action
+  (`references/endpoint.md`). There is no framework audit API.

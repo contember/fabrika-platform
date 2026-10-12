@@ -8,24 +8,24 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                  | Means                                                                                                                | Fix                                                                                    |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                             | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
-| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                    | the message names the field                                                            |
-| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                    | another name; a registry range such as `^0.0.4`                                        |
-| `generated-test-hash` | a generated test is missing, edited or stale                                                                         | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint  | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
-| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                           | the handles, or `sql: 'read'` and `ctx.sql`                                            |
-| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                         | the handles, a file collection, a connector                                            |
-| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` as a value in a server module | the handles; state lives in a table, not in a global                                   |
-| `env-read`            | `process.env`, `Bun.env`                                                                                             | `defineDeps(build)`, which receives the application's variables                        |
-| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                           | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
-| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                               | fix the type; `fromRow` parses a row into a schema's type                              |
-| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                      | log a short fixed message                                                              |
-| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                | `bunx fabrika db new <slug>`                                                           |
-| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                  | import them only from `*.test.ts` or `__tests__/`                                      |
-| `spa-server-import`   | the SPA loads a server module                                                                                        | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
-| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                            | run the test                                                                           |
+| Rule                  | Means                                                                                                               | Fix                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                            | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
+| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                   | the message names the field                                                            |
+| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                   | another name; a registry range such as `^0.0.4`                                        |
+| `generated-test-hash` | a generated test is missing, edited or stale                                                                        | `bunx fabrika db test-scaffold`, and commit what it writes                             |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
+| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                          | the handles, or `sql: 'read'` and `ctx.sql`                                            |
+| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                        | the handles, a file collection, a connector                                            |
+| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module           | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id  |
+| `env-read`            | `process.env`, `Bun.env`                                                                                            | `defineDeps(build)`, which receives the application's variables                        |
+| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                          | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
+| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                              | fix the type; `fromRow` parses a row into a schema's type                              |
+| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                     | log a short fixed message                                                              |
+| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                               | `bunx fabrika db new <slug>`                                                           |
+| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                 | import them only from `*.test.ts` or `__tests__/`                                      |
+| `spa-server-import`   | the SPA loads a server module                                                                                       | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
+| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                           | run the test                                                                           |
 
 The hints:
 
@@ -65,15 +65,20 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-| Answer | Comes from                                                                                                                                                                                      |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                          |
-| 401    | no valid credential. In a test, the caller is missing                                                                                                                                           |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself      |
-| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                         |
-| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                            |
-| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
-| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                   |
+| Answer | Comes from                                                                                                                                                                                                              |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                                                  |
+| 401    | no valid credential. In a test, the caller is missing                                                                                                                                                                   |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself; a path no endpoint declares |
+| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                                                 |
+| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                                                    |
+| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`)                         |
+| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                                           |
+
+An undeclared path is 403 at the proxy, also for a signed-in caller who holds every action: the proxy serves only the
+contract's endpoints, picks the most specific one, and never falls through to a broader one. A test that asks for a
+route you did not declare (an edit that does not exist) expects 403, not 404. An unknown procedure that reaches the
+application under an RPC prefix is 404, but the proxy stops it first.
 
 A connector call is not an HTTP answer: it resolves to an outcome (`references/webhooks-links-connectors.md`), and the
 handler decides what to answer. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` (an

@@ -89,6 +89,15 @@ export const shared = app.link('/s', {
 - The share SPA reads the key with `shareKey()` of `@fabrika/app/client` and calls
   `createClient(contract, 'shared', { key })`. Never read `location.hash`.
 - Issue the link after the data work: IAM does not roll back with the transaction.
+- `ctx.links.issue` answers `{ id, url, expiresAt }`. Keep the `id` (never the key) to end the link later with
+  `ctx.links.revoke(id)`, which the same `issues` declaration gives; its issuer or a holder of `members.manage` on its
+  chain may. A revoked link still works until the proxy's token for it expires, at most 5 minutes.
+- A link procedure acts on the link's own object (`ctx.db.target`), with no `from` and no id in its input. A link
+  that should work once records its use in the row: a `verify` sets `verified_at` once under `getForUpdate`, and a
+  second call answers the same. IAM counts no uses.
+- A cron job may issue links too (`issues` on `app.cron`, `references/jobs.md`): a visitor without an account gets a
+  link by e-mail from a job that drains a form's inbox. `references/public-intake.md` is that recipe end to end, with
+  the files a link holder uploads (`link: true`, `references/files.md`).
 
 ## Connectors: another application's data
 

@@ -63,8 +63,12 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
 - A schema module holds literal consts only. An endpoint module may declare its own consts too.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
-- An edit endpoint takes every field it sets as required. An update that sets no column is a 500, and the generated
-  tests send no optional field.
+- Optional or nullable: on a create, a field the caller may leave out is `.optional()` and the handler writes
+  `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
+  `z.nullable(…)` (`EditTask.dueOn`). An update that sets no column is a 500, and the generated cases send no optional
+  field and `null` for a nullable one (`references/tests.md`).
+- A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
+  `api.members.orgs()`.
 
 ## The access forms and their handles
 
@@ -79,11 +83,33 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
   for a `human` caller) and `ctx.requestId`.
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
-- `over` reaches every table whose chain holds the dimension: `over: 'org'` lists tasks two levels down.
+- Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
+  together: the second one finds the version moved.
 - A capability reads its own target, whatever its action: `tasks.assign` reads the task it assigns. A column with
   its own read action is left out for every other action.
 - Never use `{ member: true }` for application data. `callers` is `['human']`, `['machine']` or both; every group of
   one mount names the same callers.
+
+### Which dimension `over` names
+
+`over` names the nearest dimension of the listed rows' chain: the dimension the table's rows lie in (tasks lie in a
+project: `over: 'project'`; projects lie in an org: `over: 'org'`), a child table's parent (`task_comments`:
+`over: 'task'`), or a top-level table's own dimension. The caller's grants on that dimension and on every dimension
+containing it count; a grant held only below it does not.
+
+- A farther dimension reaches fewer rows: `over: 'org'` on tasks ignores a grant held on one project, which answers
+  403. With roles granted only in the org, both list the same rows today, so the difference shows only later.
+- The dimension is part of the endpoint's requirement, and the approver's diff shows any change of a requirement as a
+  widening. Choose it by this rule when you write the endpoint; do not change it to pass a test.
+- `ctx.db.within` reaches every table whose chain holds the dimension, so `over: 'org'` also types tasks two levels
+  down. The rule still names `project` for a list of tasks.
+
+### The caller's scopes: `ctx.within.values`
+
+`ctx.within.values` is the list of values of the `over` dimension in which the caller holds the action, or `'all'`
+for a global grant (an operator's or an auditor's role granted without a scope), which cannot be listed.
+`ctx.within.containers` holds the grants on dimensions above it. `orgs` below answers "the orgs I work in", for a
+picker of the org a new project goes into; an `'all'` caller types the org instead.
 
 ## Lists
 
@@ -94,15 +120,30 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `where: input.status === undefined ? [] : [['status', '=', input.status]]`. There is no `is null` and no OR:
   write that in `ctx.sql`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
-- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` answers rows whose `count` is a
-  string (Postgres `bigint`): convert it with `Number(…)`. `sum_<column>` is text for an integer or `numeric` column,
-  a number for a floating-point one, and `null` over no rows; `min_`/`max_` are `null` over no rows too.
+- `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` takes lists of column names
+  and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
+  `min_<column>`, `max_<column>` per listed column. Over a `deals` table, `{ groupBy: ['stage'], count: true, sum:
+  ['value'] }` answers `{ stage, count, sum_value }` per stage.
+  `sum_<column>` is text for an integer or `numeric` column, a number for a floating-point one, and `null` over no
+  rows; `min_`/`max_` are `null` over no rows too.
+- Convert such text with a checked conversion, never a bare `Number(…)` on a sum: past 2^53 − 1 a number rounds
+  silently. `exactInteger` in `logic.ts` below refuses instead; a count is far from that limit, so `Number(…)` is
+  fine there. Or keep the sum a string in the output (`z.string().regex(/^-?[0-9]+$/)`).
 
 ## Business rules: `logic.ts`
 
 ```ts src/tasks/logic.ts
 export const canClose = (status: 'open' | 'doing' | 'done'): boolean =>
 	status === 'doing'
+
+/** A `bigint` sum Postgres answers as text; one past 2^53 - 1 is refused, never rounded. */
+export const exactInteger = (text: string): number => {
+	const value = Number(text)
+	if (!Number.isSafeInteger(value)) {
+		throw new RangeError('the total is beyond the safe integer range')
+	}
+	return value
+}
 ```
 
 `logic.ts` takes and answers plain values: no `ctx`, no handle, no row it was not given. Test it without a database.
@@ -110,7 +151,7 @@ export const canClose = (status: 'open' | 'doing' | 'done'): boolean =>
 ## A slice of its own
 
 ```ts src/projects/endpoints.ts
-import { fromRow } from '@fabrika/app'
+import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { Cursor, Saved } from '../schemas'
@@ -139,16 +180,15 @@ export const projects = app.group({ callers: ['human'] }, (r) => ({
 		output: ProjectPage,
 		access: { action: 'tasks.read', in: 'org', from: 'orgId' },
 	})
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.target.projects.list({
-				orderBy: [['name', 'asc']],
-				after: input.after,
-			})
-			return {
-				items: page.items.map((row) => fromRow(Project, row)),
-				next: page.next,
-			}
-		}),
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Project,
+				await ctx.db.target.projects.list({
+					orderBy: [['name', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
 	create: r.mutation({
 		input: NewProject,
 		output: Saved,
@@ -163,7 +203,7 @@ export const projects = app.group({ callers: ['human'] }, (r) => ({
 A child table is reached through its parent's `on` endpoint. A table without `version` answers `{ id }`:
 
 ```ts src/comments/endpoints.ts
-import { fromRow } from '@fabrika/app'
+import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { Cursor } from '../schemas'
@@ -191,16 +231,15 @@ export const comments = app.group({ callers: ['human'] }, (r) => ({
 		output: CommentPage,
 		access: { action: 'tasks.read', on: 'task', from: 'taskId' },
 	})
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.target.task_comments.list({
-				orderBy: [['created_at', 'asc']],
-				after: input.after,
-			})
-			return {
-				items: page.items.map((row) => fromRow(Comment, row)),
-				next: page.next,
-			}
-		}),
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Comment,
+				await ctx.db.target.task_comments.list({
+					orderBy: [['created_at', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
 	add: r.mutation({
 		input: NewComment,
 		output: Added,
@@ -218,7 +257,8 @@ A procedure is served at `POST /api/<group>.<endpoint>`.
 ## Rows and outputs
 
 - `fromRow(Schema, row)` turns snake_case columns into the schema's camelCase fields, a `Date` into ISO text, drops a
-  column the schema does not declare, and parses the rest.
+  column the schema does not declare, and parses the rest. `fromPage(Schema, page)` does it for every row of a
+  `list` answer and keeps its `next`: the whole handler of a list is `fromPage(Item, await ….list({ … }))`.
 - `RowOf<typeof tables, '<table>'>` (`@fabrika/db/tables`) is the row a table's read action reads, for a function that
   takes one: `const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)`.
 
@@ -232,7 +272,7 @@ import type { DbHandle } from '@fabrika/app/contract'
 import type { app } from '../app-kit'
 
 export const statusCounts = async (
-	within: DbHandle<typeof app, 'over', 'org', 'tasks.read'>,
+	within: DbHandle<typeof app, 'over', 'project', 'tasks.read'>,
 ) => {
 	const rows = await within.tasks.aggregate({ groupBy: ['status'], count: true })
 	const count = (status: 'open' | 'doing' | 'done') =>
@@ -253,13 +293,14 @@ Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bu
 import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { OrgInput, TaskStatus } from '../schemas'
+import { TaskStatus } from '../schemas'
 import { statusCounts } from './queries'
 
 const Workload = z.strictObject({
 	orgId: z.string().min(1).max(100),
 	status: TaskStatus.optional(),
 })
+const ByProject = z.strictObject({ projectId: z.uuid() })
 const WorkloadRow = z.strictObject({
 	assignee: z.nullable(z.string()),
 	open: z.int(),
@@ -301,25 +342,26 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 			return { rows }
 		}),
 	counts: r.query({
-		input: OrgInput,
 		output: Counts,
-		access: { action: 'tasks.read', over: 'org' },
+		access: { action: 'tasks.read', over: 'project' },
 	})
 		.handle(({ ctx }) => statusCounts(ctx.db.within)),
-	exportTasks: r.query({
-		input: OrgInput,
+	exportProject: r.mutation({
+		input: ByProject,
 		output: TaskExport,
-		access: { action: 'tasks.read', over: 'org' },
+		access: { action: 'tasks.read', in: 'project', from: 'projectId' },
 		sql: 'read',
 	})
-		.handle(({ ctx }) =>
-			ctx.sql(TaskExportRow)`
+		.handle(async ({ ctx }) => {
+			const rows = await ctx.sql(TaskExportRow)`
 				select t.title, t.status, t.assignee, t.due_on::text as due_on
 				from tasks t
-				where ${ctx.sql.scope(ctx.within, 'tasks', 't')}
+				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
 				order by t.title
 				limit 10000`
-		),
+			await ctx.db.target.project_exports.insert({ row_count: rows.length })
+			return rows
+		}),
 }))
 ```
 
@@ -351,8 +393,8 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 ## A file download: `attachment`
 
 `output: attachment({ format: 'csv', filename, row, maxBytes, maxRows? })` (`@fabrika/app/contract`) makes the endpoint
-answer a file: the handler returns the rows (an array of `row`), and the framework writes the CSV. `exportTasks` above
-is one.
+answer a file: the handler returns the rows (an array of `row`), and the framework writes the CSV. `exportProject`
+above is one.
 
 - `row` is a `z.strictObject` of scalar fields (string, number, boolean, enum, literal; nullable or optional); its
   field names are the header line, in their order. `filename` is fixed (`[A-Za-z0-9._-]`, ending in `.csv`).
@@ -361,10 +403,13 @@ is one.
   write CSV by hand.
 - `maxBytes` (at most 16 MiB) and `maxRows` (10 000 unless declared, at most 100 000) bound the file; a cell holds at
   most 32 767 characters. Past a limit the call fails with a 500 and sends no file. Bound the rows in the query too.
-- **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows. The file is
-  encoded before the transaction commits, so a file over its limit keeps no log row.
-- The SPA calls `download(api.reports.exportTasks, { orgId })` from `@fabrika/app/client`: it saves the file and
-  answers it as a `File`. `api.reports.exportTasks` is not a function. A refusal is an `RpcError`.
+- **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows: `exportProject`
+  inserts a `project_exports` row (who, when, how many rows) in the invocation's one transaction. The file is encoded
+  before the transaction commits, so a file over its limit keeps no log row, and no file leaves without its row. The
+  log table lies in the scope the export reads (a child of `projects`), so the export's own capability writes it.
+- A mutation may declare `sql: 'read'`: its statements only read, and its handles still write.
+- The SPA calls `download(api.reports.exportProject, { projectId })` from `@fabrika/app/client`: it saves the file and
+  answers it as a `File`. `api.reports.exportProject` is not a function. A refusal is an `RpcError`.
 - An export (`app.export`) answers JSON only; an `attachment()` is for an RPC or a link procedure.
 
 ## Rows outside the capability: `unscoped`
@@ -384,6 +429,8 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   the endpoint's own action on the org itself, so `tasks.assign` validates the person it assigns without a second
   action; a caller who holds the action only on a project is refused (403). Use it for every picked person: store
   `member.principalId` and `member.label`, never a label from the input.
+- `disabled` is a person an operator disabled in IAM: still a member, but unable to sign in. Refuse to assign one
+  (`assign` in `SKILL.md`), and leave them out of a picker.
 - The approver sees each endpoint that reads a directory ("looks up one member of `org`"): a new one widens.
 - With the directory's `members.list` action (`tasks.read` here) also `ctx.members.list()`, answering
   `{ principalId, label, roles, disabled }` per member, for an assignee picker. IAM checks that action on the org
@@ -405,6 +452,7 @@ const Member = z.strictObject({
 	label: z.nullable(z.string()),
 })
 const Members = z.strictObject({ items: z.array(Member) })
+const MyOrgs = z.strictObject({ all: z.boolean(), orgs: z.array(z.string()) })
 
 export const members = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -413,11 +461,22 @@ export const members = app.group({ callers: ['human'] }, (r) => ({
 		access: { action: 'tasks.read', in: 'org', from: 'orgId' },
 	})
 		.handle(async ({ ctx }) => ({
-			items: (await ctx.members.list()).map((member) => ({
-				principalId: member.principalId,
-				label: member.label,
-			})),
+			items: (await ctx.members.list())
+				.filter((member) => !member.disabled)
+				.map((member) => ({
+					principalId: member.principalId,
+					label: member.label,
+				})),
 		})),
+	orgs: r.query({
+		output: MyOrgs,
+		access: { action: 'tasks.read', over: 'org' },
+	})
+		.handle(({ ctx }) =>
+			ctx.within.values === 'all'
+				? { all: true, orgs: [] }
+				: { all: false, orgs: [...ctx.within.values].sort() }
+		),
 }))
 ```
 

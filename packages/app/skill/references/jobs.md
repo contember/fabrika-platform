@@ -7,7 +7,7 @@ Background work is a cron job: `app.cron(schedule, { actions, scope: 'app' })` w
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
 
-/** Marks every open task past its due day, hourly. A retried attempt lists again, so it marks no task twice. */
+/** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
 export const markOverdue = app.cron('15 * * * *', {
 	actions: ['tasks.read', 'tasks.write'],
 	scope: 'app',
@@ -16,7 +16,7 @@ export const markOverdue = app.cron('15 * * * *', {
 })
 	.handle(async ({ ctx }) => {
 		const today = new Date().toISOString().slice(0, 10)
-		const tasks = ctx.db.over(ctx.within('tasks.read', 'org')).tasks
+		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
 		let after: string | undefined
 		do {
 			const page = await tasks.list({
@@ -30,9 +30,14 @@ export const markOverdue = app.cron('15 * * * *', {
 			})
 			for (const task of page.items) {
 				const ref = await ctx.ref('tasks.write', 'task', task.id)
-				await ctx.transaction((tx) =>
-					tx.db.on(ref).update({ overdue: true }, { expectVersion: task.version })
-				)
+				await ctx.transaction(async (tx) => {
+					const locked = await tx.db.on(ref).getForUpdate()
+					if (locked.status !== 'done' && !locked.overdue) {
+						await tx.db.on(ref).update({ overdue: true }, {
+							expectVersion: locked.version,
+						})
+					}
+				})
 			}
 			after = page.next ?? undefined
 		} while (after !== undefined)
@@ -62,7 +67,11 @@ export const contract = app.contract((c) => ({
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
 - An attempt that fails or outlives `timeout` (default 15 minutes) is retried up to `retries` times, so every write is
-  idempotent: re-read the state, and use `expectVersion`, as above.
+  idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
+  transaction, decide again on what it answers, and write with its `version`. The listed row is already old: someone
+  may have closed the task since, and writing with the listed version fails the whole attempt with a 409.
+- Paging over a filter the job's own writes change is safe: `after` is a keyset cursor on the key, so a row that
+  leaves the filter (`overdue` is now true) moves no other row to an earlier page.
 - A bulk write declares `sql: 'write'` on the job and runs `tx.sql` inside the transaction:
 
   ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
@@ -70,6 +79,10 @@ export const contract = app.contract((c) => ({
   `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
-- A job cannot create scopes or manage members. It issues share links only when it declares `issues: '<link mount>'`
-  and its actions hold the mount's `issuedBy` and every grant: `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>',
-  id), { mount, days })`, and `ctx.links.revoke(id)` for a link it issued. It is a widening for closer review.
+- A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
+  links only when it declares `issues: '<link mount>'` and its actions hold the mount's `issuedBy` and every grant:
+  `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
+  a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
+  inbox, the record, the link and its e-mail, each step recorded before the next.
+- `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
+  each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.

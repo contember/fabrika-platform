@@ -182,8 +182,10 @@ src/
 - **Every `ts`, `sql` and `json` block of the skill names its file** (`` ```ts src/tasks/endpoints.ts ``).
   `skill-code.test.ts` compiles the blocks as one application against the workspace (the base files: `SKILL.md`,
   `app-setup.md`, `table-and-migration.md`, `endpoint.md`, `tests.md`; each other reference file is a variant over
-  it), classifies the migrations, and on Postgres checks that they migrate to `src/__tests__/skill-app/catalog.json`,
-  from which the generated schema is rendered. Change a migration block, then regenerate that catalog.
+  it, except a `STANDALONE` one such as `public-intake.md`, an application of its own over the base's `package.json`,
+  `tsconfig.json` and `src/app-kit.ts`), classifies each application's migrations, and on Postgres checks that they
+  migrate to its catalog (`src/__tests__/skill-app/catalog.json`, `skill-app/<name>/catalog.json`), from which the
+  generated schema is rendered. Change a migration block, then regenerate that catalog.
 
 ## Contract framework
 

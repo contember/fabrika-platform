@@ -44,7 +44,9 @@ first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–
 
 `scan: true` on a collection holds every upload `quarantined` until ClamAV answers clean; on Zerops the platform
 installs ClamAV and runs the scan job. The download answers 409 `quarantined` until then and 404 once the file is
-`rejected`; the list shows each file's `status`, so show it rather than a broken link.
+`rejected`; the list shows each file's `status`, so show it rather than a broken link. In a test, the scan runs with
+`kit.runJob(FILE_SCAN_JOB)` and a `scanner` passed to `testKit` (`references/tests.md`); the generated tests pass their
+own seeded files.
 
 - A scanning collection admits at most 100 MiB per file (`maxBytes`) and not `application/gzip`; an empty upload is
   400 `empty`.
