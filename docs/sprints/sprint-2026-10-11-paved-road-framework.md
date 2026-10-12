@@ -857,3 +857,25 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   byte bound was checked per encoded line, whose width has no column bound; each field is now encoded and counted
   with its separator before the next is read. Witnesses count row and cell reads through a `Proxy`. A result that is
   no list is `output_refused`, as the whole-output validation answered it before.
+- **WU15 — verify first.** A job's token carries its actions `scope: null` (app-wide), so it meets `issueLink`'s
+  delegation rule on any chain: an issuing job is app-wide for its mount, the link is bound to one object. Measured: a
+  revoked link keeps working through a warm proxy cache for at most 270 s (the token's 300 s less the 30 s refresh
+  skew, `TOKEN_REFRESH_SKEW_SECONDS`); `visitor-link.test.ts` moves the proxy's clock across that edge.
+- **WU15 — how IAM knows a job may issue (review item 1).** `AppWorkloadDef.issues` (auth-core) carries the job's
+  approved mount from `schemaFromContract`; the reconcile writes it to `app_workloads.issues` (IAM migration 0009, a
+  `CHECK` keeps it job-only), and `appSchemaSchema` refuses a mount the schema lacks or a job without its `issuedBy` and
+  grants. `resolveCaller` still refuses every workload; a new `resolveLinkCaller` admits a job for `issueLink` and
+  `revokeLink` only, and `membership.ts` reads the declaration at each call; `createLinkCredential` inserts a job's link
+  only while the declaration still names the mount. The job presents its token: `WorkloadAuthority` gains `token`.
+- **WU15 — deviations.** `@fabrika/iam` gains the dev dependencies `@fabrika/db` and `@fabrika/proxy-core` for the
+  end-to-end witness, which boots `@fabrika/app`'s intake fixture against IAM's SQLite harness through proxy-core's
+  `Authorizer` (Postgres for the application only). Link-file rows take source `{ kind: 'mount', name: <mount> }` and
+  ids `<mount>.files.<name>.{upload,download}`, so `#linkTarget`'s mount check applies unchanged; `link: true` is refused
+  in the contract (not at boot) when no link mount is bound to the owner's dimension or one does not grant write and
+  read. The endpoint test of `ctx.links.revoke` is in `job-links.test.ts`: the multi-tenant fixture is implemented by
+  the type-mistake fixtures, which an extra endpoint breaks.
+- **WU15 — the intake recipe's crash semantics (review item 3).** The job records each delivery step in the record's
+  row before the next effect: revoke a superseded link → record; issue → record the id (`issued`); e-mail → `sent`. A
+  stop after any effect is finished by the next run with exactly one live e-mailed link (`intake.test.ts`, one case
+  per stop, a refused e-mail and an unreachable IAM): an `issued` row's link is revoked and replaced, an unrecorded
+  link's key never left the job. The e-mail is at-least-once; a link's key is never stored.
