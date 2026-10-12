@@ -18,6 +18,7 @@ export const SERVER_FAULTS = {
 	request_cancelled: 'the request was cancelled before its transaction committed; nothing it wrote is kept',
 	file_object_missing: "a file's object is missing from storage",
 	file_object_mismatch: "a file's object has another size than its row records",
+	file_key_taken: "a new file's object key already held an object this upload did not write",
 } as const
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS

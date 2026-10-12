@@ -240,7 +240,7 @@ function heldStatus(table: string, row: Readonly<Record<string, unknown>>): Held
 	const status = ownEntry(row, 'status')
 	const held = HELD.find((candidate) => candidate === status)
 	if (held === undefined) {
-		throw new QueryRefusedError(`${table}.status came back as a state no held file has`)
+		throw new QueryRefusedError('unexpected_row', `${table}.status came back as a state no held file has`)
 	}
 	return held
 }
@@ -253,7 +253,7 @@ function nullableText(row: Readonly<Record<string, unknown>>, name: string): str
 function date(table: string, row: Readonly<Record<string, unknown>>, name: string): Date {
 	const value = ownEntry(row, name)
 	if (!(value instanceof Date)) {
-		throw new QueryRefusedError(`${table}.${name} came back as ${typeof value}`)
+		throw new QueryRefusedError('unexpected_row', `${table}.${name} came back as ${typeof value}`)
 	}
 	return value
 }
@@ -293,7 +293,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 	/** A verdict of the scan pass: one conditional update, fenced by the attempt's lease. */
 	function scanning(operation: string): void {
 		if (!spec.scan) {
-			throw new QueryRefusedError(`files '${spec.name}' does not scan; it has no ${operation}`)
+			throw new QueryRefusedError('file_scan', `files '${spec.name}' does not scan; it has no ${operation}`)
 		}
 	}
 
@@ -301,7 +301,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		const current = runtime()
 		const fence = current.capabilities.fence()
 		if (fence === null) {
-			throw new QueryRefusedError(`files '${spec.name}': a scan verdict is written only inside the scan job's lease`)
+			throw new QueryRefusedError('file_scan', `files '${spec.name}': a scan verdict is written only inside the scan job's lease`)
 		}
 		const scope = equals(table, 'id', id)
 		const node = updateNode(table, changes, undefined, scopedWhere(conditions, scope), acknowledgement(table, 'id', undefined))
@@ -452,7 +452,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		async list(capability: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage> {
 			const grant = grantOf(capability, owner.dimension, spec.actions.read)
 			if (!Number.isSafeInteger(page.limit) || page.limit < 1) {
-				throw new QueryRefusedError(`files '${spec.name}': a page holds at least one file`)
+				throw new QueryRefusedError('list_page', `files '${spec.name}': a page holds at least one file`)
 			}
 			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
 			const conditions = page.after === null ? held() : allOf([held(), compare(table, 'id', '>', page.after)])

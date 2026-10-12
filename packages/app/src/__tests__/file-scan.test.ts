@@ -9,8 +9,8 @@ import {
 	FILE_SCAN_JOB,
 	type FileScanner,
 	type JobClock,
-	type JobReport,
-	type JobReporter,
+	type OperationsReport,
+	type OperationsReporter,
 	SCAN_LIMITS,
 	type ScanBatchResult,
 } from '@fabrika/app/implement'
@@ -184,10 +184,10 @@ async function statusOf(id: string): Promise<unknown> {
 	return row?.status
 }
 
-class RecordingReporter implements JobReporter {
-	readonly reports: JobReport[] = []
+class RecordingReporter implements OperationsReporter {
+	readonly reports: OperationsReport[] = []
 
-	report(report: JobReport): Promise<void> {
+	report(report: OperationsReport): Promise<void> {
 		this.reports.push(report)
 		return Promise.resolve()
 	}

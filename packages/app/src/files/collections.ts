@@ -14,7 +14,7 @@ import { HttpError, jsonResponse, NotFoundError } from '../errors'
 import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase, ImplementationDatabase } from '../implement/implement'
-import type { JobReporter } from '../jobs/report'
+import type { OperationsReporter } from '../jobs/report'
 import { type FileScanner, runScanPass } from './scan'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
@@ -266,7 +266,7 @@ export class FileCollections {
 			if (isNamed(error, 'ObjectExistsError')) {
 				// The key holds an object this upload did not write: never delete it, only the pending row.
 				await table.abandon(id)
-				throw new ServerFault(`files '${collection.name}' found an object already under a new file's key`)
+				throw new ServerFault('file_key_taken', `files '${collection.name}' found an object already under a new file's key`)
 			}
 			await this.#abandon(collection, id, objectKey)
 			if (isNamed(error, 'ObjectTooLargeError')) {
@@ -393,7 +393,7 @@ export class FileCollections {
 	}
 
 	/** One scan pass over every `scan: true` collection, then their sweep: the body of the scan job. */
-	async scanPass(scanner: FileScanner | null, reporter: JobReporter, signal: AbortSignal): Promise<void> {
+	async scanPass(scanner: FileScanner | null, reporter: OperationsReporter, signal: AbortSignal): Promise<void> {
 		const scanning = this.#collections.filter((collection) => collection.artifact.scan === true)
 		await runScanPass({ collections: scanning, store: this.#store, scanner, reporter, signal })
 		for (const collection of scanning) {

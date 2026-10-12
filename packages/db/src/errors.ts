@@ -30,6 +30,7 @@ export const QUERY_REFUSALS = {
 	sql_name: 'ctx.sql names a framework, catalog or foreign-schema object, or writes a name in U& form',
 	sql_function: 'ctx.sql calls a function that is not a reviewed built-in',
 	sql_scope: 'ctx.sql.scope(…) stands alone, joined by AND, in a WHERE or JOIN … ON clause of its own invocation',
+	file_scan: "a scan operation on a file collection without scan: true, or a scan verdict outside the scan job's lease",
 } as const
 
 export type QueryRefusal = keyof typeof QUERY_REFUSALS

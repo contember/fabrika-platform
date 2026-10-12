@@ -7,7 +7,7 @@
 
 import type { FileCollectionTable, QuarantinedFile } from '@fabrika/db/framework'
 import type { FileObjectStore } from '@fabrika/platform'
-import type { JobReporter } from '../jobs/report'
+import type { OperationsReporter } from '../jobs/report'
 import { type ArchiveRefusal, checkArchive } from './archive'
 import { ZIP_TYPES } from './sniff'
 
@@ -120,7 +120,7 @@ export interface ScanPassInput {
 	readonly store: FileObjectStore
 	/** `null` when the runtime adapter supplies none: every quarantined file stays quarantined. */
 	readonly scanner: FileScanner | null
-	readonly reporter: JobReporter
+	readonly reporter: OperationsReporter
 	readonly signal: AbortSignal
 	readonly now?: () => Date
 }
