@@ -1140,6 +1140,20 @@ provisioning credential of the application's role family
 throwaway `CREATEROLE` provisioner instead of `db`, which it grants `CREATE` on the database and drops afterwards.
 The provider writes the same reference as before; nothing else changes on the Zerops side.
 
+#### UNVERIFIED: ClamAV in a scanning application's runtime container
+
+A contract with a `scan: true` file collection gets `sudo apk add --no-cache clamav` and a first `sudo freshclam` in
+`run.prepareCommands`, the same `freshclam` in `run.initCommands` (a failure there only logs: a container starts from
+the prepared image, whose signatures are as old as its build), a daily `freshclam` crontab line on every container and
+`fabrika job run fabrika-file-scan` every minute (`packages/provider-zerops/src/execution.ts`). The scanner refuses
+signatures older than three days, so a container that cannot refresh them scans nothing and reports, rather than scan
+with stale ones. Measured locally with `clamav/clamav:1.4` (2026-10-12): one `clamscan` over 21 small files took 11 s
+and peaked at 0.99 GB resident, almost all of it the signatures. A scanning application's deploy service must
+therefore declare `verticalAutoscaling: { minRam: 2 }` (`ZEROPS_SCAN_MIN_RAM_GB`); the build and the deploy refuse it
+otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import, so an existing
+service is raised through Zerops itself. Not yet measured on a real account: that Alpine's `clamav` installs through
+`prepareCommands`, that `freshclam` reaches its mirror from the build and the runtime, and the peak memory there.
+
 #### UNVERIFIED: the service's own user can create roles, and a new role connects through `portTls`
 
 Neither has been measured; both are `not-probed` rows of the platform-facts table, because they need a PostgreSQL

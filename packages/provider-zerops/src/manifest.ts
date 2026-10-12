@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
 import {
+	assertScanMemory,
 	CONTRACT_DIGEST_PATTERN,
 	LOCKED_APP_ID_PATTERN,
 	lockedAuthoredBuild,
@@ -300,6 +301,7 @@ const contractRunSchema = z.object({
 	digest: z.string().regex(CONTRACT_DIGEST_PATTERN),
 	readinessPath: z.string().regex(READINESS_PATH),
 	jobs: z.array(z.object({ name: z.string().regex(JOB_NAME), schedule: z.string().regex(CRON_SCHEDULE) }).strict()),
+	scan: z.literal(true).optional(),
 }).strict()
 
 const runtimePackagesSchema = z.array(z.enum(ZEROPS_RUNTIME_PACKAGES)).refine((packages) => new Set(packages).size === packages.length)
@@ -434,9 +436,11 @@ export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAcc
 		throw new Error('zerops: Control approved no access for this environment')
 	}
 	if (!LOCKED_APP_ID_PATTERN.test(manifest.app.id)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
+	const contract = zeropsContractRun(access.contract)
+	assertScanMemory(manifest.target.importDocument.services, manifest.target.deployService, contract)
 	return {
 		appId: manifest.app.id,
-		contract: zeropsContractRun(access.contract),
+		contract,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
@@ -507,6 +511,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		if (!LOCKED_APP_ID_PATTERN.test(id)) throw new Error('invalid fabrika manifest: a contract application id must match [a-z0-9][a-z0-9-]*')
 		applicationDatabaseUrl(importDocument.services, namespaceResources)
 		applicationStorageHostname(importDocument.services)
+		assertScanMemory(importDocument.services, deployService, contract)
 		const entries = parsedDescriptor.document['zerops']
 		const entry = Array.isArray(entries) ? entries.find((candidate) => isDescriptorSetup(candidate, selectedSetup)) : undefined
 		if (entry !== undefined) lockedAuthoredBuild(entry, selectedSetup)

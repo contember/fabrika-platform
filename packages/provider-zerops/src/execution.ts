@@ -34,6 +34,20 @@ export interface ZeropsContractJob {
 	readonly schedule: string
 }
 
+/** The framework's file scan job (`@fabrika/app`'s `FILE_SCAN_JOB`), run every minute when a collection scans. */
+export const ZEROPS_FILE_SCAN_JOB = 'fabrika-file-scan'
+
+/**
+ * The RAM in GB a container of a scanning application starts with: one `clamscan` over a batch peaks at about 1 GB
+ * resident while it loads its signatures (measured with ClamAV 1.4), beside the application's own process.
+ */
+export const ZEROPS_SCAN_MIN_RAM_GB = 2
+
+/** What a scanning application adds: ClamAV in the image with its first signatures, refreshed at start and daily. */
+const SCANNER_PACKAGE = 'clamav'
+const FRESHCLAM = 'sudo freshclam --stdout --quiet'
+const FRESHCLAM_SCHEDULE = '17 4 * * *'
+
 /** What the generated run section needs from a contract; derived from the artifact by `zeropsContractRun`. */
 export interface ZeropsContractRun {
 	/** The contract digest the application compares at startup (`FABRIKA_CONTRACT_DIGEST`). */
@@ -41,6 +55,8 @@ export interface ZeropsContractRun {
 	/** The path of the contract's health endpoint, which the readiness and health checks request. */
 	readonly readinessPath: string
 	readonly jobs: readonly ZeropsContractJob[]
+	/** Present when a file collection scans its uploads: the build installs ClamAV and the crontab runs the scan. */
+	readonly scan?: true
 }
 
 /** Everything one locked execution descriptor is rendered from. */
@@ -73,6 +89,24 @@ export function zeropsContractRun(artifact: ContractArtifact): ZeropsContractRun
 		digest: contractDigest(artifact),
 		readinessPath: health.path,
 		jobs: Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule })).sort(byName),
+		...(Object.values(artifact.files).some((collection) => collection.scan === true) ? { scan: true } : {}),
+	}
+}
+
+/**
+ * A scanning application's deploy service must start its containers with `ZEROPS_SCAN_MIN_RAM_GB`: below it the
+ * scanner is killed for memory, and every upload stays quarantined. Zerops ignores a changed `verticalAutoscaling` of
+ * an existing service on a re-import, so an existing service is raised through Zerops itself.
+ */
+export function assertScanMemory(services: readonly { readonly [key: string]: JsonValue }[], deployService: string, run: ZeropsContractRun): void {
+	if (run.scan !== true) return
+	const service = services.find((candidate) => candidate['hostname'] === deployService)
+	const scaling = service?.['verticalAutoscaling']
+	const minRam = isMapping(scaling) ? scaling['minRam'] : undefined
+	if (typeof minRam !== 'number' || minRam < ZEROPS_SCAN_MIN_RAM_GB) {
+		throw new Error(
+			`fabrika app build: a contract with scan: true scans uploads with ClamAV, which needs ${ZEROPS_SCAN_MIN_RAM_GB} GB of RAM; set verticalAutoscaling: { minRam: ${ZEROPS_SCAN_MIN_RAM_GB} } on the service \`${deployService}\``,
+		)
 	}
 }
 
@@ -262,7 +296,25 @@ export function renderLockedSetup(
 		...(execution.databaseUrl === null ? {} : { FABRIKA_APP_DATABASE_URL: execution.databaseUrl }),
 		...(execution.storageHostname === null ? {} : storageVariables(execution.storageHostname)),
 	}
-	const packages = sortedUnique(execution.runtimePackages)
+	const scan = contract.scan === true
+	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
+	const crontab = [
+		...contract.jobs.map((job) => ({ timing: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}`, allContainers: false })),
+		// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
+		...(scan
+			? [
+				{ timing: '* * * * *', command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SCAN_JOB}`, allContainers: false },
+				{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true },
+			]
+			: []),
+	]
+	// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
+	// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
+	const initCommands = [
+		...(scan ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
+		...(execution.databaseUrl === null ? [] : [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`]),
+	]
+	const prepareCommands = packages.length === 0 ? [] : [`sudo apk add --no-cache ${packages.join(' ')}`, ...(scan ? [FRESHCLAM] : [])]
 	return {
 		setup,
 		build: {
@@ -277,14 +329,12 @@ export function renderLockedSetup(
 		},
 		run: {
 			base: ZEROPS_APPLICATION_RUNTIME,
-			...(packages.length === 0 ? {} : { prepareCommands: [`sudo apk add --no-cache ${packages.join(' ')}`] }),
-			...(execution.databaseUrl === null ? {} : { initCommands: [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`] }),
+			...(prepareCommands.length === 0 ? {} : { prepareCommands }),
+			...(initCommands.length === 0 ? {} : { initCommands }),
 			start: `sh ${RUNTIME_ROOT}/${START_SCRIPT}`,
 			ports: [{ port: ZEROPS_APPLICATION_PORT, httpSupport: true }],
 			healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' },
-			...(contract.jobs.length === 0 ? {} : {
-				crontab: contract.jobs.map((job) => ({ timing: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}`, allContainers: false })),
-			}),
+			...(crontab.length === 0 ? {} : { crontab }),
 			envVariables,
 		},
 	}
