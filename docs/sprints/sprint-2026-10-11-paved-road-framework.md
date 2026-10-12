@@ -611,3 +611,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   error's name, and a failed webhook delivery logged the unsigned `X-GitHub-Delivery`. Both now log fixed codes (the
   failed step; `delivery_failed`), and `deliveryIdOf` is gone. Every other `console.*` and reporter call in the app and
   db runtime interpolates only declared names, fixed codes or closed IAM outcomes.
+- **WU17 — file malware quarantine.** ClamAV was measured locally only (`clamav/clamav:1.4`): one `clamscan` over 21
+  files took 11 s and peaked at 0.99 GB resident, so a scanning contract's deploy service needs `minRam: 2`
+  (`ZEROPS_SCAN_MIN_RAM_GB`); the Zerops facts stay UNVERIFIED in `docs/reference/zerops-platform.md`. Deviations:
+  `freshclam` also runs in `initCommands` (an image's signatures are as old as its build, and the scanner refuses
+  ones older than three days); `ALTER TABLE fabrika_files_*` was refused everywhere, so `fileScanSql` and its exact
+  classifier exemption exist; `scan` is in the artifact only when true, so other digests stay; every file collection
+  gains `files.<name>.list`; the local stack's `notes` service runs `app-image/` (not started, only built).
