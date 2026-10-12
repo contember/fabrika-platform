@@ -24,11 +24,15 @@ export interface ZipEntry {
 	readonly bytes: Uint8Array | string
 	/** `stored` keeps the bytes; `deflate` compresses them; a number writes that method over the stored bytes. */
 	readonly method?: 'stored' | 'deflate' | number
+	/** Bit 3 writes the sizes and CRC in a data descriptor after the data, as a streaming writer does. */
 	readonly flags?: number
 }
 
-/** A ZIP archive of `entries`, written as the format says: local headers, data, the directory and its end record. */
-export function zipOf(entries: readonly ZipEntry[]): Uint8Array<ArrayBuffer> {
+/**
+ * A ZIP archive of `entries`, written as the format says: local headers, data (and a data descriptor when bit 3 is
+ * set), the directory and its end record, with `comment` after it.
+ */
+export function zipOf(entries: readonly ZipEntry[], comment: Uint8Array = new Uint8Array()): Uint8Array<ArrayBuffer> {
 	const u16 = (value: number) => [value & 0xff, (value >> 8) & 0xff]
 	const u32 = (value: number) => [value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >>> 24) & 0xff]
 	const local: number[] = []
@@ -38,20 +42,15 @@ export function zipOf(entries: readonly ZipEntry[]): Uint8Array<ArrayBuffer> {
 		const content = typeof entry.bytes === 'string' ? new TextEncoder().encode(entry.bytes) : entry.bytes
 		const method = entry.method === 'deflate' ? 8 : entry.method === undefined || entry.method === 'stored' ? 0 : entry.method
 		const data = entry.method === 'deflate' ? deflateRawSync(content) : content
-		const header = [
-			...u16(20),
-			...u16(entry.flags ?? 0),
-			...u16(method),
-			...u16(0),
-			...u16(0),
-			...u32(Bun.hash.crc32(content)),
-			...u32(data.length),
-			...u32(content.length),
-			...u16(name.length),
-		]
+		const flags = entry.flags ?? 0
+		const sizes = [...u32(Bun.hash.crc32(content)), ...u32(data.length), ...u32(content.length)]
+		const described = (flags & 0x08) !== 0
+		const header = (
+			withSizes: boolean,
+		) => [...u16(20), ...u16(flags), ...u16(method), ...u16(0), ...u16(0), ...(withSizes ? sizes : u32(0).concat(u32(0), u32(0))), ...u16(name.length)]
 		const offset = local.length
-		local.push(...u32(0x04034b50), ...header, ...u16(0), ...name, ...data)
-		central.push(...u32(0x02014b50), ...u16(20), ...header, ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset), ...name)
+		local.push(...u32(0x04034b50), ...header(!described), ...u16(0), ...name, ...data, ...(described ? [...u32(0x08074b50), ...sizes] : []))
+		central.push(...u32(0x02014b50), ...u16(20), ...header(true), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset), ...name)
 	}
 	const end = [
 		...u32(0x06054b50),
@@ -61,9 +60,9 @@ export function zipOf(entries: readonly ZipEntry[]): Uint8Array<ArrayBuffer> {
 		...u16(entries.length),
 		...u32(central.length),
 		...u32(local.length),
-		...u16(0),
+		...u16(comment.length),
 	]
-	return new Uint8Array([...local, ...central, ...end])
+	return new Uint8Array([...local, ...central, ...end, ...comment])
 }
 
 /** A deflated EICAR whose compressed stream is corrupted, its CRC and sizes left as they were. */

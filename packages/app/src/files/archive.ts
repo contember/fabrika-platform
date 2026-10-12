@@ -25,6 +25,10 @@ export type ArchiveRefusal =
 	| 'too_large_unpacked'
 	| 'nested_too_deep'
 	| 'unsupported_archive'
+	/** A ZIP signature inside a file that is no ZIP, or before a ZIP's first entry. */
+	| 'embedded_archive'
+	/** More than one end record a scanner could pick, or one whose comment does not end the file. */
+	| 'ambiguous_directory'
 
 export type ArchiveCheck = { readonly ok: true } | { readonly ok: false; readonly refusal: ArchiveRefusal }
 
@@ -77,23 +81,25 @@ function isOtherArchive(bytes: Uint8Array): boolean {
 	return isTar(bytes) || OTHER_ARCHIVES.some((magic) => startsWith(bytes, magic))
 }
 
-/** ZIP's compression methods other than stored and deflate (shrink to implode, deflate64, bzip2, LZMA, zstd, xz, …). */
-const OTHER_METHODS: ReadonlySet<number> = new Set([1, 2, 3, 4, 5, 6, 9, 10, 12, 14, 18, 19, 20, 93, 94, 95, 96, 97, 98, 99])
-const LOCAL_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04])
+/** A ZIP's local header, central header and end record: ClamAV opens a ZIP it finds by any of them, wherever it sits. */
+const ZIP_SIGNATURES = [Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from([0x50, 0x4b, 0x01, 0x02]), Buffer.from([0x50, 0x4b, 0x05, 0x06])]
 
 /**
- * A ZIP local header inside a file that is no ZIP — appended to a PDF, say — which ClamAV finds and opens, but
- * whose entry it would skip: another method, or encryption. A version above 6.3 is no header, only bytes like one.
+ * Whether a ZIP signature appears anywhere: in a file that is no ZIP, it is a ZIP embedded where the check does not
+ * look, so it is refused. Random bytes hold one with a chance of about three in 2^32 per byte (roughly one in 1400 for
+ * 1 MB of compressed data); such a file is rejected too, which fails closed.
  */
-function hasEmbeddedUnreadableEntry(bytes: Uint8Array): boolean {
+function containsZipSignature(bytes: Uint8Array): boolean {
 	const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-	for (let at = buffer.indexOf(LOCAL_SIGNATURE); at !== -1 && at + 10 <= buffer.length; at = buffer.indexOf(LOCAL_SIGNATURE, at + 1)) {
-		const version = buffer.readUInt16LE(at + 4)
-		const flags = buffer.readUInt16LE(at + 6)
-		const method = buffer.readUInt16LE(at + 8)
-		if (version <= 63 && (OTHER_METHODS.has(method) || ((flags & ENCRYPTION_FLAGS) !== 0 && (method === STORED || method === DEFLATED)))) return true
-	}
-	return false
+	return ZIP_SIGNATURES.some((signature) => buffer.includes(signature))
+}
+
+/** How often `signature` occurs in `bytes`. */
+function occurrences(bytes: Uint8Array, signature: Buffer): number {
+	const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+	let count = 0
+	for (let at = buffer.indexOf(signature); at !== -1; at = buffer.indexOf(signature, at + 1)) count++
+	return count
 }
 
 class Reader {
@@ -134,11 +140,18 @@ interface Budget {
 	unpacked: number
 }
 
-/** The end-of-directory record: exactly at the end, the comment its length says, one disk, no ZIP64. */
+/**
+ * The end-of-directory record: the only one a scanner could find in the tail, its comment ending the file exactly and
+ * holding no ZIP signature, one disk, no ZIP64. A scanner that picked another record would read another directory.
+ */
 function endRecord(zip: Reader): { readonly entries: number; readonly directoryStart: number; readonly directoryEnd: number } {
 	const length = zip.bytes.length
+	const tail = zip.bytes.subarray(Math.max(0, length - 22 - 0xffff))
+	if (occurrences(tail, ZIP_SIGNATURES[2] ?? Buffer.alloc(0)) !== 1) throw new Refused('ambiguous_directory')
 	for (let at = length - 22; at >= Math.max(0, length - 22 - 0xffff); at--) {
-		if (zip.u32(at) !== END || at + 22 + zip.u16(at + 20) !== length) continue
+		if (zip.u32(at) !== END) continue
+		if (at + 22 + zip.u16(at + 20) !== length) throw new Refused('ambiguous_directory')
+		if (containsZipSignature(zip.slice(at + 22, length))) throw new Refused('ambiguous_directory')
 		const entries = zip.u16(at + 10)
 		const size = zip.u32(at + 12)
 		const start = zip.u32(at + 16)
@@ -244,22 +257,33 @@ function checkZip(bytes: Uint8Array, depth: number, budget: Budget): void {
 	if (expected !== end.directoryStart) throw new Refused('malformed')
 }
 
+/** A nested entry's content: a ZIP from its first byte is checked in turn; any other archive or ZIP signature is refused. */
 function checkContent(content: Uint8Array, depth: number, budget: Budget): void {
 	if (isZip(content)) {
 		if (depth + 1 > ARCHIVE_LIMITS.maxDepth) throw new Refused('nested_too_deep')
 		checkZip(content, depth + 1, budget)
-	} else if (isOtherArchive(content) || hasEmbeddedUnreadableEntry(content)) {
+	} else if (isOtherArchive(content)) {
 		throw new Refused('unsupported_archive')
+	} else if (containsZipSignature(content)) {
+		throw new Refused('embedded_archive')
 	}
 }
 
 /**
- * Whether the scanner can vouch for these bytes: a file that is no archive passes; a ZIP passes when every entry,
- * nested ZIPs included, is one ClamAV reads in full; every other archive is refused.
+ * Whether the scanner can vouch for these bytes. A file of a ZIP-based type (`zipBased`: ZIP and Office Open XML) must
+ * be a ZIP from its first byte whose every entry, nested ZIPs included, ClamAV reads in full. Any other file passes
+ * only when it holds no archive: no other archive format, and no ZIP signature at any offset.
  */
-export function checkArchive(bytes: Uint8Array): ArchiveCheck {
+export function checkArchive(bytes: Uint8Array, zipBased: boolean): ArchiveCheck {
 	try {
-		checkContent(bytes, -1, { entries: 0, unpacked: 0 })
+		if (zipBased) {
+			if (!isZip(bytes)) throw new Refused('embedded_archive')
+			checkZip(bytes, 0, { entries: 0, unpacked: 0 })
+		} else if (isOtherArchive(bytes)) {
+			throw new Refused('unsupported_archive')
+		} else if (containsZipSignature(bytes)) {
+			throw new Refused('embedded_archive')
+		}
 		return { ok: true }
 	} catch (error) {
 		if (error instanceof Refused) return { ok: false, refusal: error.refusal }

@@ -27,7 +27,7 @@ import { clamscanScanner } from '../files/clamscan'
 import type { ContractApp } from '../implement/boot'
 import { implement } from '../implement/implement'
 import { bootApp, endpointHeaderFor, errorType, grant, ORIGIN, resultOf, send, type Sent, token } from './fixtures/implement/harness'
-import { CLEAN_PDF, damagedZip, EICAR, encryptedZip, LZMA_EICAR_ZIP } from './fixtures/scan-samples'
+import { CLEAN_PDF, damagedZip, EICAR, encryptedZip, LZMA_EICAR_ZIP, zipOf } from './fixtures/scan-samples'
 import { tables } from './fixtures/scoped-files/src/db/tables'
 import { vocabulary } from './fixtures/scoped-files/src/vocabulary'
 
@@ -53,6 +53,15 @@ const contract = defineContract(vocabulary, (c) => ({
 			maxPerOwner: MAX_PER_NOTE,
 			scan: true,
 		}),
+		photos: c.files({
+			owner: 'notes',
+			read: 'notes.read',
+			write: 'notes.write',
+			delete: 'notes.delete',
+			maxBytes: 65536,
+			types: ['text/plain'],
+			scan: true,
+		}),
 	},
 	health: c.health('/healthz'),
 }))
@@ -68,6 +77,7 @@ const migration = `
 ${FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')}
 create table notes (id uuid primary key, workspace_id text not null, title text not null, created_by text not null, version integer not null, unique (id, workspace_id));
 ${fileTableSql('uploads', { table: 'notes', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'workspace_id', type: 'text' }] })}
+${fileTableSql('photos', { table: 'notes', key: { column: 'id', type: 'uuid' }, chain: [{ column: 'workspace_id', type: 'text' }] })}
 `
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
@@ -90,21 +100,36 @@ async function seedNote(workspace = 'w1'): Promise<string> {
 const editorOf = (...workspaces: (typeof W1)[]): Promise<string> =>
 	token('user', workspaces.flatMap((scope) => [grant('notes.read', scope), grant('notes.write', scope), grant('notes.delete', scope)]))
 
-const UPLOAD_ENDPOINT = endpointHeaderFor(filesApp(), 'POST', '/api/files.uploads.upload/x') ?? ''
+type CollectionName = 'uploads' | 'photos'
 
-async function upload(app: ContractApp, note: string, bytes: Uint8Array<ArrayBuffer> | string, type: string, callerToken: string): Promise<Sent> {
+const uploadEndpoint = (collection: CollectionName): string => endpointHeaderFor(filesApp(), 'POST', `/api/files.${collection}.upload/x`) ?? ''
+
+async function upload(
+	app: ContractApp,
+	note: string,
+	bytes: Uint8Array<ArrayBuffer> | string,
+	type: string,
+	callerToken: string,
+	collection: CollectionName = 'uploads',
+): Promise<Sent> {
 	const headers = new Headers({
 		'Sec-Fetch-Site': 'same-origin',
 		'Content-Type': type,
 		[PROXY_TOKEN_HEADER]: callerToken,
-		[ENDPOINT_HEADER]: UPLOAD_ENDPOINT,
+		[ENDPOINT_HEADER]: uploadEndpoint(collection),
 	})
-	const response = await app.fetch(new Request(`${ORIGIN}/api/files.uploads.upload/${note}`, { method: 'POST', headers, body: bytes }))
+	const response = await app.fetch(new Request(`${ORIGIN}/api/files.${collection}.upload/${note}`, { method: 'POST', headers, body: bytes }))
 	return { status: response.status, headers: response.headers, body: await response.json() }
 }
 
-async function uploaded(app: ContractApp, note: string, bytes: Uint8Array<ArrayBuffer> | string, type = 'text/plain'): Promise<string> {
-	const result = resultOf(await upload(app, note, bytes, type, await editorOf(W1)))
+async function uploaded(
+	app: ContractApp,
+	note: string,
+	bytes: Uint8Array<ArrayBuffer> | string,
+	type = 'text/plain',
+	collection: CollectionName = 'uploads',
+): Promise<string> {
+	const result = resultOf(await upload(app, note, bytes, type, await editorOf(W1), collection))
 	if (typeof result !== 'object' || result === null || !('id' in result) || typeof result.id !== 'string') {
 		throw new Error(`expected an id, got ${JSON.stringify(result)}`)
 	}
@@ -120,13 +145,22 @@ async function list(app: ContractApp, note: string, page: Readonly<Record<string
 }
 
 async function attemptsOf(id: string): Promise<unknown> {
-	const [row] = await admin((sql) => sql.unsafe(`select scan_attempts from ${schema}.fabrika_files_uploads where id = $1`, [id]))
+	const [row] = await admin((sql) =>
+		sql.unsafe(
+			`select scan_attempts from ${schema}.fabrika_files_uploads where id = $1 union all select scan_attempts from ${schema}.fabrika_files_photos where id = $1`,
+			[id],
+		)
+	)
 	return row?.scan_attempts
 }
 
 /** Every deferred retry is due now: what the passes of the next hour would see. */
 async function dueNow(): Promise<void> {
-	await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files_uploads set scan_after = null`))
+	await admin((sql) =>
+		sql.unsafe(
+			`update ${schema}.fabrika_files_uploads set scan_after = now() - interval '1 second' where scan_after > now(); update ${schema}.fabrika_files_photos set scan_after = now() - interval '1 second' where scan_after > now()`,
+		)
+	)
 }
 
 /** Replaces an object outside the upload path, as an operator or another writer with the bucket's key could. */
@@ -141,7 +175,12 @@ async function replaceObject(store: FileObjectStore, key: string, text: string):
 }
 
 async function statusOf(id: string): Promise<unknown> {
-	const [row] = await admin((sql) => sql.unsafe(`select status from ${schema}.fabrika_files_uploads where id = $1`, [id]))
+	const [row] = await admin((sql) =>
+		sql.unsafe(
+			`select status from ${schema}.fabrika_files_uploads where id = $1 union all select status from ${schema}.fabrika_files_photos where id = $1`,
+			[id],
+		)
+	)
 	return row?.status
 }
 
@@ -186,6 +225,8 @@ class StandInScanner implements FileScanner {
 		return judge(objects, signal)
 	}
 }
+
+const joined = (...parts: Uint8Array[]): Uint8Array<ArrayBuffer> => new Uint8Array(parts.flatMap((part) => [...part]))
 
 /** An upload the stand-in, like ClamAV for some inputs, never gives a verdict. */
 const UNSCANNABLE = 'UNSCANNABLE'
@@ -279,7 +320,11 @@ afterAll(async () => {
 /** Each test scans only its own uploads: an earlier test's leftovers are removed first, and the pass sweeps them. */
 async function clearBacklog(): Promise<void> {
 	if (hasPostgres) {
-		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files_uploads set deleted_at = now() where status = 'quarantined'`))
+		await admin((sql) =>
+			sql.unsafe(
+				`update ${schema}.fabrika_files_uploads set deleted_at = now() where status = 'quarantined'; update ${schema}.fabrika_files_photos set deleted_at = now() where status = 'quarantined'`,
+			)
+		)
 	}
 }
 
@@ -382,13 +427,33 @@ for (const [storeLabel, makeStore] of stores) {
 				expect((await download(app, id)).status).toBe(409)
 			}, 120 * SECOND)
 
-			test('an empty file is clean without a verdict', async () => {
-				const id = await uploaded(app, await seedNote(), '')
-				await scanPass(app)
-				expect(await statusOf(id)).toBe('live')
-				const served = await download(app, id)
-				expect(served.status).toBe(200)
-				expect(await served.text()).toBe('')
+			test('a ZIP after a prefix, inside a text or a PDF, and an end record hidden in a comment are rejected and never served', async () => {
+				const note = await seedNote()
+				// ClamAV finds a ZIP by its local header anywhere and skips an entry whose sizes are in a data descriptor.
+				const streamed = zipOf([{ name: 'eicar.txt', bytes: EICAR, method: 'deflate', flags: 0x08 }])
+				const inText = await uploaded(app, note, joined(new TextEncoder().encode('a'.repeat(512)), streamed))
+				const inPdf = await uploaded(app, note, joined(new TextEncoder().encode(CLEAN_PDF), streamed), 'application/pdf')
+				const entries = [{ name: 'eicar.txt', bytes: EICAR, method: 'deflate' as const }, { name: 'harmless.txt', bytes: 'hello' }]
+				const shadow = new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 1, 0, 1, 0, 40, 0, 0, 0, 100, 0, 0, 0, 1, 0])
+				const shadowed = await uploaded(app, await seedNote(), zipOf(entries, shadow), 'application/zip')
+				const { reporter } = await scanPass(app)
+				for (const id of [inText, inPdf, shadowed]) {
+					expect(await statusOf(id)).toBe('rejected')
+					expect((await download(app, id)).status).toBe(404)
+				}
+				expect(reporter.reports.filter((report) => report.type === 'FileRejected').map((report) => report.tags['signature']).sort()).toEqual([
+					'Fabrika.Archive.ambiguous_directory',
+					'Fabrika.Archive.embedded_archive',
+					'Fabrika.Archive.embedded_archive',
+				])
+			}, 120 * SECOND)
+
+			test('an empty upload is refused and nothing is stored', async () => {
+				const note = await seedNote()
+				const sent = await upload(app, note, '', 'text/plain', await editorOf(W1))
+				expect(sent.status).toBe(400)
+				expect(errorType(sent)).toBe('empty')
+				expect(resultOf(await list(app, note))).toEqual(expect.objectContaining({ items: [] }))
 			}, 120 * SECOND)
 		})
 	}
@@ -518,6 +583,11 @@ describe.skipIf(!hasPostgres)('a scan that does not complete with a clean verdic
 		expect(await statusOf(id)).toBe('quarantined')
 		expect((await download(app, id)).status).toBe(409)
 		expect(first.reporter.reports).toEqual([expect.objectContaining({ type: 'FileScanFailed', tags: { code: 'delete_failed' } })])
+		expect(await attemptsOf(id)).toBe(1)
+		// It waits like a retry: a pass before its time leaves it alone.
+		await scanPass(app)
+		expect(await memory.read(`uploads/${id}`)).not.toBeNull()
+		await dueNow()
 		await scanPass(app)
 		expect(await statusOf(id)).toBe('rejected')
 		expect(await memory.read(`uploads/${id}`)).toBeNull()
@@ -555,6 +625,41 @@ describe.skipIf(!hasPostgres)('a scan that does not complete with a clean verdic
 			await dueNow()
 		}
 		expect(await statusOf(last)).toBe('rejected')
+	})
+
+	test('twenty infected files whose deletes keep failing do not hold back the next upload, and are never served', async () => {
+		const infected = []
+		for (let index = 0; index < SCAN_LIMITS.batchFiles; index++) infected.push(await uploaded(app, await seedNote(), `${EICAR} ${index}`))
+		const normal = await uploaded(app, await seedNote(), CLEAN_PDF, 'application/pdf')
+		store.failDeletes = Number.POSITIVE_INFINITY
+		try {
+			await scanPass(app)
+			expect(await statusOf(normal)).toBe('quarantined')
+			await scanPass(app)
+			expect(await statusOf(normal)).toBe('live')
+			for (const id of infected) {
+				expect(await statusOf(id)).toBe('quarantined')
+				expect(await attemptsOf(id)).toBe(1)
+				expect((await download(app, id)).status).toBe(409)
+			}
+		} finally {
+			store.failDeletes = 0
+		}
+	})
+
+	test('a file of a quiet collection is scanned in its turn while another collection keeps receiving uploads', async () => {
+		const busy = async (count: number): Promise<void> => {
+			for (let index = 0; index < count; index++) await uploaded(app, await seedNote(), `busy ${index}`)
+		}
+		await busy(SCAN_LIMITS.batchFiles)
+		const quiet = await uploaded(app, await seedNote(), 'quiet', 'text/plain', 'photos')
+		await busy(SCAN_LIMITS.batchFiles)
+		await scanPass(app)
+		expect(await statusOf(quiet)).toBe('quarantined')
+		// Newer uploads keep arriving, more than a batch of them; the older quiet file goes first.
+		await busy(SCAN_LIMITS.batchFiles)
+		await scanPass(app)
+		expect(await statusOf(quiet)).toBe('live')
 	})
 
 	test('a quarantined file whose object is missing is rejected', async () => {

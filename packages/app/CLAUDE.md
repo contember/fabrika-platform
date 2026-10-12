@@ -617,19 +617,25 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **Only a completed clean verdict promotes a file** (`scan.ts`). An upload to a `scan: true` collection ends
   `quarantined`; the download answers 409 until the scan job writes `live`, and 404 once `rejected`. The pass reads each
   object whole, checks its size and SHA-256 against the upload's and checks it as an archive (`archive.ts`) before the
-  scanner sees it, and promotes only a file the scanner called clean (or an empty one) whose bytes verified. Never add a
+  scanner sees it, and promotes only a file the scanner called clean whose bytes verified; an empty upload is refused
+  (400 `empty`), so no file skips the scanner. Never add a
   path that makes a file live without that, or that treats a scanner error, a timeout or a missing verdict as clean. A
-  rejection deletes the object before it writes `rejected`, so a failed delete is retried by the next pass.
+  rejection deletes the object before it writes `rejected`; a failed delete leaves the file quarantined and defers it
+  like a retry (`deferScan`), so failing deletes never fill every batch.
 - **ClamAV's OK never vouches for an archive.** `checkArchive` admits a ZIP only when every entry, nested ZIPs to one
   level included, is stored or deflated, unencrypted, CRC- and size-consistent and laid out without gaps, within the
-  entry and unpacked bounds; every other archive format is refused, at the top or inside. Keep it a framework check:
+  entry and unpacked bounds; every other archive format is refused, at the top or inside. ClamAV finds a ZIP by its
+  local header at any offset, so the rule is coarse and fail-closed: a ZIP-based type (`ZIP_TYPES`) starts its local
+  header at offset 0, any other file or entry holding a ZIP signature anywhere is `embedded_archive`, and a second end
+  record in the tail or a comment that does not end the file is `ambiguous_directory`. The rare false rejection of a
+  binary file is accepted; never replace the rule with an emulation of ClamAV's parser. Keep it a framework check:
   never rely on a scanner flag for it.
 - **A download of a scanning collection serves only the scanned version** (`FileObjectStore.readVersion`, one
   conditional read): a mismatch, or a live row without a version, answers 409 and quarantines the file again. Never
   read the object by key alone for such a file.
 - **A file without a verdict is retried, alone, with backoff** (`deferScan`, `SCAN_LIMITS.maxAttempts`): the batch
-  takes the fewest tries first and scans a file that failed before on its own, so old failures never starve new
-  uploads. Installation failures (no scanner, missing or stale signatures) count no try.
+  takes the due files that waited longest first (`dueSince`, across every scanning collection) and scans a file that
+  failed before on its own, so neither old failures nor a busy collection starve anything. Installation failures (no scanner, missing or stale signatures) count no try.
 - **A verdict is written only under the scan job's lease.** `FileCollectionTable.promote`, `reject` and `deferScan`
   refuse to run without a fence and are one conditional update each (still quarantined, not removed, not orphaned,
   same digest), so a pass that lost its lease or timed out, or a file removed meanwhile, changes nothing. The scan job is

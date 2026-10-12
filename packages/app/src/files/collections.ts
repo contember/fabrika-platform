@@ -257,6 +257,10 @@ export class FileCollections {
 		const body = digesting(stream, UPLOAD_TIMEOUT_MS)
 		try {
 			const { size } = await this.#store.write(objectKey, body.stream, { contentType: type, maxBytes: artifact.maxBytes })
+			if (size === 0 && artifact.scan === true) {
+				// A scanner gives no verdict on nothing, and a file goes live only on a clean verdict.
+				throw new HttpError(400, 'empty', `files '${collection.name}' scans its files and admits no empty file`)
+			}
 			await table.complete(owner, id, { size, sha256: body.digest() }, artifact.scan === true ? 'quarantined' : 'live')
 		} catch (error) {
 			if (isNamed(error, 'ObjectExistsError')) {

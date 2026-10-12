@@ -20,6 +20,14 @@ function asciiAt(head: Uint8Array, offset: number, text: string): boolean {
 
 const ZIP = [0x50, 0x4b, 0x03, 0x04]
 
+/** The ZIP-based types: a ZIP archive, and an Office Open XML document, which is one. */
+export const ZIP_TYPES: readonly string[] = [
+	'application/zip',
+	'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+	'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]
+
 const BINARY_SIGNATURES: readonly Signature[] = [
 	{ types: ['image/png'], matches: (head) => bytesAt(head, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) },
 	{ types: ['image/jpeg'], matches: (head) => bytesAt(head, 0, [0xff, 0xd8, 0xff]) },
@@ -29,12 +37,7 @@ const BINARY_SIGNATURES: readonly Signature[] = [
 	{ types: ['application/gzip'], matches: (head) => bytesAt(head, 0, [0x1f, 0x8b]) },
 	{
 		// An Office Open XML document is a zip archive; its bytes cannot tell it from any other.
-		types: [
-			'application/zip',
-			'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-			'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-			'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-		],
+		types: ZIP_TYPES,
 		matches: (head) => bytesAt(head, 0, ZIP),
 	},
 ]

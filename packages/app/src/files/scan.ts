@@ -9,6 +9,7 @@ import type { FileCollectionTable, QuarantinedFile } from '@fabrika/db/framework
 import type { FileObjectStore } from '@fabrika/platform'
 import type { JobReporter } from '../jobs/report'
 import { type ArchiveRefusal, checkArchive } from './archive'
+import { ZIP_TYPES } from './sniff'
 
 /** The reserved name of the scan job: a `c.cron` job name cannot contain `-`, so no application job takes it. */
 export const FILE_SCAN_JOB = 'fabrika-file-scan'
@@ -84,8 +85,6 @@ type ReadState =
 	| { readonly kind: 'mismatch' }
 	| { readonly kind: 'unsafe'; readonly refusal: ArchiveRefusal }
 
-const SHA256_OF_NOTHING = new Bun.CryptoHasher('sha256').digest('hex')
-
 /** A signature name as Operations shows it: ClamAV's names are plain, anything else is not repeated. */
 function signatureName(signature: string): string {
 	return /^[A-Za-z0-9._:/-]{1,128}$/.test(signature) ? signature : 'unnamed'
@@ -127,15 +126,16 @@ export interface ScanPassInput {
 }
 
 /**
- * The batch: the due files with the fewest tries first, across every scanning collection. A file that has failed
- * before is scanned alone, so it cannot take others down with it; new files go together, within the batch bounds.
+ * The batch: the due files that waited longest first, across every scanning collection, so a busy collection or a
+ * stream of new uploads never holds back an older file. A file that has failed before is scanned alone, so it cannot
+ * take others down with it; new files go together, within the batch bounds.
  */
 async function batch(collections: readonly ScanningCollection[], now: Date): Promise<Candidate[]> {
 	const due: Candidate[] = []
 	for (const collection of collections) {
 		for (const file of await collection.table.quarantined(SCAN_LIMITS.batchFiles, now)) due.push({ collection, file })
 	}
-	due.sort((left, right) => left.file.scanAttempts - right.file.scanAttempts)
+	due.sort((left, right) => left.file.dueSince.getTime() - right.file.dueSince.getTime())
 	const [first] = due
 	if (first === undefined || first.file.scanAttempts > 0) return first === undefined ? [] : [first]
 	const candidates: Candidate[] = []
@@ -179,7 +179,7 @@ class ScanPass {
 			if (!signal.aborted) this.#states.set(file.id, { kind: 'mismatch' })
 			throw new Error('the object differs from its upload')
 		}
-		const archive = checkArchive(bytes)
+		const archive = checkArchive(bytes, ZIP_TYPES.includes(file.contentType))
 		if (!archive.ok) {
 			this.#states.set(file.id, { kind: 'unsafe', refusal: archive.refusal })
 			throw new Error('the scanner cannot read this archive in full')
@@ -192,25 +192,20 @@ class ScanPass {
 		const { scanner, signal } = this.#input
 		const candidates = await batch(this.#input.collections, this.#now())
 		if (candidates.length === 0) return
-		// An empty file holds nothing to scan: it is clean once its object is verified empty.
-		const empty = candidates.filter(({ file }) => file.size === 0 && file.sha256 === SHA256_OF_NOTHING)
-		for (const { file } of empty) await this.load(file, signal).catch(() => undefined)
-		const scanned = candidates.filter((candidate) => !empty.includes(candidate))
 		const none = new Map<string, ScanVerdict>()
-		if (scanned.length === 0) return this.#settle(candidates, none, true)
 		if (scanner === null) {
 			console.error('fabrika: the file scan has no scanner; quarantined files stay quarantined')
-			await this.#failed('scanner_missing', scanned)
-			return this.#settle(candidates, none, false)
+			await this.#failed('scanner_missing', candidates)
+			return
 		}
-		const objects = scanned.map(({ file }): ScanObject => ({
+		const objects = candidates.map(({ file }): ScanObject => ({
 			id: file.id,
 			open: async (stop) => new Blob([await this.load(file, stop)]).stream(),
 		}))
 		const result = await scanner.scan(objects, signal)
 		if (!result.ok) {
 			console.error(`fabrika: the file scan did not complete: ${result.failure}`)
-			await this.#failed(result.failure, scanned)
+			await this.#failed(result.failure, candidates)
 			// A broken installation is no file's fault; a run that failed over its files counts a try for each.
 			return this.#settle(candidates, none, !INSTALLATION_FAILURES.has(result.failure))
 		}
@@ -244,7 +239,7 @@ class ScanPass {
 			} else if (verdict.kind === 'infected') {
 				const signature = signatureName(verdict.signature)
 				await this.#reject(candidate, signature, `files '${collection.name}': file ${file.id} is rejected: ${signature}`)
-			} else if (state.kind === 'verified' && (verdict.kind === 'clean' || file.size === 0)) {
+			} else if (state.kind === 'verified' && verdict.kind === 'clean') {
 				await collection.table.promote(file.id, file.sha256, state.version)
 			} else {
 				unscanned.push(candidate)
@@ -253,13 +248,18 @@ class ScanPass {
 		if (countTry) await this.#retryLater(unscanned)
 	}
 
-	/** Deletes the object, then marks the row rejected: a failed delete leaves it quarantined, so the next pass retries. */
+	/**
+	 * Deletes the object, then marks the row rejected. A failed delete leaves it quarantined, unserved, and waiting like
+	 * a retry, so the next try deletes it again and failing deletes never fill every batch.
+	 */
 	async #reject(candidate: Candidate, signature: string, message: string): Promise<void> {
 		const { collection, file } = candidate
 		try {
 			await this.#input.store.delete(file.objectKey)
 		} catch {
 			await this.#failed('delete_failed', [candidate])
+			const attempts = file.scanAttempts + 1
+			await collection.table.deferScan(file.id, attempts, new Date(this.#now().getTime() + retryDelayMs(attempts)))
 			return
 		}
 		await collection.table.reject(file.id)

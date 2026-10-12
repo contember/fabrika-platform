@@ -478,29 +478,38 @@ the same pipeline:
   binary signature. `maxPerOwner` is counted before and again once the file is live (409),
   so concurrent uploads never leave more; a quarantined or rejected file counts until it is
   removed. The file name (`?name=`) is cut at 255 code points and loses its control characters.
+  A `scan: true` collection refuses an empty upload (400 `empty`) and keeps nothing: the scanner
+  gives no verdict a file of no bytes needs, and no exception to the scan exists.
 - **`scan: true` holds every upload until a clean malware verdict.** The upload ends
   `quarantined` instead of `live`. The framework's scan job (`fabrika-file-scan`, a reserved name
   no `c.cron` job can take) runs every minute under its lease in `fabrika_job_leases`. It takes the
-  due quarantined files with the fewest earlier tries first (at most 20 and 256 MiB; a file that
-  failed before is scanned alone), reads each object whole with its version (an S3 ETag), checks its
+  due quarantined files of every scanning collection that waited longest first (at most 20 and
+  256 MiB; a file that failed before is scanned alone), so neither a busy collection nor a stream of
+  new uploads holds an older file back. It reads each object whole with its version (an S3 ETag), checks its
   size and SHA-256 against the upload's, checks it as an archive, and hands the batch to one
   `clamscan` run in a private temporary directory, all under one five-minute deadline. Each verdict
   is written in a transaction fenced by the lease.
   - **Only a clean verdict over verified bytes promotes**, while the file is still quarantined, neither
-    removed nor orphaned, with the same digest; the row records the scanned object's version. An empty
-    file is clean without a scan.
+    removed nor orphaned, with the same digest; the row records the scanned object's version.
   - **ClamAV's OK does not vouch for an archive**: it skips entries it cannot decode (an LZMA entry, a
     damaged deflate stream) and still answers OK. So the framework reads every ZIP itself — Office Open
     XML documents are ZIPs — and rejects one with an entry other than stored or deflated, an encrypted
     entry, ZIP64, a CRC or size that does not match, bytes outside every entry, more than 1000 entries
     or 256 MiB unpacked, or a ZIP nested deeper than one level. Any other archive (gzip, bzip2, xz, 7z,
-    rar, cab, zstd, lzip, lzma, tar), at the top or inside a ZIP, is rejected, and so is an unreadable
-    ZIP entry appended to another file. A `scan: true` collection may not admit `application/gzip`.
+    rar, cab, zstd, lzip, lzma, tar), at the top or inside a ZIP, is rejected. ClamAV also finds a ZIP
+    by its local header at any offset, so the check is coarse and fails closed: a ZIP-based type must
+    start with its local header at offset 0, and a file of any other type — or an entry of a ZIP — that
+    holds a ZIP local-header, central-header or end-record signature anywhere is rejected
+    (`embedded_archive`). Random binary data holds one by chance about once per 1400 MB, so a rare
+    compressed PDF or image is falsely rejected; that is the accepted cost. The end record must be the
+    only one in the last 64 KiB, and its comment must end exactly at the end of the file and hold no ZIP
+    signature (`ambiguous_directory`). A `scan: true` collection may not admit `application/gzip`.
     PDFs and images are ClamAV's to parse; an archive embedded inside a PDF's streams is a residual
     limit of ClamAV's own coverage.
   - **A rejection** (a `FOUND`: EICAR, an encrypted file, a file past ClamAV's size, recursion or time
-    limits; a refused archive; a missing object) deletes the object, then marks the row `rejected`; a
-    failed delete leaves the row quarantined, so the next pass retries it.
+    limits; a refused archive; a missing object) deletes the object, then marks the row `rejected`. A
+    failed delete leaves the row quarantined and unserved and waits like a retry (one minute, doubled
+    up to an hour), so failing deletes never fill every batch.
   - **No verdict** — a scanner error or timeout, a file the scanner skipped, bytes that differ from the
     upload — counts a try: the file waits one minute, doubled per try up to an hour, is then scanned
     alone, and is rejected after five tries. Missing or stale (older than three days) signatures and a
