@@ -320,6 +320,7 @@ class SurfaceReader {
 					rate: formRate(options.get('rate')),
 					honeypot: optionalText(options.get('honeypot'), 'honeypot'),
 					challenge: formChallenge(options.get('challenge')),
+					then: optionalText(options.get('then'), 'then'),
 					unknownOptions: optionKeys(options, 'form'),
 				}
 			}

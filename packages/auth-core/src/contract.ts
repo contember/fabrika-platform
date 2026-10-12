@@ -295,6 +295,8 @@ export interface FormMountArtifact {
 	readonly honeypot?: string
 	/** The challenge the framework verifies on the server before it writes the row. */
 	readonly challenge?: FormChallenge
+	/** The cron job each accepted submission kicks: one run in the background, coalesced on the job's lease. */
+	readonly then?: string
 }
 
 export interface FormRate {

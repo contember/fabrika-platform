@@ -42,13 +42,14 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'29-members-without-the-list-action.ts': "listing the members of org needs the action 'crm.read'; get(principalId) checks one",
 	'30-attachment-handler-returns-no-rows.ts': 'an attachment handler returns its rows: an array of its row schema, with nothing around it',
 	'31-job-links-without-issues.ts': "declare issues: '<link mount>' on this job to issue its share links",
+	'32-form-kicks-an-unknown-job.ts': "then names a job of the contract's jobs section",
 }
 
 /**
- * The compiler elaborates this one through the declaration's own types, so it is held to its line and text only: an
- * optional field an annotation allows.
+ * The compiler elaborates these through the declaration's own types, so each is held to its line and text only: an
+ * optional field an annotation allows, and a form's `then`, which only the whole surface can check.
  */
-const ELABORATED = ['11-declaration-only-in-a-type.ts']
+const ELABORATED = ['11-declaration-only-in-a-type.ts', '32-form-kicks-an-unknown-job.ts']
 
 describe('the staged kit', () => {
 	test('the kit fixture and its API matrix compile clean', () => {

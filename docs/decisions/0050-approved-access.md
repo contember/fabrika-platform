@@ -157,6 +157,8 @@ covers:
 - a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
 - a form's admission (its rate, honeypot and challenge): any change is shown and widens;
+- a form's `then` (the job a submission kicks): shown, and it widens nothing, because it reaches only a job of the same
+  approved contract, which runs under its own declared actions;
 - CSP extensions, `script-src` and `frame-src` included;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.

@@ -32,6 +32,7 @@ import {
 	type CreatableDimension,
 	type CronJob,
 	type Export,
+	type FormJobs,
 	type InputSchema,
 	type Kit,
 	type LinkMount,
@@ -215,7 +216,7 @@ export interface App<K extends KitTypes> {
 		} & Owned<'kind'>,
 	): Export<T>
 	/** The contract: mounts by name and the `files`, `jobs`, `exports` and `csp` sections; `imports` come from the kit. */
-	contract<const S extends Surface & Owned<'imports'>>(build: (c: ContractKit<K>) => S): KitContract<K, S>
+	contract<const S extends Surface & Owned<'imports'> & FormJobs<S>>(build: (c: ContractKit<K>) => S): KitContract<K, S>
 }
 
 /**

@@ -175,6 +175,7 @@ const mount = z.discriminatedUnion('kind', [
 		rate: z.strictObject({ perClient: formRate.optional(), perForm: formRate.optional() }).optional(),
 		honeypot: name.optional(),
 		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: z.string().regex(/^[A-Z][A-Z0-9_]*$/) }).optional(),
+		then: name.optional(),
 	}),
 	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions }),
 ])

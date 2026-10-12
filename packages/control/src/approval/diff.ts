@@ -16,6 +16,7 @@ import {
 	type FileCollectionArtifact,
 	isAttachmentShape,
 	JOB_SITE_PREFIX,
+	type MountArtifact,
 	type NumberShape,
 	type OutputShape,
 	type RoleArtifact,
@@ -107,7 +108,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	compareKeyed(changes, record(baseline.mounts), record(candidate.mounts), {
 		added: (name, mount) => `New ${mount.kind} mount \`${name}\``,
 		removed: (name) => `Mount \`${name}\` is removed`,
-		changed: (name, from, to) => valueChange(`Mount \`${name}\``, from, to),
+		changed: mountChanges,
 	})
 	compareKeyed(changes, record(baseline.files), record(candidate.files), {
 		added: (name, files) => `New file collection \`${name}\`${files.link ? ', reachable through share links' : ''}`,
@@ -787,6 +788,25 @@ function directoryChange(name: string, before: 'labels' | undefined, after: 'lab
 			),
 		]
 		: [removal(`Holders of the members.list action of \`${name}\` and the endpoints below \`${name}\` no longer see member labels`)]
+}
+
+/**
+ * A form's `then` reaches only a job of the same approved contract, which runs under its own declared actions and
+ * coalesces on its lease, so a change of it alone widens nothing. The rest of a mount is compared as a value.
+ */
+function mountChanges(name: string, from: MountArtifact, to: MountArtifact): AccessChange[] {
+	if (from.kind !== 'form' || to.kind !== 'form') return valueChange(`Mount \`${name}\``, from, to)
+	const { then: before, ...fromRest } = from
+	const { then: after, ...toRest } = to
+	return [...valueChange(`Mount \`${name}\``, fromRest, toRest), ...kickChange(name, before, after)]
+}
+
+function kickChange(name: string, before: string | undefined, after: string | undefined): AccessChange[] {
+	if (before === after) return []
+	const line = after === undefined
+		? `Form \`${name}\` no longer starts job \`${before}\` after a submission`
+		: `Form \`${name}\` starts job \`${after}\` after each accepted submission, beside its schedule`
+	return [{ widens: false, line }]
 }
 
 /** Any change of a value the diff does not order widens. */

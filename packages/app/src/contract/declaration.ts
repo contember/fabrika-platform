@@ -42,7 +42,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access'], owned: ['kind', 'prefix'] },
-	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge'], owned: ['kind', 'path'] },
+	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
@@ -208,6 +208,8 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly honeypot?: string
 	/** A challenge verified on the server; `secret` names the application variable that holds the provider's secret. */
 	readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string }
+	/** The cron job of the contract that each accepted submission kicks. */
+	readonly then?: string
 }
 
 export interface WebhookMountDeclaration<S> extends OptionsRecord {

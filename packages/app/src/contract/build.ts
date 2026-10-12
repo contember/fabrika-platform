@@ -416,7 +416,13 @@ class ArtifactBuilder {
 				this.#objectSchema(`${where} input`, mount.input)
 				this.#nonEmpty(`${where} appendTo`, mount.appendTo)
 				this.#anonymous(name, 'form', 'POST', mount.path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes), mount.input)
-				return { kind: 'form', path: mount.path, appendTo: mount.appendTo, ...this.#formAdmission(name, where, mount) }
+				return {
+					kind: 'form',
+					path: mount.path,
+					appendTo: mount.appendTo,
+					...this.#formAdmission(name, where, mount),
+					...(mount.then === undefined ? {} : { then: this.#formJob(where, mount.then) }),
+				}
 			case 'webhook': {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
@@ -438,6 +444,22 @@ class ArtifactBuilder {
 				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
 				return null
 		}
+	}
+
+	/** The job a form kicks: a cron job of this contract. */
+	#formJob(where: string, then: string): string {
+		const jobs = this.#contract.jobs
+		const job: { readonly kind: string } | undefined = Object.hasOwn(jobs, then) ? jobs[then] : undefined
+		if (job === undefined) {
+			const names = Object.keys(jobs)
+			this.#problem(
+				where,
+				`then '${then}' is not a job of the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})${suggestion(then, names)}`,
+			)
+		} else if (job.kind !== 'cron') {
+			this.#problem(where, `then '${then}' is not a cron job (allowed: a job c.cron declares)`)
+		}
+		return then
 	}
 
 	/** A form's declared rate, honeypot and challenge, each present in the artifact only when declared. */
