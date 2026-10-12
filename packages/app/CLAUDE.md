@@ -447,11 +447,13 @@ vocabulary (`packages/db/CLAUDE.md`).
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's
   `output` as an `AttachmentShape` (format, fixed file name, limits within `ATTACHMENT_LIMITS`, scalar columns in
-  order), refused nested in a schema, as an input and on an export. `dispatch` encodes after the output passed and
-  **before** the invocation commits, so an audited export (a mutation that writes its log row) keeps the row only
-  with its file. Every text cell that starts with `=`, `+`, `-`, `@`, a tab, CR or LF, also after leading whitespace,
+  order), refused nested in a schema, as an input and on an export. `dispatch` hands the handler's result to the encoder
+  unprojected: it checks the row count before it reads a row, then projects, validates and encodes one row at a time,
+  each field counted against `maxBytes` before the next is read, so neither a long result nor a wide row is copied
+  or built past a limit. It encodes **before** the invocation commits, so an audited export (a mutation that writes
+  its log row) keeps the row only with its file. Every text cell that starts with `=`, `+`, `-`, `@`, a tab, CR or LF, also after leading whitespace,
   or their full-width forms, gets a leading `'` before RFC 4180 quoting; a number keeps its sign. Rows over
-  `maxRows`, a cell over `maxCellLength` and the first line past `maxBytes` (UTF-8, counted line by line) are
+  `maxRows`, a cell over `maxCellLength` and the first field past `maxBytes` (UTF-8, counted field by field) are
   `ServerFault`s (`attachment_rows`, `attachment_cell`, `attachment_size`): a 500, no file, a rollback. The answer
   takes the header policy like any procedure (the proxy applies it there too); `Content-Type` and the
   `Content-Disposition` of `files/treatment.ts`'s `contentDisposition` stay. The client's attachment procedure is

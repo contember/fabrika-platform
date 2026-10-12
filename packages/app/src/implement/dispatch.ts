@@ -409,17 +409,28 @@ export class ContractRuntime {
 			} finally {
 				frame.end()
 			}
-			const output = z.safeParse(served.output, projectOutput(served, result))
-			if (!output.success) {
-				throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
-			}
-			const file = served.row.output !== null && isAttachmentShape(served.row.output) ? served.row.output : null
-			const answer = file === null ? jsonResponse({ result: output.data }, 200) : attachmentResponse(served.row.id, file, output.data)
+			const answer = this.#answerOf(served, result)
 			await invocation?.commit(request.signal)
 			return answer
 		} finally {
 			await invocation?.rollback()
 		}
+	}
+
+	/**
+	 * The output as JSON, projected and validated whole; or an attachment's file, whose rows are projected, validated
+	 * and encoded one at a time, so a result over a limit stops before it is copied.
+	 */
+	#answerOf(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown): Response {
+		const file = served.row.output !== null && isAttachmentShape(served.row.output) ? served.row.output : null
+		if (file !== null) {
+			return attachmentResponse(served.row.id, file, served.output, result)
+		}
+		const output = z.safeParse(served.output, projectOutput(served, result))
+		if (!output.success) {
+			throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
+		}
+		return jsonResponse({ result: output.data }, 200)
 	}
 
 	#data(): DataAccess {

@@ -852,3 +852,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `Content-Disposition`. A number cell is not formula-escaped (its text is a numeric literal); full-width `＝＋－＠`
   are, beside the review's list. Limits: `maxBytes` ≤ 16 MiB, `maxRows` 10 000 by default and ≤ 100 000, a cell ≤
   32 767 characters.
+- **WU19 review round 1.** (1) The row bound ran after projection and validation had copied the whole result; the
+  attachment path now checks the count before it reads a row and projects, validates and encodes row by row. (2) The
+  byte bound was checked per encoded line, whose width has no column bound; each field is now encoded and counted
+  with its separator before the next is read. Witnesses count row and cell reads through a `Proxy`. A result that is
+  no list is `output_refused`, as the whole-output validation answered it before.

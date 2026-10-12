@@ -28,8 +28,30 @@ const ExportInput = z.strictObject({ workspaceId: z.string(), names: z.array(z.s
 const contract = defineContract(vocabulary, (c) => ({
 	api: c.rpc('/api', { callers: ['human'] }, {
 		candidates: c.mutation({ input: ExportInput, output: Candidates, access: { action: 'intake.export', in: 'workspace', from: 'workspaceId' } }),
+		returned: c.query({ output: Candidates, access: { action: 'intake.export', over: 'workspace' } }),
 	}),
 }))
+
+type CandidateRow = z.input<typeof Row>
+
+/** What `api.returned` answers: a test sets it. */
+const handed: { rows: CandidateRow[] } = { rows: [] }
+
+/** `length` rows of `row`, as an array that counts every row read. */
+function counted<T>(length: number, row: (index: number) => T): { readonly rows: T[]; readonly reads: () => number } {
+	let reads = 0
+	const rows = new Proxy<T[]>([], {
+		get: (target, key, receiver) => {
+			if (key === 'length') return length
+			if (typeof key === 'string' && /^\d+$/.test(key)) {
+				reads++
+				return row(Number(key))
+			}
+			return Reflect.get(target, key, receiver)
+		},
+	})
+	return { rows, reads: () => reads }
+}
 
 const app = implement(contract, {
 	database: null,
@@ -37,11 +59,12 @@ const app = implement(contract, {
 	handlers: () => ({
 		api: {
 			candidates: ({ input }) => input.names.map((name, index) => ({ name, score: index === 0 ? -1.5 : null, active: index % 2 === 0 })),
+			returned: () => handed.rows,
 		},
 	}),
 })
 
-const BOM = '﻿'
+const BOM = '\uFEFF'
 const NAMES = ['=1+1', 'say "hi"', 'line\nbreak']
 const EXPECTED = `${BOM}name,score,active\r\n'=1+1,-1.5,true\r\n"say ""hi""",,false\r\n"line\nbreak",,true\r\n`
 
@@ -69,10 +92,13 @@ const shape = (columns: readonly string[], limits: { maxBytes?: number; maxRows?
 	})),
 })
 
+/** A row as it is: the encoder's own tests read no row schema. */
+const asIs = (row: unknown): unknown => row
+
 const decoded = (bytes: Uint8Array): string => new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes)
 
 /** The one cell of a one-column file of one row, as written to the file. */
-const cell = (value: unknown): string => decoded(encodeCsv('t', shape(['v']), [{ v: value }])).slice(`${BOM}v\r\n`.length, -2)
+const cell = (value: unknown): string => decoded(encodeCsv('t', shape(['v']), [{ v: value }], asIs)).slice(`${BOM}v\r\n`.length, -2)
 
 function faultOf(encode: () => unknown): string {
 	try {
@@ -197,8 +223,8 @@ describe('the CSV encoding', () => {
 		['   @x', "'   @x"],
 		[' +1', "' +1"],
 		[' \t-1', "' \t-1"],
-		['＝1+1', "'＝1+1"],
-		['＠x', "'＠x"],
+		['\uFF1D1+1', "'\uFF1D1+1"],
+		['\uFF20x', "'\uFF20x"],
 		['a=1', 'a=1'],
 		['1-2', '1-2'],
 		[' x', ' x'],
@@ -215,7 +241,7 @@ describe('the CSV encoding', () => {
 	})
 
 	test('the file is a byte order mark, a header line of the column names and one CRLF line per row; a column name is escaped too', () => {
-		const bytes = encodeCsv('t', shape(['=name', 'note']), [{ '=name': 'Ann', note: 'ok' }])
+		const bytes = encodeCsv('t', shape(['=name', 'note']), [{ '=name': 'Ann', note: 'ok' }], asIs)
 		expect(decoded(bytes)).toBe(`${BOM}'=name,note\r\nAnn,ok\r\n`)
 		expect([...bytes.slice(0, 3)]).toEqual([0xEF, 0xBB, 0xBF])
 	})
@@ -224,25 +250,39 @@ describe('the CSV encoding', () => {
 		const rows = [{ v: 'č😀\uD800' }]
 		const exact = new TextEncoder().encode(`${BOM}v\r\nč😀�\r\n`).byteLength
 		expect(exact).toBe(3 + 3 + 2 + 4 + 3 + 2)
-		expect(encodeCsv('t', shape(['v'], { maxBytes: exact }), rows).byteLength).toBe(exact)
-		expect(faultOf(() => encodeCsv('t', shape(['v'], { maxBytes: exact - 1 }), rows))).toBe('attachment_size')
+		expect(encodeCsv('t', shape(['v'], { maxBytes: exact }), rows, asIs).byteLength).toBe(exact)
+		expect(faultOf(() => encodeCsv('t', shape(['v'], { maxBytes: exact - 1 }), rows, asIs))).toBe('attachment_size')
 	})
 
-	test('the encoding stops at the first line over the limit, whatever follows', () => {
-		const rows = Array.from({ length: 100 }, () => ({ v: 'x'.repeat(1_000) }))
-		expect(faultOf(() => encodeCsv('t', shape(['v'], { maxBytes: 5_000 }), rows))).toBe('attachment_size')
+	test('a long result stops at the first row over the limit: no later row is read', () => {
+		const result = counted(100, () => ({ v: 'x'.repeat(1_000) }))
+		expect(faultOf(() => encodeCsv('t', shape(['v'], { maxBytes: 5_000 }), result.rows, asIs))).toBe('attachment_size')
+		expect(result.reads()).toBe(5)
+	})
+
+	test('a wide row stops at the first cell over the limit: the line is never built', () => {
+		const columns = Array.from({ length: 100 }, (_, index) => `c${index}`)
+		let cells = 0
+		const wide = new Proxy({}, {
+			get: () => {
+				cells++
+				return 'x'.repeat(32_767)
+			},
+		})
+		expect(faultOf(() => encodeCsv('t', shape(columns, { maxBytes: 1_000 }), [wide], asIs))).toBe('attachment_size')
+		expect(cells).toBe(1)
 	})
 
 	test('a row count over maxRows and a cell over the cell limit fail before the file is joined', () => {
-		expect(faultOf(() => encodeCsv('t', shape(['v'], { maxRows: 2 }), [{ v: 'a' }, { v: 'b' }, { v: 'c' }]))).toBe('attachment_rows')
-		expect(encodeCsv('t', shape(['v']), [{ v: 'x'.repeat(32_767) }]).byteLength).toBe(3 + 3 + 32_767 + 2)
-		expect(faultOf(() => encodeCsv('t', shape(['v']), [{ v: 'x'.repeat(32_768) }]))).toBe('attachment_cell')
+		expect(faultOf(() => encodeCsv('t', shape(['v'], { maxRows: 2 }), [{ v: 'a' }, { v: 'b' }, { v: 'c' }], asIs))).toBe('attachment_rows')
+		expect(encodeCsv('t', shape(['v']), [{ v: 'x'.repeat(32_767) }], asIs).byteLength).toBe(3 + 3 + 32_767 + 2)
+		expect(faultOf(() => encodeCsv('t', shape(['v']), [{ v: 'x'.repeat(32_768) }], asIs))).toBe('attachment_cell')
 	})
 
-	test('an output that is not a list of scalar rows is a contract fault, never a file', () => {
-		expect(faultOf(() => encodeCsv('t', shape(['v']), { v: 'a' }))).toBe('contract_inconsistent')
-		expect(faultOf(() => encodeCsv('t', shape(['v']), ['a']))).toBe('contract_inconsistent')
-		expect(faultOf(() => encodeCsv('t', shape(['v']), [{ v: { nested: true } }]))).toBe('contract_inconsistent')
+	test('an output that is not a list of scalar rows is a fault, never a file', () => {
+		expect(faultOf(() => encodeCsv('t', shape(['v']), { v: 'a' }, asIs))).toBe('output_refused')
+		expect(faultOf(() => encodeCsv('t', shape(['v']), ['a'], asIs))).toBe('contract_inconsistent')
+		expect(faultOf(() => encodeCsv('t', shape(['v']), [{ v: { nested: true } }], asIs))).toBe('contract_inconsistent')
 	})
 })
 
@@ -285,6 +325,45 @@ describe('the dispatcher answers the file', () => {
 				'fabrika: api.candidates: framework_fault: attachment_size: the encoded attachment is larger than it declares (maxBytes); no body was sent',
 			])
 			expect(lines.join('\n')).not.toContain('secret-row-value')
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test('a result over maxRows is refused before one of its rows is read, projected or validated', async () => {
+		const result = counted(1_000_000, () => ({ name: 'a', score: null, active: true }))
+		handed.rows = result.rows
+		const kit = testKit(app)
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const response = await kit.browser(reviewer(kit))('/api/returned', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: '{}',
+			})
+			expect(response.status).toBe(500)
+			expect(log.mock.calls.map((line) => String(line[0]))).toEqual([
+				'fabrika: api.returned: framework_fault: attachment_rows: the handler returned more rows than its attachment declares (maxRows)',
+			])
+			expect(result.reads()).toBe(0)
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test('rows are projected and validated one at a time: a row its schema refuses stops the rest', async () => {
+		// The second row's score is NaN, which z.number() refuses; the three after it are never read.
+		const result = counted(5, (index) => ({ name: 'a', score: index === 1 ? Number.NaN : null, active: true }))
+		handed.rows = result.rows
+		const kit = testKit(app)
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const response = await kit.browser(reviewer(kit))('/api/returned', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+			expect(response.status).toBe(500)
+			expect(log.mock.calls.map((line) => String(line[0]))).toEqual([
+				'fabrika: api.returned: framework_fault: output_refused: the handler returned a value its output schema refuses',
+			])
+			expect(result.reads()).toBe(2)
 		} finally {
 			log.mockRestore()
 		}
