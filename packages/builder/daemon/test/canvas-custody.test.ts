@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 
 if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
@@ -20,7 +21,7 @@ if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 	const { BuildStream } = await import('../src/build-stream')
 
 	function fixture() {
-		const directory = mkdtempSync('/tmp/opencode/canvas-custody-')
+		const directory = mkdtempSync(join(tmpdir(), 'canvas-custody-'))
 		const root = join(directory, 'project')
 		const keys = join(directory, 'keys')
 		const state = join(directory, 'state')

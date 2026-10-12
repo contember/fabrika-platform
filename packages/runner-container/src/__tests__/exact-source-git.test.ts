@@ -2,6 +2,7 @@ import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import { cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Runner, type RunnerEnv, type SpawnSpec } from '../runner'
@@ -72,7 +73,7 @@ const commit = async (author: string, sentinel: string): Promise<string> => {
 }
 
 const withOrigin = async (body: (fixture: OriginFixture) => Promise<void>): Promise<void> => {
-	const root = await mkdtemp('/tmp/opencode/fabrika-exact-source-')
+	const root = await mkdtemp(join(tmpdir(), 'fabrika-exact-source-'))
 	try {
 		const author = join(root, 'author')
 		const origin = join(root, 'origin.git')

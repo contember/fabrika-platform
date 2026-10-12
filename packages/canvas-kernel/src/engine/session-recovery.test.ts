@@ -1,11 +1,12 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from './session'
 
 const directories: string[] = []
 function directory() {
-	const root = mkdtempSync('/tmp/opencode/canvas-recovery-')
+	const root = mkdtempSync(join(tmpdir(), 'canvas-recovery-'))
 	directories.push(root)
 	return root
 }

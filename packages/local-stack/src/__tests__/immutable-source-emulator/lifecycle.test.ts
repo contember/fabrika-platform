@@ -2,6 +2,8 @@ import { createZeropsApi, type FetchLike } from '@fabrika/provider-zerops'
 import { afterEach, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { overlayRelease } from '../../../../provider-zerops/src/managed-env'
 import {
 	LOCAL_SOURCE_EMULATOR_ORIGIN,
@@ -48,7 +50,7 @@ async function fixture(options: Partial<ZeropsEmulatorOptions> = {}) {
 }
 
 async function stateFile() {
-	const directory = await mkdtemp('/tmp/opencode/immutable-source-emulator-')
+	const directory = await mkdtemp(join(tmpdir(), 'immutable-source-emulator-'))
 	directories.push(directory)
 	return `${directory}/state.json`
 }

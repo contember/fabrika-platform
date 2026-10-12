@@ -10,6 +10,7 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
@@ -124,7 +125,7 @@ interface UploadObservation {
 }
 
 async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailable = false): Promise<void> {
-	const root = await mkdtemp('/tmp/opencode/cloudflare-source-identity-')
+	const root = await mkdtemp(join(tmpdir(), 'cloudflare-source-identity-'))
 	const harness = createHarness()
 	const { db, sqlite } = harness
 	try {

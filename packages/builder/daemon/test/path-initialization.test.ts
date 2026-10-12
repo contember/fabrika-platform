@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const daemonModule = new URL('../src/index.ts', import.meta.url).href
 
 test('importing startDaemon does not initialize default paths; explicit startup creates only its selected sessions root', () => {
-	const root = mkdtempSync('/tmp/opencode/builder-path-import-')
+	const root = mkdtempSync(join(tmpdir(), 'builder-path-import-'))
 	try {
 		const blocked = join(root, 'blocked-default')
 		writeFileSync(blocked, 'A file deliberately prevents creation of the default data directory.')
@@ -56,7 +57,7 @@ test('importing startDaemon does not initialize default paths; explicit startup 
 }, 35_000)
 
 test('default startup initializes the configured sessions root after a side-effect-free import', () => {
-	const root = mkdtempSync('/tmp/opencode/builder-path-start-')
+	const root = mkdtempSync(join(tmpdir(), 'builder-path-start-'))
 	try {
 		const data = join(root, 'data')
 		const child = Bun.spawnSync([

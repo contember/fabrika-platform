@@ -3,6 +3,7 @@ import { parseStartDeviceAuthorizationInput } from '@fabrika/auth-core'
 import type { AppDto, BuilderConnectionReceiptDto } from '@fabrika/control-contract'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { BuilderPlatform, type BuilderPlatformOptions } from '../src/platform'
@@ -22,7 +23,7 @@ export async function until(check: () => boolean): Promise<void> {
 }
 
 export function fixture() {
-	const directory = mkdtempSync('/tmp/opencode/builder-platform-')
+	const directory = mkdtempSync(join(tmpdir(), 'builder-platform-'))
 	const root = join(directory, 'project')
 	mkdirSync(join(root, '.fabrika'), { recursive: true })
 	mkdirSync(join(directory, 'keys'), { mode: 0o700 })

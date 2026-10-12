@@ -46,7 +46,7 @@ afterEach(async () => {
 })
 
 const makeEnv = (spawn: RunnerEnv['spawn']): RunnerEnv => {
-	const workspace = mkdtempSync('/tmp/opencode/fabrika-runner-unit-')
+	const workspace = mkdtempSync(join(tmpdir(), 'fabrika-runner-unit-'))
 	workspaces.add(workspace)
 	return { spawn, workspace }
 }
