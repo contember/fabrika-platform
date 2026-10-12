@@ -911,10 +911,19 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   migration `0004_job_kicks.sql`), a kick in flight in one process absorbs the next, so a flood issues one kick per
   process, not one per row; a run takes the flag only after it succeeded, and a failed run leaves it to the schedule.
   `kit.runJob` waits for kicked runs, and `serveContract` drains background work (`createBunHandler`) before it closes
-  the database. A kick waits on the lease row while the holding run's write transaction is open (its `for share`
-  fence): background only, one per process. The witness of a killed run is a subprocess killed inside the kicked run's
+  the database. The witness of a killed run is a subprocess killed inside the kicked run's
   transaction: an in-process `pg_terminate_backend` prints Bun's unhandled release rejection (`@fabrika/db`'s
   connection-loss note). The visitor-intake fixture keeps explicit runs, because its crash tests arm a fault before a
   run and a kick would race them; the witnesses use `fixtures/form-kick`, and WU10b's recipe adds `then`.
 - **WU15b — approval.** A form's `then` is a line that widens nothing. It does let anonymous submissions keep the job
   running back to back, bounded by the form's `rate.perForm` and the coalescing: an availability cost, not access.
+- **WU15b review round 1.** (1) A kick waited on the lease row while a run's attempt held it as its fence, on a
+  connection requests share, so a held write transaction made an unrelated form wait. A kick now takes the lease with
+  `tryAcquire` (`for update skip locked`) and keeps its pending flag in its own table, `fabrika_job_kicks` (migration
+  0004 rewritten before it shipped), which no attempt locks; a regression holds a run's transaction on a two-connection
+  pool while five kicks end and another form answers within 250 ms. (2) The process-local flag scheduled its own
+  follow-up beside the shared one (two instances, three submissions, three runs). The shared flag is now the only
+  follow-up decision: every run clears it when it starts and takes it after it succeeded, and a local kick in flight
+  makes the next one only set it; two instances give two runs. (3) A local follow-up restarted right after a failed
+  run; now a failed run leaves the flag for the schedule (`retries: 0`, one run, `pending` kept, the next scheduled run
+  takes both rows).
