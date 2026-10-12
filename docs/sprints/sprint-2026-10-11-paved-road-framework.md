@@ -892,3 +892,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   invariants for WU10b.
 - **WU15 — on WU22.** WU22 took IAM migration 0009 (`0009_member_lookups.sql`), so `workload_issues` is `0010` in both
   dialects.
+- **WU15 review round 2.** `ctx.links` checked its attempt only before the token lookup it awaits, so an attempt that
+  timed out during the lookup still issued or revoked. The check now also runs synchronously right before each IAM call
+  (`JobLinkRequest.assertLive`); two regressions hold the lookup past the deadline, one for issue, one for revoke.
+- **WU15 — on WU16.** WU16 took `packages/app/src/__tests__/fixtures/intake` for its form-admission fixture, so the
+  WU15 recipe lives in `fixtures/visitor-intake`, renamed in every WU15 commit; `fabrika-check`'s differential registry
+  reads both.
+- **WU15 — on WU19.** WU19 took kit mistake 30, so `job-links-without-issues` is mistake 31.
