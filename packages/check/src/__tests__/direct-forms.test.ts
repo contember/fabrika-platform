@@ -161,6 +161,39 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/a.ts:1:1', 'src/a.ts:2:1'],
 	},
 	{
+		name: 'the Bun object taken from a global object: destructured, nested, aliased, with a computed literal key',
+		rule: 'forbidden-global',
+		files: {
+			'src/db/stores/driver.ts': [
+				'const { sql } = globalThis.Bun',
+				'export const all = sql`select 1`',
+				'const { Bun: { SQL } } = globalThis',
+				'export const pool = new SQL()',
+				"const runtime = globalThis['Bun']",
+				'export const fromAlias = runtime.sql`select 1`',
+				'const g = self',
+				'export const fromGlobal = g.Bun',
+				"const { ['Bun']: B } = window",
+				'export { B }',
+				'',
+			].join('\n'),
+			// The declared ctx.sql tag stays a parameter of any name.
+			'src/deals/queries.ts': [
+				'type Tag = (row: unknown) => (text: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>',
+				'declare const Row: unknown',
+				'export const pipeline = (sql: Tag) => sql(Row)`select stage from deals`',
+				'',
+			].join('\n'),
+		},
+		expected: [
+			'src/db/stores/driver.ts:1:17',
+			'src/db/stores/driver.ts:3:9',
+			'src/db/stores/driver.ts:5:17',
+			'src/db/stores/driver.ts:7:7',
+			'src/db/stores/driver.ts:9:9',
+		],
+	},
+	{
 		name: 'members of a direct load of bun',
 		rule: 'forbidden-global',
 		files: {
@@ -571,8 +604,8 @@ describe('documented escapes', () => {
 			'tests/example.test.ts': "import './cases'\n",
 			'tests/cases.ts': "import { expect, test } from 'bun:test'\n\ntest.skip('later', () => expect(1).toBe(1))\n",
 		},
-		'a global reached through a computed member and destructured': {
-			'src/a.ts': "const { serve } = globalThis['Bun']\nconst { env } = globalThis['process']\nexport { env, serve }\n",
+		'process reached through a computed member and destructured': {
+			'src/a.ts': "const { env } = globalThis['process']\nexport { env }\n",
 		},
 		'an alias of fetch': { 'src/a.ts': "const f = fetch\nexport const call = () => f('https://other.example/api')\n" },
 		'an alias of a framework object, which the frozen class refuses at runtime': {

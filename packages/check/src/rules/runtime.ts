@@ -312,6 +312,15 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 			ALLOWED_LOAD,
 		)
 	}
+	const isMemberObject = parent?.type === 'MemberExpression' && parent['object'] === node
+	if (pathIs(path, 'Bun') && (memberPath(node)?.length ?? 0) > 1 && !isMemberObject) {
+		context.report(
+			node,
+			'forbidden-global',
+			`${memberPath(node)?.join('.') ?? 'Bun'} used as a value hides which global is reached`,
+			'Bun.<member> written out',
+		)
+	}
 	const bunMember = path?.length === 2 && path[0] === 'Bun' ? FORBIDDEN_BUN_MEMBERS.get(path[1] ?? '') : undefined
 	if (bunMember !== undefined) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
 	if (pathIs(path, 'eval') && (memberPath(node)?.length ?? 0) > 1) context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
@@ -394,6 +403,32 @@ const checkIdentifier = (node: AstNode, parent: AstNode | undefined, context: So
 	}
 }
 
+/**
+ * `const { Bun } = globalThis`, `const { Bun: { sql } } = globalThis` and `const g = globalThis`: a global object
+ * taken apart or bound to a name hides which global a later read reaches.
+ */
+const checkGlobalObjectBinding = (pattern: AstNode | undefined, value: AstNode | undefined, context: SourceContext): void => {
+	const global = value === undefined ? undefined : identifierName(unwrap(value))
+	if (pattern === undefined || global === undefined || !GLOBAL_OBJECTS.has(global)) return
+	if (identifierName(pattern) !== undefined) {
+		context.report(pattern, 'forbidden-global', `${global} bound to a name hides which global is reached`, 'Bun.<member> written out')
+		return
+	}
+	if (pattern.type !== 'ObjectPattern') return
+	for (const property of children(pattern, 'properties')) {
+		if (property === null) continue
+		const key = property.type === 'Property' ? staticKey(property, 'key') : undefined
+		if (key === undefined || key === 'Bun') {
+			context.report(
+				property,
+				'forbidden-global',
+				`${key ?? 'a computed member'} destructured from ${global} hides which global is reached`,
+				'Bun.<member> written out',
+			)
+		}
+	}
+}
+
 /** `const { env } = import.meta` reads the whole environment without naming a variable. */
 const checkDestructuredEnv = (node: AstNode, context: SourceContext): void => {
 	const pattern = child(node, 'id')
@@ -445,8 +480,11 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 		case 'Identifier':
 			return checkIdentifier(node, parent, context)
 		case 'VariableDeclarator':
+			checkGlobalObjectBinding(child(node, 'id'), child(node, 'init'), context)
 			return checkDestructuredEnv(node, context)
 		case 'AssignmentExpression':
+			if (child(node, 'left')?.type === 'ObjectPattern') checkGlobalObjectBinding(child(node, 'left'), child(node, 'right'), context)
+			return checkPrototypeWrite(node, context)
 		case 'UpdateExpression':
 		case 'UnaryExpression':
 			return checkPrototypeWrite(node, context)
