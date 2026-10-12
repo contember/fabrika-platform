@@ -105,6 +105,7 @@ export type LoginRefusal =
 	| 'password_throttled'
 	| 'password_malformed'
 	| 'handoff_refused'
+	| 'login_cross_origin'
 	| 'oidc_invalid_state'
 	| 'oidc_code_exchange_failed'
 	| 'oidc_invalid_id_token'

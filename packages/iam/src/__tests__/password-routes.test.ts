@@ -338,7 +338,10 @@ describe('forgot password and one-time actions', () => {
 		await h.repositories.passwords.enableEnrollment(principalId)
 		const principal = await h.repositories.principals.getPrincipalById(principalId)
 		if (principal === null) throw new Error('missing seeded principal')
-		const action = await issuePasswordAction(services, { principal, purpose: 'enrollment' })
+		const action = await issuePasswordAction(services, { principal, purpose: 'enrollment' }, {
+			audit: { requestId: 'seed', principalId: null, principalLabel: 'seed', app: 'propustka', action: 'seed.issue', resourceType: 'principal' },
+			enableEnrollment: false,
+		})
 		expect(new URL(action.url).search).toBe('')
 		const token = new URLSearchParams(new URL(action.url).hash.slice(1)).get('token')
 		if (token === null) throw new Error('missing action token')
@@ -391,7 +394,10 @@ describe('an action token is bound to its purpose', () => {
 		await h.repositories.passwords.enableEnrollment(principalId)
 		const principal = await h.repositories.principals.getPrincipalById(principalId)
 		if (principal === null) throw new Error('missing seeded principal')
-		const action = await issuePasswordAction(services, { principal, purpose })
+		const action = await issuePasswordAction(services, { principal, purpose }, {
+			audit: { requestId: 'seed', principalId: null, principalLabel: 'seed', app: 'propustka', action: 'seed.issue', resourceType: 'principal' },
+			enableEnrollment: false,
+		})
 		const token = new URLSearchParams(new URL(action.url).hash.slice(1)).get('token')
 		if (token === null) throw new Error('missing action token')
 		return { h, services, token }

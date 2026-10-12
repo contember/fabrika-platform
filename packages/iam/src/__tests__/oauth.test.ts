@@ -52,7 +52,7 @@ describe('authorization server metadata', () => {
 	test('every OAuth path is 404 when OAUTH_CONFIG is unset', async () => {
 		const f = await fixture()
 		const services = { ...f.services, config: { ...f.services.config, oauth: null } }
-		const response = await handleOAuth(new Request(`${ISSUER}/.well-known/oauth-authorization-server`), services, SIGNING_ENV)
+		const response = await handleOAuth(new Request(`${ISSUER}/.well-known/oauth-authorization-server`), services, SIGNING_ENV, 'req-oauth')
 		expect(response.status).toBe(404)
 	})
 })

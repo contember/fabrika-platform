@@ -122,6 +122,7 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 	}
 
 	const session = randomToken(32)
+	// The child session and its `auth_log` row are one batch: a session nobody logged is never handed out.
 	await services.repositories.sessions.createSession({
 		tokenHash: await hashToken(session),
 		principalId: principal.id,
@@ -131,6 +132,13 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 		expiresAt: parent.expires_at,
 		app: consumed.app,
 		parentSessionId: parent.id,
+	}, {
+		requestId: input.requestId,
+		app: input.app,
+		kind: 'authenticate',
+		principalId: principal.id,
+		decision: 'allow',
+		reason: 'handoff',
 	})
 	return {
 		result: { ok: true, session, returnUrl: consumed.return_url, expiresAt: parent.expires_at },

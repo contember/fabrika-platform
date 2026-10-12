@@ -86,7 +86,7 @@ export async function oauthFixture(
 	}
 	const cookie = `${SESSION_COOKIE}=${sessionToken}`
 
-	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV)
+	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV, 'req-oauth')
 
 	function authorize(overrides: Record<string, string> = {}, withSession = true): Promise<Response> {
 		return call(

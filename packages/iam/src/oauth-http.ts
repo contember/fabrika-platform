@@ -25,7 +25,7 @@ const REVOKE_PATH = '/oauth/revoke'
 type SigningEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 /** The OAuth authorization server's public surface. With `OAUTH_CONFIG` unset every path is 404. */
-export async function handleOAuth(request: Request, services: Services, env: SigningEnv): Promise<Response> {
+export async function handleOAuth(request: Request, services: Services, env: SigningEnv, requestId: string): Promise<Response> {
 	const config = services.config.oauth
 	if (config === null) return new Response('not found', { status: 404 })
 	const pathname = new URL(request.url).pathname
@@ -34,12 +34,12 @@ export async function handleOAuth(request: Request, services: Services, env: Sig
 			return request.method === 'GET' ? authorizationServerMetadata(services.config.issuer) : methodNotAllowed('GET')
 		case AUTHORIZE_PATH:
 			if (request.method === 'GET') return showConsent(request, services, config)
-			if (request.method === 'POST') return decideConsent(request, services, config)
+			if (request.method === 'POST') return decideConsent(request, services, config, requestId)
 			return methodNotAllowed('GET, POST')
 		case TOKEN_PATH:
-			return request.method === 'POST' ? token(request, services, env, config) : methodNotAllowed('POST')
+			return request.method === 'POST' ? token(request, services, env, config, requestId) : methodNotAllowed('POST')
 		case REVOKE_PATH:
-			return request.method === 'POST' ? revoke(request, services, env, config) : methodNotAllowed('POST')
+			return request.method === 'POST' ? revoke(request, services, env, config, requestId) : methodNotAllowed('POST')
 		default:
 			return new Response('not found', { status: 404 })
 	}
@@ -101,7 +101,7 @@ async function showConsent(request: Request, services: Services, config: OAuthCo
 	return consentPage(check, principal.label)
 }
 
-async function decideConsent(request: Request, services: Services, config: OAuthConfig): Promise<Response> {
+async function decideConsent(request: Request, services: Services, config: OAuthConfig, requestId: string): Promise<Response> {
 	if (!sameOrigin(request, services.config)) return errorPage('The consent was not submitted from this page.', 403)
 	const form = await readForm(request)
 	const fields = form === null ? null : singleValued(form)
@@ -113,25 +113,25 @@ async function decideConsent(request: Request, services: Services, config: OAuth
 	if (decision !== 'approve') return errorPage('The consent decision is missing.', 400)
 	const session = await currentSession(request, services)
 	if (session === null) return errorPage('Your sign-in has ended. Start the authorization again.', 401)
-	const code = await grantAuthorization(services, { request: check.request, resource: check.resource, scopes: check.scopes, session })
+	const code = await grantAuthorization(services, { request: check.request, resource: check.resource, scopes: check.scopes, session, requestId })
 	return clientRedirect(check.request, { code })
 }
 
-async function token(request: Request, services: Services, env: SigningEnv, config: OAuthConfig): Promise<Response> {
+async function token(request: Request, services: Services, env: SigningEnv, config: OAuthConfig, requestId: string): Promise<Response> {
 	const form = await readForm(request)
 	const input = parseOAuthTokenRequest(form === null ? null : singleValued(form))
 	if (input === null) return protocolError('invalid_request', 400)
-	const outcome = await exchangeOAuthToken(services, env, config, input)
+	const outcome = await exchangeOAuthToken(services, env, config, input, requestId)
 	if (!outcome.ok) return protocolError(outcome.error, outcome.error === 'invalid_client' ? 401 : 400)
 	return Response.json(outcome.body, { headers: { 'cache-control': 'no-store', pragma: 'no-cache' } })
 }
 
-async function revoke(request: Request, services: Services, env: SigningEnv, config: OAuthConfig): Promise<Response> {
+async function revoke(request: Request, services: Services, env: SigningEnv, config: OAuthConfig, requestId: string): Promise<Response> {
 	const form = await readForm(request)
 	const input = parseOAuthRevocationRequest(form === null ? null : singleValued(form))
 	if (input === null) return protocolError('invalid_request', 400)
 	if (!config.clients.some((client) => client.clientId === input.client_id)) return protocolError('invalid_client', 401)
-	await revokeOAuthToken(services, env, input)
+	await revokeOAuthToken(services, env, input, requestId)
 	return new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } })
 }
 

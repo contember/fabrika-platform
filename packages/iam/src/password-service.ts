@@ -1,7 +1,7 @@
 import type { EmailMessage } from '@fabrika/email'
 import type { PrincipalRow } from './db'
 import { randomToken } from './oidc'
-import type { AdminIssuance, PasswordActionPurpose } from './password-db'
+import type { ActionIssuance, PasswordActionPurpose } from './password-db'
 import { passwordActionEmail } from './password-email'
 import { hashToken } from './secret'
 import type { Services } from './services'
@@ -19,7 +19,7 @@ export interface IssuedPasswordAction {
 export async function issuePasswordAction(
 	services: Services,
 	input: { readonly principal: PrincipalRow; readonly purpose: PasswordActionPurpose; readonly issuedBy?: string | null },
-	issuance?: AdminIssuance,
+	issuance: ActionIssuance,
 ): Promise<IssuedPasswordAction> {
 	const token = randomToken(32)
 	const expiresAt = Math.floor(Date.now() / 1000) + ACTION_TTL_SECONDS

@@ -12,7 +12,7 @@ import { hashToken } from '../secret'
 import { type Config, type Services } from '../services'
 import { handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
 import { authError, methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
-import { issueSession, refuseLogin } from './sessions'
+import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 const LOGIN_WINDOW_SECONDS = 15 * 60
 
@@ -82,9 +82,11 @@ export async function handlePasswordLogin(
 	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
-	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	const refused = (reason: LoginRefusal, message: string, status: number) =>
+		refuseLogin(services, { requestId, principalId: null, reason }, () => authError(message, status))
+	if (!sameOrigin(request, services.config)) return refused('login_cross_origin', 'invalid request origin', 403)
 	const form = await readForm(request)
-	if (form === null) return authError('invalid form', 400)
+	if (form === null) return refused('password_malformed', 'invalid form', 400)
 	const login = loginFormSchema.safeParse({ email: form.get('email'), password: form.get('password') })
 	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
 	// has registered, so a hand-edited field buys nothing.
@@ -239,12 +241,15 @@ async function runForgotPassword(services: Services, email: string, requestId: s
 		let purpose: PasswordActionPurpose | null = null
 		if (lookup.account?.state === 'enabled') purpose = 'reset'
 		if (lookup.account?.state === 'pending') purpose = 'enrollment'
-		if (lookup.account === null && !services.config.authentication.oidc.enabled && matchingBootstrapEmail(email, services.config) !== null) {
-			await services.repositories.passwords.enableEnrollment(lookup.principal.id)
-			purpose = 'enrollment'
-		}
+		// A bootstrap admin's account is opted into enrollment in the batch that issues its token.
+		const bootstrap = lookup.account === null && !services.config.authentication.oidc.enabled
+			&& matchingBootstrapEmail(email, services.config) !== null
+		if (bootstrap) purpose = 'enrollment'
 		if (purpose !== null) {
-			const action = await issuePasswordAction(services, { principal: lookup.principal, purpose })
+			const action = await issuePasswordAction(services, { principal: lookup.principal, purpose }, {
+				audit: recoveryEvent(requestId, lookup.principal.id, `iam.password.${purpose}.issue`),
+				enableEnrollment: bootstrap,
+			})
 			await deliverPasswordAction(services, action)
 		}
 	}
@@ -258,13 +263,12 @@ async function safelyCreateBootstrapPrincipal(services: Services, email: string,
 	const canonical = matchingBootstrapEmail(email, services.config)
 	if (canonical === null) return null
 	try {
-		const principal = await services.repositories.principals.inviteUser(
+		// Its enrollment opt-in commits with the token `runForgotPassword` issues next.
+		return await services.repositories.principals.inviteUser(
 			canonical,
 			canonical,
-			(principalId) => selfEvent(requestId, principalId, 'iam.principal.bootstrap'),
+			(principalId) => recoveryEvent(requestId, principalId, 'iam.principal.bootstrap'),
 		)
-		await services.repositories.passwords.enableEnrollment(principal.id)
-		return principal
 	} catch {
 		const raced = await services.repositories.passwords.lookupActionUser(canonical)
 		return raced.status === 'found' ? raced.principal : null
@@ -320,4 +324,18 @@ function matchingBootstrapEmail(email: string, config: Config): string | null {
 /** The record of a change a principal made to its own credentials: by it, about it, and with no email in it. */
 function selfEvent(requestId: string, principalId: string, action: string): AuditEventInput {
 	return { requestId, principalId, principalLabel: principalId, app: 'propustka', action, resourceType: 'principal', resourceId: principalId }
+}
+
+/** The record of a change a public recovery request made: no principal is signed in, so the actor is anonymous. */
+function recoveryEvent(requestId: string, principalId: string, action: string): AuditEventInput {
+	return {
+		requestId,
+		principalId: null,
+		principalLabel: 'password-recovery',
+		app: 'propustka',
+		action,
+		resourceType: 'principal',
+		resourceId: principalId,
+		metadata: { delivery: 'email' },
+	}
 }

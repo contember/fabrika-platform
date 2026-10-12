@@ -288,8 +288,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   A use case builds the record (`adminEvent`, `memberEvent`, a login's or a principal's own event) and hands it to the
   repository that makes the change, or composes several repositories' builders into one `audit.commit([...])` or
   `audit.writer.run([...])`. A failed insert rolls the change back; never write a change's record afterwards or in
-  `waitUntil`. This covers OIDC principal creation, claim and refresh, password completion and rehash, and a workload's
-  first key, whose principal is created in the key's batch.
+  `waitUntil`. This covers OIDC principal creation, claim and refresh, password completion and rehash, every password
+  action token (an admin's or a public recovery's, the enrollment opt-in in the same batch), OAuth grant consent and
+  revocation, and a workload's first key, whose principal is created in the key's batch. Out of scope, as transient
+  single-use secrets or flow state that grants nothing by itself: delegation grants, handoff codes, OAuth codes and
+  refresh tokens, device-flow steps before the claim (the claim writes `iam.credential.create`), login throttles, and
+  the retention prunes.
 - **A GUARDED CHANGE IS RECORDED FROM WHAT IT CHANGED, NEVER FROM AN EARLIER EXISTENCE CHECK** (`AuditWriter`). Its
   SQL is a `SqlChange` ending in `RETURNING`. On Postgres the change and its record are ONE statement,
   `WITH c0 AS (<change>) INSERT INTO audit_events … WHERE EXISTS (SELECT 1 FROM c0)`, because another writer (an admin
@@ -307,14 +311,17 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A LOGIN, A REFUSED LOGIN AND A LOGOUT WRITE `auth_log` BEFORE THE ANSWER.** `createSession` takes the login's row and
   `revokeSessionByHash` writes the `logout` row from the session it ends, each in the session's batch; a refused
   password, OIDC, handoff or local login goes through `refuseLogin` with a fixed `LoginRefusal` reason, never what
-  the caller submitted. A row that cannot be written answers 503 and opens or ends no session. A login of a principal holding `iam.admin` at IAM is `privileged = 1`. Mint rows (`mintToken`,
-  `mintFromKey`, the handoff exchange, the workload token) are not logins and stay in `waitUntil`.
+  the caller submitted. A row that cannot be written answers 503 and opens or ends no session. A login of a principal
+  holding `iam.admin` at IAM is `privileged = 1`. A handoff redemption writes its `allow` row in the child session's
+  batch. Token-only mint rows (`mintToken`, `mintFromKey`, the workload token) and a refused redemption open no
+  session and stay in `waitUntil`.
 - **EVERY `/admin/*` REQUEST OF AN INSTALLATION ADMIN WRITES ONE `iam.admin.access` ROW BEFORE IT RUNS** (`admin/access.ts`),
   reads included: method, route template, and for `/admin/rpc` the procedure (a well-formed name, else null), under
   the app the admin's credential was verified for (the console gateway, or `propustka` for a `px_` key). A request whose
-  access cannot be recorded answers 503 and does not run. A REST path that matches no operation, and an RPC caller
-  without `iam.admin`, used no privileged access and are not recorded. A mutation therefore writes two rows: the
-  access and the change.
+  access cannot be recorded answers 503 and does not run. A refused REST route is recorded too: a 405 under its
+  template, a path that names no operation under the fixed `/admin/*`, never the raw path. An RPC caller without
+  `iam.admin` reaches no procedure and is not recorded. A mutation therefore writes two rows: the access and the
+  change.
 - **RETENTION IS AN IAM SETTING, IN DAYS** (`src/retention.ts`, `Config.retention`): `AUTH_LOG_RETENTION_DAYS` (deploy
   var `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`, default 30) and `AUDIT_RETENTION_DAYS` (`FABRIKA_IAM_AUDIT_RETENTION_DAYS`,
   unset keeps every audit row). Anything but a whole number of days from 1 to 99999 fails the boot, in

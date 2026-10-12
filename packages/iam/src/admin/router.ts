@@ -168,10 +168,8 @@ export async function handleAdmin(
 			return error(403, 'admin permission required')
 		}
 
+		// Recorded whatever it then answers, a 404 or 405 included: the caller is an installation admin.
 		const operation = adminOperation(request.method, url)
-		if (operation instanceof Response) {
-			return operation
-		}
 		const c: AdminContext = {
 			services,
 			request,
@@ -197,22 +195,31 @@ export async function handleAdmin(
 	}
 }
 
-/** A matched `/admin/*` operation: its route template, which the access row records, and its handler. */
+/**
+ * One `/admin/*` request's operation: its route template, which the access row records, and its handler. A path that
+ * names no operation is the fixed `UNMATCHED_ROUTE`, so no raw path value reaches the row, and its handler answers 404.
+ */
 interface AdminOperation {
 	readonly route: string
 	run(c: AdminContext): Promise<Response>
 }
 
+const UNMATCHED_ROUTE = '/admin/*'
+
+function refusal(route: string, response: Response): AdminOperation {
+	return { route, run: () => Promise.resolve(response) }
+}
+
 /**
- * Path segments after `/admin/`. Returns the matched operation, or the 404/405 answer.
+ * Path segments after `/admin/`. Returns the matched operation, or one that answers the 404/405.
  *
  * FOUR operations, and the list is closed. Anything an operator does — principals, grants, roles,
  * policies, share links, sessions, audit — is `/admin/rpc` and only `/admin/rpc`.
  */
-function adminOperation(method: string, url: URL): AdminOperation | Response {
+function adminOperation(method: string, url: URL): AdminOperation {
 	const segments = decodedSegments(url.pathname.replace(/^\/admin\/?/, ''))
 	if (segments === null) {
-		return error(404, 'not found')
+		return refusal(UNMATCHED_ROUTE, error(404, 'not found'))
 	}
 	const [resource, idOrSub, action] = segments
 
@@ -222,12 +229,12 @@ function adminOperation(method: string, url: URL): AdminOperation | Response {
 		// nothing but a URL and a key, so a service binding is not available to it.
 		case 'apps': {
 			if (segments.length !== 3 || idOrSub === undefined || action !== 'schema') {
-				return error(404, 'not found')
+				return refusal(UNMATCHED_ROUTE, error(404, 'not found'))
 			}
 			const route = '/admin/apps/:app/schema'
 			if (method === 'GET') return { route, run: (c) => getAppSchema(c, idOrSub) }
 			if (method === 'PUT') return { route, run: (c) => putAppSchema(c, idOrSub) }
-			return methodNotAllowed()
+			return refusal(route, methodNotAllowed())
 		}
 
 		// POST /admin/api-keys, DELETE /admin/api-keys/:principalId — the first machine caller.
@@ -235,15 +242,17 @@ function adminOperation(method: string, url: URL): AdminOperation | Response {
 		// provisioning key, so it cannot be a browser-shaped RPC call either.
 		case 'api-keys':
 			if (idOrSub === undefined) {
-				return method === 'POST' ? { route: '/admin/api-keys', run: provisionApiKey } : methodNotAllowed()
+				return method === 'POST' ? { route: '/admin/api-keys', run: provisionApiKey } : refusal('/admin/api-keys', methodNotAllowed())
 			}
 			if (segments.length !== 2) {
-				return error(404, 'not found')
+				return refusal(UNMATCHED_ROUTE, error(404, 'not found'))
 			}
-			return method === 'DELETE' ? { route: '/admin/api-keys/:principalId', run: (c) => revokeApiKey(c, idOrSub) } : methodNotAllowed()
+			return method === 'DELETE'
+				? { route: '/admin/api-keys/:principalId', run: (c) => revokeApiKey(c, idOrSub) }
+				: refusal('/admin/api-keys/:principalId', methodNotAllowed())
 
 		default:
-			return error(404, 'not found')
+			return refusal(UNMATCHED_ROUTE, error(404, 'not found'))
 	}
 }
 

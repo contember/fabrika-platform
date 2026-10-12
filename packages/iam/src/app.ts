@@ -85,7 +85,7 @@ export function createIamApp(options: IamAppOptions = {}): FetchService<Env> {
 	const serve = (handle: (ctx: IamAppContext) => Response | Promise<Response>): ServiceHandler<Env> => ({ request, env, exec }) =>
 		handle(context(request, env, exec))
 	const auth = serve((ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId))
-	const oauth = serve((ctx) => handleOAuth(ctx.request, ctx.services, ctx.env))
+	const oauth = serve((ctx) => handleOAuth(ctx.request, ctx.services, ctx.env, ctx.requestId))
 	const admin = serve((ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId))
 	const mint = serve((ctx) => handleMintHttp(ctx.request, createIamRpc(ctx.env, ctx.exec), options.proxyKey ?? ''))
 	const rpc = serve((ctx) => handleRpcHttp(ctx.request, createIamRpc(ctx.env, ctx.exec), options.rpcKey ?? ''))

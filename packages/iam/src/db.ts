@@ -91,7 +91,7 @@ export function createIamRepositories(
 		passwords: replacements.passwords ?? new PasswordRepository(db, writer),
 		handoff: replacements.handoff ?? new HandoffRepository(db),
 		membership: replacements.membership ?? new MembershipRepository(db, { dialect }),
-		oauth: replacements.oauth ?? new OAuthRepository(db),
+		oauth: replacements.oauth ?? new OAuthRepository(db, writer),
 		audit: replacements.audit ?? new AuditRepository(db, writer),
 		workloads: replacements.workloads ?? new WorkloadRepository(db),
 		membershipTransport: replacements.membershipTransport ?? new MembershipTransportKeyRepository(db),

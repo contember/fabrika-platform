@@ -1460,3 +1460,8 @@ ADR-0022 or ADR-0050.
   principal and a workload's first principal now commit with their record; bulk revocations that change nothing record
   nothing; audit rows label a user by its id and carry no address; every terminal login refusal is logged with a fixed
   reason. Five Postgres suites built the SQLite composition over Postgres and now use `createPostgresIamRepositories`.
+- **WU18 review round 2.** A public recovery issues its token (and a bootstrap admin's enrollment opt-in) with its
+  record in one batch; a handoff redemption writes its `allow` row in the child session's batch and opens nothing when
+  that write fails; an oversized or cross-origin password form is a logged refusal; an admin's 404/405 REST request is
+  recorded (`/admin/*` or its template). The write-path sweep found OAuth consent and grant revocation unaudited; they
+  now record `iam.oauth.grant.create` / `iam.oauth.grant.revoke` in their own batch.

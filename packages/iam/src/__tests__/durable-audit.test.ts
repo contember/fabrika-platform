@@ -16,21 +16,26 @@ import { handleLogout, issueSession } from '../auth/sessions'
 import { runIamMaintenance } from '../cron'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
+import { exchangeAuthCode, issueAuthCode } from '../handoff'
 import { prop } from '../json'
 import { assignMember, createScope, requestDelegation, revokeMember } from '../membership'
+import { pkceChallenge, randomToken } from '../oidc'
 import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
 import { adminTokenFor, createHarness, makeServicesFor, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
 import {
 	APP,
 	CALLER_ENV,
+	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
 	type MembershipFixture,
 	membershipFixture,
 	ORIGIN,
+	PendingWork,
 	type Person,
 } from './helpers/membership'
+import { oauthFixture, tokenBody } from './helpers/oauth'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
@@ -125,6 +130,7 @@ interface Admin {
 	readonly id: string
 	call(method: string, input: unknown, requestId: string): Promise<Response>
 	get(path: string, requestId: string): Promise<Response>
+	send(method: string, path: string, requestId: string): Promise<Response>
 }
 
 async function admin(b: Backend): Promise<Admin> {
@@ -145,6 +151,8 @@ async function admin(b: Backend): Promise<Admin> {
 				}),
 			),
 		get: (path, requestId) => send(new Request(`${ORIGIN}${path}`, { headers: { authorization: `Bearer ${bearer}`, 'x-request-id': requestId } })),
+		send: (method, path, requestId) =>
+			send(new Request(`${ORIGIN}${path}`, { method, headers: { authorization: `Bearer ${bearer}`, 'x-request-id': requestId } })),
 	}
 }
 
@@ -493,6 +501,170 @@ function durableAuditSuite(backend: () => Backend): void {
 			const restore = await b.fault('auth_log', 'reason', 'password_malformed')
 			expect((await login(unique('req'))).status).toBe(503)
 			await restore()
+		})
+	})
+
+	describe('public recovery, handoff redemption, and every admin route', () => {
+		function recoveryServices(b: Backend, email: CapturingEmail, bootstrapAdmins: string[] = []) {
+			return makeServicesFor(b.repositories, {
+				environment: 'stage',
+				issuer: ORIGIN,
+				authentication: { oidc: false, password: true },
+				email,
+				bootstrapAdmins: new Set(bootstrapAdmins),
+			})
+		}
+
+		async function forgot(b: Backend, services: ReturnType<typeof recoveryServices>, address: string, requestId: string): Promise<void> {
+			const pending = new PendingWork()
+			const response = await handleAuth(
+				new Request(`${ORIGIN}/auth/forgot-password`, {
+					method: 'POST',
+					headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' },
+					body: new URLSearchParams({ email: address }),
+				}),
+				services,
+				{ FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS, ENVIRONMENT: 'stage' },
+				pending,
+				null,
+				requestId,
+			)
+			expect(response.status).toBe(200)
+			await Promise.allSettled(pending.pending)
+		}
+
+		async function tokensOf(b: Backend, principalId: string): Promise<number> {
+			const { results } = await b.db.prepare('SELECT id FROM password_action_tokens WHERE principal_id = ?').bind(principalId).all()
+			return results.length
+		}
+
+		test('a recovery request issues its reset token with its record; a fault issues nothing', async () => {
+			const b = backend()
+			const address = `${unique('reset')}@example.test`
+			const user = await b.repositories.principals.createUser(`sub-${unique('reset')}`, address)
+			await b.repositories.passwords.upsertCredential(user.id, { algorithm: 'test', parameters: '{}', salt: 's', passwordHash: 'h' })
+			const services = recoveryServices(b, new CapturingEmail())
+
+			const restore = await b.fault('audit_events', 'action', 'iam.password.reset.issue')
+			await forgot(b, services, address, unique('req'))
+			await restore()
+			expect(await tokensOf(b, user.id)).toBe(0)
+
+			await forgot(b, services, address, unique('req'))
+			expect(await tokensOf(b, user.id)).toBe(1)
+			expect(await events(b, 'iam.password.reset.issue', user.id)).toHaveLength(1)
+		})
+
+		test("a bootstrap admin's recovery opts it into enrollment in its token's batch; a fault leaves no account", async () => {
+			const b = backend()
+			const address = `${unique('boot')}@example.test`
+			const services = recoveryServices(b, new CapturingEmail(), [address])
+
+			const restore = await b.fault('audit_events', 'action', 'iam.password.enrollment.issue')
+			await forgot(b, services, address, unique('req'))
+			await restore()
+			const principal = await b.repositories.principals.getUserByEmail(address)
+			if (principal === null) throw new Error('expected the bootstrap principal')
+			expect(await events(b, 'iam.principal.bootstrap', principal.id)).toHaveLength(1)
+			expect(await b.repositories.passwords.getAccount(principal.id)).toBeNull()
+			expect(await tokensOf(b, principal.id)).toBe(0)
+
+			await forgot(b, services, address, unique('req'))
+			expect((await b.repositories.passwords.getAccount(principal.id))?.state).toBe('pending')
+			expect(await tokensOf(b, principal.id)).toBe(1)
+			expect(await events(b, 'iam.password.enrollment.issue', principal.id)).toHaveLength(1)
+		})
+
+		test('a handoff redemption opens its child session with its auth_log row; a fault opens none', async () => {
+			const b = backend()
+			const services = recoveryServices(b, new CapturingEmail())
+			const user = await b.repositories.principals.createUser(`sub-${unique('handoff')}`, `${unique('handoff')}@example.test`)
+			const parentId = await b.repositories.sessions.createSession({
+				tokenHash: await hashToken(unique('token')),
+				principalId: user.id,
+				idpSub: 'sub',
+				expiresAt: Math.floor(Date.now() / 1000) + 3600,
+			})
+			const redeem = async (requestId: string) => {
+				const verifier = randomToken(32)
+				const { code } = await issueAuthCode(services, {
+					app: APP,
+					parentSessionId: parentId,
+					returnUrl: 'https://notes.example/',
+					challenge: await pkceChallenge(verifier),
+				})
+				return exchangeAuthCode(services, { app: APP, code, verifier, requestId })
+			}
+			const children = async () => (await b.repositories.sessions.listSessionsForPrincipal(user.id, { limit: 10 })).filter((row) => row.app !== null)
+
+			const restore = await b.fault('auth_log', 'reason', 'handoff')
+			expect(await redeem(unique('req')).catch((err: unknown) => err)).toBeInstanceOf(Error)
+			await restore()
+			expect(await children()).toEqual([])
+
+			const requestId = unique('req')
+			expect((await redeem(requestId)).result.ok).toBe(true)
+			expect(await children()).toHaveLength(1)
+			expect(await authLogOf(b, requestId)).toEqual([{ kind: 'authenticate', decision: 'allow', reason: 'handoff', privileged: 0 }])
+		})
+
+		test('an OAuth consent records its grant; a fault grants nothing; a revocation records once', async () => {
+			const b = backend()
+			const f = await oauthFixture(b.repositories)
+			try {
+				const grantsOf = async () =>
+					(await b.db.prepare('SELECT id FROM oauth_grants WHERE principal_id = ?').bind(f.principal.id).all<{ id: string }>()).results
+				const restore = await b.fault('audit_events', 'action', 'iam.oauth.grant.create')
+				expect(await f.approve().catch((err: unknown) => err)).toBeInstanceOf(Error)
+				await restore()
+				expect(await grantsOf()).toEqual([])
+
+				const first = await tokenBody(await f.exchange(await f.approve()))
+				const [grant] = await grantsOf()
+				if (grant === undefined) throw new Error('expected a grant')
+				expect(await events(b, 'iam.oauth.grant.create', grant.id)).toHaveLength(1)
+				for (let attempt = 0; attempt < 2; attempt++) {
+					expect((await f.post('/oauth/revoke', { client_id: f.clientId, token: first.refresh_token ?? '' })).status).toBe(200)
+				}
+				expect(await events(b, 'iam.oauth.grant.revoke', grant.id)).toHaveLength(1)
+			} finally {
+				f.restoreFetch()
+			}
+		})
+
+		test("an admin's refused route still writes its access row, under a fixed template", async () => {
+			const b = backend()
+			const a = await admin(b)
+			const methodRefused = unique('req')
+			expect((await a.send('POST', '/admin/apps/notes%40prod/schema', methodRefused)).status).toBe(405)
+			expect(await eventsOfRequest(b, methodRefused)).toEqual([{ action: 'iam.admin.access', resource_id: '/admin/apps/:app/schema', app: 'vozka' }])
+			const unmatched = unique('req')
+			expect((await a.send('GET', '/admin/secret-path/x', unmatched)).status).toBe(404)
+			expect(await eventsOfRequest(b, unmatched)).toEqual([{ action: 'iam.admin.access', resource_id: '/admin/*', app: 'vozka' }])
+		})
+
+		test('an oversized or cross-origin password form is a logged refusal', async () => {
+			const b = backend()
+			const services = recoveryServices(b, new CapturingEmail())
+			const post = (requestId: string, body: string, origin: string) =>
+				handleAuth(
+					new Request(`${ORIGIN}/auth/login`, {
+						method: 'POST',
+						headers: { origin, 'sec-fetch-site': origin === ORIGIN ? 'same-origin' : 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
+						body,
+					}),
+					services,
+					{ FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS, ENVIRONMENT: 'stage' },
+					{ waitUntil() {} },
+					null,
+					requestId,
+				)
+			const oversized = unique('req')
+			expect((await post(oversized, `email=a%40example.test&password=x&padding=${'p'.repeat(20_000)}`, ORIGIN)).status).toBe(400)
+			expect(await authLogOf(b, oversized)).toEqual([{ kind: 'authenticate', decision: 'deny', reason: 'password_malformed', privileged: 0 }])
+			const crossOrigin = unique('req')
+			expect((await post(crossOrigin, 'email=a%40example.test&password=x', 'https://evil.example')).status).toBe(403)
+			expect(await authLogOf(b, crossOrigin)).toEqual([{ kind: 'authenticate', decision: 'deny', reason: 'login_cross_origin', privileged: 0 }])
 		})
 	})
 

@@ -58,8 +58,8 @@ function unixNow(): number {
 	return Math.floor(Date.now() / 1000)
 }
 
-/** An administrator's issuance of an action: its record, and for an enrollment the opt-in it turns on. */
-export interface AdminIssuance {
+/** The issuance of an action, by an administrator or a recovery request: its record, and the enrollment opt-in it turns on. */
+export interface ActionIssuance {
 	readonly audit: AuditEventInput
 	readonly enableEnrollment: boolean
 }
@@ -201,7 +201,7 @@ export class PasswordRepository {
 		tokenHash: string
 		issuedBy?: string | null
 		expiresAt: number
-	}, issuance?: AdminIssuance): Promise<string> {
+	}, issuance?: ActionIssuance): Promise<string> {
 		const id = uuidv7()
 		const now = unixNow()
 		try {
@@ -223,7 +223,7 @@ export class PasswordRepository {
 			issuedBy?: string | null
 			expiresAt: number
 		},
-		issuance: AdminIssuance | undefined,
+		issuance: ActionIssuance | undefined,
 	): Promise<void> {
 		await this.db.batch([
 			...(issuance?.enableEnrollment === true ? [this.enableEnrollmentStatement(input.principalId)] : []),

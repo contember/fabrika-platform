@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
+import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
 
 export interface OAuthGrantRow {
 	id: string
@@ -32,10 +33,13 @@ export interface OAuthRefreshTokenRow {
 
 /** Codes and refresh tokens are addressed by hash only; the plaintext never reaches this layer. */
 export class OAuthRepository {
-	constructor(private readonly db: SqlDatabase) {}
+	constructor(
+		private readonly db: SqlDatabase,
+		private readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
+	) {}
 
-	/** Record a consent and its one authorization code together. */
-	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'>): Promise<void> {
+	/** Record a consent, its one authorization code and `audit` together. */
+	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'>, audit?: AuditEventInput): Promise<void> {
 		await this.db.batch([
 			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, scopes, created_at, expires_at, revoked_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
@@ -51,6 +55,7 @@ export class OAuthRepository {
 			),
 			this.db.prepare('INSERT INTO oauth_codes (token_hash, grant_id, redirect_uri, challenge, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)')
 				.bind(code.token_hash, grant.id, code.redirect_uri, code.challenge, code.expires_at),
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit)]),
 		])
 	}
 
@@ -58,8 +63,9 @@ export class OAuthRepository {
 		return this.db.prepare('SELECT * FROM oauth_grants WHERE id = ?').bind(id).first<OAuthGrantRow>()
 	}
 
-	async revokeGrant(id: string, now: number): Promise<void> {
-		await this.db.prepare('UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(now, id).run()
+	/** Revoke a grant; `audit` is written exactly when this call revoked it. */
+	async revokeGrant(id: string, now: number, audit?: AuditEventInput): Promise<void> {
+		await this.writer.run([{ sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING id', binds: [now, id] }], audit)
 	}
 
 	/** Spend a code. Exactly one caller gets the row back; a replay gets null and finds it via `code`. */

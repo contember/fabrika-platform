@@ -17,7 +17,7 @@ import type {
 } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { sessionUsable } from './auth'
-import { type OAuthGrantRow, type PrincipalRow, principalStatus, type SessionRow } from './db'
+import { type AuditEventInput, type OAuthGrantRow, type PrincipalRow, principalStatus, type SessionRow } from './db'
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
 import { clientMetadata } from './oauth-client'
@@ -55,13 +55,14 @@ export async function establishClient(config: OAuthConfig, clientId: string, red
 /** Record the consent and return the plaintext authorization code — the only time it exists. */
 export async function grantAuthorization(
 	services: Services,
-	input: { request: OAuthAuthorizationRequest; resource: OAuthResourceDto; scopes: string[]; session: SessionRow },
+	input: { request: OAuthAuthorizationRequest; resource: OAuthResourceDto; scopes: string[]; session: SessionRow; requestId: string },
 ): Promise<string> {
 	const now = unixNow()
 	const code = generateToken()
+	const grantId = uuidv7()
 	await services.repositories.oauth.createGrant(
 		{
-			id: uuidv7(),
+			id: grantId,
 			principal_id: input.session.principal_id,
 			session_id: input.session.id,
 			client_id: input.request.client_id,
@@ -78,6 +79,16 @@ export async function grantAuthorization(
 			challenge: input.request.code_challenge,
 			expires_at: Math.min(now + OAUTH_CODE_TTL_SECONDS, input.session.expires_at),
 		},
+		{
+			requestId: input.requestId,
+			principalId: input.session.principal_id,
+			principalLabel: input.session.principal_id,
+			app: 'propustka',
+			action: 'iam.oauth.grant.create',
+			resourceType: 'oauth_grant',
+			resourceId: grantId,
+			metadata: { clientId: input.request.client_id, app: input.resource.app, resource: input.resource.resource, scopes: input.scopes },
+		},
 	)
 	return code
 }
@@ -89,14 +100,15 @@ export async function exchangeOAuthToken(
 	env: SigningEnv,
 	config: OAuthConfig,
 	input: OAuthTokenRequest,
+	requestId: string,
 ): Promise<OAuthTokenOutcome> {
 	const registration = config.clients.find((client) => client.clientId === input.client_id)
 	if (registration === undefined) return { ok: false, error: 'invalid_client' }
 	const metadata = await clientMetadata(registration)
 	if (metadata === null) return { ok: false, error: 'invalid_client' }
 	return input.grant_type === 'authorization_code'
-		? redeemCode(services, env, metadata, input)
-		: rotateRefreshToken(services, env, metadata, input)
+		? redeemCode(services, env, metadata, input, requestId)
+		: rotateRefreshToken(services, env, metadata, input, requestId)
 }
 
 async function redeemCode(
@@ -104,6 +116,7 @@ async function redeemCode(
 	env: SigningEnv,
 	metadata: OAuthClientMetadataDocument,
 	input: Extract<OAuthTokenRequest, { grant_type: 'authorization_code' }>,
+	requestId: string,
 ): Promise<OAuthTokenOutcome> {
 	const repository = services.repositories.oauth
 	const now = unixNow()
@@ -113,7 +126,7 @@ async function redeemCode(
 	if (code === null) {
 		const spent = await repository.code(hash)
 		// A replayed code may mean it leaked; RFC 6749 §4.1.2 says revoke what it issued.
-		if (spent !== null) await repository.revokeGrant(spent.grant_id, now)
+		if (spent !== null) await repository.revokeGrant(spent.grant_id, now, grantRevocation(requestId, spent.grant_id, input.client_id, 'code_replay'))
 		return { ok: false, error: 'invalid_grant' }
 	}
 	const grant = await repository.grant(code.grant_id)
@@ -137,6 +150,7 @@ async function rotateRefreshToken(
 	env: SigningEnv,
 	metadata: OAuthClientMetadataDocument,
 	input: Extract<OAuthTokenRequest, { grant_type: 'refresh_token' }>,
+	requestId: string,
 ): Promise<OAuthTokenOutcome> {
 	if (!metadata.grant_types.includes('refresh_token')) return { ok: false, error: 'invalid_grant' }
 	const repository = services.repositories.oauth
@@ -146,7 +160,7 @@ async function rotateRefreshToken(
 	if (presented === null) {
 		const spent = await repository.refreshToken(hash)
 		// A rotated token presented again: one of the two holders is not the client. The grant is the family.
-		if (spent !== null) await repository.revokeGrant(spent.grant_id, now)
+		if (spent !== null) await repository.revokeGrant(spent.grant_id, now, grantRevocation(requestId, spent.grant_id, input.client_id, 'refresh_replay'))
 		return { ok: false, error: 'invalid_grant' }
 	}
 	const grant = await repository.grant(presented.grant_id)
@@ -161,19 +175,23 @@ async function rotateRefreshToken(
 }
 
 /** RFC 7009: revoking either token kind revokes its grant. An unknown or foreign token is a silent no-op. */
-export async function revokeOAuthToken(services: Services, env: SigningEnv, input: OAuthRevocationRequest): Promise<void> {
+export async function revokeOAuthToken(services: Services, env: SigningEnv, input: OAuthRevocationRequest, requestId: string): Promise<void> {
 	const repository = services.repositories.oauth
 	const now = unixNow()
 	const refresh = await repository.refreshToken(await hashToken(input.token))
 	if (refresh !== null) {
 		const grant = await repository.grant(refresh.grant_id)
-		if (grant?.client_id === input.client_id) await repository.revokeGrant(grant.id, now)
+		if (grant?.client_id === input.client_id) {
+			await repository.revokeGrant(grant.id, now, grantRevocation(requestId, grant.id, input.client_id, 'client_revocation'))
+		}
 		return
 	}
 	const claims = await verifyResourceAccessToken(await getSigner(env), input.token, { issuer: services.config.issuer })
 	if (claims?.oauth === undefined || claims.oauth.clientId !== input.client_id) return
 	const grant = await repository.grant(claims.oauth.grantId)
-	if (grant !== null && grant.client_id === input.client_id && grant.principal_id === claims.sub) await repository.revokeGrant(grant.id, now)
+	if (grant !== null && grant.client_id === input.client_id && grant.principal_id === claims.sub) {
+		await repository.revokeGrant(grant.id, now, grantRevocation(requestId, grant.id, input.client_id, 'client_revocation'))
+	}
 }
 
 async function mintForGrant(services: Services, env: SigningEnv, grant: OAuthGrantRow, now: number): Promise<OAuthTokenResponse | null> {
@@ -269,4 +287,23 @@ function narrowerScope(held: Scope | null, limit: Scope | null): Scope | null | 
 	if (held === null) return limit
 	if (limit === null) return held
 	return held.type === limit.type && held.value === limit.value ? held : undefined
+}
+
+/** The record of a grant's revocation: by its client, or by IAM on a replayed code or refresh token. */
+function grantRevocation(
+	requestId: string,
+	grantId: string,
+	clientId: string,
+	reason: 'code_replay' | 'refresh_replay' | 'client_revocation',
+): AuditEventInput {
+	return {
+		requestId,
+		principalId: null,
+		principalLabel: 'oauth-client',
+		app: 'propustka',
+		action: 'iam.oauth.grant.revoke',
+		resourceType: 'oauth_grant',
+		resourceId: grantId,
+		metadata: { clientId, reason },
+	}
 }

@@ -93,16 +93,19 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			const input = withAcceptedRequestId(raw)
 			try {
 				const { result, principalId } = await exchangeAuthCode(services, input)
-				ctx.waitUntil(
-					services.repositories.audit.writeAuthLog({
-						requestId: input.requestId,
-						app: input.app,
-						kind: 'authenticate',
-						principalId,
-						decision: result.ok ? 'allow' : 'deny',
-						reason: result.ok ? 'handoff' : result.reason,
-					}),
-				)
+				// A redemption logged its `allow` row in the child session's own batch; a refusal opened nothing.
+				if (!result.ok) {
+					ctx.waitUntil(
+						services.repositories.audit.writeAuthLog({
+							requestId: input.requestId,
+							app: input.app,
+							kind: 'authenticate',
+							principalId,
+							decision: 'deny',
+							reason: result.reason,
+						}),
+					)
+				}
 				return result
 			} catch (err) {
 				logError(`exchangeAuthCode failed for request '${input.requestId}'`, err)
