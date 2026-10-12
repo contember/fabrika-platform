@@ -116,7 +116,18 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 	}),
 	z.strictObject({
 		...rowBase,
-		kind: z.enum(['health', 'form', 'webhook', 'link-spa', 'public-spa']),
+		kind: z.enum(['health', 'form', 'webhook', 'link-spa']),
+		callers: z.tuple([]),
+		requirement: z.null(),
+	}),
+	// A public SPA is a fixed static row: GET only, no body, no schemas.
+	z.strictObject({
+		...rowBase,
+		kind: z.literal('public-spa'),
+		method: z.literal('GET'),
+		admission: z.null(),
+		input: z.null(),
+		output: z.null(),
 		callers: z.tuple([]),
 		requirement: z.null(),
 	}),

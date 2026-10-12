@@ -170,7 +170,17 @@ export const proxyEndpointRowSchema = z.union([
 	}).strict(),
 	z.object({
 		...endpointRuleFields,
-		kind: z.enum(['health', 'form', 'webhook', 'link-spa', 'public-spa']),
+		kind: z.enum(['health', 'form', 'webhook', 'link-spa']),
+		callers: z.tuple([]),
+		requirement: z.null(),
+		delegation: z.null(),
+	}).strict(),
+	// A public SPA is a fixed static row: it serves GET only and admits no body.
+	z.object({
+		...endpointRuleFields,
+		kind: z.literal('public-spa'),
+		method: z.literal('GET'),
+		admission: z.null(),
 		callers: z.tuple([]),
 		requirement: z.null(),
 		delegation: z.null(),

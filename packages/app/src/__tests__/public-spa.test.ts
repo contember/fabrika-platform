@@ -1,7 +1,7 @@
 // A public SPA (`c.spa(prefix, { dir, access: { public: true } })`): one anonymous `public-spa` row, served by the
 // production proxy decision over the generated manifest and the real dispatcher, with no session and no token.
 
-import { compileContract, ContractError, defineContract } from '@fabrika/app/contract'
+import { compileContract, ContractError, defineContract, parseContractArtifact } from '@fabrika/app/contract'
 import { testKit } from '@fabrika/app/testing'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -67,6 +67,28 @@ describe('the contract build', () => {
 		expect(problemsOf(() => compileContract(mixed, {}))).toEqual([
 			`mount 'site': access {"public":true,"member":true} is not an SPA access (allowed: { member: true }, { action, over } or { public: true })`,
 		])
+	})
+})
+
+describe('the artifact parser', () => {
+	const artifact = compileContract(contract, {})
+	const withSite = (fields: Record<string, unknown>): unknown => ({
+		...artifact,
+		endpoints: artifact.endpoints.map((row) => (row.id === 'site' ? { ...row, ...fields } : row)),
+	})
+
+	test('reads the public-spa row back unchanged', () => {
+		expect(parseContractArtifact(JSON.parse(JSON.stringify(artifact)))).toEqual(artifact)
+	})
+
+	test.each<[string, Record<string, unknown>]>([
+		['the method POST', { method: 'POST' }],
+		['a body admission', { admission: { contentTypes: ['application/json'], maxBytes: 1024 } }],
+		['an input schema', { input: { type: 'object', fields: {} } }],
+		['an output schema', { output: { type: 'object', fields: {} } }],
+		['a caller', { callers: ['human'] }],
+	])('refuses a public-spa row with %s', (_name, fields) => {
+		expect(() => parseContractArtifact(withSite(fields))).toThrow()
 	})
 })
 

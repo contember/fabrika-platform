@@ -29,6 +29,7 @@ import {
 } from '../manifest'
 import { createVerifyService } from '../service'
 import {
+	anonymousRow,
 	contractAppWith,
 	FakeIam,
 	HOST,
@@ -327,6 +328,23 @@ describe('contract apps — the endpoint table', () => {
 		}],
 	])('refuses %s', (_name, candidate) => {
 		expect(parseProxyManifest({ apps: [candidate] })).toBeNull()
+	})
+
+	// Each row carries its true digest, so only the fixed GET form of the kind refuses it.
+	test.each<[string, ReturnType<typeof anonymousRow>]>([
+		['the method POST', anonymousRow({ id: 'site', kind: 'public-spa', method: 'POST', path: '/site/*', admission: null })],
+		[
+			'a body admission',
+			anonymousRow({
+				id: 'site',
+				kind: 'public-spa',
+				method: 'GET',
+				path: '/site/*',
+				admission: { contentTypes: ['application/json'], maxBytes: 1024 },
+			}),
+		],
+	])('refuses a public-spa row with %s', (_name, row) => {
+		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints.filter((other) => other.id !== 'site'), row] }] })).toBeNull()
 	})
 })
 
