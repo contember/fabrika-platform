@@ -151,7 +151,7 @@ export const packageInfo = (text: string, directory: string): PackageInfo => {
 	return { name, directory, manifest: { ...manifest, ...validated }, dependencies: validated, publishable }
 }
 
-const readPackages = async (): Promise<readonly PackageInfo[]> => {
+export const readPackages = async (): Promise<readonly PackageInfo[]> => {
 	const entries = await readdir(join(ROOT, 'packages'), { withFileTypes: true })
 	const packages: PackageInfo[] = []
 	for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
@@ -300,6 +300,31 @@ const SKILL_VERSION_LINE = /^(---\n[\s\S]*?\nversion: )\S+(\n[\s\S]*?\n---\n)/
 export const stagedSkill = (text: string, version: string): string => {
 	if (!SKILL_VERSION_LINE.test(text)) throw new Error('skill/SKILL.md must carry a version in its frontmatter')
 	return text.replace(SKILL_VERSION_LINE, `$1${version}$2`)
+}
+
+/** The package whose `skill/` ships the application rules, versioned with it. */
+const APP_SKILL_PACKAGE = '@fabrika/app'
+
+/**
+ * The application skill of `@fabrika/app` as a release ships it: `SKILL.md` names the released version, and every
+ * `@fabrika/*` range of a reference file's examples is `^<version>`, so an application copied from it installs the
+ * release whose rules it read.
+ */
+export const stagedAppSkill = (files: readonly { readonly path: string; readonly text: string }[], version: string) =>
+	files.map(({ path, text }) => ({ path, text: path === 'SKILL.md' ? stagedSkill(text, version) : rewriteExamplePins(text, version).text }))
+
+/** Copies `item` into `stagingDirectory` as `pack` packs it: its files, its staged manifest and, for the app, its skill. */
+export const stagePackage = async (item: PackageInfo, version: string, publicNames: ReadonlySet<string>, stagingDirectory: string): Promise<void> => {
+	const includeDist = includesDist(item.manifest)
+	await cp(item.directory, stagingDirectory, { recursive: true, filter: (source) => stagesPath(source, includeDist) })
+	await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, version, publicNames), null, '\t')}\n`)
+	if (item.name !== APP_SKILL_PACKAGE) return
+	const skillDirectory = join(stagingDirectory, 'skill')
+	const references = (await readdir(join(skillDirectory, 'references'))).filter((name) => name.endsWith('.md')).map((name) => `references/${name}`)
+	const files = await Promise.all(
+		['SKILL.md', ...references].map(async (path) => ({ path, text: await readFile(join(skillDirectory, path), 'utf8') })),
+	)
+	for (const file of stagedAppSkill(files, version)) await writeFile(join(skillDirectory, file.path), file.text)
 }
 
 const tarballFilename = (name: string, version: string): string => `${name.replace(/^@/, '').replaceAll('/', '-')}-${version}.tgz`
@@ -466,14 +491,7 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 		for (const item of order) {
 			if (preparesRelease(item.manifest)) await run(['bun', 'run', 'release:prepare'], { cwd: item.directory })
 			const stagingDirectory = join(stagingRoot, basename(item.directory))
-			const includeDist = includesDist(item.manifest)
-			await cp(item.directory, stagingDirectory, {
-				recursive: true,
-				filter: (source) => stagesPath(source, includeDist),
-			})
-			await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, options.version, publicNames), null, '\t')}\n`)
-			const skillFile = join(stagingDirectory, 'skill', 'SKILL.md')
-			if (await Bun.file(skillFile).exists()) await writeFile(skillFile, stagedSkill(await readFile(skillFile, 'utf8'), options.version))
+			await stagePackage(item, options.version, publicNames, stagingDirectory)
 			const filename = tarballFilename(item.name, options.version)
 			const path = join(options.artifactsDirectory, filename)
 			await rm(path, { force: true })

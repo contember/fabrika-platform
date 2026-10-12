@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
 	collectBinTargets,
@@ -13,8 +14,10 @@ import {
 	parseRegistryIntegrity,
 	parseRegistryPackageName,
 	parseReleaseManifest,
+	readPackages,
 	stagedManifest,
 	stagedSkill,
+	stagePackage,
 } from '../release'
 
 const publicManifest = {
@@ -306,4 +309,28 @@ describe('a staged agent skill', () => {
 	test('refuses a skill without a version', () => {
 		expect(() => stagedSkill('---\nname: x\n---\n\n# x\n', '1.2.3')).toThrow('must carry a version')
 	})
+})
+
+describe('staging the whole public set', () => {
+	test("stages every public package; only @fabrika/app's skill is versioned, its examples pinned to the release", async () => {
+		const { publicPackages } = packageGraph(await readPackages())
+		const publicNames = new Set(publicPackages.map((item) => item.name))
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-stage-'))
+		try {
+			for (const item of publicPackages) await stagePackage(item, '9.8.7', publicNames, join(root, item.name.replace('/', '-')))
+			const app = join(root, '@fabrika-app', 'skill')
+			expect(await readFile(join(app, 'SKILL.md'), 'utf8')).toContain('\nversion: 9.8.7\n')
+			const setup = await readFile(join(app, 'references', 'app-setup.md'), 'utf8')
+			expect(setup).toContain('"@fabrika/app": "^9.8.7"')
+			expect(setup).not.toMatch(/"@fabrika\/[a-z-]+": "\^0\./)
+			expect(setup).toContain('"zod": "^3.25.76"')
+			const builder = publicPackages.find((item) => item.name === '@fabrika/builder')
+			if (builder !== undefined) {
+				const source = await readFile(join(builder.directory, 'skill', 'SKILL.md'), 'utf8')
+				expect(await readFile(join(root, '@fabrika-builder', 'skill', 'SKILL.md'), 'utf8')).toBe(source)
+			}
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	}, 120_000)
 })
