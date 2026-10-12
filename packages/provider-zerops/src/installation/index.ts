@@ -7,7 +7,8 @@ import { consoleAdminCollaborators, runPlatformAdmin } from './admin'
 import { parsePlatformAdminArgs, REISSUE_FLAG } from './admin-options'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DEPLOY_ORDER, PLATFORM_SEQUENTIAL_DEPLOY } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
-import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
+import { consoleInitCollaborators, runInit } from './init'
+import { parseInitArgs } from './init-options'
 import { consoleInstallCollaborators, runInstall } from './install'
 import { parsePlatformInstallArgs, UNATTENDED_FLAG } from './install-options'
 import { prepareInstallationSource } from './installation-source'
@@ -38,7 +39,7 @@ const USAGE = `Zerops installation
 
 Commands:
   fabrika platform install --provider=zerops [options]
-  fabrika platform init    --provider=zerops <installation> [--repo=<owner>/<name>]
+  fabrika platform init    --provider=zerops <installation> --tag=<tag> --project-id=<id> [options]
   fabrika platform plan    --provider=zerops
   fabrika platform deploy  --provider=zerops [options]
   fabrika platform admin   --provider=zerops --email=<address> --iam-host=<host> [--scheme=<http|https>] [${REISSUE_FLAG}]
@@ -113,11 +114,12 @@ Creates and maintains the operator's SIDECAR REPOSITORY: the GitHub pipeline tha
 credentials. ADR-0025 puts that pipeline in a repository the operator owns — fabrika ships the
 generator, never the pipeline, because one public repository cannot hold every account's credentials.
 
-Interactive and laptop-side. It does the whole job and CONFIRMS before every step that leaves the
-operator's disk: reading the project, reading its control and proxy services, creating or pushing the
-repository, writing the Environment, and triggering the run.
-Declining a write stops there and prints what to run instead; a re-run is safe. Declining the read of
-control and proxy only leaves the console and IAM origins out of what init prints.
+Laptop-side and prompt-free: every value comes from a flag or the environment, so a pipeline or an
+agent runs it end to end. It CONFIRMS before every step that leaves the operator's disk: reading the
+project, reading its control and proxy services, creating or pushing the repository, writing the
+Environment, and triggering the run. A stdin that is not a terminal is refused unless \`${UNATTENDED_FLAG}\` is given.
+Declining a write stops there and prints the command that repeats the run; a re-run is safe. Declining
+the read of control and proxy only leaves the console and IAM origins out of what init prints.
 
 Init writes nothing to Zerops. It reads control and proxy only to print the console and IAM origins
 the installation records, and prints none it cannot verify. Public repositories deploy without a
@@ -133,16 +135,27 @@ file afterwards.
   <installation>                    names this installation: the GitHub Environment, the default
                                     repository \`contember/fabrika-zerops-<installation>\`, and the
                                     local checkout directory
-  --repo=<owner>/<name>             a different sidecar repository
+
+Options (a flag beats the environment variable beside it):
+
+  --repo=<owner>/<name>                                             a different sidecar repository
+  --tag=<tag>                       FABRIKA_PLATFORM_TAG            required; the published fabrika tag to pin
+  --project-id=<id>                 FABRIKA_ZEROPS_PROJECT_ID       required; the project holding the platform
+  --env=<name>                      FABRIKA_PLATFORM_ENVIRONMENT    default <installation>
+  --iam-host=<host>                 FABRIKA_PLATFORM_IAM_HOST       custom domains: all three hosts or none;
+  --console-host=<host>             FABRIKA_PLATFORM_CONSOLE_HOST   none derives them from the proxy's Zerops
+  --operations-host=<host>          FABRIKA_PLATFORM_OPERATIONS_HOST subdomains
+  ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
+                                                                    required when stdin is not a terminal
 
 It writes TWO secrets into that Environment and GENERATES NEITHER — both already belong to the
-installation, so a value invented here would not be one it accepts:
+installation, so a value invented here would not be one it accepts. Both are environment only:
 
-  FABRIKA_ZEROPS_ACCESS_TOKEN       a Zerops INTEGRATION token scoped to this installation's projects
-  FABRIKA_IAM_PROVISIONING_KEY      the px_ admin key this installation's IAM was seeded with
+	FABRIKA_ZEROPS_ACCESS_TOKEN       required   the INTEGRATION token install minted (the \`control\` service's env)
+	FABRIKA_IAM_PROVISIONING_KEY      required   the px_ key install printed
+	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
-Each is read from a hidden prompt or from the environment variable of the same name, sent to GitHub
-over \`gh\` stdin, and never printed and never written to disk.
+Each is sent to GitHub over \`gh\` stdin, and never printed and never written to disk.
 
 The generated pipeline pins a published TAG of contember/fabrika-platform and refuses a branch, at
 init and again in the workflow. It uploads that checkout's exact committed archive to every installation service.
@@ -353,7 +366,8 @@ export const installationCli: InstallationCli = {
 			return
 		}
 		if (command === 'init') {
-			await runInit(parseInitArgs(argv), consoleInitCollaborators())
+			const input = parseInitArgs(argv, process.env)
+			await runInit(input, consoleInitCollaborators(input))
 			return
 		}
 		if (command === 'plan') {

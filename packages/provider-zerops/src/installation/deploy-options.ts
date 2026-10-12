@@ -12,6 +12,7 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
+import { readEnv, required, setting } from './cli-options'
 import { type McpClient, parseMcpClientsJson } from './mcp'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
@@ -55,35 +56,6 @@ const FLAGS = [
 	'--source-dir',
 	'--mcp-clients',
 ] as const
-
-const readFlag = (argv: readonly string[], name: string): string | undefined => {
-	const prefix = `${name}=`
-	const matches = argv.filter((arg) => arg.startsWith(prefix))
-	if (matches.length > 1) {
-		throw new Error(`${name} was given more than once`)
-	}
-	const value = matches[0]?.slice(prefix.length)
-	return value === undefined || value.trim() === '' ? undefined : value.trim()
-}
-
-const readEnv = (env: Record<string, string | undefined>, name: string): string | undefined => {
-	const value = env[name]
-	return value === undefined || value.trim() === '' ? undefined : value.trim()
-}
-
-const setting = (
-	argv: readonly string[],
-	env: Record<string, string | undefined>,
-	flag: string,
-	variable: string,
-): string | undefined => readFlag(argv, flag) ?? readEnv(env, variable)
-
-const required = (value: string | undefined, flag: string, variable: string): string => {
-	if (value === undefined) {
-		throw new Error(`${flag}=<value> or ${variable} is required`)
-	}
-	return value
-}
 
 const assertKnownArguments = (argv: readonly string[]): void => {
 	for (const arg of argv) {
