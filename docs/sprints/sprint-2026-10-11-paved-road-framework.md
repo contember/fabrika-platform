@@ -823,6 +823,18 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   endpoint group (as in WU11 §3) and the backlog items filed.
 - **Touch points.** In this repository only the backlog items it files and the Run log line.
 
+### Design review of the gap units (binding)
+
+A design review of WU14–WU21 at `77683fa2` added these requirements; each unit's acceptance includes them:
+WU15 — IAM learns each job's approved `issues` mount and checks it on `issueLink`/`revokeLink` only; link-file routes
+check the mount and the current owner chain; resend and verification have durable progress across IAM and e-mail.
+WU16 — atomic buckets with expiry, admission separate from the submission quota, strict challenge verification, CSP
+origins in the approval diff. WU17 — only a completed clean verdict promotes a file (skipped, encrypted, oversize and
+timed-out scans never do); quarantined uploads count against the quota; cleanup in every state. WU18 — credential
+RPC and failed-login paths, logging coupled to the session change. WU19 — CSV only (XLSX to the backlog), per-cell
+formula escaping before quoting, incremental size bounds. WU20 — failure codes only, never an error's name or message;
+HSTS on every response, downloads and proxy failures included, on both providers.
+
 ## Out of scope (explicit)
 
 - **Declared operations** (`c.read`/`c.update` with `when`/`set`/`inc`): rejected by the owner as too declarative.
