@@ -2,7 +2,8 @@
 // one endpoint (`api.notes.rename`, `notes.write` `on` a note) and one table (`note_labels`, a child of `notes` with its
 // policy and migration), regenerated tests included, and nothing loosened — no existing endpoint's requirement, caller
 // list or access form changes, no role gains an action. Renaming writes a note's title, so the notes policy accepts
-// updates of `title`: that is the one line about an existing subject, and the approver reads it.
+// updates of `title`: that is the one line about an existing subject, and the approver reads it. A trigger keeps titles
+// trimmed for every writer: database code is a step off the paved road, allowed and marked for closer review.
 //
 // The `notes-agent-change` seed (`@fabrika/local-stack`, run by `browser:up`) deployed and approved the pinned Notes
 // commit and pushed the agent's commit through the notes connection webhook, where it waits for approval. Calls to
@@ -22,12 +23,17 @@ const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.f
 const NOTES_ORIGIN = 'http://notes.fabrika.localhost:18081'
 const RENAMED_TITLE = `Renamed by the agent change ${Date.now()}`
 
-/** What the approver reads: every line widens, and nothing else is listed. */
+const CLOSER_REVIEW = 'needs closer review'
+
+/** What the approver reads: every line widens, and nothing else is listed; the database code needs closer review. */
 const EXPECTED_CHANGES = [
 	'New endpoint `api.notes.rename` (POST /api/notes.rename) for human, machine callers with `notes.write` (on `note`)',
 	'New table policy `note_labels` read with `notes.read`',
 	'Table `notes` accepts updates of `title`',
 	'New migration `20261010090000_note_labels.sql`',
+	'New migration `20261010090100_note_titles.sql`',
+	`Migration \`20261010090100_note_titles.sql\` declares function \`notes_trim_title\` ${CLOSER_REVIEW}`,
+	`Migration \`20261010090100_note_titles.sql\` declares trigger \`notes.notes_trim_title\` ${CLOSER_REVIEW}`,
 ]
 
 /** Subjects the agent's change must not touch: the existing endpoints, file endpoints and roles. */
@@ -118,11 +124,12 @@ browserTest(
 			await expect(getPage()).toHaveURL(`${CONTROL_URL}/approvals/${change.runId}`)
 		})
 
-		await step('the access change lists the new endpoint, the new table policy and the new migration', {
+		await step('the access change lists the new endpoint, the new table policy, the new migrations and the trigger', {
 			intent: 'the console tells a person in plain language what the commit lets someone do that the approved snapshot did not',
 			hint:
-				'open the run; assert the change names api.notes.rename with notes.write on a note, the note_labels policy and the new migration file, and nothing else',
-			manual: 'Open the waiting deploy. The change lists one new endpoint, one new table and one new migration.',
+				'open the run; assert the change names api.notes.rename with notes.write on a note, the note_labels policy, both migration files and the trigger marked for closer review, and nothing else',
+			manual:
+				'Open the waiting deploy. The change lists one new endpoint, one new table, two new migrations, and the function and trigger marked "needs closer review".',
 		}, async () => {
 			await expect(byRole('heading', 'Access change of notes', { level: 1 })).toBeVisible()
 			await expect(getPage().getByRole('link', { name: `run ${change.baselineRunId.slice(0, 8)}` })).toBeVisible()

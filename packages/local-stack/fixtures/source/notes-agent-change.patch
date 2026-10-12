@@ -14,6 +14,22 @@ index 0000000..066eed9
 +);
 +
 +CREATE INDEX note_labels_note ON note_labels (note_id);
+diff --git a/db/migrations/20261010090100_note_titles.sql b/db/migrations/20261010090100_note_titles.sql
+new file mode 100644
+index 0000000..8b796ed
+--- /dev/null
++++ b/db/migrations/20261010090100_note_titles.sql
+@@ -0,0 +1,10 @@
++-- A note's title is stored trimmed, whoever writes it: database code, which this migration declares.
++CREATE FUNCTION notes_trim_title() RETURNS trigger LANGUAGE plpgsql AS $$
++BEGIN
++	NEW.title := btrim(NEW.title);
++	RETURN NEW;
++END
++$$;
++
++CREATE TRIGGER notes_trim_title BEFORE INSERT OR UPDATE OF title ON notes
++	FOR EACH ROW EXECUTE FUNCTION notes_trim_title();
 diff --git a/src/__tests__/endpoint-access.test.ts b/src/__tests__/endpoint-access.test.ts
 index 56e5ed9..39d10f3 100644
 --- a/src/__tests__/endpoint-access.test.ts
