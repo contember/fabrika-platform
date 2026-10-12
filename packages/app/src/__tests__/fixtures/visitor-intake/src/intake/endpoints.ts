@@ -49,8 +49,11 @@ export const intake = app.cron('* * * * *', {
 				returning id`
 		}
 	})
+	// Only a row whose budget has an e-mail left is due: spent rows would otherwise fill the batch and starve the rest.
 	const due = await ctx.transaction((tx) =>
-		tx.sql(Due)`select id, email, link_state, link_id, revoke_link_id from candidates where link_state <> 'sent' order by id limit 50`
+		tx.sql(Due)`select id, email, link_state, link_id, revoke_link_id from candidates
+			where link_state <> 'sent' and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
+			order by id limit 50`
 	)
 	for (const candidate of due) {
 		// The e-mail this delivery may send is charged before anything else; without one left, the row waits as it is.

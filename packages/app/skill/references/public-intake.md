@@ -354,10 +354,14 @@ export const intake = app.cron('* * * * *', {
 					returning id`
 			}
 		})
+		// Only a row whose budget has an e-mail left: spent rows would fill the batch and starve the rest.
 		const due = await ctx.transaction((tx) =>
 			tx.sql(Due)`
 				select id, email, link_state, link_id, revoke_link_id
-				from candidates where link_state <> 'sent' order by id limit 50`
+				from candidates
+				where link_state <> 'sent'
+					and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
+				order by id limit 50`
 		)
 		for (const candidate of due) {
 			// The e-mail is charged before any effect; without one left, the row waits as it is.
@@ -408,11 +412,12 @@ The job keeps three invariants. Keep them when you change it:
 
 - **The budget is charged first.** Each delivery reserves one e-mail of the address's daily budget, in its own
   transaction, before any effect. A delivery that fails after the e-mail left is still counted, so a provider that
-  times out cannot make the job mail one address without end.
+  times out cannot make the job mail one address without end. Only a row with an e-mail left is selected for the batch
+  of 50, so spent rows never crowd out the others; the reservation checks the budget again in its own transaction.
 - **Each step is recorded before the next effect.** Revoke a superseded link, then record it; issue, then record the
   link's id (`issued`); send, then record `sent`. A run that stops anywhere (a crash, a refused e-mail, IAM down) is
-  finished by the next run: an `issued` row's link is revoked and replaced, so exactly one live link was e-mailed. The
-  e-mail is at least once. The link's key is never stored: only the job saw it.
+  finished by the next run its budget allows: an `issued` row's link is revoked and replaced, so exactly one live link
+  was e-mailed. The e-mail is at least once. The link's key is never stored: only the job saw it.
 - **An effect starts only while the attempt is live.** `ctx.signal.throwIfAborted()` runs before each IAM call and the
   e-mail, and the e-mail takes `ctx.signal`. The runner aborts a timed-out attempt before the next one starts, so no
   effect of a stale attempt follows the next one's. `ctx.links` itself refuses to call IAM for an ended attempt.
@@ -425,8 +430,9 @@ More on the job:
   approver sees the job's `issues` marked "needs closer review".
 - **`sql: 'write'`** is the declared reach into the inboxes: `delete … returning` takes each row exactly once. A job is
   app-wide, so its statements need no scope fragment (`tx.sql.scope` of its `Within` is every row).
-- **The latency.** The e-mail leaves on the job's next run, within a minute at `* * * * *`. `retries: 0`: the next
-  minute's run is the retry, and it finishes whatever a stopped run left.
+- **The latency.** The e-mail leaves on the job's next run, within a minute at `* * * * *`, while the address has an
+  e-mail of its daily budget left; a spent one waits until a day after the window's first e-mail. `retries: 0`: the
+  next minute's run is the retry, and it finishes whatever a stopped run left, within the budget.
 - **A revoked link** still works until the token the proxy holds for it expires, at most 5 minutes. Revocation is the
   stop at IAM; it is not instant.
 - The e-mail goes through `deps` (`src/mail.ts`), built from application variables the human sets (`INTAKE_ORIGIN`,

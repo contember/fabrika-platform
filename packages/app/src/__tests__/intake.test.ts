@@ -421,6 +421,27 @@ describe.skipIf(!hasPostgres)('the daily budget', () => {
 		expect((await candidate('often@example.test')).sends).toBe(1)
 		await deliveredOnce(running, 'often@example.test')
 	})
+
+	test('spent budgets do not fill the batch: a candidate after 50 of them gets its link in the next run', async () => {
+		const running = start()
+		await admin((sql) =>
+			sql.unsafe(
+				`insert into ${schema}.candidates (id, email, name, link_state, sends, window_started_at, created_by, version)
+				select gen_random_uuid(), 'spent' || n || '@example.test', 'S', 'due', ${SENDS_PER_DAY}, now(), 'seed', 1
+				from generate_series(1, 50) as n`,
+			)
+		)
+		// Its id sorts after every spent row, so a batch of 50 spent rows would leave it out.
+		await admin((sql) =>
+			sql.unsafe(
+				`insert into ${schema}.candidates (id, email, name, created_by, version)
+				values ('ffffffff-ffff-4fff-bfff-ffffffffffff', 'late@example.test', 'L', 'seed', 1)`,
+			)
+		)
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		await deliveredOnce(running, 'late@example.test')
+		expect(running.world.mails.map((mail) => mail.to)).toEqual(['late@example.test'])
+	})
 })
 
 describe.skipIf(!hasPostgres)('a resend', () => {
