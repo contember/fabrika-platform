@@ -165,7 +165,7 @@ describe('the code blocks of the agent skill', () => {
 	test('the migrations are named as the checker requires and the runner refuses none of them', () => {
 		expect(migrations.map((block) => block.path).filter((path) => !/^db\/migrations\/\d{14}_[a-z0-9_]+\.sql$/.test(path ?? ''))).toEqual([])
 		const classified = classifyMigrations(migrations.map((block) => ({ name: block.path ?? '', sql: block.code })), 'app_tasks')
-		expect(classified.files.flatMap((file) => file.refused.map((refusal) => `${file.file}: ${refusal.message}`))).toEqual([])
+		expect(classified.files.flatMap((file) => file.refused.map((refusal) => `${refusal.file}:${refusal.line} ${refusal.reason}`))).toEqual([])
 	})
 
 	test("the file collection's migration is what fileTableSql writes", () => {
