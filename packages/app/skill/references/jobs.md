@@ -70,4 +70,6 @@ export const contract = app.contract((c) => ({
   `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
-- A job cannot create scopes, manage members or issue share links.
+- A job cannot create scopes or manage members. It issues share links only when it declares `issues: '<link mount>'`
+  and its actions hold the mount's `issuedBy` and every grant: `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>',
+  id), { mount, days })`, and `ctx.links.revoke(id)` for a link it issued. It is a widening for closer review.
