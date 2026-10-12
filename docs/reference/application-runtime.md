@@ -353,7 +353,7 @@ whose own `declared` differs does not boot. The API matrix:
 | `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`; every table whose chain holds the dimension | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
 | `creates`   | —                                                                                                                                          | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                               |
 | `member`    | no application data                                                                                                                        | no application data                                                                                                        |
-| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage`                                      | —                                                                                                                          |
+| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage` or `members.list`                    | —                                                                                                                          |
 
 "Target subtree" is the target's child tables and the dimension tables it contains. An `over` lists every table whose
 containment chain holds its dimension, through the stamped chain column: `over: 'org'` lists tasks two levels down by
@@ -518,6 +518,11 @@ request the schema cannot express); an IAM that cannot be asked is 503.
 - `ctx.members` (`assign`, `revoke`, `list`) exists only on an endpoint whose action is
   its dimension's `members.manage`, and takes that endpoint's own `Ref`. One request
   carries one grant, so it makes one membership change.
+- On an endpoint (`on` or `in` the dimension) whose action is the dimension's
+  `members.list`, `ctx.members` is a read-only directory: `ctx.members.list()` answers
+  the members of `ctx.target` (`principalId`, `label`, `roles`, `disabled`), for assignee
+  pickers and membership checks. The proxy already admitted the caller for that action
+  there, and IAM checks it again live; no delegation grant, no email, no invitation.
 - `ctx.links.issue(ref, { mount, days })` exists on an endpoint whose `Ref` carries a link
   mount's `issuedBy` for its dimension. IAM binds the key to the object's whole chain;
   the answer is `<prefix>/#<key>`.

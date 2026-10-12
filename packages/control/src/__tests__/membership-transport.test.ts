@@ -64,6 +64,20 @@ describe('needsMembershipTransport', () => {
 		expect(needsMembershipTransport(plain)).toBe(false)
 		expect(needsMembershipTransport(null)).toBe(false)
 	})
+
+	test("an endpoint whose action is its dimension's members.list needs it for its member directory; another read does not", () => {
+		const reads = notesArtifact.endpoints.flatMap((row) => (row.id === 'api.notes.list' && row.requirement !== null ? [row] : []))
+		const listing: ContractArtifact = {
+			...notesArtifact,
+			mounts: {},
+			endpoints: reads.map((row) => ({
+				...row,
+				requirement: { kind: 'action', action: 'notes.read', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
+			})),
+		}
+		expect(needsMembershipTransport(listing)).toBe(true)
+		expect(needsMembershipTransport({ ...listing, endpoints: reads })).toBe(false)
+	})
 })
 
 describe('VaultMembershipTransport', () => {

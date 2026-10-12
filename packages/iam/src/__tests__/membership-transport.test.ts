@@ -4,7 +4,7 @@
 // authority: the caller is the end user's token, and scope creation and membership changes spend the proxy's grant.
 
 import { HttpIamMembership, IamTransportError } from '@fabrika/auth'
-import { type MembershipCaller, type Scope, WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'
+import { type AppSchema, type MembershipCaller, type Scope, WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createIamApp } from '../app'
@@ -88,6 +88,11 @@ async function transport(options: { mounted?: boolean; repositories?: IamReposit
 		},
 		client: (key) => new HttpIamMembership({ origin: ORIGIN, key, fetch: (input, init) => fetchIam(new Request(input, init)) }),
 	}
+}
+
+/** The schema with no dimension that declares members. */
+function withoutMembers(schema: AppSchema): AppSchema {
+	return { ...schema, scopes: schema.scopes.map(({ members: _members, ...scope }) => scope) }
 }
 
 let requestSeq = 0
@@ -282,7 +287,7 @@ describe('membershipKeys.issue', () => {
 		expect((await issueKey(t.fetch, { app: APP, expiresAt: now - 1, keep: null })).status).toBe(400)
 	})
 
-	test('a reconcile that leaves the application no delegated endpoint and no link mount deletes its keys', async () => {
+	test('a reconcile that leaves the application no delegated endpoint, no link mount and no listed members deletes its keys', async () => {
 		const t = await transport()
 		const owner = await t.f.person('owner')
 		const { key } = await t.issue()
@@ -290,8 +295,38 @@ describe('membershipKeys.issue', () => {
 		const { links: _links, delegations, ...rest } = NOTES_SCHEMA
 		expect((await t.f.putSchema({ ...rest, delegations })).status).toBe(200)
 		expect(await list()).toEqual({ ok: false, reason: 'not_allowed' })
+		// A dimension that lists its members keeps the key: a read endpoint's member directory calls listMembers.
 		expect((await t.f.putSchema(rest)).status).toBe(200)
+		expect(await list()).toEqual({ ok: false, reason: 'not_allowed' })
+		expect((await t.f.putSchema(withoutMembers(rest))).status).toBe(200)
 		await expect(list()).rejects.toBeInstanceOf(IamTransportError)
+	})
+
+	test("a member lists its value's members through the key with no delegation grant; a non-member is refused", async () => {
+		const t = await transport()
+		const owner = await t.f.person('owner')
+		const editor = await t.f.person('editor')
+		const stranger = await t.f.person('stranger')
+		const { key } = await t.issue()
+		const client = t.client(key)
+		const scope = await workspace(t, client, owner)
+		const assigned = await client.assignMember({
+			...(await delegated(t.f, owner, INVITE_ENDPOINT)),
+			scope,
+			role: 'editor',
+			member: { principalId: editor.id },
+		})
+		expect(assigned.ok).toBe(true)
+		const { links: _links, delegations: _delegations, ...rest } = NOTES_SCHEMA
+		expect((await t.f.putSchema(rest)).status).toBe(200)
+
+		const listed = await client.listMembers({ ...(await caller(editor)), scope })
+		if (!listed.ok) throw new Error(`expected a list: ${listed.reason}`)
+		expect(listed.members.map((member) => [member.principalId, member.label, member.email]).sort()).toEqual(
+			[[owner.id, 'owner@example.test', null], [editor.id, 'editor@example.test', null]].sort(),
+		)
+		expect(listed.invitations).toEqual([])
+		expect(await client.listMembers({ ...(await caller(stranger)), scope })).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 })
 
@@ -328,7 +363,7 @@ describe.skipIf(!hasPostgres)('the membership transport on Postgres', () => {
 		await t.issue(APP, second.id)
 		await expect(t.client(first.key).listMembers({ ...(await caller(owner)), scope })).rejects.toBeInstanceOf(IamTransportError)
 		const { links: _links, delegations: _delegations, ...rest } = NOTES_SCHEMA
-		expect((await t.f.putSchema(rest)).status).toBe(200)
+		expect((await t.f.putSchema(withoutMembers(rest))).status).toBe(200)
 		await expect(client.listMembers({ ...(await caller(owner)), scope })).rejects.toBeInstanceOf(IamTransportError)
 	})
 })

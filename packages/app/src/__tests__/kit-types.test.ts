@@ -33,6 +33,13 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'22-job-update-outside-its-transaction.ts': 'a job writes inside ctx.transaction((tx) => …): use tx.db there',
 	'23-job-unscoped-insert-outside-its-transaction.ts': 'a job writes inside ctx.transaction((tx) => …): use tx.db there',
 	'24-sql-on-a-kit-without-tables.ts': 'ctx.sql runs on @fabrika/db: a kit without tables (defineApp(vocabulary)) declares no sql',
+	'25-reserved-role-name.ts': 'admin is a role IAM defines itself for every application (reserved: admin): choose another name',
+	// The typo is the only diagnostic: the mount does not ask for a `.handle(…)` the endpoint has.
+	'26-handler-error-stays-in-the-handler.ts': "Property 'lable' does not exist on type 'UserPrincipal'. Did you mean 'label'?",
+	'27-table-the-access-form-does-not-reach.ts': "deals is not under in: 'org' (it lies in company): declare access in: 'company' or on: 'deal'",
+	// The compiler lists a union's fields in no fixed order.
+	'28-raw-row-for-a-camel-case-output.ts': 'where the output is camelCase: map it with fromRow(Schema, row) from @fabrika/app',
+	'29-members-without-the-list-action.ts': "ctx.members needs the action 'crm.read' (lists the members of org) or 'members.manage' (manages them)",
 }
 
 /**

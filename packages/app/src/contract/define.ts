@@ -1,7 +1,7 @@
 // `defineContract`: the application's whole access surface as data. Browser-safe: it builds plain objects and
 // holds zod schemas; it validates nothing at runtime, `compileContract` does.
 
-import type { RpcCaller } from '@fabrika/auth-core'
+import type { BuiltinRoleKey, RpcCaller } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
 import {
 	type CronDeclaration,
@@ -46,6 +46,15 @@ export type NotLoose<S> = S extends z.ZodObject<z.core.$ZodShape, infer Config e
 type Owned<K extends string> = { readonly [P in K]?: never }
 
 export type WildcardMessage = 'an action is exact: a role grants listed actions, and * is not an action'
+
+/** What a vocabulary's role of a reserved name must be instead: the refusal, at the role's own line. */
+export type ReservedRoleMessage =
+	`${BuiltinRoleKey} is a role IAM defines itself for every application (reserved: ${BuiltinRoleKey}): choose another name`
+
+/** A vocabulary's roles: each a `RoleDef`, and none of a name IAM reserves. */
+export type RoleDefs<A extends string, D extends string, R extends string> =
+	& { readonly [K in R]: RoleDef<A, D, NoInfer<R>> }
+	& { readonly [K in NoInfer<R> & BuiltinRoleKey]: ReservedRoleMessage }
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────────────────────
 
@@ -416,7 +425,7 @@ export function defineContract<
 		readonly app: string
 		readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 		readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
-		readonly roles: { readonly [K in R]: RoleDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
+		readonly roles: RoleDefs<NoInfer<A>, NoInfer<D>, R>
 	},
 	surface: (c: Kit<A, D, CreatableDimension<Dims>>) => S,
 ): Contract<A, D, R, Dims, S> {

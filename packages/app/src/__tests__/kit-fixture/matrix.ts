@@ -15,7 +15,7 @@ import type {
 	Unavailable,
 	WebhookKitContext,
 } from '@fabrika/app/contract'
-import type { ConnectResult, LinkIssuing, MemberManagement, Ref, Within } from '@fabrika/app/implement'
+import type { ConnectResult, DirectoryMember, LinkIssuing, MemberDirectory, MemberManagement, Ref, Within } from '@fabrika/app/implement'
 import type { DbIndex, ScopeTarget, Tables } from '@fabrika/db/tables'
 import type { contract } from './fabrika.contract'
 import type { app } from './src/app-kit'
@@ -43,6 +43,8 @@ type DealRow = {
 	version: number
 }
 type Flat<T> = { [P in keyof T]: T[P] }
+/** The tables a handle reaches: every other table is an `Unavailable` that names the form that reaches it. */
+type Reached<H> = { [P in keyof H]: H[P] extends Unavailable<string> ? never : P }[keyof H]
 type DealRowWithMargin = DealRow & { margin: number | null }
 
 type OnQuery = Context<'query', { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }>
@@ -103,9 +105,12 @@ export type Matrix = [
 	Expect<Equal<InMutation['db']['target']['update'], Unavailable<'update acts on one object: declare access with on'>>>,
 	// over: keyset lists, counts and aggregates of every table whose chain holds the dimension; no single target.
 	Expect<Equal<Returned<OverQuery['db']['within']['companies']['list']>['items'][number]['name'], string>>,
-	Expect<Equal<keyof OverQuery['db']['within'], 'orgs' | 'companies' | 'deals' | 'deal_activities'>>,
+	Expect<Equal<Reached<OverQuery['db']['within']>, 'orgs' | 'companies' | 'deals' | 'deal_activities'>>,
 	Expect<Equal<OverQuery['within'], Within<'org', 'crm.read'>>>,
-	Expect<Equal<keyof OverCompany['db']['within'], 'deals' | 'deal_activities'>>,
+	Expect<Equal<Reached<OverCompany['db']['within']>, 'deals' | 'deal_activities'>>,
+	// A table the form does not reach names itself, the form, and the form that reaches it.
+	Expect<Equal<OverCompany['db']['within']['orgs'], Unavailable<"orgs is not under over: 'company' (it lies in org): declare over: 'org'">>>,
+	Expect<Equal<OverQuery['db']['within']['countries'], Unavailable<'countries is a reference table: read it through ctx.db.reference.countries'>>>,
 	Expect<Equal<Returned<OverCompany['db']['within']['deal_activities']['list']>['items'][number]['body'], string>>,
 	Expect<
 		Equal<
@@ -126,16 +131,35 @@ export type Matrix = [
 			Unavailable<"insert on orgs needs the action 'orgs.create', and this endpoint holds 'crm.write'">
 		>
 	>,
-	Expect<Equal<'orgs' extends keyof OnMutation['db']['target'] ? true : false, false>>,
+	Expect<Equal<OnMutation['db']['target']['orgs'], Unavailable<"orgs is not under on: 'deal' (it lies in org): declare access on or in: 'org'">>>,
+	Expect<
+		Equal<
+			InMutation['db']['target']['deals'],
+			Unavailable<"deals is not under in: 'org' (it lies in company): declare access in: 'company' or on: 'deal'">
+		>
+	>,
+	Expect<
+		Equal<
+			InMutation['db']['target']['deal_activities'],
+			Unavailable<"deal_activities is not under in: 'org' (it is a child of deals): declare access on: 'deal'">
+		>
+	>,
 	Expect<
 		Equal<
 			Creates['db']['created']['companies']['insert'],
 			Unavailable<"insert on companies needs the action 'crm.write', and this endpoint holds 'orgs.create'">
 		>
 	>,
-	// ctx.members only where the action manages the dimension's members.
+	// ctx.members only where the action manages the dimension's members, or lists them (a read-only directory).
 	Expect<Equal<Manages['members'], MemberManagement<'org', 'members.manage', 'starter' | 'viewer' | 'owner'>>>,
-	Expect<Equal<InMutation['members'], Unavailable<"ctx.members needs the action 'members.manage', which manages the members of org">>>,
+	Expect<Equal<OffRoad['members'], MemberDirectory>>,
+	Expect<Equal<Returned<OffRoad['members']['list']>, readonly DirectoryMember[]>>,
+	Expect<
+		Equal<
+			InMutation['members'],
+			Unavailable<"ctx.members needs the action 'crm.read' (lists the members of org) or 'members.manage' (manages them)">
+		>
+	>,
 	Expect<Equal<OnQuery['members'], Unavailable<'the dimension deal declares no members'>>>,
 ]
 

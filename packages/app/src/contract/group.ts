@@ -5,7 +5,8 @@
 import type { RpcCaller } from '@fabrika/auth-core'
 import type { Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { ExtraKeys, Handler, HandlerInput, IsAny } from '../implement/types'
+import type { Snake } from '../from-row'
+import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
 import type { CheckedAccess, Declared, EndpointContext, ExportContext, ImportOf, KitTypes, LinkContext, SqlMode } from './context'
 import type { ProcedureType } from './declaration'
 import type { InputOf, InputSchema, LinkAccess, MemberAccess, MutationAccess, NotLoose, Procedure, QueryAccess, Schema } from './define'
@@ -78,14 +79,42 @@ export type ListOf<U extends string, Listed extends string = ''> = [U] extends [
 /** The fields, at any depth, that a handler `F` returns and the output `O` does not declare. */
 export type UndeclaredFields<F, O extends Schema> = ExtraKeys<Returned<F>, z.input<O>>
 
+/** An object with a camelCase field, which a database row names in snake_case. */
+type HasCamel<V> = { [K in keyof V]: K extends string ? (Snake<K> extends K ? never : K) : never }[keyof V]
+
 /**
- * What `.handle` answers: the endpoint, or — when the handler returns, at any depth, a field the output does not
- * declare — a message the group refuses at the endpoint's line. A field whose type is an error elsewhere in the
- * handler is not reported again here.
+ * A database row returned where the output declares camelCase fields: its snake_case columns, of any value, at the
+ * depth the output has them. `.handle` admits it so that `ExactReturn` can name `fromRow` in one line.
  */
-export type ExactReturn<F, O extends Schema, E> = [UndeclaredFields<F, O>] extends [never] ? E
+type RowShaped<V> = V extends readonly (infer Item)[] ? readonly RowShaped<Item>[]
+	: V extends object
+		? [HasCamel<V>] extends [never] ? { readonly [K in keyof V]: RowShaped<V[K]> } : { readonly [K in keyof V as Snake<K & string>]: unknown }
+	: V
+
+/**
+ * What a kit handler `F` may return: the output, or — only when `F` returns one — a database row of it, which
+ * `ExactReturn` refuses with the fix. Any other mistake keeps the compiler's own message about the output.
+ */
+export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [z.input<O>] ? z.input<O>
+	: [Returned<F>] extends [RowShaped<z.input<O>>] ? RowShaped<z.input<O>>
+	: z.input<O>
+
+/** A kit endpoint's handler, returning `R`. */
+export type KitHandler<In, Ctx, R> = (args: { readonly input: In; readonly ctx: Ctx }) => R | Promise<R>
+
+/**
+ * What `.handle` answers: the endpoint, or a message the group refuses at the endpoint's line — when the handler
+ * returns a database row where the output is camelCase, or, at any depth, a field the output does not declare. A
+ * field whose type is an error elsewhere in the handler is not reported again here.
+ */
+export type ExactReturn<F, O extends Schema, E> = [Returned<F>] extends [z.input<O>] ? [UndeclaredFields<F, O>] extends [never] ? E
 	: IsAny<UndeclaredFields<F, O>> extends true ? E
 	: Unavailable<`the handler returns ${ListOf<UndeclaredFields<F, O> & string>}, which the output does not declare: return only declared fields`>
+	: Unavailable<
+		`the handler returns a database row (${ListOf<
+			UndeclaredFields<F, O> & string
+		>}) where the output is camelCase: map it with fromRow(Schema, row) from @fabrika/app`
+	>
 
 /** A declared, handled endpoint: what a group holds. Its type keeps the declaration and drops the handler's. */
 export interface Endpoint<T extends ProcedureType, I extends InputSchema | null, O extends Schema, Acc, D> extends Procedure<T, I, O, Acc> {
@@ -95,7 +124,7 @@ export interface Endpoint<T extends ProcedureType, I extends InputSchema | null,
 /** An endpoint before `.handle`: a group refuses it. */
 export interface EndpointBuilder<T extends ProcedureType, I extends InputSchema | null, O extends Schema, Acc, D, Ctx> extends PendingEndpoint {
 	/** The endpoint's handler, typed by its access form and declaration; it may return only the output's fields. */
-	handle<const F extends Handler<HandlerInput<I, Acc>, Ctx, O>>(handler: F): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
+	handle<const F extends KitHandler<HandlerInput<I, Acc>, Ctx, HandlerReturn<F, O>>>(handler: F): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
 }
 
 /** What every endpoint builder has and no handled endpoint has. */
@@ -166,11 +195,16 @@ export interface GroupBuild extends GroupInput {
 	readonly [failedBuild]?: true
 }
 
+/**
+ * A builder without `.handle(…)`. An endpoint typed by the compiler's error type is the consequence of a type error
+ * inside its handler, reported there; every check is wrapped in a tuple, since an unwrapped one answers the error type.
+ */
+type IsPending<E> = [0] extends [1 & E] ? false : [Extract<E, PendingEndpoint>] extends [never] ? false : true
+
 /** The endpoints of a group, prefixed by `Path`, that have no `.handle(…)`. */
 export type PendingIn<T, Path extends string> = typeof failedBuild extends keyof T ? never
-	: string extends keyof T
-		? [Extract<T[string & keyof T], PendingEndpoint>] extends [never] ? never : `${Path}* (its type admits an endpoint without a handler)`
-	: { [K in keyof T]: [Extract<T[K], PendingEndpoint>] extends [never] ? never : `${Path}${K & string}` }[keyof T]
+	: string extends keyof T ? [IsPending<T[string & keyof T]>] extends [true] ? `${Path}* (its type admits an endpoint without a handler)` : never
+	: { [K in keyof T]: [IsPending<T[K]>] extends [true] ? `${Path}${K & string}` : never }[keyof T]
 
 /** `app.group(…)`: endpoints for one set of callers, declared in any module and mounted by the contract. */
 export interface Group<C extends readonly [RpcCaller, ...RpcCaller[]], T extends GroupInput> {

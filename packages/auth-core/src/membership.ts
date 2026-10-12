@@ -5,7 +5,25 @@
 // A SEPARATE interface from `IamRpc`, like `IamHandoffRpc`: an application's IAM entrypoint serves it,
 // and a platform component that implements `IamRpc` does not have to.
 
+import type { ContractArtifact, EndpointRow } from './contract'
 import type { Scope } from './types'
+
+/**
+ * What an endpoint may ask IAM about the members of its own target (`ctx.members`): `manage` where its action is the
+ * dimension's `members.manage`, `list` where it is the dimension's `members.list`, on or in that dimension. IAM checks
+ * the same action live, so the endpoint's own access already names what IAM requires.
+ */
+export function endpointMembers(artifact: Pick<ContractArtifact, 'dimensions'>, row: EndpointRow): 'manage' | 'list' | null {
+	if (row.requirement?.kind !== 'action') {
+		return null
+	}
+	const { action, access } = row.requirement
+	if (access.form !== 'on' && access.form !== 'in') {
+		return null
+	}
+	const members = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
+	return members?.manage === action ? 'manage' : members?.list === action ? 'list' : null
+}
 
 /** Every request carries the caller's own credential; `app` is superseded by the credential's verified app. */
 export interface MembershipCaller {
@@ -88,14 +106,14 @@ export interface RevokeMemberInput extends MembershipCaller {
 
 export type RevokeMemberResult = { ok: true } | MembershipFailure
 
-/** The members of `scope`. Needs the dimension's `members.list` there; emails and invitations only to `members.manage`. */
+/** The members of `scope`, with their labels. Needs the dimension's `members.list` there; emails and invitations only to `members.manage`. */
 export interface ListMembersInput extends MembershipCaller {
 	scope: Scope
 }
 
 export interface MemberItem {
 	principalId: string
-	/** Null unless the caller holds the dimension's `members.manage` in the scope: a user's label is its address. */
+	/** The principal's display label (a user's spelling of its address); null from an IAM that shows it only to `members.manage`. */
 	label: string | null
 	/** Null unless the caller holds the dimension's `members.manage` in the scope. */
 	email: string | null

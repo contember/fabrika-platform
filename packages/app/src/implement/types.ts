@@ -8,7 +8,7 @@ import type { Export, InputOf, InputSchema, LinkMount, MemberAccess, Procedure, 
 import type { JobHandlersOf } from '../jobs/types'
 import type { Ref, Within } from './capability'
 import type { ConnectResult } from './connect'
-import type { LinkIssuing, MemberManagement } from './membership'
+import type { LinkIssuing, MemberDirectory, MemberManagement } from './membership'
 import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
@@ -33,10 +33,11 @@ type TargetOf<Acc> = Acc extends { readonly action: infer A extends string; read
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? readonly [D, A]
 	: never
 
-/** `ctx.members`, only where the action is the dimension's `members.manage` (ADR-0012 §6). */
+/** `ctx.members`, only where the action is the dimension's `members.manage` or `members.list` (ADR-0012 §6). */
 type MembersContext<C, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
 	? DimensionsOf<C>[D & keyof DimensionsOf<C>] extends { readonly members: { readonly manage: A } }
 		? { readonly members: MemberManagement<D, A, RoleOf<C>> }
+	: DimensionsOf<C>[D & keyof DimensionsOf<C>] extends { readonly members: { readonly list: A } } ? { readonly members: MemberDirectory }
 	: unknown
 	: unknown
 

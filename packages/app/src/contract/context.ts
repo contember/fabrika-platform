@@ -16,7 +16,7 @@ import type {
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Ref, Within } from '../implement/capability'
-import type { LinkIssuing, MemberManagement } from '../implement/membership'
+import type { LinkIssuing, MemberDirectory, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
 import type { ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
@@ -138,6 +138,43 @@ export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
 	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Ref<D, A> }
 	: never
 
+type TableName<Ix extends AnyDbIndex> = keyof Ix['tables'] & string
+type TableOf<Ix extends AnyDbIndex, T> = T extends TableName<Ix> ? Ix['tables'][T] : never
+
+/** Where a table lies. */
+type Lies<Ix extends AnyDbIndex, T extends string> = TableOf<Ix, T>['mode'] extends 'child' ? `it is a child of ${TableOf<Ix, T>['parent']}`
+	: `it lies in ${TableOf<Ix, T>['list']}`
+
+/** The access form that reaches a table: its parent's object for a child, else the dimension it lies in. */
+type Reach<Ix extends AnyDbIndex, T extends string, Form extends 'target' | 'over'> = TableOf<Ix, T>['mode'] extends 'child'
+	? `declare access on: '${TableOf<Ix, TableOf<Ix, T>['parent']>['dimension']}'`
+	: Form extends 'over' ? `declare over: '${TableOf<Ix, T>['list']}'`
+	: TableOf<Ix, T>['list'] extends TableOf<Ix, T>['dimension'] ? `declare access on or in: '${TableOf<Ix, T>['list']}'`
+	: `declare access in: '${TableOf<Ix, T>['list']}' or on: '${TableOf<Ix, T>['dimension']}'`
+
+/** Why the handle `Where` holds no table `T`: one line that names the table, the access form, and the form that reaches it. */
+type Unreached<Ix extends AnyDbIndex, T extends string, Where extends string, Form extends 'target' | 'over'> = T extends Ix['references']
+	? Unavailable<`${T} is a reference table: read it through ctx.db.reference.${T}`>
+	: TableOf<Ix, T>['mode'] extends 'inbox' ? Unavailable<`${T} is a form inbox, which no ctx.db handle reads`>
+	: Unavailable<`${T} is not under ${Where} (${Lies<Ix, T>}): ${Reach<Ix, T, Form>}`>
+
+/**
+ * A handle with every other table of the application as a refusal, so `ctx.db.target.tasks` on a form that does not
+ * reach `tasks` names the table and the form instead of printing the index.
+ */
+type Reaching<Ix extends AnyDbIndex, H, Where extends string, Form extends 'target' | 'over'> =
+	& H
+	& { readonly [T in Exclude<TableName<Ix>, keyof H>]: Unreached<Ix, T, Where, Form> }
+
+type Target<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind, F extends TargetForm> = Reaching<
+	Ix,
+	ScopeTarget<Ix, D, A, K, F>,
+	`${F}: '${D}'`,
+	'target'
+>
+
+type WithinData<Ix extends AnyDbIndex, D extends string, A extends string> = Reaching<Ix, WithinTables<Ix, D, A>, `over: '${D}'`, 'over'>
+
 /** `ctx.db` by access form (the API matrix of `docs/reference/application-runtime.md`). */
 type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends InvalidAccess ? {
 		readonly target: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
@@ -148,13 +185,12 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 			readonly target: Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>
 		}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
-			readonly within: WithinTables<Ix, D, A>
+			readonly within: WithinData<Ix, D, A>
 			readonly target: Unavailable<'an over endpoint lists through ctx.db.within: declare access with on or in for ctx.db.target'>
 		}
-	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? { readonly target: ScopeTarget<Ix, D, A, K, 'in'> }
-	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: ScopeTarget<Ix, D, A, K, 'on'> }
-	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string }
-		? { readonly created: ScopeTarget<Ix, D, A, K, 'in'> }
+	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? { readonly target: Target<Ix, D, A, K, 'in'> }
+	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: Target<Ix, D, A, K, 'on'> }
+	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Target<Ix, D, A, K, 'in'> }
 	: never
 
 /** `ctx.db` of an endpoint: its access form's handle, the reference tables, and the tables it declares unscoped. */
@@ -168,16 +204,26 @@ type TargetOf<Acc> = Acc extends { readonly action: infer A extends string; read
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? readonly [D, A]
 	: never
 
-type ManagerOf<K extends KitTypes, D extends string> = D extends keyof K['dimensions']
-	? K['dimensions'][D] extends { readonly members: { readonly manage: infer M extends string } } ? M : never
+type MembersOf<K extends KitTypes, D extends string> = D extends keyof K['dimensions']
+	? K['dimensions'][D] extends { readonly members: { readonly manage: infer M extends string; readonly list: infer L extends string } }
+		? { readonly manage: M; readonly list: L }
+	: never
 	: never
 
-/** `ctx.members`, only where the action is the target dimension's `members.manage`. */
+/**
+ * `ctx.members` where the action is the target dimension's `members.manage` (management) or `members.list` (the
+ * directory): IAM checks that same action live, so the type promises what IAM answers.
+ */
 type MembersContext<K extends KitTypes, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
-	? [ManagerOf<K, D>] extends [never] ? { readonly members: Unavailable<`the dimension ${D} declares no members`> }
-	: A extends ManagerOf<K, D> ? { readonly members: MemberManagement<D, A, K['role']> }
-	: { readonly members: Unavailable<`ctx.members needs the action '${ManagerOf<K, D>}', which manages the members of ${D}`> }
-	: { readonly members: Unavailable<'ctx.members needs access on or in a dimension, with the action that manages its members'> }
+	? [MembersOf<K, D>] extends [never] ? { readonly members: Unavailable<`the dimension ${D} declares no members`> }
+	: A extends MembersOf<K, D>['manage'] ? { readonly members: MemberManagement<D, A, K['role']> }
+	: A extends MembersOf<K, D>['list'] ? { readonly members: MemberDirectory }
+	: {
+		readonly members: Unavailable<
+			`ctx.members needs the action '${MembersOf<K, D>['list']}' (lists the members of ${D}) or '${MembersOf<K, D>['manage']}' (manages them)`
+		>
+	}
+	: { readonly members: Unavailable<'ctx.members needs access on or in a dimension, with the action that lists or manages its members'> }
 
 /** `ctx.links`, only where the endpoint declares the link mount it issues (`issues: '<mount>'`). */
 type LinksContext<Acc, Is extends string> = [Is] extends [never]
@@ -240,9 +286,9 @@ export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', un
  * an endpoint's access form gets. A capability typed with several actions reads no column of another read action.
  */
 export interface CapabilityData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string> {
-	on<const D extends string, const A extends Acts>(ref: Ref<D, A>): ScopeTarget<Ix, D, A, Kind, 'on'>
-	in<const D extends string, const A extends Acts>(ref: Ref<D, A>): ScopeTarget<Ix, D, A, Kind, 'in'>
-	over<const D extends string, const A extends Acts>(within: Within<D, A>): WithinTables<Ix, D, A>
+	on<const D extends string, const A extends Acts>(ref: Ref<D, A>): Target<Ix, D, A, Kind, 'on'>
+	in<const D extends string, const A extends Acts>(ref: Ref<D, A>): Target<Ix, D, A, Kind, 'in'>
+	over<const D extends string, const A extends Acts>(within: Within<D, A>): WithinData<Ix, D, A>
 }
 
 type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string, U> =

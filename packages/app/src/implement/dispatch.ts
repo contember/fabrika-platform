@@ -58,7 +58,7 @@ import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { endpointData, Invocation, siteData, type SiteDeclaration } from './invocation'
-import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
+import { createScope, type IssuableLink, linkIssuing, memberDirectory, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { deliveryIdOf, deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
@@ -76,13 +76,13 @@ export interface SpaAssets {
 
 /** What a procedure's context carries beyond its access form, decided once from the artifact. */
 export interface Facilities {
-	/** Whether the endpoint's action is its dimension's `members.manage`: only those endpoints get `ctx.members`. */
-	readonly members: boolean
+	/** `ctx.members`: management where the action is the dimension's `members.manage`, the directory where it is `members.list`. */
+	readonly members: 'manage' | 'list' | null
 	/** The link mounts whose dimension and issuing action are the endpoint's. */
 	readonly links: readonly IssuableLink[]
 }
 
-export const NO_FACILITIES: Facilities = Object.freeze({ members: false, links: Object.freeze([]) })
+export const NO_FACILITIES: Facilities = Object.freeze({ members: null, links: Object.freeze([]) })
 
 /** A staged-kit site: its handler reaches data through `ctx.db`, in the invocation's transaction. */
 export interface ServedSite {
@@ -351,7 +351,7 @@ export class ContractRuntime {
 						principal: caller.principal,
 						requestId: frame.id,
 						...access.context,
-						...this.#facilities(served.facilities, served.row, membership),
+						...this.#facilities(served.facilities, served.row, membership, access.context['target']),
 						...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
 						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context)),
 					})
@@ -420,14 +420,20 @@ export class ContractRuntime {
 	}
 
 	/** `ctx.members` and `ctx.links`, for exactly the endpoints the artifact gives them. */
-	#facilities(facilities: Facilities, row: CredentialedEndpoint, membership: MembershipRequest | null): Readonly<Record<string, unknown>> {
-		if (!facilities.members && facilities.links.length === 0) {
-			return {}
+	#facilities(
+		facilities: Facilities,
+		row: CredentialedEndpoint,
+		membership: MembershipRequest | null,
+		target: unknown,
+	): Readonly<Record<string, unknown>> {
+		const directory = facilities.members === 'list' ? { members: memberDirectory(membership, target, row.id) } : {}
+		if (facilities.members !== 'manage' && facilities.links.length === 0) {
+			return directory
 		}
 		if (membership === null) {
 			throw new ServerFault(`'${row.id}' manages members or links, and boot bound no IAM membership transport`)
 		}
-		const members = facilities.members ? { members: memberManagement(membership) } : {}
+		const members = facilities.members === 'manage' ? { members: memberManagement(membership) } : directory
 		const links = facilities.links.length === 0
 			? {}
 			: { links: linkIssuing(membership, facilities.links, this.#parts.containers.get(membership.dimension) ?? []) }

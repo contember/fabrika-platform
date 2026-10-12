@@ -7,7 +7,8 @@ import { z } from 'zod/v4'
 import { project } from './implement/project'
 
 /** `companyId` → `company_id`: the column a field is read from. */
-type Snake<S extends string> = S extends `${infer Head}${infer Tail}` ? `${Head extends Lowercase<Head> ? Head : `_${Lowercase<Head>}`}${Snake<Tail>}`
+export type Snake<S extends string> = S extends `${infer Head}${infer Tail}`
+	? `${Head extends Lowercase<Head> ? Head : `_${Lowercase<Head>}`}${Snake<Tail>}`
 	: S
 
 /** A row value a field accepts: text for a literal string (the schema checks it), a `Date` for ISO text. */

@@ -471,7 +471,7 @@ describe('members.revoke', () => {
 })
 
 describe('members.list', () => {
-	test('the list action shows members without emails; members.manage adds emails and invitations', async () => {
+	test('the list action shows members and their labels without emails; members.manage adds emails and invitations', async () => {
 		const email = new CapturingEmail()
 		const f = await fixture(email)
 		const owner = await f.person('owner')
@@ -483,7 +483,9 @@ describe('members.list', () => {
 		const asEditor = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope })
 		if (!asEditor.ok) throw new Error('expected a list')
 		expect(asEditor.members.map((member) => [member.principalId, member.roles, member.label, member.email])).toEqual(
-			[[owner.id, ['owner'], null, null], [editor.id, ['editor'], null, null]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+			[[owner.id, ['owner'], 'owner@example.test', null], [editor.id, ['editor'], 'editor@example.test', null]].sort((a, b) =>
+				String(a[0]).localeCompare(String(b[0]))
+			),
 		)
 		expect(asEditor.invitations).toEqual([])
 
@@ -502,6 +504,25 @@ describe('members.list', () => {
 		const scope = await workspaceOf(f, owner)
 		const stranger = await f.person('stranger')
 		expect(await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(stranger)), scope })).toEqual({ ok: false, reason: 'not_allowed' })
+	})
+
+	test('a member lists its own value only: another value of the dimension is not_allowed, and the list holds no one from it', async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const first = await workspaceOf(f, owner)
+		const second = await workspaceOf(f, owner)
+		const editor = await f.person('editor')
+		const elsewhere = await f.person('elsewhere')
+		await assign(f, owner, first, 'editor', { principalId: editor.id })
+		await assign(f, owner, second, 'editor', { principalId: elsewhere.id })
+
+		const listed = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope: first })
+		if (!listed.ok) throw new Error('expected a list')
+		expect(listed.members.map((member) => member.principalId).sort()).toEqual([owner.id, editor.id].sort())
+		expect(await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope: second })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
 	})
 })
 

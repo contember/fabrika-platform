@@ -2,7 +2,7 @@
 // nothing else, so the tables, the kit, the groups and the contract can each be typed by it without a cycle.
 // Browser-safe: plain data.
 
-import type { DimensionDef, RoleDef, Vocabulary, WildcardMessage } from './define'
+import type { DimensionDef, RoleDefs, Vocabulary, WildcardMessage } from './define'
 
 /** The vocabulary as `defineVocabulary` returned it, with its literal names and dimension definitions. */
 export interface AppVocabulary<A extends string, D extends string, R extends string, Dims> extends Vocabulary<A, D, R> {
@@ -24,7 +24,7 @@ export function defineVocabulary<
 	readonly app: string
 	readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 	readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
-	readonly roles: { readonly [K in R]: RoleDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
+	readonly roles: RoleDefs<NoInfer<A>, NoInfer<D>, R>
 }): AppVocabulary<A, D, R, Dims> {
 	return { app: vocabulary.app, dimensions: vocabulary.dimensions, actions: vocabulary.actions, roles: vocabulary.roles }
 }

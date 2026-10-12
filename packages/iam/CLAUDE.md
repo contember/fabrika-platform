@@ -175,7 +175,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   `assignMember`, `revokeMember`, `listMembers`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
   proxy obtains a grant. The caller is still the token in the body. `membershipKeys.issue` (admin RPC) issues a key
   for an `<app>@<env>` id only, ≤30 days, and deletes every other key of it except `keep`; a reconcile that leaves the
-  app no delegated endpoint and no link mount deletes its keys in the same batch.
+  app no delegated endpoint, no link mount and no dimension that lists its members deletes its keys in the same
+  batch (the schema holds no per-endpoint list fact, so a members-declaring dimension keeps the key).
 - **`workloads.issueKey` NEVER REVOKES THE KEY THE CALLER NAMES AS ACTIVE.** It creates the principal on first use,
   issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance
@@ -226,8 +227,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   schema parser refuses it, and scope creation also applies `contractGrantProblem` to the creator role.
   Repeating an assign or a revoke answers the same result — an active grant is kept, an expired one is
   renewed in the same statement (backlog 82's 409 stays for
-  the admin grant API). `listMembers` needs `members.list` there and shows labels, emails and open
-  invitations only to `members.manage` — a user's label is its address.
+  the admin grant API). `listMembers` needs `members.list` there and shows ids, labels and roles (an
+  application's member directory); emails and open invitations only to `members.manage`.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE

@@ -9,6 +9,7 @@ import {
 	contractDigest,
 	type CredentialedEndpoint,
 	endpointDigest,
+	endpointMembers,
 	type EndpointRow,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
@@ -412,20 +413,22 @@ function facilitiesOf(artifact: ContractArtifact, row: EndpointRow): Facilities 
 	if ((access.form !== 'in' && access.form !== 'on') || access.from === null) {
 		return NO_FACILITIES
 	}
-	const members = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
 	const links = Object.entries(artifact.mounts).flatMap(([name, mount]) =>
 		mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action ? [{ name, prefix: mount.prefix }] : []
 	)
-	return Object.freeze({ members: members?.manage === action, links: Object.freeze(links) })
+	return Object.freeze({ members: endpointMembers(artifact, row), links: Object.freeze(links) })
 }
 
-/** Whether serving the endpoint asks IAM for anything: a new scope, a membership change, or a share link. */
+/**
+ * Whether serving the endpoint needs IAM: a new scope, a membership change or a share link. A member directory does
+ * not: it asks IAM only when the handler calls it, and fails that call alone without a transport.
+ */
 function asksIam(served: ServedEndpoint): boolean {
 	if (served.kind !== 'procedure') {
 		return false
 	}
 	const creates = served.row.requirement.kind === 'action' && served.row.requirement.access.form === 'creates'
-	return creates || served.facilities.members || served.facilities.links.length > 0
+	return creates || served.facilities.members === 'manage' || served.facilities.links.length > 0
 }
 
 /** A form and a webhook write the framework's own tables, which only `@fabrika/db`'s `scoped(tables)` reaches. */

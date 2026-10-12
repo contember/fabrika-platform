@@ -438,11 +438,14 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **The framework asks IAM; IAM decides** (`membership.ts`). Every request carries the
   verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
   proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.
-  `ctx.members` exists only where the action is the dimension's `members.manage`, and
+  `ctx.members` exists only where the action is the dimension's `members.manage`
+  (management) or `members.list` (a read-only directory, `list()` of `ctx.target`: ids, labels,
+  roles, no emails), both decided by `endpointMembers` of `@fabrika/auth-core`; and
   `ctx.links` only where the `Ref`'s action is a link mount's `issuedBy` for its
   dimension: the types (`ContractContext`) and `facilitiesOf` in `boot.ts` decide the
   same, so change them together. A `Ref` passed to IAM must be this request's, for the
-  endpoint's own dimension and action. A workload (a webhook) gets neither.
+  endpoint's own dimension and action. A workload (a webhook) gets neither. A directory
+  does not need the transport to boot: without one only its `list()` call answers 503.
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
   object moves. It admits only a key of its own mount.

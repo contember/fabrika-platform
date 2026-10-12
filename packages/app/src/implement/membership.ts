@@ -33,6 +33,24 @@ export interface MemberManagement<D extends string, A extends string, R extends 
 	revoke(ref: Ref<D, A>, member: { readonly principalId: string; readonly role?: R } | { readonly invitationId: string }): Promise<void>
 }
 
+/** One member of the target, as a member directory lists it. */
+export interface DirectoryMember {
+	readonly principalId: string
+	/** The principal's display label (a user's spelling of its address); null from an IAM that shows it only to `members.manage`. */
+	readonly label: string | null
+	/** Its membership roles in the target. */
+	readonly roles: readonly string[]
+	readonly disabled: boolean
+}
+
+/**
+ * `ctx.members` of an endpoint whose action is its dimension's `members.list`: the members of `ctx.target`, read from
+ * IAM, which checks that action live. No emails and no invitations: those stay with `members.manage`.
+ */
+export interface MemberDirectory {
+	list(): Promise<readonly DirectoryMember[]>
+}
+
 export interface IssuedLink {
 	readonly id: string
 	/** `<prefix>/#<key>`: the key travels in the fragment, which never reaches a server or a `Referer`. */
@@ -141,6 +159,27 @@ export function memberManagement(request: MembershipRequest): MemberManagement<s
 			const scope = scopeOf(refGrant(request, ref))
 			const target = 'invitationId' in member ? { invitationId: member.invitationId } : { principalId: member.principalId, role: member.role ?? null }
 			await ask(() => request.iam.revokeMember(request.caller, delegationOf(request), scope, target), 'revoke a member')
+		},
+	})
+}
+
+/**
+ * The members of the request's own target, `target`; IAM requires the dimension's `members.list` there. Every read
+ * endpoint of that action has a directory, so a runtime without an IAM membership transport still boots, and only a
+ * `list()` call fails.
+ */
+export function memberDirectory(request: MembershipRequest | null, target: unknown, endpoint: string): MemberDirectory {
+	return Object.freeze({
+		async list(): Promise<readonly DirectoryMember[]> {
+			if (request === null) {
+				throw new ServerFault(`'${endpoint}' lists members, and the runtime adapter supplies no IAM membership transport`, 503)
+			}
+			const listed = await ask(() => request.iam.listMembers(request.caller, scopeOf(refGrant(request, target))), 'list members')
+			return Object.freeze(
+				listed.members.map((member) =>
+					Object.freeze({ principalId: member.principalId, label: member.label, roles: Object.freeze([...member.roles]), disabled: member.disabled })
+				),
+			)
 		},
 	})
 }
