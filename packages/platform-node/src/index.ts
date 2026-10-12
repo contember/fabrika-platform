@@ -22,7 +22,6 @@ export {
 	APPLICATION_MIGRATION_BUNDLE,
 	APPLICATION_MIGRATION_LEDGER,
 	applicationDatabaseRoles,
-	applicationDatabaseSchema,
 	applicationMigrationLockKey,
 	applicationRuntimeUrl,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
@@ -33,6 +32,7 @@ export {
 	type PostgresApplicationMigrationsConfig,
 } from './application-postgres-migrations'
 export type { ApplicationDatabaseRoles } from './application-postgres-roles'
+export { applicationDatabaseSchema } from './application-schema'
 export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asset-server-fs'
 export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
 export { databaseCodeQuery } from './database-code'

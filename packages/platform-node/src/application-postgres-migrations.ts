@@ -2,6 +2,7 @@ import type { SqlDatabase } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { type ApplicationDatabaseRoles, dropPostgresRoles, postgresRoleUrl, provisionPostgresRoles } from './application-postgres-roles'
+import { applicationDatabaseSchema, validateApplicationId } from './application-schema'
 import { classifyMigrations, type DatabaseObject } from './migration-classify'
 import {
 	applyPostgresMigrations,
@@ -13,10 +14,6 @@ import {
 } from './postgres-migrations'
 import { PostgresDatabase } from './sql-postgres'
 
-/** IAM's application id alphabet; `-` maps to `_`, which the alphabet lacks, so two ids never share a schema. */
-const APP_ID = /^[a-z0-9][a-z0-9-]*$/
-/** Postgres truncates identifiers to 63 bytes; `app_` takes four of them. */
-const MAX_APP_ID_LENGTH = 59
 /** The file-name contract the checker enforces (`db/migrations/`, `@fabrika/check`); timestamps keep worktrees apart. */
 const APPLICATION_MIGRATION_NAME = /^\d{14}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/
 
@@ -65,20 +62,9 @@ export interface PostgresApplicationMigrations {
 	migrate(provisioningUrl: string, migrations?: readonly PostgresMigration[]): Promise<string[]>
 }
 
-function validateAppId(appId: string): void {
-	if (!APP_ID.test(appId) || appId.length > MAX_APP_ID_LENGTH) {
-		throw new PostgresMigrationError(`Invalid application id for a database schema: ${appId} (lowercase letters, digits and -, at most 59)`)
-	}
-}
-
-export function applicationDatabaseSchema(appId: string): string {
-	validateAppId(appId)
-	return `app_${appId.replaceAll('-', '_')}`
-}
-
 /** The first 48 bits of SHA-256(`fabrika-db:<appId>`), plus one: applications sharing a database do not serialize each other. */
 export function applicationMigrationLockKey(appId: string): number {
-	validateAppId(appId)
+	validateApplicationId(appId)
 	return createHash('sha256').update(`fabrika-db:${appId}`, 'utf8').digest().readUIntBE(0, 6) + 1
 }
 

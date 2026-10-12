@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { applicationDatabaseSchema } from '../../../platform-node/src/application-postgres-migrations'
+import { applicationDatabaseSchema } from '../../../platform-node/src/application-schema'
 import { applicationSchema, Database } from '../database'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, isScopedDatabase } from '../framework'

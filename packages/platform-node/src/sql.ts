@@ -2,6 +2,7 @@
 // driver, so a Cloudflare Worker (Control reading a commit) loads it as the runner does. `sql-subpath.test.ts` holds
 // the import graph to that.
 
+export { applicationDatabaseSchema } from './application-schema'
 export {
 	classifyMigration,
 	type ClassifyMigrationOptions,

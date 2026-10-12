@@ -4,12 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-	applicationDatabaseSchema,
 	applicationMigrationLockKey,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 	definePostgresApplicationMigrations,
 } from '../application-postgres-migrations.js'
+import { applicationDatabaseSchema } from '../application-schema.js'
 import { databaseCodeQuery } from '../database-code.js'
 import {
 	applyPostgresMigrations,

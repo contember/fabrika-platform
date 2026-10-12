@@ -104,7 +104,8 @@ Read this before moving a service onto this driver.
   exists for the runner's own tests. `dropApplicationDatabase` is for throwaway test databases; `createTestProvisioner` (Postgres 16+) makes the
   credential code the platform did not write gets for them.
 - **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
-  `sql-names.ts`, `pg-catalog-names.ts` and `migration-classify.ts`, which import
+  `sql-names.ts`, `pg-catalog-names.ts`, `migration-classify.ts`, `application-schema.ts` (`applicationDatabaseSchema`,
+  so Control classifies against the runner's schema name) and `postgres-migration-error.ts`, which import
   nothing outside themselves: Control loads it in
   a Worker. `sql-subpath.test.ts` pins the import graph; never import Bun, Node or a driver there.
 - **Neither check may depend on the session.** `sqlTokens` follows Postgres' lexer (whitespace is
