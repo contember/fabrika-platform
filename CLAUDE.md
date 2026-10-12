@@ -81,6 +81,7 @@ packages/
   check                           # the application checker (`fabrika-check`), for applications, not this repo
   db                              # the scoped data layer applications use on Postgres (Kysely over Bun.SQL)
 examples/app examples/zerops-app  # a worked app per provider
+examples/crm                      # the CRM on the paved road: the acceptance application of the framework
 tests/browser                     # opice end-to-end suites against the local stack
 ```
 

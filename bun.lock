@@ -39,6 +39,24 @@
         "wrangler": "^4.24.0",
       },
     },
+    "examples/crm": {
+      "name": "fabrika-example-crm",
+      "dependencies": {
+        "@fabrika/app": "^0.0.4",
+        "@fabrika/db": "^0.0.4",
+        "@fabrika/provider-zerops": "^0.0.4",
+        "@fabrika/proxy-core": "^0.0.4",
+        "kysely": "0.29.6",
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@fabrika/check": "^0.0.4",
+        "@fabrika/cli": "^0.0.4",
+        "@fabrika/platform": "^0.0.4",
+        "@types/bun": "latest",
+        "typescript": "^5.9.3",
+      },
+    },
     "examples/zerops-app": {
       "name": "fabrika-example-zerops",
       "dependencies": {
@@ -1067,6 +1085,8 @@
 
     "fabrika-example-app": ["fabrika-example-app@workspace:examples/app"],
 
+    "fabrika-example-crm": ["fabrika-example-crm@workspace:examples/crm"],
+
     "fabrika-example-zerops": ["fabrika-example-zerops@workspace:examples/zerops-app"],
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
@@ -1341,6 +1361,8 @@
 
     "fabrika-example-app/oblaka-iac": ["oblaka-iac@0.0.19", "", { "dependencies": { "jsonc-parser": "^3.3.1" }, "peerDependencies": { "typescript": "^5" }, "bin": { "oblaka": "src/commands/run.ts" } }, "sha512-Je3IaI6BcGfVxbtwOTnnri35h42crxGsiDExxH/Y2haLqtLBbIpRmOWsNW3UyDQMXwCOeXjL5H9BSKlgYMOcMA=="],
 
+    "fabrika-example-crm/@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
+
     "fabrika-example-zerops/@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
 
     "lightningcss/detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
@@ -1448,6 +1470,8 @@
     "@types/babel__traverse/@babel/types/@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],
 
     "fabrika-example-app/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
+
+    "fabrika-example-crm/@types/bun/bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
 
     "fabrika-example-zerops/@types/bun/bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
   }

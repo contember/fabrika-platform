@@ -1,0 +1,10 @@
+# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,
+# `build.base`, `build.os` and the SPA's `build.buildCommands`; the platform generates the rest (ADR-0043).
+
+zerops:
+  - setup: crmapi
+    build:
+      base: alpine/bun@1.3
+      buildCommands:
+        - bun install --frozen-lockfile
+        - bun run build:web

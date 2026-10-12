@@ -1,0 +1,8 @@
+node_modules/
+fabrika.manifest.json
+.env
+*.local
+# The platform build writes the entrypoint.
+/fabrika/entry.generated.ts
+# The SPA build writes it (`bun run build:web`).
+/dist/

@@ -1,0 +1,10 @@
+body { font-family: system-ui, sans-serif; margin: 1rem; }
+nav a { margin-right: 1rem; text-transform: capitalize; }
+.status { color: #b00020; min-height: 1.2em; }
+.pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; }
+.stage { background: #f3f3f3; padding: 0.5rem; }
+.card { background: #fff; border: 1px solid #ddd; margin: 0.25rem 0; padding: 0.25rem; }
+.overdue { color: #b00020; }
+table { border-collapse: collapse; }
+td, th { border-bottom: 1px solid #ddd; padding: 0.25rem 0.5rem; text-align: left; }
+form { margin: 0.5rem 0; display: flex; gap: 0.25rem; flex-wrap: wrap; }
