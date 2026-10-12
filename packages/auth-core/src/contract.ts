@@ -262,6 +262,26 @@ export interface FormMountArtifact {
 	readonly path: string
 	/** The inbox table the form appends to. */
 	readonly appendTo: string
+	/** Submissions per minute it admits from one client and accepts in all; each is present only when declared. */
+	readonly rate?: FormRate
+	/** The input field that must stay empty; a filled one is answered as accepted and writes nothing. */
+	readonly honeypot?: string
+	/** The challenge the framework verifies on the server before it writes the row. */
+	readonly challenge?: FormChallenge
+}
+
+export interface FormRate {
+	readonly perClient?: number
+	readonly perForm?: number
+}
+
+/** The closed list of challenge providers; each one's verification endpoint and browser origins are fixed. */
+export type ChallengeProvider = 'turnstile'
+
+export interface FormChallenge {
+	readonly provider: ChallengeProvider
+	/** The application variable holding the provider's secret: a name, never the value. */
+	readonly secret: string
 }
 
 export interface WebhookMountArtifact {
@@ -356,6 +376,10 @@ export interface CspExtensions {
 	readonly connectSrc: readonly CspSource[]
 	readonly imgSrc: readonly CspSource[]
 	readonly frameAncestors: readonly CspSource[]
+	/** Present only when the contract names a script origin (or a challenge provider needs one). */
+	readonly scriptSrc?: readonly CspSource[]
+	/** Present only when the contract names a frame origin; `frame-src` is emitted only then. */
+	readonly frameSrc?: readonly CspSource[]
 }
 
 export interface CspSource {

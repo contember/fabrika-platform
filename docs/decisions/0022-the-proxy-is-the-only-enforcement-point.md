@@ -166,11 +166,12 @@ The policy:
   and the proxy from its manifest entry's `operationsOrigin`, the origin of the same DSN: the Cloudflare
   provider reads it from the run's managed environment, and on Zerops Control hands it to each namespace
   member (`ProviderNamespaceMember.operationsOrigin`). The DSN's key never reaches a manifest. The
-  contract may extend `connect-src`, `img-src` and `frame-ancestors` with named origins — exact
-  `https://` origins with a literal host, never a pattern, at most 16 per directive
+  contract may extend `connect-src`, `img-src`, `frame-ancestors`, `script-src` and `frame-src` with
+  named origins — exact `https://` origins with a literal host, never a pattern, at most 16 per directive
   (`MAX_CSP_ORIGINS`, checked by the contract build and the manifest parser); such an extension is
-  approvable
-  ([ADR-0050](0050-approved-access.md)).
+  approvable ([ADR-0050](0050-approved-access.md)). `frame-src` appears only when it names an origin. A
+  form's challenge provider adds its own fixed origins to `script-src` and `frame-src`, which the
+  approval diff shows like any other.
 - `X-Content-Type-Options: nosniff`.
 - `Cache-Control: no-store`, static assets included.
 - `Referrer-Policy: no-referrer`.

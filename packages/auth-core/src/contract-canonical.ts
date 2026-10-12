@@ -37,6 +37,8 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 			connectSrc: sortedSources(artifact.csp.connectSrc),
 			imgSrc: sortedSources(artifact.csp.imgSrc),
 			frameAncestors: sortedSources(artifact.csp.frameAncestors),
+			...(artifact.csp.scriptSrc === undefined ? {} : { scriptSrc: sortedSources(artifact.csp.scriptSrc) }),
+			...(artifact.csp.frameSrc === undefined ? {} : { frameSrc: sortedSources(artifact.csp.frameSrc) }),
 		},
 		tables: mapValues(artifact.tables, canonicalTable),
 		endpoints: artifact.endpoints.map(canonicalizeEndpoint).sort((a, b) => compare(a.id, b.id)),

@@ -11,6 +11,7 @@ import {
 	applyFileTreatment,
 	applyHeaderPolicy,
 	BASE_HEADER_POLICY,
+	type CspOrigins,
 	FILE_TREATMENT,
 	type HeaderPolicy,
 	headerPolicy,
@@ -39,7 +40,7 @@ const DOWNLOAD = endpointRow({
 })
 const HEALTH = anonymousRow({ id: 'health', kind: 'health', method: 'GET', path: '/healthz', admission: null })
 
-const CSP = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: ['https://portal.example'] }
+const CSP = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: ['https://portal.example'], scriptSrc: [], frameSrc: [] }
 const OPERATIONS = 'https://operations.example.com'
 const CONTRACT = contractAppWith([ME, DOWNLOAD, HEALTH], ['/api'], { csp: CSP, operationsOrigin: OPERATIONS })
 const POLICY = headerPolicy(CSP, OPERATIONS)
@@ -53,6 +54,18 @@ function expectHeaders(response: Response, policy: HeaderPolicy): void {
 		expect(response.headers.get(name)).toBe(value)
 	}
 }
+
+describe('the CSP of named script and frame origins', () => {
+	const widget = 'https://challenges.cloudflare.com'
+
+	test('a declared script origin joins script-src, and a declared frame origin is the only way frame-src appears', () => {
+		const csp = (origins: Partial<CspOrigins>) => headerPolicy({ ...CSP, ...origins }, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(csp({})).toContain("script-src 'self';")
+		expect(csp({}) ?? '').not.toContain('frame-src')
+		expect(csp({ scriptSrc: [widget], frameSrc: [widget] })).toContain(`script-src 'self' ${widget};`)
+		expect(csp({ scriptSrc: [widget], frameSrc: [widget] })).toEndWith(`; frame-src ${widget}`)
+	})
+})
 
 describe('a contract application', () => {
 	test('a denial carries its policy, with its named origins and the Operations ingest', async () => {

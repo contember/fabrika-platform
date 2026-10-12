@@ -44,11 +44,14 @@ const PERMISSIONS_POLICY = PERMISSIONS_POLICY_FEATURES.map((feature) => `${featu
 
 export type HeaderPolicy = readonly (readonly [name: string, value: string])[]
 
-/** The named origins a contract adds to three CSP directives: exact `https://` origins, never patterns. */
+/** The named origins a contract adds to five CSP directives: exact `https://` origins, never patterns. */
 export interface CspOrigins {
 	readonly connectSrc: readonly string[]
 	readonly imgSrc: readonly string[]
 	readonly frameAncestors: readonly string[]
+	readonly scriptSrc: readonly string[]
+	/** `frame-src` is emitted only when it names an origin; without it frames fall back to `default-src 'self'`. */
+	readonly frameSrc: readonly string[]
 }
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
@@ -69,13 +72,15 @@ export function isPolicyOrigin(value: string, protocols: readonly string[] = ['h
 /** The most named origins one directive may carry: the contract build and the manifest parser refuse more. */
 export const MAX_CSP_ORIGINS = 16
 
-export const NO_CSP_ORIGINS: CspOrigins = Object.freeze({ connectSrc: [], imgSrc: [], frameAncestors: [] })
+export const NO_CSP_ORIGINS: CspOrigins = Object.freeze({ connectSrc: [], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [] })
 
 export function cspOrigins(csp: CspExtensions): CspOrigins {
 	return {
 		connectSrc: csp.connectSrc.map((source) => source.origin),
 		imgSrc: csp.imgSrc.map((source) => source.origin),
 		frameAncestors: csp.frameAncestors.map((source) => source.origin),
+		scriptSrc: (csp.scriptSrc ?? []).map((source) => source.origin),
+		frameSrc: (csp.frameSrc ?? []).map((source) => source.origin),
 	}
 }
 
@@ -88,7 +93,7 @@ export function headerPolicy(origins: CspOrigins, operationsOrigin: string | nul
 	const frameAncestors = origins.frameAncestors.length === 0 ? ["'none'"] : origins.frameAncestors
 	const directives = [
 		"default-src 'self'",
-		"script-src 'self'",
+		`script-src ${["'self'", ...origins.scriptSrc].join(' ')}`,
 		"style-src 'self' 'unsafe-inline'",
 		`img-src ${["'self'", 'data:', 'blob:', ...origins.imgSrc].join(' ')}`,
 		"font-src 'self' data:",
@@ -97,6 +102,7 @@ export function headerPolicy(origins: CspOrigins, operationsOrigin: string | nul
 		"object-src 'none'",
 		"base-uri 'none'",
 		`frame-ancestors ${frameAncestors.join(' ')}`,
+		...(origins.frameSrc.length === 0 ? [] : [`frame-src ${origins.frameSrc.join(' ')}`]),
 	]
 	return Object.freeze([
 		['Content-Security-Policy', directives.join('; ')],

@@ -266,7 +266,20 @@ describe('contract apps — the endpoint table', () => {
 		expect(table.endpoints.every((row) => isDigest(row.digest))).toBe(true)
 		expect(table.reservedPrefixes).toEqual([...artifact.reservedPrefixes])
 		expect(table.snapshot).toBe(contractDigest(artifact))
-		expect(table.csp).toEqual({ connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [] })
+		expect(table.csp).toEqual({ connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [] })
+	})
+
+	test('a manifest written before script and frame origins existed parses with none', () => {
+		const { scriptSrc: _script, frameSrc: _frame, ...older } = app.csp
+		expect(parseProxyManifest({ apps: [{ ...app, csp: older }] })?.apps[0]).toEqual({ ...app, scheme: 'https' })
+	})
+
+	test('a contract that names script and frame origins carries them', () => {
+		const widget = { origin: 'https://challenges.cloudflare.com', purpose: 'the turnstile challenge' }
+		const table = contractProxyTable({ ...artifact, csp: { ...artifact.csp, scriptSrc: [widget], frameSrc: [widget] } })
+		expect(table.csp.scriptSrc).toEqual(['https://challenges.cloudflare.com'])
+		expect(table.csp.frameSrc).toEqual(['https://challenges.cloudflare.com'])
+		expect(parseProxyManifest({ apps: [{ ...app, ...table }] })?.apps[0]).toEqual({ ...app, ...table, scheme: 'https' })
 	})
 
 	test('a directive may name 16 origins', () => {
@@ -315,6 +328,14 @@ describe('contract apps — the endpoint table', () => {
 		['a CSP origin that is not https', { ...app, csp: { ...app.csp, imgSrc: ['http://tiles.example'] } }],
 		['a CSP origin with a path', { ...app, csp: { ...app.csp, connectSrc: ['https://api.example/v1'] } }],
 		['a CSP wildcard', { ...app, csp: { ...app.csp, frameAncestors: ['https://*.example.com'] } }],
+		['a script origin that is not https', { ...app, csp: { ...app.csp, scriptSrc: ['http://widgets.example'] } }],
+		['a wildcard script origin', { ...app, csp: { ...app.csp, scriptSrc: ['https://*.example.com'] } }],
+		['a frame origin that is not https', { ...app, csp: { ...app.csp, frameSrc: ['http://widgets.example'] } }],
+		['a wildcard frame origin', { ...app, csp: { ...app.csp, frameSrc: ['https://*.example.com'] } }],
+		['a 17th frame origin', {
+			...app,
+			csp: { ...app.csp, frameSrc: Array.from({ length: MAX_CSP_ORIGINS + 1 }, (_, index) => `https://frame${index}.example`) },
+		}],
 		['a 17th origin in one directive', {
 			...app,
 			csp: { ...app.csp, imgSrc: Array.from({ length: MAX_CSP_ORIGINS + 1 }, (_, index) => `https://tiles${index}.example`) },

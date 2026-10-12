@@ -571,7 +571,7 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		path: '/api/files.avatar/:fileId',
 		admission: null,
 	} satisfies EndpointRules & { id: string }
-	const csp = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [] }
+	const csp = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [] }
 	/** The application's own headers per path: a weaker policy than the proxy's, and downloads it labels itself. */
 	const answers: Record<string, Record<string, string>> = {
 		'/api/me': { 'Content-Security-Policy': 'default-src *', 'Cache-Control': 'public, max-age=60', 'X-App': 'kept' },

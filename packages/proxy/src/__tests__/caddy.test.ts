@@ -595,7 +595,7 @@ describe('a contract app — the response headers', () => {
 		endpoints: [download],
 		reservedPrefixes: [],
 		snapshot: `sha256:${'0'.repeat(64)}`,
-		csp: { connectSrc: ['https://api.maps.example'], imgSrc: ['https://tiles.maps.example'], frameAncestors: [] },
+		csp: { connectSrc: ['https://api.maps.example'], imgSrc: ['https://tiles.maps.example'], frameAncestors: [], scriptSrc: [], frameSrc: [] },
 		operationsOrigin: 'https://operations.example.com',
 	}
 	const [contractRoute, installationRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']

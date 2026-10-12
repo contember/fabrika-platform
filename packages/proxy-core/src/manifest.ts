@@ -197,6 +197,9 @@ const cspOriginsSchema = z.object({
 	connectSrc: cspDirectiveSchema,
 	imgSrc: cspDirectiveSchema,
 	frameAncestors: cspDirectiveSchema,
+	// A manifest written before these two directives existed names neither.
+	scriptSrc: cspDirectiveSchema.default([]),
+	frameSrc: cspDirectiveSchema.default([]),
 }).strict() satisfies z.ZodType<CspOrigins, z.ZodTypeDef, unknown>
 
 // Strict: a key the proxy does not read (`gates`, or an installation entry's field) is refused, never ignored.
