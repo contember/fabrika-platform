@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { watch } from 'node:fs'
 import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -42,6 +42,22 @@ async function prepare(): Promise<PreparedPlatformSource> {
 	prepared.push(result)
 	return result
 }
+
+const hostTmpdir = process.env['TMPDIR']
+let privateTmpdir: string
+
+// Concurrent test runs on the host also create `fabrika-platform-source-*` in the shared tmpdir; the snapshots and the
+// abort watcher must see only this file's.
+beforeAll(async () => {
+	privateTmpdir = await mkdtemp(join(tmpdir(), 'platform-source-tests-'))
+	process.env['TMPDIR'] = privateTmpdir
+})
+
+afterAll(async () => {
+	if (hostTmpdir === undefined) delete process.env['TMPDIR']
+	else process.env['TMPDIR'] = hostTmpdir
+	await rm(privateTmpdir, { recursive: true, force: true })
+})
 
 beforeEach(async () => {
 	root = await mkdtemp(join(tmpdir(), 'platform-source-fixture-'))
