@@ -1116,8 +1116,8 @@ CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_a
 - The owner table needs `UNIQUE (<key>, <chain columns>)`; `tasks` has `UNIQUE (id, project_id, org_id)`.
 - Codegen leaves the table out, and no policy names it: only the framework reads it.
 - The name is lowercase snake_case, at most 39 characters.
-- `link: true` serves a link mount's holders, for the mount's own object: `POST <prefix>/api/files.<name>.upload` and
-  `GET <prefix>/api/files.<name>/:fileId` under every link mount bound to the owner's dimension, which must grant the
+- `link: true` serves a link mount's holders, for the mount's own object: `POST <prefix>/api/files.<name>.upload`,
+  `POST <prefix>/api/files.<name>.list` (no `owner`) and `GET <prefix>/api/files.<name>/:fileId` under every link mount bound to the owner's dimension, which must grant the
   collection's `write` and `read`. The owner is the link's object, never a parameter.
 
 ## Storage
