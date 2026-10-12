@@ -180,9 +180,10 @@ they are declared. A query or an export declares only `'read'`.
 
 - A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
-- Before you add a role, a grant, an action, a declared deviation, an anonymous endpoint (`c.form`, a webhook, a link),
-  an export or an import, a job, or before you drop or rename a column: say in one sentence what it lets someone do,
-  and wait for a yes.
+- When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
+  anonymous endpoint (`c.form`, a webhook, a link), an export or an import, or a job, or before you drop or rename a
+  column: say in one sentence what it lets someone do, and wait for a yes. A data repair goes to the operator, not
+  into a job.
 - A file refused as protected: stop and ask. Do not move the change elsewhere.
 
 ## The loop
@@ -824,23 +825,24 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                  | Means                                                                                    | Fix                                                                                    |
-| --------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
-| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)        | the message names the field                                                            |
-| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`        | another name; a registry range such as `^0.0.4`                                        |
-| `generated-test-hash` | a generated test is missing, edited or stale                                             | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, or a fixture or seed names no endpoint            | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
-| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                               | the handles, or `sql: 'read'` and `ctx.sql`                                            |
-| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                             | the handles, a file collection, a connector                                            |
-| `env-read`            | `process.env`, `Bun.env`                                                                 | `defineDeps(build)`, which receives the application's variables                        |
-| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`               | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
-| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                   | fix the type; `fromRow` parses a row into a schema's type                              |
-| `sensitive-log`       | a log of an error object, a request, headers or the environment                          | log a short fixed message                                                              |
-| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                    | `bunx fabrika db new <slug>`                                                           |
-| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                      | import them only from `*.test.ts` or `__tests__/`                                      |
-| `spa-server-import`   | the SPA loads a server module                                                            | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
-| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                | run the test                                                                           |
+| Rule                  | Means                                                                                                                | Fix                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                             | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
+| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                    | the message names the field                                                            |
+| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                    | another name; a registry range such as `^0.0.4`                                        |
+| `generated-test-hash` | a generated test is missing, edited or stale                                                                         | `bunx fabrika db test-scaffold`, and commit what it writes                             |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, or a fixture or seed names no endpoint                                        | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
+| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                           | the handles, or `sql: 'read'` and `ctx.sql`                                            |
+| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                         | the handles, a file collection, a connector                                            |
+| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` as a value in a server module | the handles; state lives in a table, not in a global                                   |
+| `env-read`            | `process.env`, `Bun.env`                                                                                             | `defineDeps(build)`, which receives the application's variables                        |
+| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                           | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
+| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                               | fix the type; `fromRow` parses a row into a schema's type                              |
+| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                      | log a short fixed message                                                              |
+| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                | `bunx fabrika db new <slug>`                                                           |
+| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                  | import them only from `*.test.ts` or `__tests__/`                                      |
+| `spa-server-import`   | the SPA loads a server module                                                                                        | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
+| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                            | run the test                                                                           |
 
 The hints:
 
@@ -1158,7 +1160,7 @@ CREATE INDEX task_comments_task ON task_comments (task_id);
   the policy records the caller. The data layer generates `id` and writes `version` and `created_by`.
 - A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: the generated tests fill text columns
   with markers, which a `CHECK` refuses.
-- Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or an ISO string;
+- Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
 - Plain SQL of the application's own schema only. Refused: another schema (`public.`, `app_…`), any `fabrika_*`
   object (except a file collection's table, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,

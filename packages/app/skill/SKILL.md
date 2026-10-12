@@ -188,9 +188,10 @@ they are declared. A query or an export declares only `'read'`.
 
 - A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
-- Before you add a role, a grant, an action, a declared deviation, an anonymous endpoint (`c.form`, a webhook, a link),
-  an export or an import, a job, or before you drop or rename a column: say in one sentence what it lets someone do,
-  and wait for a yes.
+- When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
+  anonymous endpoint (`c.form`, a webhook, a link), an export or an import, or a job, or before you drop or rename a
+  column: say in one sentence what it lets someone do, and wait for a yes. A data repair goes to the operator, not
+  into a job.
 - A file refused as protected: stop and ask. Do not move the change elsewhere.
 
 ## The loop

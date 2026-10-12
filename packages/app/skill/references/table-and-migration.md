@@ -101,7 +101,7 @@ CREATE INDEX task_comments_task ON task_comments (task_id);
   the policy records the caller. The data layer generates `id` and writes `version` and `created_by`.
 - A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: the generated tests fill text columns
   with markers, which a `CHECK` refuses.
-- Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or an ISO string;
+- Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
   `int8` and `numeric` are strings; an enum is its literal union. JSON, `bytea`, arrays and domains are refused.
 - Plain SQL of the application's own schema only. Refused: another schema (`public.`, `app_…`), any `fabrika_*`
   object (except a file collection's table, `references/files.md`), `GRANT`, roles, `CREATE EXTENSION`, `COPY`,
