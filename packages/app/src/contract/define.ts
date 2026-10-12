@@ -54,7 +54,7 @@ export type ReservedRoleMessage =
 /** A vocabulary's roles: each a `RoleDef`, and none of a name IAM reserves. */
 export type RoleDefs<A extends string, D extends string, R extends string> =
 	& { readonly [K in R]: RoleDef<A, D, NoInfer<R>> }
-	& { readonly [K in NoInfer<R> & BuiltinRoleKey]: ReservedRoleMessage }
+	& (string extends R ? unknown : { readonly [K in NoInfer<R> & BuiltinRoleKey]: ReservedRoleMessage })
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────────────────────
 

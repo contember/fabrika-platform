@@ -323,8 +323,8 @@ type IndexOf<A> = A extends App<infer K> ? K['index'] : never
  * `deals.write`, and `DbHandle<typeof app, 'over', 'org', 'crm.read'>` is `ctx.db.within` of a query `over` orgs.
  */
 export type DbHandle<A, F extends TargetForm | 'over', D extends string, Act extends string, K extends DataKind = 'query'> = F extends TargetForm
-	? ScopeTarget<IndexOf<A>, D, Act, K, F>
-	: WithinTables<IndexOf<A>, D, Act>
+	? Target<IndexOf<A>, D, Act, K, F>
+	: WithinData<IndexOf<A>, D, Act>
 
 /** The type of `ctx.db.reference`, for a query function that takes it. */
 export type ReferenceHandle<A> = ReferenceTables<IndexOf<A>>
