@@ -28,9 +28,14 @@ import { allMigrations } from './helpers/migrations'
 // runtime cannot resolve. Stub it with a base class that just assigns ctx/env — exactly
 // what the real WorkerEntrypoint does for our purposes. This is test infrastructure, not
 // a source change: it must run BEFORE importing the class under test.
+// bun's module mocks are process-wide and test files share a process, so this stub must offer every
+// export another suite's stub does: `@cloudflare/containers` links against `DurableObject`.
 mock.module('cloudflare:workers', () => ({
 	WorkerEntrypoint: class<E> {
 		constructor(public readonly ctx: RequestContext, public readonly env: E) {}
+	},
+	DurableObject: class<E> {
+		constructor(public readonly ctx: unknown, public readonly env: E) {}
 	},
 }))
 
