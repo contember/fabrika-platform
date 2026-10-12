@@ -45,6 +45,13 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
 - **Two independent reviews of this plan** (at `cf1e292c`) found a type cycle in the first file order (contract →
   slice → tables → `typeof contract`, TS7022 with tsc 5.9), and that a syntactic deviation detector is evaded by
   destructuring, helper modules and `ctx[k]`. WU0 and the declared off-road fields answer them.
+- **A public intake application** (2026-10-12): two independent validations, against main, of the specification of a
+  candidate registration module of one of our projects. Anonymous visitors submit a profile with attachments, verify
+  their e-mail, and HR works the records. The HR side fits the paved road: scoped lists, a status history under
+  `getForUpdate`, notes, roles, and an audited export over a declared `sql: 'read'`. The public side breaks on seven
+  gaps: no public page, no credential for an anonymous visitor, no per-client abuse control, no malware check, IAM
+  audit that is best-effort, no file-download response, and no HSTS, server-error report or browser Operations
+  bootstrap. WU14–WU20 close them; WU21 builds the module privately to prove it.
 
 ## Refs re-verified at HEAD (2026-10-11, `5b81b901`)
 
@@ -101,6 +108,44 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
   `packages/app/skill/SKILL.md:72-75`. WU5, WU10.
 - ⚠ Decision 5 contradicts ADR-0050's "a code-only change deploys without a prompt" —
   `docs/decisions/0050-approved-access.md:217-219`: a change that declares a new deviation now waits. WU7, WU9.
+
+**The platform-gap units (WU14–WU21), re-verified at `191af008` (2026-10-12):**
+
+- ✔ `c.spa` admits only `{ member: true }` or `{ action, over }` — `packages/app/src/contract/build.ts:549-561`. The
+  anonymous kinds are `health | form | webhook | link-spa` — `packages/auth-core/src/contract.ts:61`,
+  `packages/proxy-core/src/manifest.ts:173`. A link mount's shell is already served anonymously at `GET <prefix>/*` —
+  `build.ts:397-408`, `packages/app/src/implement/dispatch.ts:240-244`.
+- ✔ A form appends to its inbox, runs no handler and answers `{ received: true }` — `dispatch.ts:533-542`; its body
+  limit is 16 KiB — `packages/app/src/contract/defaults.ts:9`. A job reads the inbox through a declared
+  `unscoped` — `packages/db/src/orm.ts:420-438`.
+- ✔ The form limit is one token bucket per form per process, 10 at once then 10 per minute —
+  `packages/app/src/implement/anonymous.ts:18-41`.
+- ✔ The proxy holds no counter — ADR-0022's invariant, `docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md:105-107`.
+  It already sets `X-Fabrika-Client-Ip` on every application route — `packages/proxy/src/caddy.ts:393`,
+  `packages/provider-cloudflare/src/proxy-worker.ts:130`. The application does not read it.
+- ⚠ On Zerops that address is the balancer: no `trusted_proxies` range is configured until a live account settles it —
+  `docs/reference/zerops-platform.md:75-82`, `docs/backlog/05-bring-up-on-a-real-zerops-account.md:57-69`. WU16.
+- ✔ `issues` is RPC-only — `build.ts:933-937`, `:1028-1029`. A job context has no `links` —
+  `packages/app/src/jobs/types.ts:21-34`. An endpoint's `ctx.links` has `issue` and no `revoke` —
+  `packages/app/src/implement/membership.ts:61-63`, `:203-217`.
+- ✔ IAM refuses every workload token on a membership operation, `issueLink` included —
+  `packages/iam/src/auth.ts:101-104`, `:118-120`. `revokeLink` exists — `packages/iam/src/membership.ts:629-654`. WU15.
+- ✔ File endpoints admit `human` only — `build.ts:604-617`; `link: true` is refused at boot —
+  `packages/app/src/files/collections.ts:339-340`. There is no file list endpoint (dogfood finding 10).
+- ✔ A file row is `pending` while its object is written, and the sweep removes pending rows; then it is `live` —
+  `packages/db/src/file-table-sql.ts:68-98`, `collections.ts:196-240`. A scan state cannot reuse `pending`. WU17.
+- ✔ Runtime system packages come from an allowlist that the generated `run.prepareCommands` installs —
+  `packages/provider-zerops/src/execution.ts:27-28`, `:280`. ClamAV appears nowhere in the repository.
+- ✔ The CSP extensions are `connectSrc`, `imgSrc` and `frameAncestors`; `script-src 'self'` is fixed —
+  `packages/proxy-core/src/headers.ts:47-52`, `:88-100`. No `Strict-Transport-Security` header exists.
+- ✔ A procedure answers JSON only — `dispatch.ts:368`.
+- ✔ A handler 5xx is a log line, not an Operations event — `dispatch.ts:816-837`. Jobs report through
+  `operationsReporter` — `packages/app/src/jobs/report.ts:72`. Backlog 102 is open.
+- ✔ IAM writes the login `auth_log` row and the membership `audit_events` row in `waitUntil` and only logs a failure —
+  `packages/iam/src/auth/sessions.ts:64-65`, `packages/iam/src/membership.ts:195-205`. Admin audit is awaited after the
+  change, outside its transaction — `packages/iam/src/admin/context.ts:50-64`, `admin/grants.ts:41-49`. The device
+  claim already writes its audit row in the same batch — `packages/iam/src/repositories/device.ts:107-109`. `auth_log`
+  retention is a 30-day constant — `packages/iam/src/cron.ts:18`.
 
 ## Target shape (WU0 fixes the signatures; WU1 the layout; WU3 the API matrix)
 
@@ -530,6 +575,254 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   rules/literal.ts,rules/runtime.ts}`, `packages/app/src/implement/membership.ts`, `packages/iam` (read path only),
   `packages/auth-core` if the RPC needs it, their tests.
 
+### WU14 — A public static SPA (S)
+
+- **Problem.** An application has no public page: `c.spa` needs a member or an action (`build.ts:549-561`). The public
+  intake application (Evidence) needs a landing page that an anonymous visitor opens and that posts to a `c.form`.
+  The only workaround is a link mount's shell, which is not at `/` and is meant for link holders.
+- **Verify first.** The link-SPA precedent (`build.ts:397-408`, `dispatch.ts:240-244`); the "anonymous kinds" line of
+  ADR-0050 §3; how `classifyAccess` names an anonymous row (`packages/control/src/approval/diff.ts:542`).
+- **Scope.**
+  1. `c.spa(prefix, { dir, access: { public: true } })` adds one row of a new fixed anonymous kind `public-spa`:
+     `GET <prefix>/*`, no callers, no requirement, no input, no output. `{ public: true }` takes no other key.
+  2. The proxy treats `public-spa` as it treats `link-spa`: it reads no credential, mints no token, forwards no session
+     and never bounces to login. The fixed header policy applies.
+  3. The framework serves the files without its token check. The page reaches only anonymous rows (forms); every
+     other call needs a session, as before.
+  4. The static reader accepts the literal. The approval diff shows a new public SPA, and a member SPA that becomes
+     public, as a widening.
+  5. ADR-0022 ("Anonymous kinds") and ADR-0050 §3 name the kind.
+- **Acceptance / witness.** A proxy test over a generated manifest: an anonymous `GET /` and `GET /assets/app.js`
+  answer the files, with no session and no token upstream; `POST /` is refused; a member SPA at `/app` still bounces
+  to login. A build test refuses `{ public: true, member: true }`. A `classifyAccess` test: a new public SPA widens.
+- **Touch points.** `packages/app/src/contract/{build.ts (the SPA requirement and row),define.ts (the SPA access type),
+  artifact-schema.ts}`, `packages/auth-core/src/contract.ts` (`AnonymousEndpointKind`),
+  `packages/proxy-core/src/{manifest.ts,authorize.ts}` (the kind list only), `packages/app/src/implement/dispatch.ts`
+  (the `spa` case), `packages/check/src/reader/` (the SPA access), `packages/control/src/approval/diff.ts`,
+  `docs/decisions/{0022-…,0050-…}.md` (one line each), their tests.
+
+### WU15 — A time-limited credential for an anonymous visitor (L)
+
+- **Problem.** A visitor who submitted a form holds no credential, so e-mail verification, attachments and
+  self-service have nothing to stand on. `issues` is RPC-only (`build.ts:933-937`); a job has no `ctx.links`
+  (`jobs/types.ts:21-34`); IAM refuses a workload token on `issueLink` (`packages/iam/src/auth.ts:101-104`); link
+  file collections are refused at boot (`collections.ts:339-340`).
+- **Decision: a form runs no handler.** A form stays append-only with a constant answer, and a job does the work.
+  - **Security.** An anonymous request costs one bounded insert, reads nothing and answers nothing that depends on
+    data. A handler gives every anonymous request a transaction and reads. A duplicate check in it is an enumeration
+    oracle, unless every answer is constant, and then the visitor gains nothing from the handler. An e-mail per request
+    is amplification. The job runs under its own workload identity with declared actions, takes a batch, and applies
+    per-recipient budgets in one transaction.
+  - **Ergonomics.** The job path uses declarations an agent already knows: a form, a cron job with
+    `unscoped: { <inbox>: 'write' }` (`orm.ts:420-438`), this unit's `issues`, and link mutations, which are ordinary
+    handlers on `ctx.db.target`. WU10b writes it as one recipe. The cost is latency: the e-mail leaves on the next
+    run of the job, within a minute at `* * * * *`.
+- **Verify first.** `issueLink`'s delegation rule (`packages/iam/src/membership.ts:578-610`): the caller holds
+  `issuedBy` and every grant on some link of the chain. A job's token carries its declared actions with
+  `scope: 'app'`; confirm that it meets that rule on any chain. Measure how long a revoked key still works through the
+  proxy's token cache.
+- **Scope.**
+  1. A cron job may declare `issues: '<link mount>'` when its actions include the mount's `issuedBy` and every grant.
+     `ctx.links.issue(ref, { mount, days })` and `ctx.links.revoke(id)` exist only on a site that declares `issues`;
+     an endpoint gets `revoke` too. A webhook still issues nothing.
+  2. IAM accepts a `job` workload token on `issueLink`, and on `revokeLink` of a link that job issued. Every other
+     membership operation still refuses a workload token. The link's `issued_by` is the job's principal.
+  3. **Link-holder file collections.** `link: true` is served. A collection whose owner dimension is a link mount's
+     dimension gets upload, list (WU17) and download rows under the mount's API prefix with caller `link`. The owner is
+     the link's object, never a parameter. The mount must grant the collection's write and read actions, or boot
+     refuses. Uploads keep their limits and, with WU17, the scan.
+  4. **Single use is application state.** A `verify` link mutation sets `verified_at` once under `getForUpdate`; a
+     second call answers the same. IAM gets no use counter: the proxy honours a cached token without asking IAM, so a
+     per-use count needs shared proxy state (ADR-0022:105). Revocation is the IAM-side stop.
+  5. **Resend.** A second form (`{ email }`, constant answer). The job issues a new link for an unverified record
+     within a per-recipient budget (an application table) and revokes the previous link.
+  6. **Approval.** A job's `issues` widens with "needs closer review", keyed by the job, as an endpoint's does.
+- **Acceptance / witness.** A Postgres and IAM test through the proxy on a fixture application: a form row → the job
+  issues a link bound to the created record → the holder calls `verify` twice (one `verified_at`), uploads, lists and
+  downloads its own files; another record's file id answers 404; another record's link cannot upload here; after
+  `revokeLink` the key is refused once the cached token expires. A job without `issues` has no `ctx.links` (a type
+  fixture) and IAM refuses its token on `issueLink`; a job token still cannot `assignMember`. A `classifyAccess` test
+  for a job's new `issues`.
+- **Touch points.** `packages/app/src/contract/{build.ts (#declare for jobs, the file rows),define.ts (the job's
+  issues)}`, `packages/app/src/jobs/{types.ts,runner.ts}`, `packages/app/src/implement/membership.ts` (`issue` for a
+  job, `revoke`), `packages/app/src/files/collections.ts` (the link caller), `packages/iam/src/{auth.ts,membership.ts}`,
+  `packages/auth-core/src/` (only if the RPC shape changes), `packages/check/src/reader/`,
+  `packages/control/src/approval/diff.ts`, `docs/decisions/0050-approved-access.md` (one line), their tests.
+
+### WU16 — Anonymous abuse control (S–M)
+
+- **Problem.** One token bucket per form per process (`anonymous.ts:18-41`): a flood from one address blocks every real
+  visitor, and the limit grows with the number of instances. A form has no honeypot and no challenge, and the fixed
+  CSP (`script-src 'self'`, no frame source) cannot load a challenge widget (`headers.ts:88-100`).
+- **Verify first.** The proxy may not count (ADR-0022:105; `packages/proxy/CLAUDE.md`, "it holds no counter"). It
+  already sets `X-Fabrika-Client-Ip` (`caddy.ts:393`, `proxy-worker.ts:130`). On Zerops that value is the balancer
+  until backlog 05 settles the trusted range (`docs/reference/zerops-platform.md:75-82`).
+- **Scope.**
+  1. **Per-client admission in the framework, not the proxy.** The form dispatcher keys a shared bucket in a framework
+     table (`fabrika_form_admissions`, one row per form, client address and window) on `X-Fabrika-Client-Ip`, beside a
+     per-form ceiling that all instances now share. The defaults live in `defaults.ts`; a form may declare its own
+     per-client rate. This is admission, not authorization. Public SPA assets (WU14) have no limit.
+  2. **Honeypot.** `c.form(…, { honeypot: '<field>' })` declares one string field that must stay empty. A filled one
+     gets the same `{ received: true }` and writes no row.
+  3. **Challenge.** `c.form(…, { challenge: { provider: 'turnstile', secret: '<APP_VARIABLE>' } })`. The framework
+     verifies the token on the server before it writes the row: a failed check answers 400, an unreachable provider
+     503, and neither writes a row. The secret is an application variable, never a contract value. The provider list
+     is closed, and each provider's origins are fixed.
+  4. **CSP.** `csp: { scriptSrc, frameSrc }` join the existing extensions: exact `https://` origins, at most 16 each;
+     `frame-src` is emitted only when declared. A new origin widens (ADR-0050 §3, "CSP extensions").
+  5. Until backlog 05 answers, the per-client key on Zerops is the balancer, so the per-client limit equals the
+     per-form one. The challenge is the defense that does not depend on the address. The skill says so (WU10b).
+- **Acceptance / witness.** A Postgres test: one address empties its bucket and another address still submits; two
+  framework instances share the ceiling; a filled honeypot writes no row and answers 200; a challenge stub that fails
+  gives 400 and no row, one that is down gives 503 and no row. A proxy-core test: a declared `scriptSrc` and `frameSrc`
+  appear in the CSP; a non-`https` or wildcard origin is refused by the build and by the manifest parser.
+- **Touch points.** `packages/app/src/implement/{anonymous.ts,dispatch.ts (#form)}`, `packages/db/src/migrations.ts`
+  (the framework table), `packages/app/src/contract/{build.ts (form options, csp),define.ts,defaults.ts,artifact-schema.ts}`,
+  `packages/auth-core/src/` (`CspExtensions`), `packages/proxy-core/src/{headers.ts,manifest.ts}`,
+  `packages/check/src/reader/`, `packages/control/src/approval/diff.ts`, `packages/proxy/CLAUDE.md`, their tests.
+
+### WU17 — File malware quarantine (M)
+
+- **Problem.** Sniffing proves only the type (`packages/app/src/files/sniff.ts:20-40`), and an upload is `live` once
+  written (`collections.ts:219-226`). A visitor's attachment reaches HR unchecked.
+- **Verify first.** In the Zerops runtime container: Alpine's `clamav` installs through the package allowlist
+  (`execution.ts:27-28`, `:280`); `freshclam` reaches its mirror; the peak memory and the duration of one `clamscan`
+  over a batch. If the memory does not fit the default container, the unit sets a minimum for a scanning application
+  and the skill says so.
+- **Scope.**
+  1. `c.files(name, { …, scan: true })`. The file status gains `quarantined` and `rejected`. `pending` keeps its
+     meaning (the object is still being written; the sweep removes it). An upload to a scanning collection ends
+     `quarantined`.
+  2. **A scan pass in the application's own container.** The generated crontab runs it every minute under a reserved
+     framework job name and its lease (`fabrika_job_leases`). It streams each quarantined object to `clamscan`, marks it
+     `live` or `rejected`, deletes a rejected object from the store, and reports a rejection or a failure to Operations
+     through the job reporter. No new service.
+  3. **Fail closed, on every environment.** A missing binary, missing signatures or a scanner error leaves the file
+     `quarantined`. The provider build adds `clamav` and a daily `freshclam` for any `scan: true` collection, so a
+     missing scanner is a broken build, not a mode. The local stack's application image installs it too.
+  4. **Serving.** A download serves only `live`; `quarantined` answers 409 ("being checked"), `rejected` 404. A
+     generated `files.<name>.list` query (id, name, type, size, status, createdAt) under the collection's read action
+     closes dogfood finding 10.
+  5. `fileTableSql` emits the wider status check. An existing collection that turns `scan` on needs a migration that
+     widens the check; the checker names it. Turning `scan` off widens in the approval diff.
+- **Acceptance / witness.** A Postgres and S3 test with a real ClamAV: the EICAR string → `rejected`, its object
+  deleted, download 404; a clean PDF → `quarantined`, then `live`; a download before the pass → 409; a pass without the
+  scanner leaves the file quarantined and reports; the list shows each state. A Zerops render test: a `scan: true`
+  contract adds `clamav` and the `freshclam` crontab line.
+- **Touch points.** `packages/app/src/files/{collections.ts,scan.ts (new)}`, `packages/db/src/file-table-sql.ts` and
+  the file table's accessor, `packages/app/src/contract/{build.ts (the files section),define.ts,artifact-schema.ts}`,
+  `packages/app/src/jobs/` (the reserved scan job), `packages/provider-zerops/src/execution.ts`, the local stack's
+  application image, `packages/check/src/reader/`, `packages/control/src/approval/diff.ts`, their tests.
+
+### WU18 — Durable audit (M)
+
+- **Problem.** IAM writes the login `auth_log` row and the membership `audit_events` row in `waitUntil` and only logs
+  a failure (`sessions.ts:64-65`, `membership.ts:195-205`). Admin audit is awaited after the change, outside its
+  transaction (`admin/context.ts:50-64`). A crash or a storage error loses the record of a committed change. `auth_log`
+  retention is a constant (`cron.ts:18`). Nothing records that a privileged person used privileged access.
+- **Verify first.** The device claim's batch (`repositories/device.ts:107-109`) as the pattern on D1 and on Postgres;
+  each membership and admin write path, one statement or several.
+- **Scope.**
+  1. Every IAM-owned change writes its `audit_events` row in the same transaction as the change (a D1 batch, a
+     Postgres transaction): membership operations, link issue and revoke, grants, roles, principals, credentials. A
+     failed audit write fails the change.
+  2. A login, a logout and a failed login write `auth_log` before the answer. A failed write fails the login with 503.
+  3. **Privileged access.** Every `/admin/*` request of an installation admin, reads included, writes one
+     `audit_events` row (`iam.admin.access`: method, route template, app). A session of a principal with an
+     installation-admin grant is marked privileged in `auth_log`.
+  4. **Retention.** `auth_log` retention is an IAM setting in days, parsed at boot, default 30. `audit_events` are
+     kept unless the operator sets a retention.
+  5. **Application audit stays in application tables, on the paved road:** a handler writes its own history or export
+     row in the invocation's transaction (WU3). No framework audit API. The skill says so (WU10b).
+  6. Rescope backlog 71 to what remains: delivery from Control and Operations to IAM through an outbox.
+- **Acceptance / witness.** On SQLite and on Postgres: a fault in the audit insert rolls back a membership change and
+  an admin grant; a committed change has exactly one row; an admin GET writes one access row; the retention setting
+  prunes at its value, and a bad value refuses boot.
+- **Touch points.** `packages/iam/src/{auth/sessions.ts,membership.ts,admin/,cron.ts,env.ts,repositories/}`,
+  `packages/iam/{migrations,migrations-postgres}/` (new files only), `packages/iam/CLAUDE.md`,
+  `docs/backlog/{71-…md,README.md}`, their tests.
+
+### WU19 — File-download responses (S/M)
+
+- **Problem.** A procedure answers JSON only (`dispatch.ts:368`). An HR export must download as CSV or XLSX. Built in
+  the browser, each application must get the quoting, the formula escaping and the size bound right on its own.
+- **Verify first.** How the client transport reads an answer (`packages/app/src/client/transport.ts`); what the
+  proxy's header policy does to a non-JSON answer (`Cache-Control: no-store`, `nosniff`).
+- **Scope.**
+  1. A procedure output `c.attachment({ format: 'csv', filename, row: <zod object>, maxBytes })`, on a query or a
+     mutation. The handler returns rows, and the framework encodes them. An audited export is therefore a mutation
+     that inserts its log row in the invocation's transaction and returns the attachment.
+  2. A fixed `Content-Type` (`text/csv; charset=utf-8`) and `Content-Disposition: attachment` with the declared file
+     name. RFC 4180 quoting. A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`.
+     An encoding over `maxBytes` fails the invocation and sends no partial body.
+  3. **XLSX** (`format: 'xlsx'`): a stored (uncompressed) ZIP with inline strings and no dependency, if it stays near
+     200 lines with its tests. Otherwise CSV only, and XLSX becomes a backlog item.
+  4. The same access forms, callers and approval as any procedure. The snapshot holds the format and the row schema
+     as the output shape.
+  5. `@fabrika/app/client` gains `download(api.<procedure>, input)`, which saves the file.
+- **Acceptance / witness.** A dispatch test: the CSV bytes and headers, with a `=1+1` cell, a quote and a newline; over
+  `maxBytes` → an error and no body. An XLSX round trip in the test. A type fixture: a handler that returns something
+  other than rows is refused at its line.
+- **Touch points.** `packages/app/src/contract/{build.ts (the procedure output),define.ts,artifact-schema.ts}`,
+  `packages/app/src/implement/{dispatch.ts (#procedure),attachment.ts (new)}`, `packages/app/src/client/`,
+  `packages/check/src/reader/`, `packages/control/src/approval/diff.ts` (the output kind), their tests.
+
+### WU20 — Operations and headers (S)
+
+- **Problem.** The header policy has no HSTS (`headers.ts:88-109`). A handler 5xx is a log line only
+  (`dispatch.ts:816-837`). A contract application's browser cannot learn the Operations DSN
+  ([backlog 102](../backlog/102-a-contract-application-cannot-hand-its-browser-the-operations-dsn.md)).
+- **Verify first.** Where the manifest holds an application host's public scheme (the login bounce takes it from
+  there); `operationsReporter` and its envelope (`jobs/report.ts:55-72`).
+- **Scope.**
+  1. **HSTS.** `Strict-Transport-Security: max-age=31536000` on every answer of an `https` application host. No
+     `includeSubDomains`, no `preload`: applications share parent domains. Nothing on `http` (the local stack).
+  2. **Server errors.** A handler 5xx sends one Operations event: endpoint id, request id, error name and message,
+     release. No input, no headers, no row data. At most a bounded number per process per minute.
+  3. **Backlog 102.** Every `spa` and `public-spa` mount serves `<prefix>/__fabrika-config.json` with the browser DSN
+     and the release, and nothing else of the environment. Backlog 102's witness and deletion follow its acceptance.
+  4. `auth_log` retention is WU18's (IAM's territory).
+- **Acceptance / witness.** A proxy-core header test: `https` gets HSTS, `http` does not. A dispatch test: a throwing
+  handler sends one envelope without its input. `tests/browser/operations-sdk-ingest.test.ts` passes against the
+  Zerops example; backlog 102 is deleted.
+- **Touch points.** `packages/proxy-core/src/headers.ts`, `packages/app/src/implement/{dispatch.ts (errorResponse, the
+  spa cases),boot.ts}`, `packages/app/src/jobs/report.ts` (the shared reporter), `examples/zerops-app/web/`,
+  `packages/local-stack/src/operations-witness/` (deleted), `tests/browser/operations-sdk-ingest.test.ts`,
+  `docs/backlog/{102-…md,README.md}`.
+
+### WU10b — The skill for the gap units (S)
+
+- **Problem.** WU10 documents the API as it stands before WU14–WU20.
+- **Scope.** Extend `skill/references/`. `endpoint.md`: the public SPA and the attachment output. `files.md`:
+  `scan: true`, the file states, link-holder collections and the list query. `webhooks-links-connectors.md`: a job's
+  `issues`, `ctx.links.revoke`, and the public intake recipe (public SPA → form → job with an `unscoped` inbox and
+  `issues` → link SPA with `verify` and link files → resend). Forms: honeypot, challenge, the CSP extensions and the
+  Zerops client-address caveat. Audit: application history and export rows in the invocation's transaction.
+  `SKILL.md` gains pointers only and stays within its budget.
+- **Acceptance / witness.** `agent-skill.test.ts` passes, every new code block type-checks, and
+  `examples/zerops-app/AGENTS.md` is regenerated.
+- **Touch points.** `packages/app/skill/`, `examples/zerops-app/AGENTS.md`, `packages/app/src/__tests__/agent-skill.test.ts`
+  (only for a new topic).
+
+### WU21 — Private dogfood: the public intake module (L)
+
+- **Problem.** WU14–WU20 come from a validation, not from building the application. A fresh agent with only the skill
+  must build the module and show what is still off the road.
+- **Scope.**
+  1. Built outside every public repository, in a local directory that is never pushed (`intake-dogfood`), from the
+     private specification, with this repository's packages packed locally (`bun run release:pack`). The agent reads
+     WU10's and WU10b's skill files only.
+  2. The surface: the public landing (WU14); the profile form with a honeypot and a challenge (WU16); the job that
+     creates the record, issues the link and sends the e-mail (WU15); verification and resend; attachments with the
+     scan (WU15, WU17); the HR list, detail, status history, notes, code lists and roles; consent records; an audited
+     CSV export (WU19).
+  3. Findings stay in that directory. Each platform finding comes back to this repository as a backlog item in
+     generic words: no client, product or document name.
+- **Acceptance / witness.** The module's generated and authored tests pass on Postgres; `fabrika-check` reports no
+  refusal; every deviation is declared and listed. The Run log gets one generic line: the tsc and checker runs per
+  endpoint group (as in WU11 §3) and the backlog items filed.
+- **Touch points.** In this repository only the backlog items it files and the Run log line.
+
 ## Out of scope (explicit)
 
 - **Declared operations** (`c.read`/`c.update` with `when`/`set`/`inc`): rejected by the owner as too declarative.
@@ -543,15 +836,27 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
 - **File-based routing** (spike C) and **entity sugar** (spike D).
 - **`ctx.jobs.enqueue`**: application jobs are cron only and have no queue (WU3 §5).
 - **Form inbox reads** and **list writes on the road** (`over` mutations): `unscoped` or `sql` cover them, declared.
+  WU15's intake job reads its inbox through a declared `unscoped`.
+- **A form with a handler**: a form stays append-only with a constant answer, and a job does the work (WU15's
+  decision).
+- **A single-use credential in IAM**: a per-use count needs shared proxy state (ADR-0022:105). Single use is
+  application state (WU15 §4).
+- **A rate counter in the proxy**: the proxy holds no state a decision depends on. The framework keeps the per-client
+  bucket (WU16).
+- **A scanner service** or a scan outside the application's container (WU17).
+- **A framework audit API for applications**: application audit is application tables on the paved road (WU18 §5).
+  Durable delivery from Control and Operations to IAM stays in [backlog 71](../backlog/71-deliver-domain-audit-events-durably.md).
+- **Outbound e-mail as a declared reach** (`sends: 'email'`): an application sends through `deps`, as plain code.
+- **Backup and restore tooling**: database and object-storage backups and restore drills are the operator's.
 - **Two-capability access** for `move` and merges ([backlog 97](../backlog/97-the-generated-tests-have-no-move-case.md)).
 - **Destructive-migration rules** ([backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)).
 - **A data layer on Cloudflare**: still Bun and Postgres only.
 - **Dogfood findings not addressed:** 1 (unpublished packages), 2 (a second app on the local stack: WU11 uses Notes),
   6 (a membership stand-in for the endpoint test), 7 (the seed and `CHECK` columns), 8 (a deploy failing before the
-  build gives no reason), 9 (own rows only), 10 (listing attachments), 11 (listing members without `members.manage`),
-  12 (author tests for jobs), 13 (`fabrika dev`), 17 (builder and MCP locally), 18 (the template's `bun.lock`), 19
-  (refusal texts), 20 (the checker reads dev scripts: reading less is a place to hide code), 21 (smaller items).
-  WU10 fixes 14–16.
+  build gives no reason), 9 (own rows only), 11 (listing members without `members.manage`), 12 (author tests for
+  jobs), 13 (`fabrika dev`), 17 (builder and MCP locally), 18 (the template's `bun.lock`), 19 (refusal texts), 20 (the
+  checker reads dev scripts: reading less is a place to hide code), 21 (smaller items). WU10 fixes 14–16; WU17 fixes 10
+  (listing attachments).
 - The 105/106/109 hardening and 107 stay as they are; no unit relaxes them.
 
 ## Decisions
@@ -599,6 +904,23 @@ Resolved in this sprint:
   sprint outranks them (`docs/CLAUDE.md` precedence).
 - The idea document is deleted and its still-valid evidence is above.
 
+Platform-gap decisions (owner, 2026-10-12), binding:
+
+18. **The seven gaps of the public intake application are in this sprint** (WU14–WU20), before WU11, with a second,
+    private dogfood (WU21) that never enters a public repository.
+19. Simple designs: no new service, no complex orchestration. A new reach is a declared deviation and a widening; a
+    hard refusal stays only for platform integrity.
+
+Resolved for the gap units:
+
+- **A form runs no handler** (WU15): security and ergonomics, stated there.
+- **The per-client bucket lives in the framework**, keyed on the proxy's `X-Fabrika-Client-Ip`; the proxy stays
+  stateless (WU16).
+- **The scan fails closed on every environment**, and the provider build installs the scanner for any `scan: true`
+  collection (WU17).
+- **`auth_log` retention is WU18's**, not WU20's: one unit owns IAM.
+- **HSTS has no `includeSubDomains`** (WU20): applications share parent domains.
+
 ## Sequencing
 
 Each unit runs in its own worktree. Units in one step share no source file; where they share a test file, the rows
@@ -613,13 +935,25 @@ below say who owns which cases. Each unit edits only its own packages' `CLAUDE.m
 | 4    | WU7, WU8 (+ WU12)   | WU7 needs WU4–WU6; WU8 needs WU2–WU4 and WU6; WU12 may still run, outside both territories                                                                 |
 | 5    | WU13a, WU13b        | the probes' fixes, after WU8; disjoint: db+reader · shell+checker+IAM                                                                                      |
 | 5b   | WU9, WU10           | the ADRs and the skill describe what is built                                                                                                              |
-| 6    | WU11                | the CRM, the counts and both trials                                                                                                                        |
+| 6a   | WU14, WU17, WU18    | public SPA (contract, kinds, proxy-core manifest) · scan (files, `file-table-sql`, provider-zerops) · audit (IAM only)                                     |
+| 6b   | WU15, WU20          | links on WU17's list and scan (contract, jobs, `collections.ts`, IAM) · headers and Operations (`headers.ts`, `dispatch` errors, `report.ts`)              |
+| 6c   | WU16, WU19          | abuse control on WU14's kinds and WU20's header policy · attachment output (`#procedure`, client)                                                          |
+| 7    | WU10b               | the skill describes what WU14–WU20 built                                                                                                                   |
+| 8    | WU11, WU21          | the CRM, the counts and both trials · the private intake module; both read only the skill                                                                  |
 
 Shared tests in step 2: `differential.test.ts` — WU0 writes the skeletons, WU2 owns the table cases, WU4 the slice
 cases; type fixtures — WU3 owns `orm-mistakes/`, WU4 `colocated-mistakes/`, WU0 `kit-mistakes/`; the scale budget is
 rerun after WU3. WU7 and WU10 touch different tools of `packages/control/src/mcp/handler.ts`, in different steps; the
 active [MCP authoring sprint](sprint-2026-10-07-mcp-authoring.md) also edits that file, so coordinate there. WU8 touches
 only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that package.
+
+Steps 6a–6c: the contract seams (`contract/{build,define,artifact-schema}.ts`, `packages/check/src/reader/`,
+`packages/control/src/approval/diff.ts`) are shared by two units in 6a (WU14, WU17) and in 6c (WU16, WU19), and by
+WU15 alone in 6b. Each unit adds its own declaration's branch and test file, and the unit that merges second rebases.
+In 6c both units also edit `dispatch.ts`, in `#form` and `#procedure` only. No other source file is shared within a
+step: `files/collections.ts` is WU17's, then WU15's; `proxy-core` is WU14's, WU20's, then WU16's; IAM is WU18's, then
+WU15's. WU18 may start before WU9 lands; every other gap unit waits for WU9, because each edits its own lines of
+ADR-0022 or ADR-0050.
 
 ## Run log
 
