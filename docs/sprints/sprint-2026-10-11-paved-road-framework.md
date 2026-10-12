@@ -607,3 +607,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   host's transport header; the Cloudflare Worker's initialization 503 the named host's treatment; an application's own
   HSTS is dropped on `http` (Caddy deletes it only on `http`, because a named delete runs after the set). The followed
   agent-change commit's SPA is built before Notes serves it; the SDK scenario passes after that follow, without a reset.
+- **WU20 review round 2.** The sweep of runtime log sinks found two more: a file cleanup and sweep logged a storage
+  error's name, and a failed webhook delivery logged the unsigned `X-GitHub-Delivery`. Both now log fixed codes (the
+  failed step; `delivery_failed`), and `deliveryIdOf` is gone. Every other `console.*` and reporter call in the app and
+  db runtime interpolates only declared names, fixed codes or closed IAM outcomes.
