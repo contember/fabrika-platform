@@ -135,6 +135,8 @@ async function memberCallerOf(services: Services, input: MembershipCaller, resol
 interface IssuingJob {
 	readonly name: string
 	readonly issues: string
+	/** The job's declared actions as IAM read them: the issuance is written only while they are still declared. */
+	readonly actions: readonly string[]
 }
 
 type LinkCallerOutcome = { ok: true; caller: MemberCaller; job: IssuingJob | null } | MembershipFailure
@@ -171,7 +173,11 @@ async function resolveLinkOperationCaller(services: Services, env: CallerEnv, in
 		return NOT_ALLOWED
 	}
 	const permissions = caller.permissions.filter((entry) => entry.scope === null && declaration.actions.includes(entry.action))
-	return { ok: true, caller: { principal, permissions, app: verifiedApp }, job: { name: workload.name, issues: declaration.issues } }
+	return {
+		ok: true,
+		caller: { principal, permissions, app: verifiedApp },
+		job: { name: workload.name, issues: declaration.issues, actions: declaration.actions },
+	}
 }
 
 function scopeProblem(scope: Scope): string | null {
@@ -723,7 +729,12 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 		expiresAt,
 		grants: grants.map((action) => ({ action, scopeType: object.type, scopeValue: object.value })),
 		link: { mount: mount.mount, chain: input.chain.map((scope) => ({ type: scope.type, value: scope.value })) },
-		...(job === null ? {} : { issuingJob: job.name }),
+		checked: {
+			grants,
+			issuedBy: mount.issued_by,
+			maxDays: mount.max_days,
+			...(job === null ? {} : { job: { name: job.name, actions: job.actions } }),
+		},
 	}, (credentialId) =>
 		memberEvent(caller, input.requestId, {
 			action: 'iam.link.issue',
@@ -732,8 +743,8 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 			metadata: { mount: mount.mount, chain: input.chain, days: input.days },
 		}))
 	if (id === null) {
-		// A reconcile removed the mount, or the job's declaration of it, between the checks above and the write.
-		return job === null ? invalid(`unknown link mount '${input.mount}'`) : NOT_ALLOWED
+		// A reconcile changed what was checked above (the mount, the containment or the job) before the write.
+		return NOT_ALLOWED
 	}
 	return { ok: true, key, id, expiresAt }
 }

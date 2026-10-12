@@ -94,11 +94,13 @@ export class CredentialRepository {
 	}
 
 	/**
-	 * Insert a share link and its grants only while its mount still exists with the dimension it was
-	 * issued for, in one transaction. The first statement locks the mount row with the one row lock
-	 * SQLite and Postgres share (D1 runs a batch serially anyway): a reconcile that is deleting the row
-	 * makes this wait and then insert nothing, and one that comes later waits for this key and revokes
-	 * it. Returns the id, or null when the mount is gone; `audit` is written exactly when the key is.
+	 * Insert a share link and its grants only while the app's schema still declares exactly what `checked` says was
+	 * authorized: the mount with its dimension, grants, issuing action and lifetime, the chain's containment, and for
+	 * a job its actions and the mount it issues — all in one transaction. The first statement locks the mount row with
+	 * the one row lock SQLite and Postgres share (D1 runs a batch serially anyway); every reconcile deletes and rewrites
+	 * that row, so one already writing makes this wait and then compare against what it committed, and one that comes
+	 * later waits for this key. Returns the id, or null when the declaration changed; `audit` is written exactly when
+	 * the key is.
 	 */
 	async createLinkCredential(
 		input: {
@@ -109,23 +111,17 @@ export class CredentialRepository {
 			expiresAt: number
 			grants: { action: string; scopeType: string; scopeValue: string }[]
 			link: { mount: string; chain: Scope[] }
-			/** A job that issues: the write inserts only while the app's schema still declares that it issues this mount. */
-			issuingJob?: string
+			checked: CheckedLinkDeclaration
 		},
 		audit?: (credentialId: string) => AuditEventInput,
 	): Promise<string | null> {
 		const id = uuidv7()
 		const dimension = input.link.chain[0]?.type ?? ''
-		const issuingJob = input.issuingJob === undefined
-			? { sql: '', binds: [] }
-			: {
-				sql: `AND EXISTS (SELECT 1 FROM app_workloads WHERE app = ? AND kind = 'job' AND name = ? AND issues = ?)`,
-				binds: [input.app, input.issuingJob, input.link.mount],
-			}
+		const declared = declaredLink(input.app, input.link, input.checked)
 		const insert: SqlChange = {
 			sql: `INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at, link_mount, link_dimension, link_chain)
 				SELECT ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?
-				WHERE EXISTS (SELECT 1 FROM app_link_mounts WHERE app = ? AND mount = ? AND dimension = ?) ${issuingJob.sql}
+				WHERE ${declared.sql}
 				RETURNING id`,
 			binds: [
 				id,
@@ -138,10 +134,7 @@ export class CredentialRepository {
 				input.link.mount,
 				dimension,
 				JSON.stringify(input.link.chain),
-				input.app,
-				input.link.mount,
-				dimension,
-				...issuingJob.binds,
+				...declared.binds,
 			],
 		}
 		const inserted = this.writer.changed([insert], audit?.(id))
@@ -270,4 +263,38 @@ export class CredentialRepository {
 			binds: [unixNow(), principalId, ...keep],
 		}
 	}
+}
+
+/** What `issueLink` authorized against: the mount as it read it and, for a job, the job's declaration. */
+export interface CheckedLinkDeclaration {
+	readonly grants: readonly string[]
+	readonly issuedBy: string
+	readonly maxDays: number
+	readonly job?: { readonly name: string; readonly actions: readonly string[] }
+}
+
+/**
+ * The condition that the schema still declares `checked`: stored lists compare as the JSON the reconcile writes, and
+ * each value of the chain names the dimension the schema contains the previous one in, the last one none.
+ */
+function declaredLink(app: string, link: { mount: string; chain: Scope[] }, checked: CheckedLinkDeclaration): { sql: string; binds: unknown[] } {
+	const terms = [
+		'EXISTS (SELECT 1 FROM app_link_mounts WHERE app = ? AND mount = ? AND dimension = ? AND grants = ? AND issued_by = ? AND max_days = ?)',
+	]
+	const binds: unknown[] = [app, link.mount, link.chain[0]?.type ?? '', JSON.stringify(checked.grants), checked.issuedBy, checked.maxDays]
+	for (const [index, scope] of link.chain.entries()) {
+		const parent = link.chain[index + 1]
+		if (parent === undefined) {
+			terms.push('EXISTS (SELECT 1 FROM app_scopes WHERE app = ? AND scope_type = ? AND parent_scope IS NULL)')
+			binds.push(app, scope.type)
+		} else {
+			terms.push('EXISTS (SELECT 1 FROM app_scopes WHERE app = ? AND scope_type = ? AND parent_scope = ?)')
+			binds.push(app, scope.type, parent.type)
+		}
+	}
+	if (checked.job !== undefined) {
+		terms.push(`EXISTS (SELECT 1 FROM app_workloads WHERE app = ? AND kind = 'job' AND name = ? AND actions = ? AND issues = ?)`)
+		binds.push(app, checked.job.name, JSON.stringify(checked.job.actions), link.mount)
+	}
+	return { sql: terms.join(' AND '), binds }
 }

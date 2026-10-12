@@ -227,6 +227,7 @@ describe('Db.reconcileAppSchema — membership metadata and link mounts', () => 
 				expiresAt: Math.floor(Date.now() / 1000) + 60,
 				grants: [],
 				link: { mount: 'shared', chain: linkChain },
+				checked: { grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 },
 			})
 			if (id === null) throw new Error('the mount is gone')
 			return id
@@ -261,6 +262,7 @@ describe('Db.reconcileAppSchema — membership metadata and link mounts', () => 
 				expiresAt: Math.floor(Date.now() / 1000) + 60,
 				grants: [{ action: 'notes.read', scopeType: chain[0]?.type ?? '', scopeValue: chain[0]?.value ?? '' }],
 				link: { mount: 'shared', chain },
+				checked: { grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 },
 			})
 		expect(await write([{ type: 'workspace', value: 'w1' }])).toBeNull()
 		await h.repositories.appSchema.reconcileAppSchema({ ...vocabulary, links: [] })

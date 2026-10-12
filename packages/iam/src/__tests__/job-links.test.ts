@@ -5,9 +5,10 @@
 import { type AppSchema, type MembershipCaller, type MembershipFailure, parseAccessClaims, type Scope } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
+import { createIamRepositories, CredentialRepository } from '../db'
 import { assignMember, createScope, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from '../membership'
 import { mintFromKey } from '../tokens'
-import { createHarness, TEST_SIGNING_ENV } from './helpers/harness'
+import { createHarness, TEST_SIGNING_ENV, TestSqlDatabase } from './helpers/harness'
 import { APP, CALLER_ENV, INVITE_ENDPOINT, type MembershipFixture, membershipFixture, NOTES_SCHEMA } from './helpers/membership'
 
 const LINKS: AppSchema['links'] = {
@@ -180,5 +181,80 @@ describe('the schema declares what a job issues', () => {
 		expect(await status([{ kind: 'job', name: 'intake', actions: ['notes.share'], issues: 'shared' }])).toBe(400)
 		expect(await status([{ kind: 'job', name: 'intake', actions: ['notes.read'], issues: 'shared' }])).toBe(400)
 		expect(await status([{ kind: 'job', name: 'intake', actions: ['notes.read', 'notes.share'], issues: 'shared' }])).toBe(200)
+	})
+})
+
+/** A credential repository that runs `before` once, right before the next link is written: a reconcile in between. */
+class ReconcileBeforeWrite extends CredentialRepository {
+	before: (() => Promise<void>) | null = null
+
+	override async createLinkCredential(...args: Parameters<CredentialRepository['createLinkCredential']>): Promise<string | null> {
+		const before = this.before
+		this.before = null
+		await before?.()
+		return super.createLinkCredential(...args)
+	}
+}
+
+async function racingFixture() {
+	const h = createHarness()
+	const credentials = new ReconcileBeforeWrite(new TestSqlDatabase(h.sqlite))
+	const f = await membershipFixture(createIamRepositories(new TestSqlDatabase(h.sqlite), { credentials }))
+	const reconciled = await f.putSchema(SCHEMA)
+	if (reconciled.status !== 200) throw new Error(`schema refused: ${await reconciled.text()}`)
+	return { f, credentials, h }
+}
+
+describe('a reconcile between the checks and the write of a link', () => {
+	test("that shortens the mount's lifetime writes no link for the job", async () => {
+		const { f, credentials, h } = await racingFixture()
+		const job = await f.workload('job', 'intake')
+		const token = await job.token()
+		credentials.before = async () => {
+			const shorter = { ...LINKS, shared: { dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 1 } }
+			expect((await f.putSchema({ ...SCHEMA, links: shorter })).status).toBe(200)
+		}
+		expect(await issueLink(f.services, CALLER_ENV, f.ctx, { ...as(token), mount: 'shared', chain: CHAIN, days: 7 })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
+		expect(h.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM credentials WHERE link_mount IS NOT NULL').get()?.n).toBe(0)
+	})
+
+	test("that changes the mount's grants or the job's actions writes no link", async () => {
+		const { f, credentials } = await racingFixture()
+		const job = await f.workload('job', 'intake')
+		const token = await job.token()
+		credentials.before = async () => {
+			const wider = { ...LINKS, shared: { dimension: 'note', grants: ['notes.read', 'notes.write'], issuedBy: 'notes.share', maxDays: 30 } }
+			const workloads: AppSchema['workloads'] = [{
+				kind: 'job',
+				name: 'intake',
+				actions: ['notes.read', 'notes.share', 'notes.write'],
+				issues: 'shared',
+			}]
+			expect((await f.putSchema({ ...SCHEMA, links: wider, workloads })).status).toBe(200)
+		}
+		expect(await issueLink(f.services, CALLER_ENV, f.ctx, { ...as(token), mount: 'shared', chain: CHAIN, days: 7 })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
+		// With nothing changed in between, the same issuance is written.
+		expect((await issueLink(f.services, CALLER_ENV, f.ctx, { ...as(await job.token()), mount: 'shared', chain: CHAIN, days: 7 })).ok).toBe(true)
+	})
+
+	test("that changes the chain's containment writes no link for a person either", async () => {
+		const { f, credentials } = await racingFixture()
+		const owner = await f.person('owner')
+		await f.repositories.grants.createGrant({ principalId: owner.id, app: APP, permissions: ['notes.read', 'notes.share'] })
+		credentials.before = async () => {
+			const flat = SCHEMA.scopes.map((scope) => (scope.type === 'note' ? { type: 'note' } : scope))
+			const links = { shared: { dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 } }
+			expect((await f.putSchema({ ...SCHEMA, scopes: flat, links })).status).toBe(200)
+		}
+		expect(await issueLink(f.services, CALLER_ENV, f.ctx, { ...as(await owner.token()), mount: 'shared', chain: CHAIN, days: 7 })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
 	})
 })

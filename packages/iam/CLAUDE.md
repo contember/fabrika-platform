@@ -172,7 +172,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`app_workloads.issues`, reconciled from the approved artifact's `issues`): it issues only links of that mount,
   with its declared actions app-wide (never more than its token carries), and revokes only links it issued of that
   mount. Without the declaration, for another mount, another app, and for every webhook or connector token, the answer
-  is a refusal. `createLinkCredential` inserts a job's link only while the declaration still names the mount. An
+  is a refusal. `createLinkCredential` inserts a job's link only while the job's whole checked declaration still holds. An
   issuing job is app-wide for its mount: the link is bound to one object, the job is not. `apiKeys.list`, `rotate` and
   `revoke` do not see workload principals.
 - **AN APPLICATION WITHOUT A BINDING CALLS `/membership/<method>`, AND ITS KEY ONLY PINS THE APPLICATION** (ADR-0022
@@ -270,8 +270,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   at most the mount's `maxDays`, and requires the issuer to hold `issuedBy` and every granted action on
   some link of the chain; the grants are frozen on the object. Its token carries `link: { mount, chain }`
   and no `ptype`, and the framework re-checks the chain per request. `createLinkCredential` locks the
-  mount row and inserts only while the mount still exists, so a reconcile removing it either makes the
-  write insert nothing or revokes the committed key. The issuer or a holder of
+  mount row and inserts only while the schema still declares exactly what was checked (`CheckedLinkDeclaration`: the
+  mount's dimension, grants, `issuedBy` and `maxDays`, the chain's containment, and an issuing job's actions and
+  `issues`), so a reconcile in between either makes the write insert nothing (`not_allowed`) or comes after the
+  committed key, which it revokes if it removes or moves the mount. The issuer or a holder of
   `members.manage` on a value of the chain revokes it (a job only as its issuer); a reconcile that removes the mount, or moves it
   to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id

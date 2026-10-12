@@ -273,8 +273,40 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 			expiresAt: Math.floor(Date.now() / 1000) + 60,
 			grants: [{ action: 'notes.read', scopeType: 'note', scopeValue: 'n1' }],
 			link: { mount: 'shared', chain: [{ type: 'note', value: 'n1' }, scope] },
+			checked: { grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 },
 		})
 		await removal
+		expect(issued).toBeNull()
+		expect((await f.putSchema(NOTES_SCHEMA)).status).toBe(200)
+	})
+
+	test('a link issued while a reconcile narrows its mount is written only under the declaration it was checked against', async () => {
+		const f = await membershipFixture(repositories)
+		fixtureSeq += 1
+		const owner = await f.person(`narrow-owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		if (pool === null) throw new Error('fixture')
+		// A reconcile that rewrites the mount with a shorter lifetime and holds its transaction open.
+		const narrowing = pool.batch([
+			pool.prepare("DELETE FROM app_link_mounts WHERE app = ? AND mount = 'shared'").bind(APP),
+			pool.prepare(
+				`INSERT INTO app_link_mounts (app, mount, dimension, grants, issued_by, max_days) VALUES (?, 'shared', 'note', '["notes.read"]', 'notes.share', 1)`,
+			)
+				.bind(APP),
+			pool.prepare('SELECT pg_sleep(0.4)'),
+		])
+		await Bun.sleep(100)
+		const issued = await concurrent.credentials.createLinkCredential({
+			tokenHash: `narrow-${fixtureSeq}`,
+			label: 'link:shared',
+			app: APP,
+			issuedBy: owner.id,
+			expiresAt: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+			grants: [{ action: 'notes.read', scopeType: 'note', scopeValue: 'n1' }],
+			link: { mount: 'shared', chain: [{ type: 'note', value: 'n1' }, scope] },
+			checked: { grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 },
+		})
+		await narrowing
 		expect(issued).toBeNull()
 		expect((await f.putSchema(NOTES_SCHEMA)).status).toBe(200)
 	})
