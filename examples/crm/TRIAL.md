@@ -2,8 +2,10 @@
 
 Inputs for part 3 of WU11 in `docs/sprints/sprint-2026-10-11-paved-road-framework.md`. A trial agent sees only the
 `fabrika-app` skill files of `@fabrika/app` (`packages/app/skill/`) and a copy of `examples/crm` with one endpoint
-group removed. It writes that group from the brief below. The pass: at most 3 tsc and checker runs per group, no
-edited generated file, and no loosened access to make a test pass. Record every tsc and checker run.
+group removed. It writes that group from the brief below. The pass: at most 3 tsc and checker runs per group in total
+(tsc and `fabrika-check` added together), no edited generated file, and no loosened access to make a test pass. Record
+every tsc and checker run, and how many of them failed. Regenerating files with `fabrika db codegen` or `fabrika db
+test-scaffold` is the skill's loop, not an edit.
 
 ## The groups
 
@@ -121,7 +123,7 @@ that fails halfway and starts again must not mark a task twice or fail on one it
 People record what happened with a contact or a deal: a note, a call, an e-mail or a meeting, with a text of up to
 5000 characters. Salespeople and managers record them. Everyone in the org reads the history of one contact or one
 deal, newest first, a page at a time; each entry shows its kind, its text, who wrote it and when. Nobody edits or
-deletes an entry.
+deletes an entry; it goes only with the contact or deal it belongs to.
 
 ### E — Orgs and people
 
@@ -131,7 +133,9 @@ member of that org may see its people.
 
 ## Judging a run
 
-- **Runs.** Count each `tsc --noEmit` and each `fabrika-check` the agent starts for the group. Pass: at most 3.
+- **Runs.** Count each `tsc --noEmit` and each `fabrika-check` the agent starts for the group, both tools together.
+  Pass: at most 3 in total. Report the number of failing runs beside it (a run with an error or a refusal); it is a
+  metric, not a pass criterion.
 - **Generated files.** `git diff` of the copy shows no hand edit of `src/db/schema.generated.ts` or of a generated
   test: `fabrika-check`'s `generated-test-hash` refuses one, and `bunx fabrika db codegen --verify` the schema.
 - **Access.** Compare the group's endpoint table with the reference: `compileContract` of both, or Control's
