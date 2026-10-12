@@ -14,6 +14,7 @@ import {
 	parseRegistryPackageName,
 	parseReleaseManifest,
 	stagedManifest,
+	stagedSkill,
 } from '../release'
 
 const publicManifest = {
@@ -292,4 +293,17 @@ describe('release dependency graph', () => {
 			}
 		})
 	}
+})
+
+describe('a staged agent skill', () => {
+	test('carries the released version in its frontmatter, and nothing else changes', async () => {
+		const source = await readFile(resolve(import.meta.dir, '../../packages/app/skill/SKILL.md'), 'utf8')
+		const staged = stagedSkill(source, '1.2.3')
+		expect(staged).toContain('\nversion: 1.2.3\n')
+		expect(staged.replace('\nversion: 1.2.3\n', '')).toBe(source.replace(/\nversion: \S+\n/, ''))
+	})
+
+	test('refuses a skill without a version', () => {
+		expect(() => stagedSkill('---\nname: x\n---\n\n# x\n', '1.2.3')).toThrow('must carry a version')
+	})
 })

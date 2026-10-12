@@ -294,6 +294,14 @@ export const stagedManifest = (item: PackageInfo, version: string, publicNames: 
 	return manifest
 }
 
+const SKILL_VERSION_LINE = /^(---\n[\s\S]*?\nversion: )\S+(\n[\s\S]*?\n---\n)/
+
+/** An agent skill's `SKILL.md` as a release ships it: its frontmatter `version` is the released version. */
+export const stagedSkill = (text: string, version: string): string => {
+	if (!SKILL_VERSION_LINE.test(text)) throw new Error('skill/SKILL.md must carry a version in its frontmatter')
+	return text.replace(SKILL_VERSION_LINE, `$1${version}$2`)
+}
+
 const tarballFilename = (name: string, version: string): string => `${name.replace(/^@/, '').replaceAll('/', '-')}-${version}.tgz`
 
 const preparesRelease = (manifest: Record<string, unknown>): boolean => {
@@ -464,6 +472,8 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 				filter: (source) => stagesPath(source, includeDist),
 			})
 			await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, options.version, publicNames), null, '\t')}\n`)
+			const skillFile = join(stagingDirectory, 'skill', 'SKILL.md')
+			if (await Bun.file(skillFile).exists()) await writeFile(skillFile, stagedSkill(await readFile(skillFile, 'utf8'), options.version))
 			const filename = tarballFilename(item.name, options.version)
 			const path = join(options.artifactsDirectory, filename)
 			await rm(path, { force: true })
