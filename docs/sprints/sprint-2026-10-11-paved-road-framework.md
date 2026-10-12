@@ -1376,3 +1376,14 @@ ADR-0022 or ADR-0050.
   still reach `window`, and `checkFetch`, `eval` and `innerHTML` read through it. No example or fixture used a global
   object in `src/`. A schema const and the methods applied to it are one chain for the string order rule
   (`stringStepProblem`), refused by the reader at the call that adds the check.
+- **WU14 — the proxy decision did not change.** It already treats every row with `requirement: null` alike, so a
+  `public-spa` row needed only the kind in `AnonymousEndpointKind`, the proxy manifest parser and the artifact schema;
+  no existing row's rules or digest changed. The mount artifact stays `{ kind: 'spa', prefix, dir }`: the row kind
+  carries publicness, so the diff sees it on the endpoint (`becomes public` / `for anyone, without signing in`).
+- **WU14 — what a public SPA at `/` takes.** It answers every `GET` no more specific row serves and no reserved prefix
+  covers, so `GET /app` (no trailing slash) beside a member SPA at `/app/*` now gets the public page instead of 403.
+  No row narrows; the new row's widening line is what the approver sees. Public → member classifies as a widening
+  (any kind change does), which is conservative.
+- **WU14 — `{ public: true, member: true }` passes the types** (an object literal is structurally a `MemberAccess`);
+  the build and the reader refuse it. The reader-forms fixture of `differential.test.ts` does not reach `public-spa`
+  (shared file, left alone); `packages/check/src/__tests__/public-spa.test.ts` compares reader and runtime for it.
