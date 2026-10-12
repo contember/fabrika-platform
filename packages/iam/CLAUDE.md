@@ -167,7 +167,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   through, `getActiveGrantsForApp`, excludes workload principals in its SQL; `createGrant` and
   `createRoleGrantUnlessHeld` throw `WorkloadGrantError` for one, and `grants.create` answers 409 before anything else.
   A workload token is refused before any permission is resolved: by `resolveAdmin`'s token branch, by `resolveCaller`
-  for every management and membership operation. `apiKeys.list`, `rotate` and `revoke` do not see workload principals.
+  for every management and membership operation. The one exception is `resolveLinkCaller`, for `issueLink` and
+  `revokeLink` only: it admits a **job**, which `membership.ts` then holds to its current declaration
+  (`app_workloads.issues`, reconciled from the approved artifact's `issues`): it issues only links of that mount,
+  with its declared actions app-wide (never more than its token carries), and revokes only links it issued of that
+  mount. Without the declaration, for another mount, another app, and for every webhook or connector token, the answer
+  is a refusal. `createLinkCredential` inserts a job's link only while the declaration still names the mount. An
+  issuing job is app-wide for its mount: the link is bound to one object, the job is not. `apiKeys.list`, `rotate` and
+  `revoke` do not see workload principals.
 - **AN APPLICATION WITHOUT A BINDING CALLS `/membership/<method>`, AND ITS KEY ONLY PINS THE APPLICATION** (ADR-0022
   rule 6, `src/membership-http.ts`, mounted by the Bun composition only). The bearer is the environment's membership
   transport key (`membership_transport_keys`, hash only, no `credentials` row, so no `px_` path finds it and it mints
@@ -265,7 +272,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   and no `ptype`, and the framework re-checks the chain per request. `createLinkCredential` locks the
   mount row and inserts only while the mount still exists, so a reconcile removing it either makes the
   write insert nothing or revokes the committed key. The issuer or a holder of
-  `members.manage` on a value of the chain revokes it; a reconcile that removes the mount, or moves it
+  `members.manage` on a value of the chain revokes it (a job only as its issuer); a reconcile that removes the mount, or moves it
   to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
   `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.

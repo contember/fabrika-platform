@@ -37,7 +37,7 @@ import {
 	type Scope,
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
-import { resolveCaller } from './auth'
+import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
 import { contractGrantProblem } from './contract-rules'
 import {
 	type AppScopeRow,
@@ -100,7 +100,10 @@ type CallerOutcome = { ok: true; caller: MemberCaller } | MembershipFailure
  * principal: a workload creates no scope and manages no member, so a form plus a job cannot sign anyone up.
  */
 async function resolveMemberCaller(services: Services, env: CallerEnv, input: MembershipCaller, userOnly: boolean): Promise<CallerOutcome> {
-	const resolution = await resolveCaller(services, env, input)
+	return memberCallerOf(services, input, await resolveCaller(services, env, input), userOnly)
+}
+
+async function memberCallerOf(services: Services, input: MembershipCaller, resolution: CallerResolution, userOnly: boolean): Promise<CallerOutcome> {
 	if (!resolution.ok) {
 		return { ok: false, reason: resolution.reason }
 	}
@@ -122,6 +125,53 @@ async function resolveMemberCaller(services: Services, env: CallerEnv, input: Me
 	const live = await resolvePermissionsAt(services, principal, verifiedApp)
 	const permissions = caller.permissions.filter((entry) => permits(live, entry.action, entry.scope ?? undefined))
 	return { ok: true, caller: { principal, permissions, app: verifiedApp } }
+}
+
+/**
+ * The caller of a link operation. A job is admitted only while the app's schema declares that it issues a link mount
+ * (`app_workloads.issues`, reconciled from the approved artifact): `job` names it and that mount, null for a member
+ * caller. A job's permissions are its declared actions, app-wide, never more than its token carries.
+ */
+interface IssuingJob {
+	readonly name: string
+	readonly issues: string
+}
+
+type LinkCallerOutcome = { ok: true; caller: MemberCaller; job: IssuingJob | null } | MembershipFailure
+
+async function resolveLinkOperationCaller(services: Services, env: CallerEnv, input: MembershipCaller): Promise<LinkCallerOutcome> {
+	const resolution = await resolveLinkCaller(services, env, input)
+	if (!resolution.ok) {
+		return { ok: false, reason: resolution.reason }
+	}
+	const { verifiedApp } = resolution
+	const { type, ...caller } = resolution.caller
+	if (type !== 'job') {
+		const member = await memberCallerOf(
+			services,
+			input,
+			{ ok: true, caller: { ...caller, ...(type === undefined ? {} : { type }) }, verifiedApp },
+			false,
+		)
+		return member.ok ? { ...member, job: null } : member
+	}
+	const principal = await services.repositories.principals.getPrincipalById(caller.id)
+	if (principal === null) {
+		return { ok: false, reason: 'unknown_principal' }
+	}
+	if (principalStatus(principal) === 'disabled') {
+		return { ok: false, reason: 'disabled' }
+	}
+	const workload = await services.repositories.workloads.getByPrincipal(principal.id)
+	if (workload === null || workload.kind !== 'job' || workload.app !== verifiedApp) {
+		return NOT_ALLOWED
+	}
+	const declaration = await services.repositories.workloads.declaration(workload.app, 'job', workload.name)
+	if (declaration === null || declaration.issues === null) {
+		return NOT_ALLOWED
+	}
+	const permissions = caller.permissions.filter((entry) => entry.scope === null && declaration.actions.includes(entry.action))
+	return { ok: true, caller: { principal, permissions, app: verifiedApp }, job: { name: workload.name, issues: declaration.issues } }
 }
 
 function scopeProblem(scope: Scope): string | null {
@@ -637,12 +687,16 @@ async function chainProblem(services: Services, app: string, dimension: string, 
 /**
  * Issue a share link: an anonymous `px_` key bound to the app, the mount and the whole chain, with the
  * mount's grants frozen on the object. The caller holds the mount's `issuedBy` and every grant on some
- * link of the chain — the delegation rule of every key IAM issues.
+ * link of the chain — the delegation rule of every key IAM issues. A job issues only for the mount its
+ * declaration names, and holds those actions app-wide: it issues for any object of the mount's dimension.
  */
 export async function issueLink(services: Services, env: CallerEnv, ctx: RequestContext, input: IssueLinkInput): Promise<IssueLinkResult> {
-	const resolved = await resolveMemberCaller(services, env, input, false)
+	const resolved = await resolveLinkOperationCaller(services, env, input)
 	if (!resolved.ok) return resolved
-	const { caller } = resolved
+	const { caller, job } = resolved
+	if (job !== null && job.issues !== input.mount) {
+		return NOT_ALLOWED
+	}
 	const mount = await services.repositories.appSchema.getLinkMount(caller.app, input.mount)
 	if (mount === null) {
 		return invalid(`unknown link mount '${input.mount}'`)
@@ -669,6 +723,7 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 		expiresAt,
 		grants: grants.map((action) => ({ action, scopeType: object.type, scopeValue: object.value })),
 		link: { mount: mount.mount, chain: input.chain.map((scope) => ({ type: scope.type, value: scope.value })) },
+		...(job === null ? {} : { issuingJob: job.name }),
 	}, (credentialId) =>
 		memberEvent(caller, input.requestId, {
 			action: 'iam.link.issue',
@@ -677,22 +732,27 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 			metadata: { mount: mount.mount, chain: input.chain, days: input.days },
 		}))
 	if (id === null) {
-		// A reconcile removed the mount between the checks above and the write.
-		return invalid(`unknown link mount '${input.mount}'`)
+		// A reconcile removed the mount, or the job's declaration of it, between the checks above and the write.
+		return job === null ? invalid(`unknown link mount '${input.mount}'`) : NOT_ALLOWED
 	}
 	return { ok: true, key, id, expiresAt }
 }
 
-/** Revoke a link: by its issuer, or by a holder of `members.manage` on a value of its chain. */
+/**
+ * Revoke a link: by its issuer, or by a holder of `members.manage` on a value of its chain. A job revokes only a link
+ * it issued, of the mount its declaration still names.
+ */
 export async function revokeLink(services: Services, env: CallerEnv, ctx: RequestContext, input: RevokeLinkInput): Promise<RevokeLinkResult> {
-	const resolved = await resolveMemberCaller(services, env, input, false)
+	const resolved = await resolveLinkOperationCaller(services, env, input)
 	if (!resolved.ok) return resolved
-	const { caller } = resolved
+	const { caller, job } = resolved
 	const credential = await services.repositories.credentials.getCredentialById(input.id)
 	if (credential === null || credential.app !== caller.app || credential.link_mount === null || credential.link_chain === null) {
 		return NOT_FOUND
 	}
-	if (credential.issued_by !== caller.principal.id) {
+	if (job !== null) {
+		if (credential.issued_by !== caller.principal.id || credential.link_mount !== job.issues) return NOT_ALLOWED
+	} else if (credential.issued_by !== caller.principal.id) {
 		let manager = false
 		for (const scope of parseStoredChain(credential.link_chain) ?? []) {
 			const dimension = await services.repositories.appSchema.getScope(caller.app, scope.type)

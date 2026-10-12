@@ -161,6 +161,11 @@ export interface AppWorkloadDef {
 	kind: WorkloadKind
 	name: string
 	actions: string[]
+	/**
+	 * A job only: the link mount whose links it may issue (`issueLink`) and revoke, its own only. Its actions hold the
+	 * mount's `issuedBy` and every grant, app-wide, so the job issues for any object of the mount's dimension.
+	 */
+	issues?: string
 }
 
 /**

@@ -12,12 +12,22 @@ export interface WorkloadPrincipalRow {
 	name: string
 }
 
-/** One workload a schema reconcile declared (the `app_workloads` table). `actions` is a JSON array of exact actions. */
+/**
+ * One workload a schema reconcile declared (the `app_workloads` table). `actions` is a JSON array of exact actions;
+ * `issues` the link mount a job may issue links of, or null.
+ */
 export interface AppWorkloadRow {
 	app: string
 	kind: WorkloadKind
 	name: string
 	actions: string
+	issues: string | null
+}
+
+/** What the app's schema declares for one workload now. */
+export interface WorkloadDeclaration {
+	actions: string[]
+	issues: string | null
 }
 
 /** A workload's principal is a `service` row under this external id, which the (type, external_id) index keeps unique. */
@@ -110,10 +120,15 @@ export class WorkloadRepository {
 
 	/** The workload's declared actions, or null when the app's schema declares no such workload. */
 	async declaredActions(app: string, kind: WorkloadKind, name: string): Promise<string[] | null> {
+		return (await this.declaration(app, kind, name))?.actions ?? null
+	}
+
+	/** The workload's declaration, or null when the app's schema declares no such workload. */
+	async declaration(app: string, kind: WorkloadKind, name: string): Promise<WorkloadDeclaration | null> {
 		const row = await this.db
 			.prepare('SELECT * FROM app_workloads WHERE app = ? AND kind = ? AND name = ?')
 			.bind(app, kind, name)
 			.first<AppWorkloadRow>()
-		return row === null ? null : parseJsonStringArray(row.actions)
+		return row === null ? null : { actions: parseJsonStringArray(row.actions), issues: row.issues }
 	}
 }

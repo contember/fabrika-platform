@@ -1,4 +1,4 @@
-import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, type PrincipalType, type TokenPrincipalType } from '@fabrika/auth-core'
 import type { SessionRow } from './db'
 import type { Env } from './env'
 import { hashToken, timingSafeEqualHex } from './secret'
@@ -51,22 +51,57 @@ export const PROVISIONING_ADMIN_ID = 'provisioning-admin'
 // `resolveCredential` core as `mintFromKey`). There is no Cloudflare Access JWT anymore.
 
 /** The resolved caller. `type` is absent for an ANONYMOUS credential (a share link). */
-export interface ResolvedCaller {
+export interface ResolvedCaller<T extends TokenPrincipalType = PrincipalType> {
 	id: string
-	type?: PrincipalType
+	type?: T
 	label: string | null
 	permissions: PermissionEntry[]
 }
 
-export type CallerResolution =
-	| { ok: true; caller: ResolvedCaller; verifiedApp: string }
-	| { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' }
+type CallerRefusal = { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' }
 
-export async function resolveCaller(
-	services: Services,
-	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
-	input: { app: string; credential: string | null; requestId: string },
-): Promise<CallerResolution> {
+export type CallerResolution<T extends TokenPrincipalType = PrincipalType> =
+	| { ok: true; caller: ResolvedCaller<T>; verifiedApp: string }
+	| CallerRefusal
+
+type CallerEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>
+type CallerInput = { app: string; credential: string | null; requestId: string }
+
+const INVALID_TOKEN: CallerRefusal = { ok: false, reason: 'invalid_token' }
+
+/**
+ * The caller of a management or membership operation. A workload key or token calls none: it only mints for its own
+ * application (a job's link operations resolve through `resolveLinkCaller`).
+ */
+export async function resolveCaller(services: Services, env: CallerEnv, input: CallerInput): Promise<CallerResolution> {
+	const resolution = await resolveAnyCaller(services, env, input)
+	if (!resolution.ok) {
+		return resolution
+	}
+	const { type, ...caller } = resolution.caller
+	if (isWorkloadKind(type)) {
+		return INVALID_TOKEN
+	}
+	return { ok: true, caller: { ...caller, ...(type === undefined ? {} : { type }) }, verifiedApp: resolution.verifiedApp }
+}
+
+/**
+ * The caller of `issueLink` or `revokeLink`: a member caller, or a job (`type: 'job'`), which IAM then holds to the link
+ * mount its current declaration names. A webhook or a connector key calls neither.
+ */
+export async function resolveLinkCaller(services: Services, env: CallerEnv, input: CallerInput): Promise<CallerResolution<PrincipalType | 'job'>> {
+	const resolution = await resolveAnyCaller(services, env, input)
+	if (!resolution.ok) {
+		return resolution
+	}
+	const { type, ...caller } = resolution.caller
+	if (type === 'webhook' || type === 'app') {
+		return INVALID_TOKEN
+	}
+	return { ok: true, caller: { ...caller, ...(type === undefined ? {} : { type }) }, verifiedApp: resolution.verifiedApp }
+}
+
+async function resolveAnyCaller(services: Services, env: CallerEnv, input: CallerInput): Promise<CallerResolution<TokenPrincipalType>> {
 	if (input.credential === null) {
 		return { ok: false, reason: 'missing_token' }
 	}
@@ -91,16 +126,12 @@ export async function resolveCaller(
 
 		const cred = await services.repositories.credentials.getActiveCredentialByHash(presentedHash)
 		if (!cred) {
-			return { ok: false, reason: 'invalid_token' }
+			return INVALID_TOKEN
 		}
 		const eff = await resolveCredential(services, cred, input.app)
 		if (!eff.ok) {
 			// A credential presented to the wrong app is indistinguishable from one that does not exist.
 			return { ok: false, reason: eff.reason === 'wrong_app' ? 'invalid_token' : eff.reason }
-		}
-		// A workload key calls no management or membership operation: it only mints for its own application.
-		if (isWorkloadKind(eff.type)) {
-			return { ok: false, reason: 'invalid_token' }
 		}
 		return {
 			ok: true,
@@ -116,8 +147,8 @@ export async function resolveCaller(
 	// ARE the caller's resolved permissions for that app (the same snapshot the SDK's `can()` trusts).
 	const signer = await getSigner(env)
 	const claims = await verifyAccessToken(signer, input.credential, { issuer: services.config.issuer, audience: input.app })
-	if (!claims || isWorkloadKind(claims.ptype)) {
-		return { ok: false, reason: 'invalid_token' }
+	if (!claims) {
+		return INVALID_TOKEN
 	}
 	return {
 		ok: true,

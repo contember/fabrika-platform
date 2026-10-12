@@ -109,15 +109,23 @@ export class CredentialRepository {
 			expiresAt: number
 			grants: { action: string; scopeType: string; scopeValue: string }[]
 			link: { mount: string; chain: Scope[] }
+			/** A job that issues: the write inserts only while the app's schema still declares that it issues this mount. */
+			issuingJob?: string
 		},
 		audit?: (credentialId: string) => AuditEventInput,
 	): Promise<string | null> {
 		const id = uuidv7()
 		const dimension = input.link.chain[0]?.type ?? ''
+		const issuingJob = input.issuingJob === undefined
+			? { sql: '', binds: [] }
+			: {
+				sql: `AND EXISTS (SELECT 1 FROM app_workloads WHERE app = ? AND kind = 'job' AND name = ? AND issues = ?)`,
+				binds: [input.app, input.issuingJob, input.link.mount],
+			}
 		const insert: SqlChange = {
 			sql: `INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at, link_mount, link_dimension, link_chain)
 				SELECT ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?
-				WHERE EXISTS (SELECT 1 FROM app_link_mounts WHERE app = ? AND mount = ? AND dimension = ?)
+				WHERE EXISTS (SELECT 1 FROM app_link_mounts WHERE app = ? AND mount = ? AND dimension = ?) ${issuingJob.sql}
 				RETURNING id`,
 			binds: [
 				id,
@@ -133,6 +141,7 @@ export class CredentialRepository {
 				input.app,
 				input.link.mount,
 				dimension,
+				...issuingJob.binds,
 			],
 		}
 		const inserted = this.writer.changed([insert], audit?.(id))

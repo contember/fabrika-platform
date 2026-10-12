@@ -41,7 +41,13 @@ const delegationSchema = z.object({
 const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
 const APP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 const workloadSchema = z.discriminatedUnion('kind', [
-	z.object({ kind: z.enum(['job', 'webhook']), name: z.string().regex(WORKLOAD_NAME), actions: z.array(z.string().min(1)) }),
+	z.object({
+		kind: z.literal('job'),
+		name: z.string().regex(WORKLOAD_NAME),
+		actions: z.array(z.string().min(1)),
+		issues: z.string().min(1).optional(),
+	}),
+	z.object({ kind: z.literal('webhook'), name: z.string().regex(WORKLOAD_NAME), actions: z.array(z.string().min(1)) }),
 	z.object({ kind: z.literal('app'), name: z.string().regex(APP_ID), actions: z.array(z.string().min(1)) }),
 ])
 
@@ -123,6 +129,20 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 		if (workloads.has(key)) issues.push({ path: ['workloads', index, 'name'], message: `workload ${quote(key)} is declared twice` })
 		workloads.add(key)
 		for (const [position, action] of workload.actions.entries()) exactAction(['workloads', index, 'actions', position], action)
+		if (workload.kind === 'job' && workload.issues !== undefined) {
+			const link = Object.hasOwn(schema.links ?? {}, workload.issues) ? schema.links?.[workload.issues] : undefined
+			if (link === undefined) {
+				issues.push({
+					path: ['workloads', index, 'issues'],
+					message: `job ${quote(workload.name)} issues an undeclared link mount: ${quote(workload.issues)}`,
+				})
+			} else if (![link.issuedBy, ...link.grants].every((action) => workload.actions.includes(action))) {
+				issues.push({
+					path: ['workloads', index, 'issues'],
+					message: `job ${quote(workload.name)} issues links of ${quote(workload.issues)} without holding its issuedBy and every grant`,
+				})
+			}
+		}
 	}
 	for (const [endpoint, delegation] of Object.entries(schema.delegations ?? {})) {
 		const dimension = dimensions.get(delegation.dimension)

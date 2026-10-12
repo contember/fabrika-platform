@@ -255,7 +255,7 @@ export class AppSchemaRepository {
 		contract?: boolean
 		links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
 		delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
-		workloads?: { kind: WorkloadKind; name: string; actions: string[] }[]
+		workloads?: { kind: WorkloadKind; name: string; actions: string[]; issues?: string }[]
 	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -363,8 +363,8 @@ export class AppSchemaRepository {
 		for (const workload of input.workloads ?? []) {
 			statements.push(
 				this.db
-					.prepare('INSERT INTO app_workloads (app, kind, name, actions) VALUES (?, ?, ?, ?)')
-					.bind(app, workload.kind, workload.name, JSON.stringify(workload.actions)),
+					.prepare('INSERT INTO app_workloads (app, kind, name, actions, issues) VALUES (?, ?, ?, ?, ?)')
+					.bind(app, workload.kind, workload.name, JSON.stringify(workload.actions), workload.issues ?? null),
 			)
 		}
 		// A workload no longer declared keeps no key: its keys are revoked in the same transaction.

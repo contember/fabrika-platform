@@ -1,4 +1,4 @@
-import { type AppSchema, buildAccessClaims } from '@fabrika/auth-core'
+import { type AppSchema, buildAccessClaims, type WorkloadKind } from '@fabrika/auth-core'
 import type { Scope } from '@fabrika/auth-core'
 import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
 import type { SqlDatabase } from '@fabrika/platform'
@@ -14,8 +14,10 @@ import {
 import type { RequestContext } from '../../env'
 import type { InvitationAcceptance } from '../../repositories/membership'
 import { resolvePermissionsAt } from '../../resolve'
+import { generateToken, hashToken } from '../../secret'
 import type { Services } from '../../services'
 import { getSigner } from '../../signing'
+import { mintFromKey } from '../../tokens'
 import { adminTokenFor, makeServicesFor, TEST_SIGNING_ENV } from './harness'
 
 // A multi-tenant application for the membership witnesses (ADR-0012 §6), reconciled
@@ -122,11 +124,20 @@ export async function mintedToken(services: Services, principal: PrincipalRow, a
 	}))
 }
 
+/** A job's or a webhook's principal, its `px_` key, and the token IAM signs from that key now. */
+export interface Workload {
+	readonly id: string
+	readonly key: string
+	token(): Promise<string>
+}
+
 export interface MembershipFixture {
 	readonly repositories: IamRepositories
 	readonly services: Services
 	readonly ctx: PendingWork
 	person(name: string): Promise<Person>
+	/** A workload key, issued as Control issues it (`workloads.issueKey`). */
+	workload(kind: WorkloadKind, name: string): Promise<Workload>
 	putSchema(schema: AppSchema): Promise<Response>
 }
 
@@ -161,6 +172,38 @@ export async function membershipFixture(repositories: IamRepositories, options: 
 		async person(name: string): Promise<Person> {
 			const principal = await repositories.principals.createUser(`sub-${name}`, `${name}@example.test`)
 			return { id: principal.id, token: (app = APP) => mintedToken(services, principal, app) }
+		},
+		async workload(kind: WorkloadKind, name: string): Promise<Workload> {
+			const key = `px_${generateToken()}`
+			const id = await repositories.workloads.issueKey(
+				{
+					app: APP,
+					kind,
+					name,
+					credentialId: crypto.randomUUID(),
+					tokenHash: await hashToken(key),
+					issuedBy: admin.id,
+					expiresAt: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+					keep: null,
+				},
+				{
+					requestId: 'req-workload-key',
+					principalId: admin.id,
+					principalLabel: 'admin',
+					app: APP,
+					action: 'iam.workload.key.issue',
+					resourceType: 'principal',
+				},
+			)
+			return {
+				id,
+				key,
+				async token() {
+					const { result: minted } = await mintFromKey(services, TEST_SIGNING_ENV, { app: APP, key, requestId: 'req-workload' })
+					if (!minted.ok) throw new Error(`no workload token: ${minted.reason}`)
+					return minted.token
+				},
+			}
 		},
 	}
 }

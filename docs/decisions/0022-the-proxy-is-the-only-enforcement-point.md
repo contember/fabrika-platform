@@ -261,7 +261,12 @@ A workload token carries its kind in `ptype` and names its workload in `workload
 webhook's name, or for `app` the consuming application's id. `callerOf` maps `app` to `app:<workload>`
 and `job` and `webhook` to no caller; `callerAdmittedAt` admits `app:<id>` only under
 `/__fabrika/connect/`. The caller `machine` refuses a workload token too, and neither `@fabrika/auth` nor
-IAM's management and membership operations accept one. IAM stores a workload principal as a `service`
+IAM's management and membership operations accept one, with one exception: a **job** that the approved contract
+declares `issues: '<link mount>'` calls `issueLink` for that mount and `revokeLink` for a link it issued. The schema
+reconcile records the mount with the job (`AppSchema.workloads[].issues`, from the approved artifact); IAM reads that
+declaration at every call and refuses a job without it, another mount, another application, and every webhook or
+connector token. The job holds the mount's `issuedBy` and grants app-wide, so it issues for any object of the
+mount's dimension: the link is bound to one object, the job is not. IAM stores a workload principal as a `service`
 row whose `workload_principals` row names its kind. A workload key resolves to exactly the actions the
 reconciled schema declares for the workload (`AppSchema.workloads`, app-wide), never to a grant, and a
 reconcile that no longer declares the workload revokes its keys. Control issues one key per job and per
@@ -446,7 +451,7 @@ decision, and the proxy's decision never replaces them.
 
 **Invariant: an application issues no credentials.** `@fabrika/auth` issues and redeems nothing.
 IAM issues every `px_` credential: share links on an application's request, checked against its
-caller's live permissions ([ADR-0012](0012-fabrika-app-runtime.md)), share links and API keys from
+caller's live permissions or, for a job, its approved declaration ([ADR-0012](0012-fabrika-app-runtime.md)), share links and API keys from
 its admin surface, machine keys through `fabrika control key issue`, a job's and a webhook's key and an application
 environment's membership transport key through Control's reconcile, builder credentials through device authorization
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)
