@@ -199,19 +199,19 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		signal: AbortSignal,
 		itemSchema: z.ZodType<Item, z.ZodTypeDef, unknown>,
 	): Promise<Item[]> => {
-		const pageSchema = z.object({ list: z.array(itemSchema), totalCount: z.number().int().nonnegative() })
+		const pageSchema = z.object({ list: z.array(itemSchema), total: z.number().int().nonnegative() })
 		const items: Item[] = []
 		let offset = 0
 		while (true) {
 			const separator = path.includes('?') ? '&' : '?'
 			const payload = await request(label, 'GET', `${path}${separator}limit=${PAGE_SIZE}&offset=${offset}`, { signal })
-			const { list: page, totalCount } = readResponse(label, pageSchema, payload)
+			const { list: page, total } = readResponse(label, pageSchema, payload)
 			items.push(...page)
-			if (items.length >= totalCount) {
+			if (items.length >= total) {
 				return items
 			}
 			if (page.length === 0) {
-				throw new Error(`zerops: ${label} ended before totalCount`)
+				throw new Error(`zerops: ${label} ended before total`)
 			}
 			offset += page.length
 		}
