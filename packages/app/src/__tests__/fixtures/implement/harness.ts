@@ -230,11 +230,11 @@ export async function appToken(consumer: string, perms: PermissionEntry[], audie
 }
 
 /** A share-link token: no principal type, bound to `mount` and `chain` (the object first), as IAM mints from a link key. */
-export async function linkToken(perms: PermissionEntry[], link: LinkTokenClaims): Promise<string> {
+export async function linkToken(perms: PermissionEntry[], link: LinkTokenClaims, audience = APP_ID): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
 	const claims = buildAccessClaims({
 		iss: ISSUER,
-		app: APP_ID,
+		app: audience,
 		subject: 'link-credential-1',
 		label: null,
 		permissions: perms,
