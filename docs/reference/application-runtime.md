@@ -411,6 +411,9 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
   capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
   a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty — with each
   value a bound parameter. A table the capability does not reach is refused, and a fragment of another site is refused.
+  The fragment must be a conjunct: alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
+  level holds no OR (`where (<filter>) and ${…}`); any interpolation inside a literal, a quoted name, a dollar body or a
+  comment is refused, a fragment with no value included. A reference table needs no fragment.
   Every `${…}` is a bound parameter: the tag reads the template's static text with a `$n` placeholder for each value,
   so a value never becomes SQL, and a value inside a literal, a quoted name or a comment is refused. Before anything
   is sent the text is refused for more than one statement; any statement but `SELECT`, `WITH`, `VALUES` and `TABLE`,

@@ -12,7 +12,7 @@ import { z } from 'zod/v4'
 import { type InvocationTransaction, runApplicationStatement, type Session } from '../database'
 import { DatabaseError, QueryRefusedError, SqlRowError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
-import { classifySql, type SqlMode, type SqlTag, sqlTag } from '../sql'
+import { classifySql, type ScopeTerms, type SqlMode, type SqlTag, sqlTag } from '../sql'
 import { scoped } from '../store'
 import { type TestDatabase, testDatabase } from '../testing'
 import { TestAuthority } from './fixtures/authority'
@@ -182,6 +182,93 @@ describe('the static text', () => {
 		expect(refusal(parts`select ${'x'}0`)).toContain('a digit right after the value ${…} number 1')
 		expect(refusal(parts`select $1, ${'x'}`)).toContain('reads as a positional parameter')
 		expect(refusal(parts`select 'open`)).toContain('at line 1 never closes')
+	})
+})
+
+/** A tag whose scopes answer `terms` for every capability and table, over a session that is never reached. */
+function scopedTag(terms: ScopeTerms): { sql: SqlTag; sent: () => number } {
+	let sent = 0
+	const mode: SqlMode = 'read'
+	const site = {
+		mode,
+		check() {},
+		fail() {},
+		session(): Promise<Session> {
+			sent++
+			return Promise.reject(new Error('the statement reached the session'))
+		},
+	}
+	return { sql: sqlTag(site, SCHEMA, () => terms), sent: () => sent }
+}
+
+const REACHED = 'the statement reached the session'
+const ONE: ScopeTerms = [[{ column: 'organization_id', value: 'o1' }]]
+
+describe('ctx.sql.scope, before anything is sent', () => {
+	test('a fragment is a frozen object without a prototype, and nothing an application builds or patches passes for one', async () => {
+		const { sql, sent } = scopedTag('all')
+		const fragment = sql.scope({}, 'notes', 'n')
+		expect(Object.getPrototypeOf(fragment)).toBeNull()
+		expect(Object.isFrozen(fragment)).toBe(true)
+		expect(Reflect.set(fragment, 'kind', 'other')).toBe(false)
+		await expect(sql(Row)`select n.id as v from notes n where ${{ kind: 'sql-scope' }}`).rejects.toThrow('is an object')
+		const get = Object.getOwnPropertyDescriptor(WeakMap.prototype, 'get')
+		Object.defineProperty(WeakMap.prototype, 'get', { value: () => ({ site: {}, parts: ['(true)'], values: [] }), configurable: true, writable: true })
+		try {
+			await expect(sql(Row)`select n.id as v from notes n where ${{ kind: 'sql-scope' }}`).rejects.toThrow('is an object')
+		} finally {
+			if (get !== undefined) Object.defineProperty(WeakMap.prototype, 'get', get)
+		}
+		expect(sent()).toBe(0)
+	})
+
+	test('a fragment of another site is refused, whether that site still runs or ended', async () => {
+		const own = scopedTag(ONE)
+		const other = scopedTag('all')
+		await expect(own.sql(Row)`select n.id as v from notes n where ${other.sql.scope({}, 'notes', 'n')}`).rejects.toThrow(
+			'a ctx.sql.scope(…) of another invocation or site is refused',
+		)
+		expect(own.sent()).toBe(0)
+	})
+
+	test('a fragment inside a literal, a quoted name, a dollar body or a comment is refused, also one with no value', async () => {
+		for (const terms of ['all', [], ONE] satisfies ScopeTerms[]) {
+			const { sql, sent } = scopedTag(terms)
+			const scope = sql.scope({}, 'notes', 'n')
+			const refused = [
+				() => sql(Row)`select n.id as v from notes n where '${scope}' <> ''`,
+				() => sql(Row)`select n.id as v from notes n where "${scope}" is null`,
+				() => sql(Row)`select n.id as v from notes n where true -- ${scope}`,
+				() => sql(Row)`select n.id as v from notes n where true /* ${scope} */`,
+				() => sql(Row)`select n.id as v from notes n where $$ ${scope} $$ <> ''`,
+			]
+			for (const statement of refused) await expect(statement()).rejects.toThrow('is not bound; interpolate a whole value')
+			expect(sent()).toBe(0)
+		}
+	})
+
+	test('a fragment stands alone, joined by AND, at the top of a WHERE or JOIN … ON clause without a top-level OR', async () => {
+		const { sql } = scopedTag(ONE)
+		const scope = () => sql.scope({}, 'notes', 'n')
+		const admitted = [
+			() => sql(Row)`select n.id as v from notes n where ${scope()}`,
+			() => sql(Row)`select n.id as v from notes n where (n.title = ${'a'} or n.title = ${'b'}) and ${scope()} order by n.id`,
+			() => sql(Row)`select n.id as v from notes n where ${scope()} and n.trashed is distinct from true`,
+			() => sql(Row)`select w.id as v from workspaces w join notes n on n.workspace_id = w.id and ${scope()} where w.name = ${'x'}`,
+			() => sql(Row)`select w.id as v from workspaces w where w.id in (select n.workspace_id from notes n where ${scope()})`,
+		]
+		for (const statement of admitted) await expect(statement()).rejects.toThrow(REACHED)
+		const refused: readonly [() => Promise<unknown>, string][] = [
+			[() => sql(Row)`select n.id as v from notes n where n.title = ${'public'} or ${scope()}`, 'has an OR at its top level'],
+			[() => sql(Row)`select n.id as v from notes n where n.title = ${'a'} or n.trashed and ${scope()}`, 'has an OR at its top level'],
+			[() => sql(Row)`select n.id as v from notes n where ${scope()} and n.title = ${'a'} or true`, 'has an OR at its top level'],
+			[() => sql(Row)`select n.id as v from notes n where not ${scope()}`, 'must stand alone, joined by AND'],
+			[() => sql(Row)`select n.id as v from notes n where ${scope()} = false`, 'must stand alone, joined by AND'],
+			[() => sql(Row)`select n.id as v from notes n where (${scope()})`, 'stands inside parentheses'],
+			[() => sql(Row)`select ${scope()} as v from notes n`, 'stands outside a WHERE or JOIN … ON clause'],
+			[() => sql(Row)`select n.id as v from notes n where n.word_count between 1 and ${scope()}`, 'put BETWEEN … AND … in parentheses'],
+		]
+		for (const [statement, message] of refused) await expect(statement()).rejects.toThrow(message)
 	})
 })
 

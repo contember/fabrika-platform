@@ -254,9 +254,13 @@ and the target `Ref`, so no handler can call it.
 - **`ctx.sql.scope(capability, table, alias?)` is the one interpolation that is not a single parameter.** It renders
   `scopeTerms` (`store.ts`): a `Ref`'s object column and every link of its chain (`linkValues`), a `Within`'s values
   and container grants as `ctx.db.within` matches them, `(true)` for `all`, `(false)` when empty; a table the
-  capability does not reach is refused as the handles refuse it. The fragment is a private class of `sql.ts` bound to
-  its site: the tag splices its text around its own `$n` values before `classifySql` reads the whole statement, and
-  refuses one of another site. Never let an application build one, nor let any other object splice text.
+  capability does not reach is refused as the handles refuse it. A fragment is a frozen object without a prototype;
+  what it holds lives in a module-private `WeakMap` read through methods bound at load, so no object an application
+  builds or patches passes for one, and the tag refuses a fragment of another site. Before it splices anything, the
+  tag checks every interpolation's place in the original text (code level, not a literal, a quoted name, a dollar
+  body or a comment, fragments with no value included) and each fragment's: alone, joined by AND, at the top level
+  of a WHERE or JOIN … ON clause with no top-level OR or BETWEEN (`checkConjunct`). Then `classifySql` reads the
+  whole statement. Never let any other object splice text.
 - **`Database` is frozen, the class and its prototype.** Application modules load after `database.ts`, and a
   replaced `Database.postgres` would receive the database URL; `@fabrika/app/bun` also takes the factory before it
   imports the application. Never add a writable static. `hardening.test.ts` is the witness; `@fabrika/check`'s

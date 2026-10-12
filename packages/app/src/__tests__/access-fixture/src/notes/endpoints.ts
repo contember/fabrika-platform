@@ -48,6 +48,26 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			titles: (await ctx.sql(Title)`select title from notes where ${ctx.sql.scope(ctx.target, 'notes')} order by title`).map((row) => row.title),
 		})),
+	filteredTitles: r.query({
+		input: InOrganization,
+		output: Titles,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => ({
+			titles: (await ctx.sql(Title)`select n.title from notes n
+				where (n.trashed or n.title <> ${''}) and ${ctx.sql.scope(ctx.target, 'notes', 'n')} order by n.title`).map((row) => row.title),
+		})),
+	orTitles: r.query({
+		input: InOrganization,
+		output: Titles,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => ({
+			titles: (await ctx.sql(Title)`select n.title from notes n
+				where n.title <> ${''} or ${ctx.sql.scope(ctx.target, 'notes', 'n')} order by n.title`).map((row) => row.title),
+		})),
 	everyTitle: r.query({
 		input: InOrganization,
 		output: Titles,

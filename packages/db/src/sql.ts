@@ -19,7 +19,7 @@ import {
 	upperWord,
 } from '@fabrika/platform-node/sql'
 import { z } from 'zod/v4'
-import { hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
+import { freeze, hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
 import { runApplicationStatement, type Session, type SqlParameter } from './database'
 import { QueryRefusedError, SqlRowError } from './errors'
 import { isPlainIdentifier } from './identifier'
@@ -45,30 +45,37 @@ export type ScopeOf = (capability: unknown, table: string) => ScopeTerms
 
 /**
  * `ctx.sql.scope(capability, table, alias?)`: the capability's whole predicate on one table, as SQL with bound values.
- * Only the tag builds one, for its own site, and an interpolation of it is the one that is not a single parameter.
+ * A fragment is a frozen object with no prototype; what it holds lives in this module's registry, read through
+ * methods captured at load, so no object an application builds or changes is ever taken for one.
  */
-class Scope {
-	readonly #site: SqlSite
-	readonly #parts: readonly string[]
-	readonly #values: readonly SqlValue[]
-
-	constructor(site: SqlSite, parts: readonly string[], values: readonly SqlValue[]) {
-		this.#site = site
-		this.#parts = Object.freeze([...parts])
-		this.#values = Object.freeze([...values])
-	}
-
-	/** The fragment's static parts and values, when `value` is a scope this tag's site built. */
-	static of(value: unknown, site: SqlSite): { readonly parts: readonly string[]; readonly values: readonly SqlValue[] } | undefined {
-		if (typeof value !== 'object' || value === null || !(#site in value)) return undefined
-		if (value.#site !== site) {
-			refuse('a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
-		}
-		return { parts: value.#parts, values: value.#values }
-	}
+export interface SqlScope {
+	readonly kind: 'sql-scope'
 }
 
-export type SqlScope = Scope
+interface ScopeData {
+	readonly site: SqlSite
+	readonly parts: readonly string[]
+	readonly values: readonly SqlValue[]
+}
+
+const scopes = new WeakMap<object, ScopeData>()
+// Bound once at load: a later patch of WeakMap.prototype or Function.prototype changes neither.
+const registered = WeakMap.prototype.get.bind(scopes)
+const register = WeakMap.prototype.set.bind(scopes)
+const withoutPrototype = Object.setPrototypeOf
+
+function newScope(data: ScopeData): SqlScope {
+	const scope: SqlScope = { kind: 'sql-scope' }
+	withoutPrototype(scope, null)
+	freeze(scope)
+	register(scope, freeze({ site: data.site, parts: freeze([...data.parts]), values: freeze([...data.values]) }))
+	return scope
+}
+
+/** What `value` holds when it is a fragment this module built; `undefined` for anything else. */
+function scopeOf(value: unknown): ScopeData | undefined {
+	return typeof value === 'object' && value !== null ? registered(value) : undefined
+}
 
 /** `ctx.sql(Row)`: the tag for rows of `Row`, and `scope` for the capability's predicate inside its text. */
 export interface SqlTag {
@@ -338,9 +345,9 @@ function rowIssue(
 }
 
 /** The predicate `terms` make over `alias`'s columns: static parts around one bound value per test. */
-function scopeFragment(site: SqlSite, terms: ScopeTerms, alias: string): Scope {
-	if (terms === 'all') return new Scope(site, ['(true)'], [])
-	if (terms.length === 0) return new Scope(site, ['(false)'], [])
+function scopeFragment(site: SqlSite, terms: ScopeTerms, alias: string): SqlScope {
+	if (terms === 'all') return newScope({ site, parts: ['(true)'], values: [] })
+	if (terms.length === 0) return newScope({ site, parts: ['(false)'], values: [] })
 	const parts: string[] = []
 	const values: SqlValue[] = []
 	let text = '('
@@ -355,21 +362,147 @@ function scopeFragment(site: SqlSite, terms: ScopeTerms, alias: string): Scope {
 		text += ')'
 	})
 	parts.push(`${text})`)
-	return new Scope(site, parts, values)
+	return newScope({ site, parts, values })
+}
+
+/** Words that open the clause a scope may stand in. */
+const SCOPE_CLAUSES: ReadonlySet<string> = new Set(['WHERE', 'ON'])
+/** Words that end a WHERE or ON clause at its own depth. */
+const CLAUSE_ENDS: ReadonlySet<string> = new Set([
+	'GROUP',
+	'ORDER',
+	'LIMIT',
+	'OFFSET',
+	'FETCH',
+	'HAVING',
+	'WINDOW',
+	'UNION',
+	'INTERSECT',
+	'EXCEPT',
+	'RETURNING',
+	'FOR',
+	'JOIN',
+	'LEFT',
+	'RIGHT',
+	'INNER',
+	'FULL',
+	'CROSS',
+	'NATURAL',
+	'WHERE',
+	'ON',
+	'USING',
+	'SET',
+	'FROM',
+	'SELECT',
+	'VALUES',
+])
+const CONJUNCT_FORM = 'write it as a conjunct of its WHERE or JOIN … ON clause: where (<filter>) and ${ctx.sql.scope(…)}'
+
+/** Whether the token at `position` ends a WHERE or ON clause at its depth; `IS DISTINCT FROM` does not. */
+function endsClause(tokens: readonly SqlToken[], position: number): boolean {
+	const token = tokens[position]
+	const word = upperWord(token)
+	if (isPunct(token, ';')) return true
+	if (word === undefined || !CLAUSE_ENDS.has(word)) return false
+	return word !== 'FROM' || upperWord(tokens[position - 1]) !== 'DISTINCT'
+}
+
+/** The index of the token after the `$n` placeholder at `index`. */
+function afterPlaceholder(tokens: readonly SqlToken[], index: number): number {
+	let next = index + 1
+	while (isDigit(tokens[next])) next++
+	return next
+}
+
+/**
+ * A scope must restrict every row its clause admits: it stands alone, joined by AND, at the top level of a WHERE or
+ * JOIN … ON clause whose top level holds no OR (`where (<filter>) and ${scope}`). Anything else could reach past it.
+ */
+function checkConjunct(tokens: readonly SqlToken[], index: number): void {
+	const line = tokens[index]?.line
+	let depth = 0
+	let start = -1
+	for (let position = index - 1; position >= 0 && start === -1; position--) {
+		const token = tokens[position]
+		const word = upperWord(token)
+		if (isPunct(token, ')')) depth++
+		else if (isPunct(token, '(')) {
+			if (depth === 0) refuse(`ctx.sql.scope(…) at line ${line} stands inside parentheses; ${CONJUNCT_FORM}`)
+			depth--
+		} else if (depth === 0 && word !== undefined && SCOPE_CLAUSES.has(word)) start = position
+		else if (depth === 0 && endsClause(tokens, position)) break
+	}
+	if (start === -1) refuse(`ctx.sql.scope(…) at line ${line} stands outside a WHERE or JOIN … ON clause; ${CONJUNCT_FORM}`)
+	const next = afterPlaceholder(tokens, index)
+	let end = tokens.length
+	depth = 0
+	for (let position = next; position < tokens.length && end === tokens.length; position++) {
+		const token = tokens[position]
+		if (isPunct(token, '(')) depth++
+		else if (isPunct(token, ')')) {
+			if (depth === 0) end = position
+			else depth--
+		} else if (depth === 0 && endsClause(tokens, position)) end = position
+	}
+	depth = 0
+	for (let position = start + 1; position < end; position++) {
+		const token = tokens[position]
+		if (isPunct(token, '(')) depth++
+		else if (isPunct(token, ')')) depth--
+		else if (depth === 0 && upperWord(token) === 'OR') {
+			refuse(`the clause that holds ctx.sql.scope(…) at line ${line} has an OR at its top level, which reaches past the scope; ${CONJUNCT_FORM}`)
+		} else if (depth === 0 && upperWord(token) === 'BETWEEN') {
+			refuse(`put BETWEEN … AND … in parentheses in the clause that holds ctx.sql.scope(…) at line ${line}`)
+		}
+	}
+	const before = upperWord(tokens[index - 1])
+	const after = next === end ? 'END' : upperWord(tokens[next])
+	if ((index - 1 !== start && before !== 'AND') || (after !== 'END' && after !== 'AND')) {
+		refuse(`ctx.sql.scope(…) at line ${line} must stand alone, joined by AND; ${CONJUNCT_FORM}`)
+	}
+}
+
+/**
+ * Before any scope is spliced in, each interpolation must stand where a value binds (not in a literal, a quoted name,
+ * a dollar-quoted body or a comment), and each scope where it restricts every row of its clause.
+ */
+function checkInterpolations(parts: readonly string[], values: readonly unknown[]): void {
+	for (const part of parts) {
+		if (/\$[0-9]/.test(part)) {
+			refuse('the text holds $ and a digit, which reads as a positional parameter; interpolate the value with ${…}, a literal one too')
+		}
+	}
+	const { tokens, unterminated } = lexSql(statementText(parts))
+	if (unterminated !== undefined) {
+		refuse(`a string, quoted name, dollar-quoted body or comment at line ${unterminated} never closes`)
+	}
+	if (placeholderCount(tokens) !== parts.length - 1) {
+		refuse('a value ${…} inside a string literal, a quoted name, a dollar-quoted body or a comment is not bound; interpolate a whole value')
+	}
+	let interpolation = 0
+	for (let index = 0; index + 1 < tokens.length; index++) {
+		if (!isPunct(tokens[index], '$') || !isDigit(tokens[index + 1])) continue
+		if (scopeOf(values[interpolation]) !== undefined) checkConjunct(tokens, index)
+		interpolation++
+	}
 }
 
 /** The template with every scope spliced in as text around its own values, and the values a parameter each. */
 function expandScopes(site: SqlSite, parts: readonly string[], values: readonly unknown[]): { parts: string[]; values: unknown[] } {
+	checkInterpolations(parts, values)
 	const expanded: string[] = [parts[0] ?? '']
 	const bound: unknown[] = []
 	for (let index = 0; index < values.length; index++) {
 		const value = values[index]
 		const after = parts[index + 1] ?? ''
-		const fragment = Scope.of(value, site)
+		const fragment = scopeOf(value)
 		if (fragment === undefined) {
 			bound.push(value)
 			expanded.push(after)
 			continue
+		}
+		if (fragment.site !== site) {
+			refuse('a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
 		}
 		expanded[expanded.length - 1] += fragment.parts[0] ?? ''
 		for (let position = 0; position < fragment.values.length; position++) {
