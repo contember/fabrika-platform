@@ -47,4 +47,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 8 KiB token bound at a few dozen workspaces; the 1000-value `Within` cap sits behind it.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
+- [111](111-an-attachment-has-no-xlsx-format.md) — `attachment()` encodes CSV only; an export with typed cells needs `format: 'xlsx'`, a writer that the WU19 review kept out of the sprint.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

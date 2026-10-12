@@ -842,3 +842,13 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   its own statement. Every strict input (procedures, forms, webhooks) and every path parameter refuses a string or key
   holding U+0000 with a 400, because Postgres `text` cannot store it. A declared `frame-src` keeps `'self'`, so removing
   the last frame origin narrows, as the approval diff already says.
+- **WU19 — file-download responses.** CSV only, per the binding review; XLSX → [backlog 111](../backlog/111-an-attachment-has-no-xlsx-format.md).
+  Deviations: the builder is a standalone `attachment({ … })` of `@fabrika/app/contract`, not `c.attachment`, so a
+  schema module (`src/schemas.ts`) and every kit form can declare one, and the reader recognises it like `defineApp`.
+  Its value is the rows' array schema, marked, so the handler's types, projection and validation need no new path; the
+  artifact row's `output` widens to `OutputShape` (`SchemaShape | AttachmentShape`, auth-core), with ordered `columns`.
+  The file carries a UTF-8 byte order mark (Excel reads a BOM-less CSV in the legacy code page) and the header policy,
+  not the file treatment: the proxy applies the policy to every procedure row, and it keeps `Content-Type` and
+  `Content-Disposition`. A number cell is not formula-escaped (its text is a numeric literal); full-width `＝＋－＠`
+  are, beside the review's list. Limits: `maxBytes` ≤ 16 MiB, `maxRows` 10 000 by default and ≤ 100 000, a cell ≤
+  32 767 characters.
