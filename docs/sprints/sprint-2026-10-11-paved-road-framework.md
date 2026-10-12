@@ -739,7 +739,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   | migrations                                                                    |                 115 |                            117 |
   | authored tests (+ fixtures)                                                   |                 236 |                      349 (+ 2) |
 
-  Pass: 399 ≤ 400 with 28 RPC endpoints (33 endpoints in all: 3 file endpoints, the SPA, the health check) against the baseline's 25 RPC endpoints, and no file that only mirrors another (the
+  Pass: 399 ≤ 400 with 28 RPC endpoints (34 endpoints in all: 4 file endpoints, the SPA, the health check) against the baseline's 25 RPC endpoints, and no file that only mirrors another (the
   handler tree, `database.ts` and the stores are gone). 383 lines without comments and blank lines. The margin is thin:
   the 400 needed cutting restating comments, one-line schemas through a shared `MaybeText`, and destructuring edit
   inputs (`({ input: { expectVersion, ...contact } })`: a handler's input omits the access form's `from` field, so the
@@ -788,7 +788,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   3e9 case in `deals.test.ts`, the edges in `logic.test.ts`). (3) `TRIAL.md`: a copy is renamed
   `fabrika-example-crm-trial-<group>` (two workspaces of one name stop `bun install`), the SPA's script, build line and
   `web/**/*` include go with it, and group C's contract comment drops the job; checked for C beside `examples/crm`
-  (136 tests). (5) 28 RPC endpoints, 33 in all, not 30. Server lines are 400 (the job's loop and `safeTotal`, with the
+  (136 tests). (5) 28 RPC endpoints, 34 in all (WU17 added the file list endpoint), not 30. Server lines are 400 (the job's loop and `safeTotal`, with the
   three `remove` handlers on one line each). 157 tests.
 - **WU11 — owner/assignee validation waits for WU22.** `deals.assign` and `tasks.create` take the principal and label
   from the input, so an outsider or a forged label persists. No endpoint below the org can check membership:
@@ -808,3 +808,6 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   added), 117 migration lines, 469 authored test and fixture lines, 160 tests on Postgres (133 generated). The 400 needed cutting
   the file headers that restated the code; the margin is gone, so the next endpoint on this CRM passes the bar only
   with a `fromPage`-style helper (the 7 list handlers repeat one page mapping).
+- **WU11 review round 2.** `TRIAL.md`: every group deletes its removed endpoints' `seeds` and `members` entries (C's
+  `members['api.tasks.create']` made `test-scaffold` and the checker fail with `endpoint-fixture`), and E keeps
+  `src/orgs/logic.ts`, which the deals and tasks slices import. Checked on WU22 for C (139 tests) and E (143).
