@@ -11,7 +11,18 @@ export type { LeaseFence } from './capability'
 export type { InvocationTransaction, Session } from './database'
 export { LeaseLostError, QUERY_REFUSALS, type QueryRefusal, QueryRefusedError } from './errors'
 export { fileTableName } from './file-table-sql'
-export type { FileCollectionSpec, FileCollectionTable, FileTables, LiveFile, PendingFile, RemovableFile } from './file-tables'
+export type {
+	FileCollectionSpec,
+	FileCollectionTable,
+	FilePage,
+	FileTables,
+	HeldStatus,
+	ListedFile,
+	PendingFile,
+	QuarantinedFile,
+	RemovableFile,
+	StoredFile,
+} from './file-tables'
 export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { DataAccess, DataHandles, DataSite } from './orm'

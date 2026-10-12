@@ -10,7 +10,7 @@ import { contract as scopedContract } from './fixtures/scoped-notes/fabrika.cont
 import { tables as scopedTables } from './fixtures/scoped-notes/src/db/tables'
 
 /** The generated file endpoints `notesArtifact` does not list. */
-const UNLISTED_FILE_ROWS = new Set(['files.attachments.upload', 'files.attachments.remove'])
+const UNLISTED_FILE_ROWS = new Set(['files.attachments.upload', 'files.attachments.list', 'files.attachments.remove'])
 /** The generated webhook binding endpoints `notesArtifact` does not list. */
 const UNLISTED_WEBHOOK_ROWS = new Set(['webhooks.github.bind', 'webhooks.github.unbind'])
 
@@ -52,10 +52,19 @@ describe('compileContract', () => {
 		expect(artifact.reservedPrefixes).toContain('/api')
 	})
 
-	test('generates the upload and remove endpoints of a file collection', () => {
+	test('generates the upload, list and remove endpoints of a file collection', () => {
 		const rows = artifact.endpoints.filter((row) => UNLISTED_FILE_ROWS.has(row.id))
 		expect(rows.map(({ id, kind, method, path, callers, requirement, admission }) => ({ id, kind, method, path, callers, requirement, admission })))
 			.toEqual([
+				{
+					id: 'files.attachments.list',
+					kind: 'query',
+					method: 'POST',
+					path: '/api/files.attachments.list',
+					callers: ['human'],
+					requirement: { kind: 'action', action: 'notes.read', access: { form: 'on', dimension: 'note', from: 'owner' } },
+					admission: { contentTypes: ['application/json'], maxBytes: null },
+				},
 				{
 					id: 'files.attachments.remove',
 					kind: 'mutation',
@@ -88,6 +97,45 @@ describe('compileContract', () => {
 		expect(artifact.dimensions['note']).toEqual({ in: 'workspace', creator: null, members: null })
 		expect(artifact.roles['starter']).toEqual({ grants: ['workspaces.create'], member: null })
 		expect(artifact.csp.imgSrc).toEqual([])
+	})
+})
+
+describe('a file collection that scans its uploads', () => {
+	const withFiles = (collection: { readonly scan?: boolean; readonly maxBytes: number }) =>
+		defineContract({
+			app: 'notes',
+			dimensions: { workspace: {}, note: { in: 'workspace' } },
+			actions: { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.delete': 'Delete' },
+			roles: { editor: { grants: ['notes.read'] } },
+		}, (c) => ({
+			files: {
+				attachments: c.files({
+					owner: 'notes',
+					read: 'notes.read',
+					write: 'notes.write',
+					delete: 'notes.delete',
+					types: ['application/pdf'],
+					...collection,
+				}),
+			},
+			health: c.health('/healthz'),
+		}))
+	const tables = tablePolicies(scopedTables)
+
+	test('carries scan: true only when it scans, so the artifact of one that does not is what it was before', () => {
+		expect(compileContract(withFiles({ scan: true, maxBytes: 1024 }), tables).files['attachments']?.scan).toBe(true)
+		for (const scan of [false, undefined]) {
+			const artifact = compileContract(withFiles({ ...(scan === undefined ? {} : { scan }), maxBytes: 1024 }), tables)
+			expect(Object.keys(artifact.files['attachments'] ?? {})).not.toContain('scan')
+			expect(canonicalArtifactJson(artifact)).not.toContain('"scan"')
+		}
+	})
+
+	test('admits no file larger than the scanner reads in full', () => {
+		expect(() => compileContract(withFiles({ scan: true, maxBytes: 100 * 1024 * 1024 + 1 }), tables)).toThrow(
+			"files 'attachments': scans its files and admits 104857601 bytes per file; the scanner gives a clean verdict to at most 104857600",
+		)
+		expect(() => compileContract(withFiles({ maxBytes: 100 * 1024 * 1024 + 1 }), tables)).not.toThrow()
 	})
 })
 

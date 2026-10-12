@@ -16,6 +16,16 @@ export const CONTRACT_DEFAULTS = {
 /** Generated file endpoints live under this prefix, for signed-in people. */
 export const FILES_PREFIX = '/api'
 
+/**
+ * The bounds of a file collection: the largest file a `scan: true` collection admits (the scanner reads at most this
+ * much of one file, so a larger one could never be given a clean verdict), and the pages of `files.<name>.list`.
+ */
+export const FILE_LIMITS = {
+	maxScannedBytes: 100 * 1024 * 1024,
+	listPageDefault: 50,
+	listPageMax: 100,
+} as const
+
 /** Export procedures are served here, one path per procedure, and each export's description at its own path. */
 export { CONNECT_PREFIX } from '@fabrika/auth-core'
 

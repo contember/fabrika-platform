@@ -63,8 +63,21 @@ export interface JobRunOptions {
 	readonly reporter?: OperationsReporter
 }
 
-/** The contract's jobs, bound to their handlers by `boot`. */
+/**
+ * A job the framework runs itself under a reserved name (`FILE_SCAN_JOB`): no handler, no key, no capability, one
+ * attempt. It holds its lease like an application job, and every write of its run is fenced by it.
+ */
+export interface FrameworkJob {
+	readonly name: string
+	readonly schedule: string
+	readonly timeoutMs: number
+	/** One run; `signal` aborts when the attempt's deadline passes. A throw fails the run. */
+	run(reporter: OperationsReporter, signal: AbortSignal): Promise<void>
+}
+
+/** The contract's jobs, bound to their handlers by `boot`, and the framework's own. */
 export interface ContractJobs {
+	/** The contract's `c.cron` jobs; `run` also takes the name of a framework job the contract needs. */
 	readonly names: readonly string[]
 	run(name: string, options?: JobRunOptions): Promise<JobRunResult>
 	/**
@@ -132,6 +145,14 @@ export interface JobBindingInput {
 	readonly mint: CapabilityMint
 	/** The mini-ORM of the bound `scoped(tables)` layer, behind a staged-kit job's `ctx.db`. */
 	readonly data: DataAccess | null
+	/** The framework's own jobs this contract needs: the scan of its `scan: true` file collections. */
+	readonly frameworkJobs?: readonly FrameworkJob[]
+}
+
+interface BoundFrameworkJob {
+	readonly job: FrameworkJob
+	readonly name: string
+	readonly schedule: CronSchedule
 }
 
 export interface BoundJobs {
@@ -188,6 +209,15 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential, site })
 		}
 	}
+	const frameworkJobs = new Map<string, BoundFrameworkJob>()
+	for (const job of input.frameworkJobs ?? []) {
+		const schedule = parseCron(job.schedule)
+		if (input.framework === null) {
+			problems.push(`the framework job '${job.name}' needs @fabrika/db on Postgres, which holds its lease and fences its writes`)
+		} else if (schedule !== null) {
+			frameworkJobs.set(job.name, { job, name: job.name, schedule })
+		}
+	}
 	const names = Object.freeze(entries.map(([name]) => name))
 	const framework = input.framework
 	const contextFor = (leases: JobLeases, chosen: OperationsReporter | undefined): RunnerContext => ({
@@ -202,6 +232,10 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 	const jobs: ContractJobs = Object.freeze({
 		names,
 		run(name: string, options: JobRunOptions = {}): Promise<JobRunResult> {
+			const own = frameworkJobs.get(name)
+			if (own !== undefined && framework !== null) {
+				return runFrameworkJob(own, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock)
+			}
 			const job = bound.get(name)
 			if (job === undefined || framework === null) {
 				throw new JobError(`no job '${name}' in the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})`)
@@ -213,7 +247,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 				return
 			}
 			const context = contextFor(framework.jobs, options.reporter)
-			for (const job of bound.values()) {
+			for (const job of [...bound.values(), ...frameworkJobs.values()]) {
 				try {
 					await context.leases.register(job.name)
 					await surveil(job, context)
@@ -236,7 +270,7 @@ function backoffMs(attempt: number, random: number): number {
 }
 
 /** A crashed run (its lease expired before it finished) and a job overdue by twice its period: one report each. */
-async function surveil(job: BoundJob, context: RunnerContext): Promise<void> {
+async function surveil(job: { readonly name: string; readonly schedule: CronSchedule }, context: RunnerContext): Promise<void> {
 	const tags = { job: job.name }
 	if (await context.leases.reapCrashed(job.name)) {
 		const message = `job '${job.name}' failed: crashed (its run's lease expired before the run finished)`
@@ -309,7 +343,7 @@ async function runLeased(job: BoundJob, context: RunnerContext, clock: JobClock,
 	return failed(job, progress.attempts, code, context.reporter)
 }
 
-async function failed(job: BoundJob, attempts: number, code: JobFailureCode, reporter: OperationsReporter): Promise<JobRunResult> {
+async function failed(job: { readonly name: string }, attempts: number, code: JobFailureCode, reporter: OperationsReporter): Promise<JobRunResult> {
 	const message = `job '${job.name}' failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${code}`
 	console.error(`fabrika: ${message}`)
 	await reporter.report({ fingerprint: ['fabrika-job-failed', job.name], type: 'JobFailed', message, tags: { job: job.name, code } })
@@ -317,6 +351,51 @@ async function failed(job: BoundJob, attempts: number, code: JobFailureCode, rep
 }
 
 const TIMED_OUT: unique symbol = Symbol('fabrika.job.timedOut')
+
+/** One run of a framework job: its lease, one attempt in a frame fenced by it, and the outcome reported like a job's. */
+async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
+	const { leases } = context
+	let fence: LeaseFence | null
+	try {
+		await leases.register(bound.name)
+		await surveil(bound, context)
+		fence = await leases.acquire(bound.name, attemptId(), bound.job.timeoutMs, bound.job.timeoutMs + LEASE_GRACE_MS)
+	} catch {
+		return failed(bound, 0, 'driver_failed', context.reporter)
+	}
+	if (fence === null) {
+		console.error(`fabrika: a previous run of job '${bound.name}' still holds its lease; this run does not start`)
+		return { status: 'skipped' }
+	}
+	const frame = new RequestFrame(fence.holder, { fence })
+	const cancel = new AbortController()
+	const timer = new AbortController()
+	let code: JobFailureCode | null
+	try {
+		const ran = runInRequest(frame, () => bound.job.run(context.reporter, cancel.signal)).then(() => null, failureOf)
+		const timeout = clock.wait(bound.job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
+		const result = await Promise.race([ran, timeout])
+		code = result === TIMED_OUT ? 'timeout' : result
+	} finally {
+		frame.end()
+		timer.abort()
+	}
+	try {
+		// Writes are refused before the run hears it was stopped: a scanner that answers on abort commits nothing.
+		try {
+			await leases.cancelInFlight(fence)
+		} finally {
+			cancel.abort()
+		}
+		const finished = await leases.finish(fence, code === null ? 'succeeded' : 'failed')
+		if (code === null) {
+			return finished ? { status: 'succeeded', attempts: 1 } : failed(bound, 1, 'lease_lost', context.reporter)
+		}
+	} catch {
+		return failed(bound, 1, 'driver_failed', context.reporter)
+	}
+	return failed(bound, 1, code, context.reporter)
+}
 
 /**
  * `null` when the handler finished, else the attempt's failure code. Either way the attempt's frame ends and the

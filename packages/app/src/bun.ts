@@ -14,6 +14,7 @@ import type { FileObjectStore } from '@fabrika/platform'
 import { applicationRuntimeUrl, S3BlobStore } from '@fabrika/platform-node'
 import { join, resolve, sep } from 'node:path'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
+import { clamscanScanner } from './files/clamscan.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
@@ -21,6 +22,8 @@ import { type ContractImplementation, isContractImplementation } from './impleme
 import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
 import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
 import { makeProcessUndumpable } from './undumpable.js'
+
+export { clamscanArguments, type ClamscanOptions, clamscanScanner } from './files/clamscan.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
 
@@ -364,6 +367,8 @@ export async function runContractJob(
 			membership,
 			workloadTokens,
 			requireProxySecret: true,
+			// ClamAV on PATH, as the provider's build installs it for a `scan: true` collection; missing, the scan fails closed.
+			scanner: clamscanScanner(),
 		})
 			.jobs.run(name, options)
 	} finally {

@@ -24,6 +24,16 @@ export const FILE_COLUMNS: readonly string[] = [
 	'deleted_at',
 ]
 
+/**
+ * A file row's states. `pending`: its object is still being written. `quarantined`: written to a scanning collection
+ * and not yet given a clean verdict. `live`: served. `rejected`: the scanner found it infected and its object is gone.
+ */
+export const FILE_STATUSES = ['pending', 'live', 'quarantined', 'rejected'] as const
+
+export type FileStatus = (typeof FILE_STATUSES)[number]
+
+const STATUS_CHECK = `CHECK (status IN (${FILE_STATUSES.map((status) => `'${status}'`).join(', ')}))`
+
 /** The column types whose values `Bun.SQL` decodes as strings, as a capability carries them. */
 export type FileColumnType = 'text' | 'uuid'
 
@@ -89,7 +99,7 @@ export function fileTableSql(collection: string, owner: FileOwner): string {
 	return `CREATE TABLE ${table} (
 	id UUID PRIMARY KEY,
 	owner_id ${keyType},
-${chain.map((link) => `\t${link.column} ${link.type},\n`).join('')}	status TEXT NOT NULL CHECK (status IN ('pending', 'live')),
+${chain.map((link) => `\t${link.column} ${link.type},\n`).join('')}	status TEXT NOT NULL CONSTRAINT ${table}_status ${STATUS_CHECK},
 	object_key TEXT NOT NULL UNIQUE,
 	size BIGINT,
 	content_type TEXT NOT NULL,
@@ -102,5 +112,26 @@ ${chain.map((link) => `\t${link.column} ${link.type},\n`).join('')}	status TEXT 
 );
 CREATE INDEX ${table}_owner ON ${table} (owner_id) WHERE deleted_at IS NULL;
 CREATE INDEX ${table}_removable ON ${table} (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
+CREATE INDEX ${table}_scan ON ${table} (created_at) WHERE status = 'quarantined';
+`
+}
+
+/**
+ * The name Postgres gave the unnamed status check of a table an earlier `fileTableSql` created:
+ * `<table>_status_check`, the table's name cut to 50 characters first (`makeObjectName`).
+ */
+export function legacyStatusCheckName(table: string): string {
+	return `${table.slice(0, 63 - '_status_check'.length)}_status_check`
+}
+
+/**
+ * The migration that lets an existing collection turn `scan: true` on: it replaces the status check of a table an
+ * earlier `fileTableSql` created, which admitted only `pending` and `live`, by the check of every state, and adds the
+ * scan pass's index. A table `fileTableSql` creates now needs none of it.
+ */
+export function fileScanSql(collection: string): string {
+	const table = tableOf(collection)
+	return `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${legacyStatusCheckName(table)}, ADD CONSTRAINT ${table}_status ${STATUS_CHECK};
+CREATE INDEX ${table}_scan ON ${table} (created_at) WHERE status = 'quarantined';
 `
 }

@@ -442,13 +442,14 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
 
 ### File collections
 
-A `c.files` collection serves three generated endpoints, for signed-in people only, through
+A `c.files` collection serves four generated endpoints, for signed-in people only, through
 the same pipeline:
 
 | Endpoint                               | Access                                       | Behaviour                                                                                                                             |
 | -------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/files.<name>.upload/:owner` | `write` `on` the owner's dimension, `:owner` | the body is the file; `Content-Type` must be a declared type; `?name=` is the file name, metadata only. Answers `{ result: { id } }`  |
-| `GET /api/files.<name>/:fileId`        | `read` `on` `file:<name>`, `:fileId`         | streams the object with the file treatment                                                                                            |
+| `GET /api/files.<name>/:fileId`        | `read` `on` `file:<name>`, `:fileId`         | streams a `live` file with the file treatment; a `quarantined` one answers 409 `quarantined`, a `rejected` one 404                    |
+| `POST /api/files.<name>.list`          | `read` `on` the owner's dimension, `owner`   | the owner's files, oldest first: `{ items: [{ id, name, type, size, status, createdAt }], next }`, `limit` 1–100 (50), `after` an id  |
 | `POST /api/files.<name>.remove`        | `delete` `on` `file:<name>`, body `{ id }`   | marks the row removed, then sweeps: deletes the objects of removed and orphaned files of the collection (at most 20), then their rows |
 
 - **A file reaches what its owner reaches, now.** A file row carries its owner's key and the
@@ -475,8 +476,26 @@ the same pipeline:
   each binary type by its signature, a text type (`text/plain`, `text/csv`,
   `text/markdown`, `application/json`, `image/svg+xml`) as UTF-8 without NUL bytes or a
   binary signature. `maxPerOwner` is counted before and again once the file is live (409),
-  so concurrent uploads never leave more. The file name (`?name=`) is cut at 255 code points
-  and loses its control characters.
+  so concurrent uploads never leave more; a quarantined or rejected file counts until it is
+  removed. The file name (`?name=`) is cut at 255 code points and loses its control characters.
+- **`scan: true` holds every upload until a clean malware verdict.** The upload ends
+  `quarantined` instead of `live`. The framework's scan job (`fabrika-file-scan`, a reserved name
+  no `c.cron` job can take) runs every minute under its lease in `fabrika_job_leases`: it takes the
+  oldest quarantined files (at most 20 and 256 MiB), streams each object into one `clamscan` run
+  in a private temporary directory, checking its size and SHA-256 against the upload's, and
+  writes each verdict in a transaction fenced by the lease. Only an exact `OK` over verified bytes
+  promotes a file to `live`, and only while it is still quarantined, neither removed nor orphaned,
+  with the same digest. A `FOUND` (EICAR, an encrypted file, a file past ClamAV's size, recursion
+  or time limits) deletes the object, then marks the row `rejected`; a failed delete leaves the
+  row quarantined, so the next pass retries it. Anything else — no scanner, missing or older than
+  three days signatures, a scanner error, a run past five minutes, a file without a verdict, bytes
+  that differ from the upload — leaves the file quarantined, and the pass reports it to Operations
+  under a fixed code. The pass ends with the sweep, which deletes removed and orphaned files in
+  every state. A `scan: true` collection admits at most 100 MiB per file, the most the scanner
+  reads in full. Turning `scan` off widens in the approval diff; a file left quarantined stays
+  unserved. An existing collection that turns `scan` on needs `fileScanSql(name)` of
+  `@fabrika/db` in a new migration (the checker's `file-scan-migration` names it): the earlier
+  `fileTableSql` checked for `pending` and `live` only.
 - **The file treatment** is on every answer of the download endpoint, its denials and errors
   included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
   default-src 'none'` and `Cache-Control: private, no-store`, and a `Content-Disposition`
@@ -497,7 +516,8 @@ the same pipeline:
   partial set stops the boot. On Zerops the platform writes all four into the generated run
   section as `${<host>_…}` references to the application's one `object-storage` service,
   which must be a bucket the platform created for it. Downloads always go through the application: there are no
-  presigned URLs.
+  presigned URLs. A job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the
+  build installs it for a `scan: true` contract (see [Zerops platform](zerops-platform.md)).
 
 A `Ref` and a `Within` are classes with private fields, bound to their request with
 `AsyncLocalStorage`. Each `boot` makes its own issuer: a mint, held only by that

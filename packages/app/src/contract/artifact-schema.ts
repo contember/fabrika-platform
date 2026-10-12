@@ -203,6 +203,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		types: names,
 		maxPerOwner: z.int().positive().nullable(),
 		link: z.boolean(),
+		scan: z.literal(true).optional(),
 	})),
 	jobs: record(z.strictObject({
 		schedule: name,

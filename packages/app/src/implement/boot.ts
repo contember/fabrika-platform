@@ -41,6 +41,7 @@ import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
 import { fileCollections } from '../files/collections'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
+import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
@@ -76,6 +77,11 @@ export interface BootOptions {
 	readonly requireProxySecret?: boolean
 	/** The object storage of the file collections, which the Bun adapter opens. Without it, a contract with files does not boot. */
 	readonly files?: FileObjectStore
+	/**
+	 * The malware scanner of the scan job of `scan: true` collections, which the Bun adapter supplies to a job run
+	 * (`clamscanScanner`). Without it the scan job leaves every quarantined file quarantined and reports.
+	 */
+	readonly scanner?: FileScanner
 	/**
 	 * IAM's membership operations: the IAM binding on Cloudflare, `HttpIamRpc` elsewhere. Without it, a contract that
 	 * creates scopes, manages members or issues share links does not boot.
@@ -633,6 +639,14 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		credentials: workloads,
 		mint: issuer.mint,
 		data: bound?.data ?? null,
+		frameworkJobs: files?.scans === true
+			? [{
+				name: FILE_SCAN_JOB,
+				schedule: FILE_SCAN_SCHEDULE,
+				timeoutMs: SCAN_LIMITS.jobTimeoutMs,
+				run: (reporter, signal) => files.scanPass(options.scanner ?? null, reporter, signal),
+			}]
+			: [],
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)

@@ -33,7 +33,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `store.ts`             | `scoped(tables)` → `ScopedDatabase`; the stores (`defineStore`, framework tests only); the generated locator; every check.                                     |
 | `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                                       |
 | `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`, `dataAccessOf`; browser-safe. |
-| `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                                    |
+| `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`), its DDL (`fileTableSql`) and the scan migration (`fileScanSql`); pure.                                |
 | `file-tables.ts`       | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                                          |
 | `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                                |
 | `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                                          |
@@ -154,6 +154,13 @@ and the target `Ref`, so no handler can call it.
   moved would still reach the file. The pending insert and its completion lock the owner row `for share` on the
   owner `Ref`'s chain in their transaction. Only a removed, orphaned or stale pending row is ever purged, after its
   object.
+- **A file row is `pending`, `quarantined`, `live` or `rejected`** (`FILE_STATUSES`, the named check `<table>_status`).
+  A held file (`live`, `quarantined`, `rejected`) is located, found, listed, counted against the quota and removable;
+  a removed or orphaned one is purgeable in every held state. The scan verdicts `promote` and `reject` are the only
+  writes keyed by the id alone, and only inside a job attempt's lease (`fencedTransaction`; without a fence they throw).
+  `fileScanSql` replaces the unnamed two-state check an earlier `fileTableSql` wrote (Postgres named it
+  `<table cut to 50>_status_check`); `@fabrika/platform-node`'s classifier admits exactly that statement, and
+  `file-tables.test.ts` pins the two together.
   `framework-tables.ts` reads a unique violation off `DatabaseError.sqlState`; `framework.ts` imports only its types,
   and `store.ts` builds the implementation.
 - **A delivery key is recorded by its primary key.** The `delivery_id` column holds the key `@fabrika/app` derives

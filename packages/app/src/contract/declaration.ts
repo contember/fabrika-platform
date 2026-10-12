@@ -44,7 +44,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	spa: { options: ['dir', 'access'], owned: ['kind', 'prefix'] },
 	form: { options: ['input', 'appendTo', 'maxBytes'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
-	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link'], owned: ['kind'] },
+	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
 	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
 }
@@ -210,6 +210,8 @@ export interface FilesDeclaration extends OptionsRecord {
 	readonly types: readonly string[]
 	readonly maxPerOwner?: number
 	readonly link?: boolean
+	/** Every upload waits `quarantined` until the scan pass gives it a clean verdict. */
+	readonly scan?: boolean
 }
 
 export interface CronDeclaration extends OptionsRecord {

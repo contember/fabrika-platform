@@ -239,6 +239,8 @@ const fileCases = (row: EndpointRow, artifact: ContractArtifact): readonly Case[
 			testCase(`${row.id}: a file of another scope is 404`, call('download', 'other', 404)),
 		]
 	}
+	// The list is a query on the owner: the endpoint cases above cover it.
+	if (row.kind !== 'mutation') return []
 	return [
 		testCase(`${row.id}: a caller with ${collection.delete} removes an own file`, call('remove', 'own', 200)),
 		...(collection.delete === collection.read ? [] : [

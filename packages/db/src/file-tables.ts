@@ -12,7 +12,10 @@ import {
 	LimitNode,
 	type OperationNode,
 	OperatorNode,
+	OrderByItemNode,
+	OrderByNode,
 	ParensNode,
+	RawNode,
 	SelectAllNode,
 	SelectionNode,
 	type SelectQueryNode,
@@ -23,8 +26,9 @@ import { freeze, ownEntry } from './builtins'
 import type { RefGrant } from './capability'
 import { type Session, sessionOf } from './database'
 import { CapabilityError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
-import { FILE_COLUMNS, tableOf } from './file-table-sql'
+import { FILE_COLUMNS, type FileStatus, tableOf } from './file-table-sql'
 import type { GuardContext } from './guard'
+import { fencedTransaction } from './job-leases'
 import { linksPredicate, linkValues } from './links'
 import { acknowledgement, allOf, anyOf, column, deleteNode, equals, everything, insertNode, lockNode, scopedWhere, updateNode } from './nodes'
 import { type Container, modelOf, type TableModel, type TableModels } from './policy'
@@ -47,12 +51,40 @@ export interface PendingFile {
 	readonly createdAt: Date
 }
 
-export interface LiveFile {
+/** A file whose upload completed: served when `live`, `409` while `quarantined`, gone when `rejected`. */
+export type HeldStatus = Exclude<FileStatus, 'pending'>
+
+export interface StoredFile {
 	readonly id: string
 	readonly objectKey: string
 	readonly size: number
 	readonly contentType: string
 	readonly originalName: string | null
+	readonly status: HeldStatus
+}
+
+/** One row of an owner's file list. */
+export interface ListedFile {
+	readonly id: string
+	readonly name: string | null
+	readonly type: string
+	readonly size: number
+	readonly status: HeldStatus
+	readonly createdAt: Date
+}
+
+/** A keyset page of an owner's files, oldest first; `next` is the `after` of the following page. */
+export interface FilePage {
+	readonly items: readonly ListedFile[]
+	readonly next: string | null
+}
+
+/** What the scan pass needs of a quarantined file: its object, and the size and digest its upload recorded. */
+export interface QuarantinedFile {
+	readonly id: string
+	readonly objectKey: string
+	readonly size: number
+	readonly sha256: string
 }
 
 /** A row whose object may be deleted: removed, orphaned by its owner's deletion, or pending past the grace period. */
@@ -64,21 +96,40 @@ export interface RemovableFile {
 export interface FileCollectionTable {
 	/** Locks the owner where `owner` says it lies and inserts a `pending` row there: the intent to clean its object up. */
 	begin(owner: unknown, file: PendingFile): Promise<void>
-	/** Locks the owner again and makes the pending row `live`; `NotFoundError` when the owner moved or the row is gone. */
-	complete(owner: unknown, id: string, written: { readonly size: number; readonly sha256: string }): Promise<void>
+	/**
+	 * Locks the owner again and ends the pending row in `status`: `live`, or `quarantined` in a scanning collection;
+	 * `NotFoundError` when the owner moved or the row is gone.
+	 */
+	complete(owner: unknown, id: string, written: { readonly size: number; readonly sha256: string }, status: 'live' | 'quarantined'): Promise<void>
 	/** Deletes the caller's own pending row once its object is gone. */
 	abandon(id: string): Promise<void>
-	countLive(owner: unknown): Promise<number>
-	/** Marks a live file of `owner` removed. */
+	/** The owner's files that hold a place in its quota: live, quarantined and rejected, until removed. */
+	countHeld(owner: unknown): Promise<number>
+	/** Marks a held file of `owner` removed. */
 	retract(owner: unknown, id: string, at: Date): Promise<void>
-	/** The live file `file` names, over its whole chain; `NotFoundError` otherwise. */
-	find(file: unknown): Promise<LiveFile>
+	/** The held file `file` names, over its whole chain, in any held state; `NotFoundError` otherwise. */
+	find(file: unknown): Promise<StoredFile>
+	/** Marks the held file `file` names removed, in any held state. */
 	markRemoved(file: unknown, at: Date): Promise<void>
-	/** The containers of a live file, read from its row: its owner and the owner's chain. */
+	/** The containers of a held file, read from its row: its owner and the owner's chain. */
 	locate(id: string): Promise<ReadonlyMap<string, string> | null>
-	/** At most `limit` rows whose objects may be deleted; a pending row only when created before `pendingBefore`. */
+	/** At most `limit` held files of the owner `owner` (a `Ref` for the read action) after the id `after`, oldest first. */
+	list(owner: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage>
+	/** At most `limit` quarantined files that are neither removed nor orphaned, oldest first: the scan pass's batch. */
+	quarantined(limit: number): Promise<readonly QuarantinedFile[]>
+	/**
+	 * Makes a quarantined file `live` when it is still quarantined, not removed, not orphaned and its recorded digest is
+	 * `sha256`. Only inside a job attempt's lease, which fences the write; `false` when no row matched.
+	 */
+	promote(id: string, sha256: string): Promise<boolean>
+	/** Marks a quarantined file `rejected` once its object is deleted; fenced like `promote`. `false` when no row matched. */
+	reject(id: string): Promise<boolean>
+	/**
+	 * At most `limit` rows whose objects may be deleted: a removed or orphaned file in any held state, and a pending row
+	 * only when created before `pendingBefore`.
+	 */
 	removable(limit: number, pendingBefore: Date): Promise<readonly RemovableFile[]>
-	/** Deletes the row of a removable file; a live file's row, and a recent pending one, are never deleted. */
+	/** Deletes the row of a removable file; a held file's row, and a recent pending one, are never deleted. */
 	purge(id: string, pendingBefore: Date): Promise<void>
 }
 
@@ -110,7 +161,7 @@ function isNull(table: string, name: string, negated: boolean): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create(negated ? 'is not' : 'is'), ValueNode.createImmediate(null))
 }
 
-function compare(table: string, name: string, operator: '=' | '<', value: string | Date): OperationNode {
+function compare(table: string, name: string, operator: '=' | '<' | '>', value: string | Date): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create(operator), ValueNode.create(value))
 }
 
@@ -120,12 +171,14 @@ function selectNode(
 	conditions: OperationNode,
 	scope: OperationNode,
 	limit?: number,
+	orderBy?: string,
 ): SelectQueryNode {
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
 		selections,
 		where: scopedWhere(conditions, scope),
+		orderBy: orderBy === undefined ? undefined : OrderByNode.create([OrderByItemNode.create(column(table, orderBy), RawNode.createWithSql('asc'))]),
 		limit: limit === undefined ? undefined : LimitNode.create(ValueNode.create(limit)),
 	}
 	return freeze(node)
@@ -156,7 +209,31 @@ function integer(table: string, row: Readonly<Record<string, unknown>>, name: st
 	return value
 }
 
-const LIVE_COLUMNS = ['id', 'object_key', 'size', 'content_type', 'original_name']
+const STORED_COLUMNS = ['id', 'object_key', 'size', 'content_type', 'original_name', 'status']
+const LISTED_COLUMNS = ['id', 'original_name', 'content_type', 'size', 'status', 'created_at']
+const HELD: readonly HeldStatus[] = ['live', 'quarantined', 'rejected']
+
+function heldStatus(table: string, row: Readonly<Record<string, unknown>>): HeldStatus {
+	const status = ownEntry(row, 'status')
+	const held = HELD.find((candidate) => candidate === status)
+	if (held === undefined) {
+		throw new QueryRefusedError(`${table}.status came back as a state no held file has`)
+	}
+	return held
+}
+
+function nullableText(row: Readonly<Record<string, unknown>>, name: string): string | null {
+	const value = ownEntry(row, name)
+	return typeof value === 'string' ? value : null
+}
+
+function date(table: string, row: Readonly<Record<string, unknown>>, name: string): Date {
+	const value = ownEntry(row, name)
+	if (!(value instanceof Date)) {
+		throw new QueryRefusedError(`${table}.${name} came back as ${typeof value}`)
+	}
+	return value
+}
 
 function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, spec: FileCollectionSpec): FileCollectionTable {
 	const table = tableOf(spec.name)
@@ -178,16 +255,30 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		return grant
 	}
 
-	const live = (): OperationNode => allOf([compare(table, 'status', '=', 'live'), isNull(table, 'deleted_at', false), isNull(table, 'owner_id', true)])
+	const isHeld = (): OperationNode => anyOf(HELD.map((status) => compare(table, 'status', '=', status)))
+	const status = (value: HeldStatus): OperationNode => compare(table, 'status', '=', value)
+	/** A held file that is neither removed nor orphaned: one a request may reach. */
+	const held = (state: OperationNode = isHeld()): OperationNode => allOf([state, isNull(table, 'deleted_at', false), isNull(table, 'owner_id', true)])
 
-	/** Removed or orphaned live files, and pending rows older than `pendingBefore`; never an upload in progress. */
+	/** Removed or orphaned files in every held state, and pending rows older than `pendingBefore`; never an upload in progress. */
 	const removable = (pendingBefore: Date): OperationNode =>
 		anyOf([
-			ParensNode.create(
-				allOf([compare(table, 'status', '=', 'live'), ParensNode.create(anyOf([isNull(table, 'deleted_at', true), isNull(table, 'owner_id', false)]))]),
-			),
+			ParensNode.create(allOf([isHeld(), anyOf([isNull(table, 'deleted_at', true), isNull(table, 'owner_id', false)])])),
 			ParensNode.create(allOf([compare(table, 'status', '=', 'pending'), compare(table, 'created_at', '<', pendingBefore)])),
 		])
+
+	/** A verdict of the scan pass: one conditional update, fenced by the attempt's lease. */
+	async function verdict(id: string, changes: ReadonlyMap<string, string>, conditions: OperationNode): Promise<boolean> {
+		const current = runtime()
+		const fence = current.capabilities.fence()
+		if (fence === null) {
+			throw new QueryRefusedError(`files '${spec.name}': a scan verdict is written only inside the scan job's lease`)
+		}
+		const scope = equals(table, 'id', id)
+		const node = updateNode(table, changes, undefined, scopedWhere(conditions, scope), acknowledgement(table, 'id', undefined))
+		const updated = await fencedTransaction(sessionOf(current), fence, (transaction) => transaction.run(node, guard('UpdateQueryNode', table, scope)))
+		return updated.length > 0
+	}
 
 	/** Locks the owner row `for share` where the Ref says it lies, in `transaction`; `NotFoundError` when it does not. */
 	async function lockOwner(transaction: Session, grant: RefGrant): Promise<void> {
@@ -222,11 +313,16 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			})
 		},
 
-		async complete(capability: unknown, id: string, written: { readonly size: number; readonly sha256: string }): Promise<void> {
+		async complete(
+			capability: unknown,
+			id: string,
+			written: { readonly size: number; readonly sha256: string },
+			ended: 'live' | 'quarantined',
+		): Promise<void> {
 			const grant = grantOf(capability, owner.dimension, spec.actions.write)
 			const scope = ownedFile(grant, id)
 			const pending = allOf([compare(table, 'status', '=', 'pending'), isNull(table, 'deleted_at', false)])
-			const changes = new Map<string, string | number>([['status', 'live'], ['size', written.size], ['sha256', written.sha256]])
+			const changes = new Map<string, string | number>([['status', ended], ['size', written.size], ['sha256', written.sha256]])
 			const node = updateNode(table, changes, undefined, scopedWhere(pending, scope), acknowledgement(table, 'id', undefined))
 			await session().transaction(async (transaction) => {
 				await lockOwner(transaction, grant)
@@ -243,13 +339,13 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			await session().run(deleteNode(table, where, 'id'), guard('DeleteQueryNode', table, scope))
 		},
 
-		async countLive(capability: unknown): Promise<number> {
+		async countHeld(capability: unknown): Promise<number> {
 			const grant = grantOf(capability, owner.dimension, spec.actions.write)
 			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
 			const count = SelectionNode.create(
 				AliasNode.create(AggregateFunctionNode.create('count', [SelectAllNode.create()]), IdentifierNode.create('count')),
 			)
-			const conditions = allOf([compare(table, 'status', '=', 'live'), isNull(table, 'deleted_at', false)])
+			const conditions = allOf([isHeld(), isNull(table, 'deleted_at', false)])
 			const [row] = await session().run<Readonly<Record<string, unknown>>>(
 				selectNode(table, [count], conditions, scope),
 				guard('SelectQueryNode', table, scope),
@@ -264,29 +360,29 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 				table,
 				new Map([['deleted_at', at]]),
 				undefined,
-				scopedWhere(live(), scope),
+				scopedWhere(held(), scope),
 				acknowledgement(table, 'id', undefined),
 			)
 			await session().run(node, guard('UpdateQueryNode', table, scope))
 		},
 
-		async find(capability: unknown): Promise<LiveFile> {
+		async find(capability: unknown): Promise<StoredFile> {
 			const grant = grantOf(capability, spec.dimension, spec.actions.read)
 			const scope = linksPredicate(table, linkValues(table, fileLinks, grant))
 			const [row] = await session().run<Readonly<Record<string, unknown>>>(
-				selectNode(table, selections(table, LIVE_COLUMNS), live(), scope, 1),
+				selectNode(table, selections(table, STORED_COLUMNS), held(), scope, 1),
 				guard('SelectQueryNode', table, scope),
 			)
 			if (row === undefined) {
 				throw new NotFoundError(`files '${spec.name}': the file is not where its Ref says`)
 			}
-			const originalName = ownEntry(row, 'original_name')
 			return freeze({
 				id: text(table, row, 'id'),
 				objectKey: text(table, row, 'object_key'),
 				size: integer(table, row, 'size'),
 				contentType: text(table, row, 'content_type'),
-				originalName: typeof originalName === 'string' ? originalName : null,
+				originalName: nullableText(row, 'original_name'),
+				status: heldStatus(table, row),
 			})
 		},
 
@@ -297,7 +393,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 				table,
 				new Map([['deleted_at', at]]),
 				undefined,
-				scopedWhere(live(), scope),
+				scopedWhere(held(), scope),
 				acknowledgement(table, 'id', undefined),
 			)
 			const updated = await session().run(node, guard('UpdateQueryNode', table, scope))
@@ -310,13 +406,62 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const scope = equals(table, 'id', id)
 			const columns = fileOwnerLinks.map((link) => link.column)
 			const [row] = await session().run<Readonly<Record<string, unknown>>>(
-				selectNode(table, selections(table, columns), live(), scope, 1),
+				selectNode(table, selections(table, columns), held(), scope, 1),
 				guard('SelectQueryNode', table, scope),
 			)
 			if (row === undefined) {
 				return null
 			}
 			return new Map(fileOwnerLinks.map((link) => [link.dimension, text(table, row, link.column)]))
+		},
+
+		async list(capability: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage> {
+			const grant = grantOf(capability, owner.dimension, spec.actions.read)
+			if (!Number.isSafeInteger(page.limit) || page.limit < 1) {
+				throw new QueryRefusedError(`files '${spec.name}': a page holds at least one file`)
+			}
+			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
+			const conditions = page.after === null ? held() : allOf([held(), compare(table, 'id', '>', page.after)])
+			const rows = await session().run<Readonly<Record<string, unknown>>>(
+				selectNode(table, selections(table, LISTED_COLUMNS), conditions, scope, page.limit + 1, 'id'),
+				guard('SelectQueryNode', table, scope),
+			)
+			const items = rows.slice(0, page.limit).map((row) =>
+				freeze({
+					id: text(table, row, 'id'),
+					name: nullableText(row, 'original_name'),
+					type: text(table, row, 'content_type'),
+					size: integer(table, row, 'size'),
+					status: heldStatus(table, row),
+					createdAt: date(table, row, 'created_at'),
+				})
+			)
+			const last = items[items.length - 1]
+			return freeze({ items, next: rows.length > page.limit && last !== undefined ? last.id : null })
+		},
+
+		async quarantined(limit: number): Promise<readonly QuarantinedFile[]> {
+			const scope = everything()
+			const rows = await session().run<Readonly<Record<string, unknown>>>(
+				selectNode(table, selections(table, ['id', 'object_key', 'size', 'sha256']), held(status('quarantined')), scope, limit, 'created_at'),
+				guard('SelectQueryNode', table, scope),
+			)
+			return rows.map((row) =>
+				freeze({
+					id: text(table, row, 'id'),
+					objectKey: text(table, row, 'object_key'),
+					size: integer(table, row, 'size'),
+					sha256: text(table, row, 'sha256'),
+				})
+			)
+		},
+
+		promote(id: string, sha256: string): Promise<boolean> {
+			return verdict(id, new Map([['status', 'live']]), allOf([held(status('quarantined')), compare(table, 'sha256', '=', sha256)]))
+		},
+
+		reject(id: string): Promise<boolean> {
+			return verdict(id, new Map([['status', 'rejected']]), status('quarantined'))
 		},
 
 		async removable(limit: number, pendingBefore: Date): Promise<readonly RemovableFile[]> {

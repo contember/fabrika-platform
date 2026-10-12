@@ -1,5 +1,6 @@
-// The runtime of `c.files`: the generated upload, download and remove endpoints, the locator of every `file:<name>`
-// dimension, and the sweep that deletes the objects of removed, orphaned and abandoned files. Access is the core's:
+// The runtime of `c.files`: the generated upload, download, list and remove endpoints, the locator of every
+// `file:<name>` dimension, the scan pass of `scan: true` collections (`scan.ts`), and the sweep that deletes the objects
+// of removed, orphaned and abandoned files. Access is the core's:
 // the dispatcher checks the access form and mints the target, and every database operation here takes that target,
 // so `@fabrika/db` scopes it by the whole chain the access check saw.
 
@@ -8,10 +9,13 @@ import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type FileCollectionTable, fileTableName, fileTablesOf, isScopedDatabase } from '@fabrika/db/framework'
 import { type FileObjectStore, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
-import { HttpError, jsonResponse } from '../errors'
+import { FILE_LIMITS } from '../contract/defaults'
+import { HttpError, jsonResponse, NotFoundError } from '../errors'
 import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase, ImplementationDatabase } from '../implement/implement'
+import type { JobReporter } from '../jobs/report'
+import { type FileScanner, runScanPass } from './scan'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
 
@@ -28,6 +32,24 @@ export const PENDING_GRACE_MS = 60 * 60 * 1000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const ById = z.strictObject({ id: z.uuid() })
+
+/** `files.<name>.list`'s schemas; `FILE_LIST_INPUT` and `FILE_LIST_OUTPUT` of the contract describe the same. */
+export const FileListInput = z.strictObject({
+	owner: z.string().min(1),
+	after: z.uuid().optional(),
+	limit: z.number().int().min(1).max(FILE_LIMITS.listPageMax).optional(),
+})
+export const FileListOutput = z.strictObject({
+	items: z.array(z.strictObject({
+		id: z.uuid(),
+		name: z.string().min(1).nullable(),
+		type: z.string().min(1),
+		size: z.number().int().min(0),
+		status: z.enum(['live', 'quarantined', 'rejected']),
+		createdAt: z.iso.datetime(),
+	})).max(FILE_LIMITS.listPageMax),
+	next: z.uuid().nullable(),
+})
 
 interface Collection {
 	readonly name: string
@@ -175,12 +197,23 @@ export class FileCollections {
 			}
 			const upload = row('upload')
 			const download = row('download')
+			const list = row('list')
 			const remove = row('remove')
 			if (upload !== null) {
 				served.set(upload.id, { kind: 'file', row: upload, serve: (request, target) => this.#upload(collection, request, target) })
 			}
 			if (download !== null) {
 				served.set(download.id, { kind: 'file', row: download, serve: (_request, target) => this.#download(collection, target) })
+			}
+			if (list !== null) {
+				served.set(list.id, {
+					kind: 'procedure',
+					row: list,
+					input: FileListInput,
+					output: FileListOutput,
+					handler: async ({ input, ctx }) => this.#list(collection, 'target' in ctx ? ctx.target : undefined, input),
+					facilities: NO_FACILITIES,
+				})
 			}
 			if (remove !== null) {
 				served.set(remove.id, {
@@ -209,7 +242,8 @@ export class FileCollections {
 		if (Number(request.headers.get('Content-Length') ?? 0) > artifact.maxBytes) {
 			throw tooLarge(collection)
 		}
-		if (artifact.maxPerOwner !== null && (await table.countLive(owner)) >= artifact.maxPerOwner) {
+		// A quarantined or rejected file holds its place too: uploads waiting for the scan are not a way past the limit.
+		if (artifact.maxPerOwner !== null && (await table.countHeld(owner)) >= artifact.maxPerOwner) {
 			throw tooMany(collection)
 		}
 		const { head, stream } = await readHead(request.body ?? new Blob([]).stream(), SNIFF_BYTES)
@@ -223,7 +257,7 @@ export class FileCollections {
 		const body = digesting(stream, UPLOAD_TIMEOUT_MS)
 		try {
 			const { size } = await this.#store.write(objectKey, body.stream, { contentType: type, maxBytes: artifact.maxBytes })
-			await table.complete(owner, id, { size, sha256: body.digest() })
+			await table.complete(owner, id, { size, sha256: body.digest() }, artifact.scan === true ? 'quarantined' : 'live')
 		} catch (error) {
 			await this.#abandon(collection, id, objectKey)
 			if (isNamed(error, 'ObjectTooLargeError')) {
@@ -236,8 +270,8 @@ export class FileCollections {
 		} finally {
 			body.stop()
 		}
-		// Counted again once live: two concurrent uploads may both have passed the first count.
-		if (artifact.maxPerOwner !== null && (await table.countLive(owner)) > artifact.maxPerOwner) {
+		// Counted again once held: two concurrent uploads may both have passed the first count.
+		if (artifact.maxPerOwner !== null && (await table.countHeld(owner)) > artifact.maxPerOwner) {
 			await table.retract(owner, id, new Date())
 			await this.#sweep(collection)
 			throw tooMany(collection)
@@ -260,8 +294,15 @@ export class FileCollections {
 		}
 	}
 
+	/** Only a live file is served: a quarantined one answers 409 until the scan pass decides, a rejected one 404. */
 	async #download(collection: Collection, target: unknown): Promise<FileDownload> {
 		const file = await collection.table.find(target)
+		if (file.status === 'quarantined') {
+			throw new HttpError(409, 'quarantined', 'The file is being checked for malware; try again in a few minutes')
+		}
+		if (file.status === 'rejected') {
+			throw new NotFoundError()
+		}
 		const object = await this.#store.read(file.objectKey)
 		if (object === null) {
 			throw new ServerFault('file_object_missing', `the object of a file in '${collection.name}' is missing from storage`)
@@ -271,6 +312,20 @@ export class FileCollections {
 			throw new ServerFault('file_object_mismatch', `the object of a file in '${collection.name}' has another size than its row records`)
 		}
 		return new FileDownload({ body: object.body, size: file.size, contentType: file.contentType, name: file.originalName })
+	}
+
+	async #list(collection: Collection, owner: unknown, input: Readonly<Record<string, unknown>>): Promise<z.input<typeof FileListOutput>> {
+		// The dispatcher parsed the input with `FileListInput`; the access form took `owner` for the target.
+		const after = input['after']
+		const limit = input['limit']
+		const page = await collection.table.list(owner, {
+			after: typeof after === 'string' ? after : null,
+			limit: typeof limit === 'number' ? limit : FILE_LIMITS.listPageDefault,
+		})
+		return {
+			items: page.items.map((file) => ({ ...file, createdAt: file.createdAt.toISOString() })),
+			next: page.next,
+		}
 	}
 
 	async #remove(collection: Collection, target: unknown): Promise<{ readonly id: string }> {
@@ -305,6 +360,20 @@ export class FileCollections {
 	/** One sweep of every collection, for a framework job to run on a schedule. */
 	async sweep(): Promise<void> {
 		for (const collection of this.#collections) {
+			await this.#sweep(collection)
+		}
+	}
+
+	/** Whether a collection scans its uploads, so the scan job runs. */
+	get scans(): boolean {
+		return this.#collections.some((collection) => collection.artifact.scan === true)
+	}
+
+	/** One scan pass over every `scan: true` collection, then their sweep: the body of the scan job. */
+	async scanPass(scanner: FileScanner | null, reporter: JobReporter, signal: AbortSignal): Promise<void> {
+		const scanning = this.#collections.filter((collection) => collection.artifact.scan === true)
+		await runScanPass({ collections: scanning, store: this.#store, scanner, reporter, signal })
+		for (const collection of scanning) {
 			await this.#sweep(collection)
 		}
 	}

@@ -292,6 +292,8 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly types: readonly [string, ...string[]]
 			readonly maxPerOwner?: number
 			readonly link?: boolean
+			/** Each upload is scanned for malware and served only after a clean verdict; until then it answers 409. */
+			readonly scan?: boolean
 		} & Owned<'kind'>,
 	): FileCollection<A>
 	cron<const Acts extends readonly [A, ...A[]], const Sc extends D | 'app'>(
@@ -397,6 +399,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			types: collection.types,
 			maxPerOwner: collection.maxPerOwner,
 			link: collection.link,
+			scan: collection.scan,
 			unknownOptions: unknownOptions(collection, 'files'),
 		}),
 		cron: (schedule, options) => ({

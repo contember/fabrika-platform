@@ -53,6 +53,7 @@ import {
 	CONNECT_PREFIX,
 	CONTRACT_DEFAULTS,
 	exportBase,
+	FILE_LIMITS,
 	FILES_PREFIX,
 	joinPath,
 	JSON_ADMISSION,
@@ -96,6 +97,40 @@ const UUID: SchemaShape = {
 }
 const ID_OBJECT: SchemaShape = { type: 'object', fields: { id: UUID } }
 const TEXT: SchemaShape = { ...UUID, format: null, minLength: 1 }
+
+const COUNT: SchemaShape = { type: 'number', int: true, min: 0, exclusiveMin: false, max: null, exclusiveMax: false, multipleOf: null }
+
+/** The shapes of a collection's generated list query; `src/files/collections.ts` parses with the same schemas. */
+export const FILE_LIST_INPUT: SchemaShape = {
+	type: 'object',
+	fields: {
+		owner: TEXT,
+		after: { type: 'optional', inner: UUID },
+		limit: { type: 'optional', inner: { ...COUNT, min: 1, max: FILE_LIMITS.listPageMax } },
+	},
+}
+export const FILE_LIST_OUTPUT: SchemaShape = {
+	type: 'object',
+	fields: {
+		items: {
+			type: 'array',
+			minItems: null,
+			maxItems: FILE_LIMITS.listPageMax,
+			items: {
+				type: 'object',
+				fields: {
+					id: UUID,
+					name: { type: 'nullable', inner: TEXT },
+					type: TEXT,
+					size: COUNT,
+					status: { type: 'enum', values: ['live', 'quarantined', 'rejected'] },
+					createdAt: { ...UUID, format: 'datetime' },
+				},
+			},
+		},
+		next: { type: 'nullable', inner: UUID },
+	},
+}
 
 /** The shapes of the generated webhook binding endpoints; `@fabrika/app/implement` parses with the same schemas. */
 export const WEBHOOK_BIND_INPUT: SchemaShape = {
@@ -634,6 +669,18 @@ class ArtifactBuilder {
 				output: null,
 			})
 			this.#row({
+				id: `files.${name}.list`,
+				source,
+				kind: 'query',
+				method: 'POST',
+				path: `${base}.list`,
+				callers: ['human'],
+				requirement: { kind: 'action', action: collection.read, access: { form: 'on', dimension: owner.scope.dimension, from: 'owner' } },
+				admission: JSON_ADMISSION,
+				input: FILE_LIST_INPUT,
+				output: FILE_LIST_OUTPUT,
+			})
+			this.#row({
 				id: `files.${name}.remove`,
 				source,
 				kind: 'mutation',
@@ -667,6 +714,15 @@ class ArtifactBuilder {
 		if (collection.types.length === 0) {
 			this.#problem(where, 'admits no media type (allowed: types: [<exact media types>])')
 		}
+		if (collection.scan !== undefined && typeof collection.scan !== 'boolean') {
+			this.#problem(where, 'scan is true or false')
+		}
+		if (collection.scan === true && collection.maxBytes > FILE_LIMITS.maxScannedBytes) {
+			this.#problem(
+				where,
+				`scans its files and admits ${collection.maxBytes} bytes per file; the scanner gives a clean verdict to at most ${FILE_LIMITS.maxScannedBytes} (allowed: maxBytes: ${FILE_LIMITS.maxScannedBytes} or less)`,
+			)
+		}
 		return {
 			owner: collection.owner,
 			read: collection.read,
@@ -676,6 +732,7 @@ class ArtifactBuilder {
 			types: [...collection.types],
 			maxPerOwner: collection.maxPerOwner ?? CONTRACT_DEFAULTS.fileMaxPerOwner,
 			link: collection.link ?? CONTRACT_DEFAULTS.fileLink,
+			...(collection.scan === true ? { scan: true } : {}),
 		}
 	}
 

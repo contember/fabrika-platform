@@ -29,6 +29,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract } from '../contract/define'
+import type { FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
@@ -53,6 +54,8 @@ export interface TestKitOptions {
 	readonly database?: Database
 	/** The object storage of the file collections, as the runtime adapter supplies it to `boot`. */
 	readonly files?: FileObjectStore
+	/** The scanner of the scan job of `scan: true` collections; without it, the job leaves every upload quarantined. */
+	readonly scanner?: FileScanner
 	/**
 	 * IAM's membership operations, for an application that creates scopes, manages members or issues share links:
 	 * `boot` asks it as the adapter's transport, and the kit's proxy obtains each delegation grant from it.
@@ -208,6 +211,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		assets: options.assets ?? defaultAssets,
 		database: options.database,
 		files: options.files,
+		...(options.scanner === undefined ? {} : { scanner: options.scanner }),
 		membership,
 		connectBindings,
 		workloadTokens,

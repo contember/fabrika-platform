@@ -143,7 +143,7 @@ describe.skipIf(!hasPostgres)('a bound Date on Postgres', () => {
 		const file = pending(AT)
 		await expect(files.begin(ownerRef('n1'), pending(new Date(Number.NaN)))).rejects.toBeInstanceOf(QueryRefusedError)
 		await files.begin(ownerRef('n1'), file)
-		await files.complete(ownerRef('n1'), file.id, { size: 3, sha256: 'ab'.repeat(32) })
+		await files.complete(ownerRef('n1'), file.id, { size: 3, sha256: 'ab'.repeat(32) }, 'live')
 		const fileRef = alice.ref('file:attachments', 'notes.delete', file.id, { note: 'n1', workspace: 'w1', organization: 'o1' })
 		await expect(files.markRemoved(fileRef, new Date(Number.NaN))).rejects.toBeInstanceOf(QueryRefusedError)
 		const [row] = await admin((sql) => sql.unsafe(`select deleted_at from ${schema}.fabrika_files_attachments where id = $1`, [file.id]))

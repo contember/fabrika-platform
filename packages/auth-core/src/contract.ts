@@ -280,6 +280,11 @@ export interface FileCollectionArtifact {
 	readonly maxPerOwner: number | null
 	/** Whether a share link to the owner reaches the files. */
 	readonly link: boolean
+	/**
+	 * Present when every upload waits `quarantined` for a clean malware verdict before it is served. Absent otherwise,
+	 * so the digest of a contract that does not scan is what it was before the field existed.
+	 */
+	readonly scan?: true
 }
 
 export interface JobArtifact {

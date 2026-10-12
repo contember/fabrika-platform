@@ -545,6 +545,7 @@ describe("the contract's endpoint table is enforced by the proxy, and survives t
 			'api.notes.restore',
 			'api.notes.trash',
 			'files.attachments.download',
+			'files.attachments.list',
 			'files.attachments.remove',
 			'files.attachments.upload',
 			'health',
