@@ -35,6 +35,7 @@ bun test src/__tests__/locators.test.ts         # on, in and over through nested
 bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
 bun test src/__tests__/file-scan.test.ts        # scan: true and the scan job (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_CLAMSCAN_BIN adds a real ClamAV)
 bun test src/__tests__/clamscan.test.ts         # the ClamAV scanner: stand-in binaries, and a real clamscan with FABRIKA_TEST_CLAMSCAN_BIN
+bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damaged, encrypted, nested, bombs
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
@@ -114,6 +115,7 @@ src/
   files/              c.files: served by boot, never imported by an application
     collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep
     scan.ts           the scan pass of scan: true collections and the FileScanner contract (FILE_SCAN_JOB)
+    archive.ts        checkArchive: what a ZIP must be for the scanner's OK to cover it
     clamscan.ts       clamscanScanner: ClamAV's clamscan over a batch (Bun; @fabrika/app/bun only)
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
@@ -613,19 +615,31 @@ vocabulary (`packages/db/CLAUDE.md`).
   remove sweeps its collection, and the scan job sweeps the scanning ones. `serveContract` opens the object storage from
   `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or presign one.
 - **Only a completed clean verdict promotes a file** (`scan.ts`). An upload to a `scan: true` collection ends
-  `quarantined`; the download answers 409 until the scan job writes `live`, and 404 once `rejected`. The pass checks each
-  object's size and SHA-256 against the upload's while the scanner reads it, and promotes only a file the scanner called
-  clean and whose bytes verified. Every other outcome leaves the file quarantined and reports a fixed code; never add a
-  path that makes a file live without a verdict, or that treats a scanner error, a timeout or a missing verdict as
-  clean. A rejection deletes the object before it writes `rejected`, so a failed delete is retried by the next pass.
-- **A verdict is written only under the scan job's lease.** `FileCollectionTable.promote` and `reject` refuse to run
-  without a fence and are one conditional update each (still quarantined, not removed, not orphaned, same digest), so a
-  pass that lost its lease or timed out, or a file removed meanwhile, changes nothing. The scan job is a framework job of
-  `bindJobs` (`FrameworkJob`): a reserved name with `-`, which no `c.cron` name can take, no handler and no key.
+  `quarantined`; the download answers 409 until the scan job writes `live`, and 404 once `rejected`. The pass reads each
+  object whole, checks its size and SHA-256 against the upload's and checks it as an archive (`archive.ts`) before the
+  scanner sees it, and promotes only a file the scanner called clean (or an empty one) whose bytes verified. Never add a
+  path that makes a file live without that, or that treats a scanner error, a timeout or a missing verdict as clean. A
+  rejection deletes the object before it writes `rejected`, so a failed delete is retried by the next pass.
+- **ClamAV's OK never vouches for an archive.** `checkArchive` admits a ZIP only when every entry, nested ZIPs to one
+  level included, is stored or deflated, unencrypted, CRC- and size-consistent and laid out without gaps, within the
+  entry and unpacked bounds; every other archive format is refused, at the top or inside. Keep it a framework check:
+  never rely on a scanner flag for it.
+- **A download of a scanning collection serves only the scanned version** (`FileObjectStore.readVersion`, one
+  conditional read): a mismatch, or a live row without a version, answers 409 and quarantines the file again. Never
+  read the object by key alone for such a file.
+- **A file without a verdict is retried, alone, with backoff** (`deferScan`, `SCAN_LIMITS.maxAttempts`): the batch
+  takes the fewest tries first and scans a file that failed before on its own, so old failures never starve new
+  uploads. Installation failures (no scanner, missing or stale signatures) count no try.
+- **A verdict is written only under the scan job's lease.** `FileCollectionTable.promote`, `reject` and `deferScan`
+  refuse to run without a fence and are one conditional update each (still quarantined, not removed, not orphaned,
+  same digest), so a pass that lost its lease or timed out, or a file removed meanwhile, changes nothing. The scan job is
+  a framework job of `bindJobs` (`FrameworkJob`): a reserved name with `-`, which no `c.cron` name can take, no handler
+  and no key; the runner refuses its writes before it signals the run to stop.
 - **The scanner comes from the runtime adapter.** `runContractJob` passes `clamscanScanner()` (ClamAV on `PATH`), which
   runs with only `PATH` in its environment, its own limits alerting (`--alert-exceeds-max`, `--alert-encrypted`), and
-  `--fail-if-cvd-older-than=3`; `clamscanVerdicts` reads only an exact `<path>: OK` as clean. `boot` without a scanner
-  still serves: the scan job reports `scanner_missing` and leaves every file quarantined.
+  `--fail-if-cvd-older-than=3`; one deadline covers opening and writing the objects, the run and the cleanup, and no
+  scanner is spawned once it passed. `clamscanVerdicts` reads only an exact `<path>: OK` as clean. `boot` without a
+  scanner still serves: the scan job reports `scanner_missing` and leaves every file quarantined.
 
 ## The typed client and the test kit
 

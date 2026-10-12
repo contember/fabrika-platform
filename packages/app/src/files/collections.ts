@@ -6,8 +6,8 @@
 
 import type { ContractArtifact, CredentialedEndpoint, EndpointRow, FileCollectionArtifact } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
-import { type FileCollectionTable, fileTableName, fileTablesOf, isScopedDatabase } from '@fabrika/db/framework'
-import { type FileObjectStore, uuidv7 } from '@fabrika/platform'
+import { type FileCollectionTable, fileTableName, fileTablesOf, isScopedDatabase, type StoredFile } from '@fabrika/db/framework'
+import { type FileObjectStore, type StoredObject, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
 import { FILE_LIMITS } from '../contract/defaults'
 import { HttpError, jsonResponse, NotFoundError } from '../errors'
@@ -259,6 +259,11 @@ export class FileCollections {
 			const { size } = await this.#store.write(objectKey, body.stream, { contentType: type, maxBytes: artifact.maxBytes })
 			await table.complete(owner, id, { size, sha256: body.digest() }, artifact.scan === true ? 'quarantined' : 'live')
 		} catch (error) {
+			if (isNamed(error, 'ObjectExistsError')) {
+				// The key holds an object this upload did not write: never delete it, only the pending row.
+				await table.abandon(id)
+				throw new ServerFault(`files '${collection.name}' found an object already under a new file's key`)
+			}
 			await this.#abandon(collection, id, objectKey)
 			if (isNamed(error, 'ObjectTooLargeError')) {
 				throw tooLarge(collection)
@@ -303,7 +308,7 @@ export class FileCollections {
 		if (file.status === 'rejected') {
 			throw new NotFoundError()
 		}
-		const object = await this.#store.read(file.objectKey)
+		const object = collection.artifact.scan === true ? await this.#scannedObject(collection, target, file) : await this.#store.read(file.objectKey)
 		if (object === null) {
 			throw new ServerFault('file_object_missing', `the object of a file in '${collection.name}' is missing from storage`)
 		}
@@ -312,6 +317,20 @@ export class FileCollections {
 			throw new ServerFault('file_object_mismatch', `the object of a file in '${collection.name}' has another size than its row records`)
 		}
 		return new FileDownload({ body: object.body, size: file.size, contentType: file.contentType, name: file.originalName })
+	}
+
+	/**
+	 * The object of a live file of a scanning collection, only as the version the scan passed, in one conditional read:
+	 * no byte of a replaced object is served. A file without that version — replaced, or live before the collection
+	 * scanned — is quarantined again, so the scan job decides about the bytes stored now.
+	 */
+	async #scannedObject(collection: Collection, target: unknown, file: StoredFile): Promise<StoredObject> {
+		const object = file.objectVersion === null ? null : await this.#store.readVersion(file.objectKey, file.objectVersion)
+		if (object === null) {
+			await collection.table.requarantine(target, file.objectVersion)
+			throw new HttpError(409, 'quarantined', 'The file is being checked for malware; try again in a few minutes')
+		}
+		return object
 	}
 
 	async #list(collection: Collection, owner: unknown, input: Readonly<Record<string, unknown>>): Promise<z.input<typeof FileListOutput>> {
@@ -433,6 +452,7 @@ export function fileCollections(
 				owner: collection.owner,
 				dimension,
 				actions: { read: collection.read, write: collection.write, delete: collection.delete },
+				scan: collection.scan === true,
 			})
 			collections.push({ name, artifact: collection, dimension, table })
 		} catch (error) {

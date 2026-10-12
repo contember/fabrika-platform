@@ -30,6 +30,7 @@ const SPEC = {
 	owner: 'notes',
 	dimension: 'file:attachments',
 	actions: { read: 'notes.read', write: 'notes.write', delete: 'notes.delete' },
+	scan: true,
 }
 const OWNER = {
 	table: 'notes',
@@ -44,6 +45,9 @@ let database: Database
 let files: FileCollectionTable
 let leases: JobLeases
 const SHA = 'ab'.repeat(32)
+const VERSION = '"v1"'
+/** A moment just after now: every file whose retry is not deferred is due. */
+const soon = (): Date => new Date(Date.now() + 1000)
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
@@ -187,6 +191,7 @@ describe.skipIf(!hasPostgres)('the rows of a file collection on Postgres', () =>
 			contentType: 'image/png',
 			originalName: 'a.png',
 			status: 'live',
+			objectVersion: null,
 		})
 		expect(await files.countHeld(ownerRef('n1'))).toBe(1)
 	})
@@ -302,6 +307,7 @@ describe('the status check of a scanning collection', () => {
 				const earlier = fileTableSql(name, { table: 'notes', key: { column: 'id', type: 'text' }, chain: [] })
 					.replace(/CONSTRAINT \S+ CHECK \(status IN \([^)]*\)\)/, "CHECK (status IN ('pending', 'live'))")
 					.replace(/^CREATE INDEX \S+_scan .*$/m, '')
+					.replace(/^\t(object_version|scan_attempts|scan_after) .*\n/gm, '')
 				await sql.unsafe(`set search_path to ${legacy}; ${earlier}`)
 			}
 		})
@@ -328,16 +334,23 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		expect(await statusOf(id)).toBe('quarantined')
 		expect(await files.locate(id)).toEqual(new Map([['note', 's1'], ['workspace', 'w1'], ['organization', 'o1']]))
 		expect((await files.find(fileRef('notes.read', id, 's1'))).status).toBe('quarantined')
-		expect(await files.quarantined(100)).toContainEqual({ id, objectKey: `attachments/${id}`, size: 3, sha256: SHA })
-		expect(await inLease(() => files.promote(id, SHA))).toBe(true)
+		expect(await files.quarantined(100, soon())).toContainEqual({
+			id,
+			objectKey: `attachments/${id}`,
+			size: 3,
+			sha256: SHA,
+			contentType: 'image/png',
+			scanAttempts: 0,
+		})
+		expect(await inLease(() => files.promote(id, SHA, VERSION))).toBe(true)
 		expect((await files.find(fileRef('notes.read', id, 's1'))).status).toBe('live')
-		expect((await files.quarantined(100)).map((file) => file.id)).not.toContain(id)
+		expect((await files.quarantined(100, soon())).map((file) => file.id)).not.toContain(id)
 	})
 
 	test('a verdict outside a lease is refused, and one whose lease was lost writes nothing', async () => {
 		await addNote('s2')
 		const id = await quarantinedFile('s2')
-		await expect(files.promote(id, SHA)).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(files.promote(id, SHA, VERSION)).rejects.toBeInstanceOf(QueryRefusedError)
 		await expect(files.reject(id)).rejects.toBeInstanceOf(QueryRefusedError)
 		await expect(
 			inLease(async () => {
@@ -345,7 +358,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 				if (fence === null) throw new Error('no lease')
 				// Another run takes the lease over: a newer generation is granted, so the old attempt commits nothing.
 				await admin((sql) => sql.unsafe(`update ${schema}.fabrika_job_leases set generation = generation + 1 where job = $1`, [fence.job]))
-				return files.promote(id, SHA)
+				return files.promote(id, SHA, VERSION)
 			}),
 		).rejects.toBeInstanceOf(LeaseLostError)
 		expect(await statusOf(id)).toBe('quarantined')
@@ -359,13 +372,13 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		const orphaned = await quarantinedFile('s4')
 		await files.markRemoved(fileRef('notes.delete', removed, 's3'), new Date())
 		await admin((sql) => sql.unsafe(`delete from ${schema}.notes where id = 's4'`))
-		expect(await inLease(() => files.promote(removed, SHA))).toBe(false)
-		expect(await inLease(() => files.promote(orphaned, SHA))).toBe(false)
-		expect(await inLease(() => files.promote(changed, 'cd'.repeat(32)))).toBe(false)
+		expect(await inLease(() => files.promote(removed, SHA, VERSION))).toBe(false)
+		expect(await inLease(() => files.promote(orphaned, SHA, VERSION))).toBe(false)
+		expect(await inLease(() => files.promote(changed, 'cd'.repeat(32), VERSION))).toBe(false)
 		expect(await statusOf(removed)).toBe('quarantined')
 		expect(await statusOf(orphaned)).toBe('quarantined')
 		expect(await statusOf(changed)).toBe('quarantined')
-		const batch = (await files.quarantined(100)).map((file) => file.id)
+		const batch = (await files.quarantined(100, soon())).map((file) => file.id)
 		expect(batch).toContain(changed)
 		expect(batch).not.toContain(removed)
 		expect(batch).not.toContain(orphaned)
@@ -376,7 +389,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		await addNote('s6')
 		const rejected = await quarantinedFile('s5')
 		expect(await inLease(() => files.reject(rejected))).toBe(true)
-		expect(await inLease(() => files.promote(rejected, SHA))).toBe(false)
+		expect(await inLease(() => files.promote(rejected, SHA, VERSION))).toBe(false)
 		expect((await files.find(fileRef('notes.read', rejected, 's5'))).status).toBe('rejected')
 		const quarantined = await quarantinedFile('s5')
 		await liveFile('s5')
@@ -419,5 +432,40 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		await expect(files.list(reader, { after: null, limit: 0 })).rejects.toBeInstanceOf(QueryRefusedError)
 		await moveNote('s7', 'w2')
 		expect((await files.list(reader, { after: null, limit: 10 })).items).toEqual([])
+	})
+
+	test('a deferred retry waits until its time, and files with fewer tries come first', async () => {
+		await addNote('s8')
+		const failing = await quarantinedFile('s8')
+		await inLease(() => files.deferScan(failing, 1, new Date(Date.now() + HOUR)))
+		const fresh = await quarantinedFile('s8')
+		const ids = (await files.quarantined(1000, soon())).map((file) => file.id)
+		expect(ids).toContain(fresh)
+		expect(ids).not.toContain(failing)
+		const later = await files.quarantined(1000, new Date(Date.now() + 2 * HOUR))
+		expect(later.findIndex((file) => file.id === fresh)).toBeLessThan(later.findIndex((file) => file.id === failing))
+		expect(later.find((file) => file.id === failing)?.scanAttempts).toBe(1)
+		// A retry recorded twice for the same try changes nothing the second time.
+		expect(await inLease(() => files.deferScan(failing, 1, new Date()))).toBe(false)
+	})
+
+	test('a live file is quarantined again only by the download that saw another version than the scanned one', async () => {
+		await addNote('s9')
+		const id = await quarantinedFile('s9')
+		await inLease(() => files.promote(id, SHA, VERSION))
+		const reader = fileRef('notes.read', id, 's9')
+		expect((await files.find(reader)).objectVersion).toBe(VERSION)
+		await files.requarantine(reader, '"another"')
+		expect(await statusOf(id)).toBe('live')
+		await files.requarantine(reader, VERSION)
+		expect(await statusOf(id)).toBe('quarantined')
+		expect((await files.find(reader)).objectVersion).toBeNull()
+	})
+
+	test('a collection that does not scan has no scan batch, verdict, retry or quarantine', async () => {
+		const plain = fileTablesOf(connected(tables, { database, capabilities: alice }).database).collection({ ...SPEC, scan: false })
+		await expect(plain.quarantined(1, soon())).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(plain.promote(Bun.randomUUIDv7(), SHA, VERSION)).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(plain.deferScan(Bun.randomUUIDv7(), 1, new Date())).rejects.toBeInstanceOf(QueryRefusedError)
 	})
 })

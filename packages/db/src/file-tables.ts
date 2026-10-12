@@ -41,6 +41,8 @@ export interface FileCollectionSpec {
 	/** `file:<name>`, contained in the owner's dimension. */
 	readonly dimension: string
 	readonly actions: { readonly read: string; readonly write: string; readonly delete: string }
+	/** Whether the collection scans its uploads: only then does its table carry the scan columns. */
+	readonly scan: boolean
 }
 
 export interface PendingFile {
@@ -61,6 +63,8 @@ export interface StoredFile {
 	readonly contentType: string
 	readonly originalName: string | null
 	readonly status: HeldStatus
+	/** The object version a scanning collection's file was scanned as; `null` before a verdict or without scanning. */
+	readonly objectVersion: string | null
 }
 
 /** One row of an owner's file list. */
@@ -79,12 +83,15 @@ export interface FilePage {
 	readonly next: string | null
 }
 
-/** What the scan pass needs of a quarantined file: its object, and the size and digest its upload recorded. */
+/** What the scan pass needs of a quarantined file: its object, the size and digest its upload recorded, its tries. */
 export interface QuarantinedFile {
 	readonly id: string
 	readonly objectKey: string
 	readonly size: number
 	readonly sha256: string
+	readonly contentType: string
+	/** Earlier passes that gave it no verdict. */
+	readonly scanAttempts: number
 }
 
 /** A row whose object may be deleted: removed, orphaned by its owner's deletion, or pending past the grace period. */
@@ -115,13 +122,24 @@ export interface FileCollectionTable {
 	locate(id: string): Promise<ReadonlyMap<string, string> | null>
 	/** At most `limit` held files of the owner `owner` (a `Ref` for the read action) after the id `after`, oldest first. */
 	list(owner: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage>
-	/** At most `limit` quarantined files that are neither removed nor orphaned, oldest first: the scan pass's batch. */
-	quarantined(limit: number): Promise<readonly QuarantinedFile[]>
+	/**
+	 * At most `limit` quarantined files that are neither removed nor orphaned and due at `now`: the fewest earlier tries
+	 * first, then the oldest, so files that keep failing never hold back a new one.
+	 */
+	quarantined(limit: number, now: Date): Promise<readonly QuarantinedFile[]>
 	/**
 	 * Makes a quarantined file `live` when it is still quarantined, not removed, not orphaned and its recorded digest is
-	 * `sha256`. Only inside a job attempt's lease, which fences the write; `false` when no row matched.
+	 * `sha256`, and records `version`, the scanned object's. Only inside a job attempt's lease, which fences the write;
+	 * `false` when no row matched.
 	 */
-	promote(id: string, sha256: string): Promise<boolean>
+	promote(id: string, sha256: string, version: string): Promise<boolean>
+	/** Records a try that gave no verdict, the `attempts`-th, and when the next may start; fenced like `promote`. */
+	deferScan(id: string, attempts: number, after: Date): Promise<boolean>
+	/**
+	 * Quarantines a live file of a scanning collection again, when its object is no longer the version it was scanned
+	 * as (`version`, `null` for a file that went live before the collection scanned): the download that saw it.
+	 */
+	requarantine(file: unknown, version: string | null): Promise<void>
 	/** Marks a quarantined file `rejected` once its object is deleted; fenced like `promote`. `false` when no row matched. */
 	reject(id: string): Promise<boolean>
 	/**
@@ -161,7 +179,7 @@ function isNull(table: string, name: string, negated: boolean): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create(negated ? 'is not' : 'is'), ValueNode.createImmediate(null))
 }
 
-function compare(table: string, name: string, operator: '=' | '<' | '>', value: string | Date): OperationNode {
+function compare(table: string, name: string, operator: '=' | '<' | '>', value: string | number | Date): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create(operator), ValueNode.create(value))
 }
 
@@ -171,14 +189,16 @@ function selectNode(
 	conditions: OperationNode,
 	scope: OperationNode,
 	limit?: number,
-	orderBy?: string,
+	orderBy: readonly string[] = [],
 ): SelectQueryNode {
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
 		selections,
 		where: scopedWhere(conditions, scope),
-		orderBy: orderBy === undefined ? undefined : OrderByNode.create([OrderByItemNode.create(column(table, orderBy), RawNode.createWithSql('asc'))]),
+		orderBy: orderBy.length === 0
+			? undefined
+			: OrderByNode.create(orderBy.map((name) => OrderByItemNode.create(column(table, name), RawNode.createWithSql('asc')))),
 		limit: limit === undefined ? undefined : LimitNode.create(ValueNode.create(limit)),
 	}
 	return freeze(node)
@@ -210,6 +230,7 @@ function integer(table: string, row: Readonly<Record<string, unknown>>, name: st
 }
 
 const STORED_COLUMNS = ['id', 'object_key', 'size', 'content_type', 'original_name', 'status']
+const SCANNED_COLUMNS = [...STORED_COLUMNS, 'object_version']
 const LISTED_COLUMNS = ['id', 'original_name', 'content_type', 'size', 'status', 'created_at']
 const HELD: readonly HeldStatus[] = ['live', 'quarantined', 'rejected']
 
@@ -268,7 +289,13 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		])
 
 	/** A verdict of the scan pass: one conditional update, fenced by the attempt's lease. */
-	async function verdict(id: string, changes: ReadonlyMap<string, string>, conditions: OperationNode): Promise<boolean> {
+	function scanning(operation: string): void {
+		if (!spec.scan) {
+			throw new QueryRefusedError(`files '${spec.name}' does not scan; it has no ${operation}`)
+		}
+	}
+
+	async function verdict(id: string, changes: ReadonlyMap<string, string | number | Date | null>, conditions: OperationNode): Promise<boolean> {
 		const current = runtime()
 		const fence = current.capabilities.fence()
 		if (fence === null) {
@@ -370,7 +397,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const grant = grantOf(capability, spec.dimension, spec.actions.read)
 			const scope = linksPredicate(table, linkValues(table, fileLinks, grant))
 			const [row] = await session().run<Readonly<Record<string, unknown>>>(
-				selectNode(table, selections(table, STORED_COLUMNS), held(), scope, 1),
+				selectNode(table, selections(table, spec.scan ? SCANNED_COLUMNS : STORED_COLUMNS), held(), scope, 1),
 				guard('SelectQueryNode', table, scope),
 			)
 			if (row === undefined) {
@@ -383,6 +410,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 				contentType: text(table, row, 'content_type'),
 				originalName: nullableText(row, 'original_name'),
 				status: heldStatus(table, row),
+				objectVersion: spec.scan ? nullableText(row, 'object_version') : null,
 			})
 		},
 
@@ -423,7 +451,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
 			const conditions = page.after === null ? held() : allOf([held(), compare(table, 'id', '>', page.after)])
 			const rows = await session().run<Readonly<Record<string, unknown>>>(
-				selectNode(table, selections(table, LISTED_COLUMNS), conditions, scope, page.limit + 1, 'id'),
+				selectNode(table, selections(table, LISTED_COLUMNS), conditions, scope, page.limit + 1, ['id']),
 				guard('SelectQueryNode', table, scope),
 			)
 			const items = rows.slice(0, page.limit).map((row) =>
@@ -440,10 +468,13 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			return freeze({ items, next: rows.length > page.limit && last !== undefined ? last.id : null })
 		},
 
-		async quarantined(limit: number): Promise<readonly QuarantinedFile[]> {
+		async quarantined(limit: number, now: Date): Promise<readonly QuarantinedFile[]> {
+			scanning('scan batch')
 			const scope = everything()
+			const due = allOf([held(status('quarantined')), anyOf([isNull(table, 'scan_after', false), compare(table, 'scan_after', '<', now)])])
+			const columns = ['id', 'object_key', 'size', 'sha256', 'content_type', 'scan_attempts']
 			const rows = await session().run<Readonly<Record<string, unknown>>>(
-				selectNode(table, selections(table, ['id', 'object_key', 'size', 'sha256']), held(status('quarantined')), scope, limit, 'created_at'),
+				selectNode(table, selections(table, columns), due, scope, limit, ['scan_attempts', 'created_at']),
 				guard('SelectQueryNode', table, scope),
 			)
 			return rows.map((row) =>
@@ -452,12 +483,41 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 					objectKey: text(table, row, 'object_key'),
 					size: integer(table, row, 'size'),
 					sha256: text(table, row, 'sha256'),
+					contentType: text(table, row, 'content_type'),
+					scanAttempts: integer(table, row, 'scan_attempts'),
 				})
 			)
 		},
 
-		promote(id: string, sha256: string): Promise<boolean> {
-			return verdict(id, new Map([['status', 'live']]), allOf([held(status('quarantined')), compare(table, 'sha256', '=', sha256)]))
+		async promote(id: string, sha256: string, version: string): Promise<boolean> {
+			scanning('verdict')
+			const changes = new Map([['status', 'live'], ['object_version', version]])
+			return await verdict(id, changes, allOf([held(status('quarantined')), compare(table, 'sha256', '=', sha256)]))
+		},
+
+		async deferScan(id: string, attempts: number, after: Date): Promise<boolean> {
+			scanning('retry')
+			const changes = new Map<string, number | Date>([['scan_attempts', attempts], ['scan_after', after]])
+			return await verdict(id, changes, allOf([status('quarantined'), compare(table, 'scan_attempts', '=', attempts - 1)]))
+		},
+
+		async requarantine(capability: unknown, version: string | null): Promise<void> {
+			scanning('quarantine')
+			const grant = grantOf(capability, spec.dimension, spec.actions.read)
+			const scope = linksPredicate(table, linkValues(table, fileLinks, grant))
+			const scanned = version === null ? isNull(table, 'object_version', false) : compare(table, 'object_version', '=', version)
+			const changes = new Map<string, string | number | null>([['status', 'quarantined'], ['object_version', null], ['scan_attempts', 0], [
+				'scan_after',
+				null,
+			]])
+			const node = updateNode(
+				table,
+				changes,
+				undefined,
+				scopedWhere(allOf([held(status('live')), scanned]), scope),
+				acknowledgement(table, 'id', undefined),
+			)
+			await session().run(node, guard('UpdateQueryNode', table, scope))
 		},
 
 		reject(id: string): Promise<boolean> {

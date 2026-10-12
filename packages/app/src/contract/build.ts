@@ -717,6 +717,12 @@ class ArtifactBuilder {
 		if (collection.scan !== undefined && typeof collection.scan !== 'boolean') {
 			this.#problem(where, 'scan is true or false')
 		}
+		for (const type of collection.scan === true ? collection.types.filter((candidate) => FILE_LIMITS.unscannedTypes.includes(candidate)) : []) {
+			this.#problem(
+				where,
+				`scans its files and admits '${type}', an archive the framework does not open, so no scan can vouch for its contents (allowed: application/zip, which the framework checks entry by entry)`,
+			)
+		}
 		if (collection.scan === true && collection.maxBytes > FILE_LIMITS.maxScannedBytes) {
 			this.#problem(
 				where,

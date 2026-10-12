@@ -123,6 +123,41 @@ describe('a clamscan run that does not complete gives no verdict', () => {
 		expect(await scanner.scan([object(id(), CLEAN_PDF)], abort.signal)).toEqual({ ok: false, failure: 'timeout' })
 	})
 
+	test('one deadline covers the reads: an object that never opens, or a stream that stalls, ends the run in time', async () => {
+		const binary = await standIn('never-run', 'echo should not run >&2; exit 3')
+		const scanner = clamscanScanner({ binary, directory: bin, timeoutMs: 200 })
+		const stalled = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('%PDF-'))
+			},
+		})
+		let cancelled = false
+		const watched = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('%PDF-'))
+			},
+			cancel() {
+				cancelled = true
+			},
+		})
+		for (const open of [() => new Promise<ReadableStream<Uint8Array>>(() => {}), () => Promise.resolve(stalled), () => Promise.resolve(watched)]) {
+			const started = Date.now()
+			expect(await scanner.scan([{ id: id(), open }], new AbortController().signal)).toEqual({ ok: false, failure: 'timeout' })
+			expect(Date.now() - started).toBeLessThan(2_000)
+		}
+		expect(cancelled).toBe(true)
+		expect(await leftovers(bin)).toEqual([])
+	})
+
+	test('an attempt aborted before the scan starts spawns no scanner', async () => {
+		const marker = join(bin, 'spawned')
+		const scanner = clamscanScanner({ binary: await standIn('marks', `touch ${marker}`), directory: bin })
+		const abort = new AbortController()
+		abort.abort()
+		expect(await scanner.scan([object(id(), CLEAN_PDF)], abort.signal)).toEqual({ ok: false, failure: 'timeout' })
+		expect(await Bun.file(marker).exists()).toBe(false)
+	})
+
 	test('a run that floods its output is stopped', async () => {
 		const scanner = clamscanScanner({ binary: await standIn('noisy', 'yes OK | head -c 4000000'), directory: bin })
 		expect(await scanner.scan([object(id(), CLEAN_PDF)], new AbortController().signal)).toEqual({ ok: false, failure: 'output_overflow' })

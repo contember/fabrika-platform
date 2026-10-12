@@ -480,22 +480,41 @@ the same pipeline:
   removed. The file name (`?name=`) is cut at 255 code points and loses its control characters.
 - **`scan: true` holds every upload until a clean malware verdict.** The upload ends
   `quarantined` instead of `live`. The framework's scan job (`fabrika-file-scan`, a reserved name
-  no `c.cron` job can take) runs every minute under its lease in `fabrika_job_leases`: it takes the
-  oldest quarantined files (at most 20 and 256 MiB), streams each object into one `clamscan` run
-  in a private temporary directory, checking its size and SHA-256 against the upload's, and
-  writes each verdict in a transaction fenced by the lease. Only an exact `OK` over verified bytes
-  promotes a file to `live`, and only while it is still quarantined, neither removed nor orphaned,
-  with the same digest. A `FOUND` (EICAR, an encrypted file, a file past ClamAV's size, recursion
-  or time limits) deletes the object, then marks the row `rejected`; a failed delete leaves the
-  row quarantined, so the next pass retries it. Anything else — no scanner, missing or older than
-  three days signatures, a scanner error, a run past five minutes, a file without a verdict, bytes
-  that differ from the upload — leaves the file quarantined, and the pass reports it to Operations
-  under a fixed code. The pass ends with the sweep, which deletes removed and orphaned files in
-  every state. A `scan: true` collection admits at most 100 MiB per file, the most the scanner
-  reads in full. Turning `scan` off widens in the approval diff; a file left quarantined stays
-  unserved. An existing collection that turns `scan` on needs `fileScanSql(name)` of
-  `@fabrika/db` in a new migration (the checker's `file-scan-migration` names it): the earlier
-  `fileTableSql` checked for `pending` and `live` only.
+  no `c.cron` job can take) runs every minute under its lease in `fabrika_job_leases`. It takes the
+  due quarantined files with the fewest earlier tries first (at most 20 and 256 MiB; a file that
+  failed before is scanned alone), reads each object whole with its version (an S3 ETag), checks its
+  size and SHA-256 against the upload's, checks it as an archive, and hands the batch to one
+  `clamscan` run in a private temporary directory, all under one five-minute deadline. Each verdict
+  is written in a transaction fenced by the lease.
+  - **Only a clean verdict over verified bytes promotes**, while the file is still quarantined, neither
+    removed nor orphaned, with the same digest; the row records the scanned object's version. An empty
+    file is clean without a scan.
+  - **ClamAV's OK does not vouch for an archive**: it skips entries it cannot decode (an LZMA entry, a
+    damaged deflate stream) and still answers OK. So the framework reads every ZIP itself — Office Open
+    XML documents are ZIPs — and rejects one with an entry other than stored or deflated, an encrypted
+    entry, ZIP64, a CRC or size that does not match, bytes outside every entry, more than 1000 entries
+    or 256 MiB unpacked, or a ZIP nested deeper than one level. Any other archive (gzip, bzip2, xz, 7z,
+    rar, cab, zstd, lzip, lzma, tar), at the top or inside a ZIP, is rejected, and so is an unreadable
+    ZIP entry appended to another file. A `scan: true` collection may not admit `application/gzip`.
+    PDFs and images are ClamAV's to parse; an archive embedded inside a PDF's streams is a residual
+    limit of ClamAV's own coverage.
+  - **A rejection** (a `FOUND`: EICAR, an encrypted file, a file past ClamAV's size, recursion or time
+    limits; a refused archive; a missing object) deletes the object, then marks the row `rejected`; a
+    failed delete leaves the row quarantined, so the next pass retries it.
+  - **No verdict** — a scanner error or timeout, a file the scanner skipped, bytes that differ from the
+    upload — counts a try: the file waits one minute, doubled per try up to an hour, is then scanned
+    alone, and is rejected after five tries. Missing or stale (older than three days) signatures and a
+    missing scanner count no try. Every outcome is reported to Operations under a fixed code.
+  - **The download serves only the scanned version**: one conditional read (`If-Match` on the recorded
+    ETag) answers the bytes, so a replaced object answers 409 without a byte, and the file is quarantined
+    again for the next pass; so is a live file without a recorded version. A new object key is written
+    once: the store refuses a key that already holds an object.
+  - The pass ends with the sweep, which deletes removed and orphaned files in every state. A
+    `scan: true` collection admits at most 100 MiB per file, the most the scanner reads in full.
+    Turning `scan` off widens in the approval diff; a file left quarantined stays unserved. An existing
+    collection that turns `scan` on needs `fileScanSql(name)` of `@fabrika/db` in a new migration (the
+    checker's `file-scan-migration` names it): the earlier `fileTableSql` checked for `pending` and
+    `live` only and had no scan columns.
 - **The file treatment** is on every answer of the download endpoint, its denials and errors
   included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
   default-src 'none'` and `Cache-Control: private, no-store`, and a `Content-Disposition`

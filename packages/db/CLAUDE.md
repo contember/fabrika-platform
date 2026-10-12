@@ -156,11 +156,12 @@ and the target `Ref`, so no handler can call it.
   object.
 - **A file row is `pending`, `quarantined`, `live` or `rejected`** (`FILE_STATUSES`, the named check `<table>_status`).
   A held file (`live`, `quarantined`, `rejected`) is located, found, listed, counted against the quota and removable;
-  a removed or orphaned one is purgeable in every held state. The scan verdicts `promote` and `reject` are the only
-  writes keyed by the id alone, and only inside a job attempt's lease (`fencedTransaction`; without a fence they throw).
-  `fileScanSql` replaces the unnamed two-state check an earlier `fileTableSql` wrote (Postgres named it
-  `<table cut to 50>_status_check`); `@fabrika/platform-node`'s classifier admits exactly that statement, and
-  `file-tables.test.ts` pins the two together.
+  a removed or orphaned one is purgeable in every held state. A scanning collection's table carries `object_version`,
+  `scan_attempts` and `scan_after`, and only a spec with `scan: true` reads them. The scan writes `promote` (which
+  records the scanned object's version), `reject` and `deferScan` are the only writes keyed by the id alone, and only
+  inside a job attempt's lease (`fencedTransaction`; without a fence they throw); `requarantine` takes the download's
+  `Ref`. The SQL all readers agree on lives in `@fabrika/platform-node/sql`'s `file-table-ddl.ts`: `fileTableSql` and
+  `fileScanSql` write it, the classifier admits exactly the scan statement, and the checker recognizes it.
   `framework-tables.ts` reads a unique violation off `DatabaseError.sqlState`; `framework.ts` imports only its types,
   and `store.ts` builds the implementation.
 - **A delivery key is recorded by its primary key.** The `delivery_id` column holds the key `@fabrika/app` derives

@@ -22,6 +22,8 @@ export const FILES_PREFIX = '/api'
  */
 export const FILE_LIMITS = {
 	maxScannedBytes: 100 * 1024 * 1024,
+	/** Sniffable types a `scan: true` collection refuses: archives other than ZIP, whose contents the framework does not check. */
+	unscannedTypes: ['application/gzip'] as readonly string[],
 	listPageDefault: 50,
 	listPageMax: 100,
 } as const

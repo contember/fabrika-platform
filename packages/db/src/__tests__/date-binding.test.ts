@@ -29,6 +29,7 @@ const SPEC = {
 	owner: 'notes',
 	dimension: 'file:attachments',
 	actions: { read: 'notes.read', write: 'notes.write', delete: 'notes.delete' },
+	scan: true,
 }
 const OWNER = {
 	table: 'notes',

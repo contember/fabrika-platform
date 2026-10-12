@@ -137,6 +137,31 @@ describe('a file collection that scans its uploads', () => {
 		)
 		expect(() => compileContract(withFiles({ maxBytes: 100 * 1024 * 1024 + 1 }), tables)).not.toThrow()
 	})
+
+	test('admits no archive the framework does not open', () => {
+		const gzip = (scan: boolean) =>
+			defineContract({
+				app: 'notes',
+				dimensions: { workspace: {}, note: { in: 'workspace' } },
+				actions: { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.delete': 'Delete' },
+				roles: {},
+			}, (c) => ({
+				files: {
+					attachments: c.files({
+						owner: 'notes',
+						read: 'notes.read',
+						write: 'notes.read',
+						delete: 'notes.read',
+						maxBytes: 1024,
+						types: ['application/gzip'],
+						scan,
+					}),
+				},
+				health: c.health('/healthz'),
+			}))
+		expect(() => compileContract(gzip(true), tables)).toThrow("files 'attachments': scans its files and admits 'application/gzip'")
+		expect(() => compileContract(gzip(false), tables)).not.toThrow()
+	})
 })
 
 describe('compileContract over defineTables output', () => {

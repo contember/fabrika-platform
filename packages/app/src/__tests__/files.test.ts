@@ -572,6 +572,10 @@ class HookedStore implements FileObjectStore {
 		return this.#inner.read(key)
 	}
 
+	readVersion(key: string, version: string): Promise<StoredObject | null> {
+		return this.#inner.readVersion(key, version)
+	}
+
 	async delete(key: string): Promise<void> {
 		if ((this.#faults.failDeletes ?? 0) > 0) {
 			this.#faults.failDeletes = (this.#faults.failDeletes ?? 0) - 1

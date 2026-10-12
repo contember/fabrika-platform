@@ -1,10 +1,19 @@
 // The names and the DDL of a file collection's table (`fabrika_files_<collection>`). Pure: `@fabrika/db/framework`
 // re-exports `fileTableName` for `boot`, which the Worker adapter imports, and an application's migration uses the DDL.
 
+import {
+	FILE_SCAN_COLUMNS,
+	FILE_STATUSES,
+	FILE_TABLE_PREFIX,
+	fileScanAlter,
+	fileScanIndex,
+	fileStatusCheck,
+	legacyStatusCheckName,
+} from '@fabrika/platform-node/sql'
 import { QueryRefusedError } from './errors'
 import { isPlainIdentifier } from './identifier'
 
-export const FILE_TABLE_PREFIX = 'fabrika_files_'
+export { FILE_STATUSES, FILE_TABLE_PREFIX, legacyStatusCheckName }
 
 /** `<table>_removable`, the longest name the DDL derives, must stay within Postgres' 63 characters. */
 const MAX_COLLECTION_LENGTH = 63 - FILE_TABLE_PREFIX.length - '_removable'.length
@@ -22,17 +31,12 @@ export const FILE_COLUMNS: readonly string[] = [
 	'created_by',
 	'created_at',
 	'deleted_at',
+	'object_version',
+	'scan_attempts',
+	'scan_after',
 ]
 
-/**
- * A file row's states. `pending`: its object is still being written. `quarantined`: written to a scanning collection
- * and not yet given a clean verdict. `live`: served. `rejected`: the scanner found it infected and its object is gone.
- */
-export const FILE_STATUSES = ['pending', 'live', 'quarantined', 'rejected'] as const
-
 export type FileStatus = (typeof FILE_STATUSES)[number]
-
-const STATUS_CHECK = `CHECK (status IN (${FILE_STATUSES.map((status) => `'${status}'`).join(', ')}))`
 
 /** The column types whose values `Bun.SQL` decodes as strings, as a capability carries them. */
 export type FileColumnType = 'text' | 'uuid'
@@ -99,7 +103,7 @@ export function fileTableSql(collection: string, owner: FileOwner): string {
 	return `CREATE TABLE ${table} (
 	id UUID PRIMARY KEY,
 	owner_id ${keyType},
-${chain.map((link) => `\t${link.column} ${link.type},\n`).join('')}	status TEXT NOT NULL CONSTRAINT ${table}_status ${STATUS_CHECK},
+${chain.map((link) => `\t${link.column} ${link.type},\n`).join('')}	status TEXT NOT NULL ${fileStatusCheck(table)},
 	object_key TEXT NOT NULL UNIQUE,
 	size BIGINT,
 	content_type TEXT NOT NULL,
@@ -108,30 +112,22 @@ ${chain.map((link) => `\t${link.column} ${link.type},\n`).join('')}	status TEXT 
 	created_by TEXT NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL,
 	deleted_at TIMESTAMPTZ,
-	FOREIGN KEY (${fileColumns}) REFERENCES ${owner.table} (${ownerColumns}) ON UPDATE CASCADE ON DELETE SET NULL
+${
+		FILE_SCAN_COLUMNS.map((column) => `\t${column},\n`).join('')
+	}	FOREIGN KEY (${fileColumns}) REFERENCES ${owner.table} (${ownerColumns}) ON UPDATE CASCADE ON DELETE SET NULL
 );
 CREATE INDEX ${table}_owner ON ${table} (owner_id) WHERE deleted_at IS NULL;
 CREATE INDEX ${table}_removable ON ${table} (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
-CREATE INDEX ${table}_scan ON ${table} (created_at) WHERE status = 'quarantined';
+${fileScanIndex(table)};
 `
-}
-
-/**
- * The name Postgres gave the unnamed status check of a table an earlier `fileTableSql` created:
- * `<table>_status_check`, the table's name cut to 50 characters first (`makeObjectName`).
- */
-export function legacyStatusCheckName(table: string): string {
-	return `${table.slice(0, 63 - '_status_check'.length)}_status_check`
 }
 
 /**
  * The migration that lets an existing collection turn `scan: true` on: it replaces the status check of a table an
  * earlier `fileTableSql` created, which admitted only `pending` and `live`, by the check of every state, and adds the
- * scan pass's index. A table `fileTableSql` creates now needs none of it.
+ * scan job's columns and index. A table `fileTableSql` creates now needs none of it.
  */
 export function fileScanSql(collection: string): string {
 	const table = tableOf(collection)
-	return `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${legacyStatusCheckName(table)}, ADD CONSTRAINT ${table}_status ${STATUS_CHECK};
-CREATE INDEX ${table}_scan ON ${table} (created_at) WHERE status = 'quarantined';
-`
+	return `${fileScanAlter(table)};\n${fileScanIndex(table)};\n`
 }

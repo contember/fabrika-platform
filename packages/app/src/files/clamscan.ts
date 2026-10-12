@@ -120,30 +120,54 @@ async function bounded(stream: ReadableStream<Uint8Array>, limit: number, overfl
 	return text + decoder.decode()
 }
 
-/** Streams `body` to `path`. A reader and a file sink: `Bun.write` of a stream that errors never settles (Bun 1.3). */
-async function writeStream(path: string, body: ReadableStream<Uint8Array>): Promise<void> {
+/** `promise`'s value, or `null` once `signal` aborts first: a read that never answers does not hold the run. */
+function unlessAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
+	if (signal.aborted) return Promise.resolve(null)
+	return new Promise((resolve, reject) => {
+		const stop = () => resolve(null)
+		signal.addEventListener('abort', stop, { once: true })
+		promise.then(
+			(value) => {
+				signal.removeEventListener('abort', stop)
+				resolve(value)
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', stop)
+				reject(error)
+			},
+		)
+	})
+}
+
+/**
+ * Streams `body` to `path`; `false` when `signal` aborted it, which cancels the reader. A reader and a file sink:
+ * `Bun.write` of a stream that errors never settles (Bun 1.3).
+ */
+async function writeStream(path: string, body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<boolean> {
 	const sink = Bun.file(path).writer()
 	const reader = body.getReader()
 	try {
-		for (let next = await reader.read(); !next.done; next = await reader.read()) {
+		for (let next = await unlessAborted(reader.read(), signal); next !== null; next = await unlessAborted(reader.read(), signal)) {
+			if (next.done) return true
 			sink.write(next.value)
 		}
+		return false
 	} finally {
+		await reader.cancel().catch(() => undefined)
 		await sink.end()
 	}
 }
 
 /** Writes each object to `<directory>/<id>`; a file whose object could not be read in full is left out. */
-async function write(directory: string, objects: readonly ScanObject[]): Promise<Map<string, string>> {
+async function write(directory: string, objects: readonly ScanObject[], signal: AbortSignal): Promise<Map<string, string>> {
 	const paths = new Map<string, string>()
 	for (const object of objects) {
-		if (!UUID.test(object.id)) {
-			continue
-		}
+		if (signal.aborted) break
+		if (!UUID.test(object.id)) continue
 		const path = join(directory, object.id)
 		try {
-			await writeStream(path, await object.open())
-			paths.set(object.id, path)
+			const body = await unlessAborted(object.open(signal), signal)
+			if (body !== null && (await writeStream(path, body, signal))) paths.set(object.id, path)
 		} catch {
 			await rm(path, { force: true })
 		}
@@ -157,8 +181,9 @@ interface Finished {
 	readonly stderr: string
 }
 
-/** One clamscan run, stopped at `timeoutMs`, on `signal`, or once its output passes the bound. */
-async function run(binary: string, args: readonly string[], timeoutMs: number, signal: AbortSignal): Promise<Finished | ScanFailure> {
+/** One clamscan run, stopped on `signal` or once its output passes the bound; never started once `signal` aborted. */
+async function run(binary: string, args: readonly string[], signal: AbortSignal): Promise<Finished | ScanFailure> {
+	if (signal.aborted) return 'timeout'
 	let child: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
 	try {
 		// Only PATH: the job's own environment carries the application's secrets.
@@ -173,7 +198,6 @@ async function run(binary: string, args: readonly string[], timeoutMs: number, s
 		child.kill('SIGKILL')
 		halt.abort()
 	}
-	const timer = setTimeout(stop, timeoutMs)
 	signal.addEventListener('abort', stop, { once: true })
 	try {
 		let overflowed = false
@@ -195,7 +219,6 @@ async function run(binary: string, args: readonly string[], timeoutMs: number, s
 		}
 		return { exitCode, stdout, stderr }
 	} finally {
-		clearTimeout(timer)
 		signal.removeEventListener('abort', stop)
 	}
 }
@@ -206,14 +229,19 @@ export function clamscanScanner(options: ClamscanOptions = {}): FileScanner {
 	const timeoutMs = options.timeoutMs ?? SCAN_LIMITS.scanTimeoutMs
 	return {
 		async scan(objects, signal) {
+			// One deadline over the whole run: reading the objects, writing them, the scan and the cleanup.
+			const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
 			const directory = await mkdtemp(join(options.directory ?? tmpdir(), 'fabrika-scan-'))
 			try {
-				const paths = await write(directory, objects)
+				const paths = await write(directory, objects, deadline)
+				if (deadline.aborted) {
+					return { ok: false, failure: 'timeout' }
+				}
 				if (paths.size === 0) {
 					return { ok: true, verdicts: new Map() }
 				}
 				const args = [...clamscanArguments(options.database, options.maxFileBytes), ...paths.values()]
-				const finished = await run(binary, args, timeoutMs, signal)
+				const finished = await run(binary, args, deadline)
 				return typeof finished === 'string'
 					? { ok: false, failure: finished }
 					: clamscanVerdicts(paths, finished.exitCode, finished.stdout, finished.stderr)
