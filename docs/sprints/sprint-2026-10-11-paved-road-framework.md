@@ -899,3 +899,22 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   WU15 recipe lives in `fixtures/visitor-intake`, renamed in every WU15 commit; `fabrika-check`'s differential registry
   reads both.
 - **WU15 — on WU19.** WU19 took kit mistake 30, so `job-links-without-issues` is mistake 31.
+- **WU15b — verify first.** The serving process already holds every job's key: Control writes
+  `FABRIKA_JOB_<NAME>_KEY` into every deploy, `boot` refuses to start without it and binds the jobs in the server too
+  (`serveContract` runs `jobs.check()`). A kicked run is `runJob` in that process under the job's own
+  `WorkloadCredential` (an IAM exchange per attempt), so it widens nothing; no `fabrika job run` is spawned. A form
+  carries no token, so there is no request identity to inherit. Cloudflare: no data layer and no token exchange, so a
+  contract with a job does not boot there; the kick still goes to `waitUntil` (30 s past the answer against a 15 min
+  job timeout, moot until jobs run on Workers).
+- **WU15b — deviations.** The name stays `then`. The compiler check sits on the whole surface (`FormJobs`, an F-bounded
+  `S`), so its message is elaborated (kit mistake 32 is in `ELABORATED`). Beside the lease's `pending` flag (framework
+  migration `0004_job_kicks.sql`), a kick in flight in one process absorbs the next, so a flood issues one kick per
+  process, not one per row; a run takes the flag only after it succeeded, and a failed run leaves it to the schedule.
+  `kit.runJob` waits for kicked runs, and `serveContract` drains background work (`createBunHandler`) before it closes
+  the database. A kick waits on the lease row while the holding run's write transaction is open (its `for share`
+  fence): background only, one per process. The witness of a killed run is a subprocess killed inside the kicked run's
+  transaction: an in-process `pg_terminate_backend` prints Bun's unhandled release rejection (`@fabrika/db`'s
+  connection-loss note). The visitor-intake fixture keeps explicit runs, because its crash tests arm a fault before a
+  run and a kick would race them; the witnesses use `fixtures/form-kick`, and WU10b's recipe adds `then`.
+- **WU15b — approval.** A form's `then` is a line that widens nothing. It does let anonymous submissions keep the job
+  running back to back, bounded by the form's `rate.perForm` and the coalescing: an availability cost, not access.
