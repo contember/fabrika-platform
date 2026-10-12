@@ -24,7 +24,7 @@ written by fresh agents from the skill alone, with an off-road request declared,
 map, the evidence carried over, the refs re-verified at HEAD, sequencing steps 0–6a and their Run log entries up to
 WU13b are in the [archived first part](../archive/sprint-2026-10-11-paved-road-core.md). A reference in this file to a
 shipped unit, to "Evidence" or to a verified ref points there. Still active: WU11, WU15, WU15b, WU16, WU17, WU19, WU20,
-WU10b and WU21.
+WU10b, WU21 and WU22.
 
 ## Target shape (WU0 fixes the signatures; WU1 the layout; WU3 the API matrix)
 
@@ -350,6 +350,63 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   endpoint group (as in WU11 §3) and the backlog items filed.
 - **Touch points.** In this repository only the backlog items it files and the Run log line.
 
+### WU22 — The member directory below its dimension (S–M)
+
+- **Problem.** An application picks a person for a column such as a deal's `owner` or a task's `assignee`. The member
+  directory (`ctx.members`, WU13b) exists only on an endpoint whose own dimension declares `members`; on a `deal` or
+  `task` endpoint it is `Unavailable<"the dimension deal declares no members">`. An endpoint below the org cannot check
+  that the picked principal is a member of the org, so the paved road trusts a client-sent `{ principalId, label }`
+  (the skill's `assign` did). Found by the WU11 review (finding 1) and by three fresh agents of the CRM trial. The
+  endpoint that sets the owner holds its own action (`deals.assign`), not the directory's (`crm.read`), and the skill
+  forbids checking a second action; and the generated access cases send a sampled id that names no member.
+- **Verify first.** `endpointMembers` (`packages/auth-core/src/membership.ts`) and `MembersContext`
+  (`contract/context.ts`) decide `ctx.members` from the endpoint's own dimension only. IAM's `listMembers` checks
+  `members.list` on the directory's value as a flat scope. The `Ref` of an `on`/`in` endpoint carries the object's
+  chain, read from the database for the access form (`#chain` in `dispatch.ts`). IAM's `issueLink` already takes such
+  a chain and checks it against the schema's containment (`chainProblem`). The scaffold samples a string as `'x'`; the
+  endpoint access kit treats a 400 as a broken fixture.
+- **Decision: authorization.** A single-member lookup is authorized by the endpoint's OWN action on the object's
+  chain, checked live by IAM (`findMember`); listing stays with the directory's `members.list`, checked live on the
+  directory's value. The lookup answers one id the caller named: the member (id, label, disabled) or `null`, never
+  which check failed. It cannot enumerate, the caller already holds an action on an object of that org, and labels
+  stay opt-in: `null` unless the dimension declares `directory: 'labels'` or the caller manages its members. It is no
+  second enforcement decision (ADR-0022): the proxy and the access form admitted the request, and IAM authorizes its
+  own operation, as it does for `listMembers` and `issueLink`.
+- **Decision: the ancestor.** The nearest dimension, the endpoint's own or one containing it, that declares
+  `members`, at the value the `Ref`'s chain holds: the owner chain the framework already read from the database for
+  the access form, never the token's scopes and never the input. IAM checks the chain against the schema's
+  containment and that it holds the directory's value.
+- **Decision: the static shell and approval.** Nothing new is declared: the reach follows from the dimension's
+  `members` (and `directory`), already in the artifact and reviewed. One function (`endpointDirectory`) derives it for
+  `boot`, Control's transport key and the test kit, and the kit's types mirror it. It is not a widening by itself; the
+  `directory: 'labels'` widening line now names the endpoints below the dimension too. Control issues the Zerops
+  membership key for any contract with such an endpoint.
+- **Scope.**
+  1. `endpointDirectory` (auth-core); `IamMembershipRpc.findMember` (auth-core, `@fabrika/auth`'s client and HTTP
+     transport, IAM's operation, binding, `/rpc/*` and `/membership/*`, and its repository query).
+  2. `ctx.members` below the dimension: `MemberLookup.get(principalId): Promise<Member | null>` everywhere,
+     `MemberDirectory` (`get` and `list`) for the directory's `members.list`, management unchanged. The types
+     (`contract/context.ts`, `implement/types.ts`), `facilitiesOf` and the dispatcher decide the same. Jobs get none: a
+     job holds no object chain.
+  3. The test kit's directory answers `findMember`. `endpoint-access.fixtures.ts` gains
+     `export const members = { '<endpoint id>': ['<field>'] }`; the scaffold writes `GENERATED_MEMBER` there, and the
+     endpoint access kit replaces it with a real member of the case's org.
+  4. The skill's `assign` validates the picked person with the lookup and stores its label; AGENTS.md regenerated.
+- **Acceptance / witness.** `packages/local-stack/__tests__/member-lookup.test.ts` (Postgres, the real IAM, the
+  production proxy, the fixture org → company → deal): a deal endpoint's lookup answers the org's member with its
+  label and `null` for a member of another org and for an unknown id; an assignment stores the directory's label and
+  refuses an outsider (400); a caller holding the endpoint's action on the company alone looks a member up; a caller
+  holding `crm.read` on the company alone is refused the org's list (403, IAM's live check); another org's caller gets
+  404. `packages/app/src/__tests__/members-lookup.test.ts`: the type fixture (a deal endpoint's `ctx.members`, and
+  `Unavailable` where no dimension above declares members), the kit's directory, and the fixture's committed generated
+  tests (with a `members` field), which pass and are current. IAM's `findMember` rules in `membership.test.ts` and on
+  Postgres.
+- **Touch points.** `packages/auth-core/src/membership.ts`, `packages/auth/src/{membership,rpc-http}.ts`,
+  `packages/iam/src/{membership,rpc,rpc-http,rpc-inputs,membership-http,index}.ts` and `repositories/membership.ts`,
+  `packages/app/src/{contract/context.ts,contract/defaults.ts,implement/*,testing/*}`,
+  `packages/check/src/{endpoint-fixtures,scaffold}.ts`, `packages/control/src/{membership-transport,approval/diff}.ts`,
+  `packages/app/skill/`, `examples/zerops-app/AGENTS.md`, their tests. Not `examples/crm`: WU11 adopts it.
+
 ### Design review of the gap units (binding)
 
 A design review of WU14–WU21 at `77683fa2` added these requirements; each unit's acceptance includes them:
@@ -473,6 +530,7 @@ edits only its own packages' `CLAUDE.md` sections; the integrator merges them. S
 | 6b'  | WU15b      | after WU15 (the same job and form files), before WU16 (`#form`)                                                                               |
 | 6c   | WU16, WU19 | abuse control on WU14's kinds and WU20's header policy · attachment output (`#procedure`, client)                                             |
 | 7    | WU10b      | the skill describes what WU14–WU20 and WU15b built                                                                                            |
+| 7b   | WU22       | after WU13b's directory; parallel with WU15 — both touch `implement/membership.ts`, the second to merge rebases; before WU11 merges           |
 | 8    | WU11, WU21 | the CRM, the counts and both trials · the private intake module; both read only the skill                                                     |
 
 The contract seams (`contract/{build,define,artifact-schema}.ts`, `packages/check/src/reader/`,
@@ -625,3 +683,19 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   version (`If-Match` on the recorded ETag); object keys are written once. A file without a verdict, or whose delete
   failed, waits with backoff and is retried alone; the batch takes the oldest due files across collections. An empty
   upload to a scanning collection is refused (400 `empty`) rather than promoted without a verdict.
+- **WU22 — generated cases of a nested list.** A generated case grants the endpoint's action at the table's grant
+  dimension (a deal's company). IAM checks a list on the directory's value (the org), so the case of a deal endpoint
+  of `crm.read` was refused 403. The endpoint access kit now grants such an endpoint's action on the directory's value
+  instead: still one scope per side, so isolation is still what the case tests.
+- **WU22 — `client-identity` refuses `ownerId`.** The checker reads `ownerId`, `userId` and their kin as the caller's
+  own identity, so a picked person's field is named by its role (`assignee`, `newOwner`); the skill says so. WU11: the
+  CRM's `deals.assign` field must follow when it adopts the lookup.
+- **WU22 — deviations.** Control now issues the Zerops membership key for every contract with an endpoint on, in or
+  below a dimension with members (it did only for a `members.list` endpoint): a deploy of such an existing contract
+  gains the key. On Cloudflare a binding without `findMember` is still a membership transport; only a lookup answers
+  503. Jobs get no lookup: a job holds no object chain. `implement-mistakes/11` now assigns instead of listing,
+  because a note endpoint reads its workspace's directory. Outside the touch points: `packages/local-stack` gained
+  `@fabrika/db` (dev) for its Postgres witness, and `dprint.json` excludes the fixture's generated tests.
+- **WU22 — one process, one binding.** The root `bun test` runs every file in one process, and a data layer binds
+  once. The fixture's `src/app.ts` is booted by its own generated tests, so every other suite over the fixture boots
+  `serve(contract, { database: scoped(tables) })` of its own.
