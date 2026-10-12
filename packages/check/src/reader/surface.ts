@@ -467,6 +467,7 @@ class SurfaceReader {
 		const [collection] = args(at, 'c.files', 1, 1)
 		const options = builderOptions(collection, at, 'c.files')
 		const link = options.get('link')
+		const scan = options.get('scan')
 		return {
 			kind: 'files',
 			owner: text(options.get('owner'), at, 'owner'),
@@ -477,6 +478,7 @@ class SurfaceReader {
 			types: texts(options.get('types'), at, 'types'),
 			maxPerOwner: optionalNumber(options.get('maxPerOwner'), 'maxPerOwner'),
 			link: link === undefined ? undefined : boolean(link, 'link'),
+			scan: scan === undefined ? undefined : boolean(scan, 'scan'),
 			unknownOptions: optionKeys(options, 'files'),
 		}
 	}

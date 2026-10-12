@@ -1,3 +1,4 @@
+import { fileScanSql } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import type { RuleId } from '../finding'
 import { RULE_IDS } from '../finding'
@@ -5,6 +6,23 @@ import { STRUCTURE_RULE_IDS } from '../rules/structure'
 import { generatedTestHeader } from '../rules/tests'
 import { generatedTests, scaffoldInputs } from '../scaffold'
 import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, CLEAN_GENERATED_TESTS, CLEAN_SCHEMAS, CLEAN_TABLES, locations } from './helpers'
+
+/** The clean contract with a collection that scans, and its table as an earlier `fileTableSql` created it. */
+const SCANNING_CONTRACT = CLEAN_CONTRACT.replace(
+	"\thealth: c.health('/healthz'),\n",
+	"\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.write', maxBytes: 1024, types: ['text/plain'], scan: true }) },\n\thealth: c.health('/healthz'),\n",
+)
+const SCANNING_SOURCES: Readonly<Record<string, string>> = { ...CLEAN_APPLICATION, 'fabrika.contract.ts': SCANNING_CONTRACT }
+const scanningInputs = scaffoldInputs(new Map(Object.entries(SCANNING_SOURCES)))
+/** The scanning application with the tests `fabrika db test-scaffold` writes for it. */
+const SCANNING_APPLICATION: Readonly<Record<string, string>> = {
+	...SCANNING_SOURCES,
+	...Object.fromEntries(
+		[...(await generatedTests(scanningInputs.policies, scanningInputs.artifact, scanningInputs.fixtures))].map(([file, test]) => [file, test.text]),
+	),
+}
+const EARLIER_FILE_TABLE =
+	"CREATE TABLE fabrika_files_attachments (id UUID PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('pending', 'live')));\n"
 
 interface RuleCase {
 	readonly rule: RuleId
@@ -472,6 +490,19 @@ const cases: readonly RuleCase[] = [
 			'db/migrations/old/20261008120000_init.sql:1:1',
 		],
 		good: { 'db/migrations/20261008120000_init.sql': '', 'db/migrations/20261008120001_add_notes.sql': '', 'db/seeds/example.sql': '' },
+	},
+	{
+		rule: 'file-scan-migration',
+		bad: {
+			...SCANNING_APPLICATION,
+			'db/migrations/20261001000000_files.sql': `-- the table an earlier fileTableSql wrote\n${EARLIER_FILE_TABLE}`,
+		},
+		expected: ['db/migrations/20261001000000_files.sql:2:1'],
+		good: {
+			...SCANNING_APPLICATION,
+			'db/migrations/20261001000000_files.sql': EARLIER_FILE_TABLE,
+			'db/migrations/20261012000000_scan_files.sql': fileScanSql('attachments'),
+		},
 	},
 	{
 		rule: 'package-replacement',

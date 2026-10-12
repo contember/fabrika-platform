@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type ParsedModule, parseModule, walk } from './ast'
-import { contractModules } from './contract'
+import { contractModules, readContractModule } from './contract'
 import { compareFindings, type Finding, reporter } from './finding'
 import { ModuleGraph } from './graph'
 import {
@@ -25,7 +25,7 @@ import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
-import { checkMigrationNames } from './rules/migrations'
+import { checkMigrationNames, checkScanMigrations } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode, rawSqlBindings } from './rules/runtime'
@@ -164,6 +164,11 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	for (const module of contract === undefined ? [] : contractModules(graph, contract)) findings.push(...checkClientIdentity(module, graph))
 	findings.push(...(await checkGeneratedTests(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0)))
 	findings.push(...checkMigrationNames(checkedPaths))
+	const read = contract !== undefined && literal.length === 0 && contractRead.length === 0 ? readContractModule(graph) : undefined
+	if (read?.ok === true) {
+		const scanning = Object.entries(read.contract.surface.files ?? {}).filter(([, collection]) => collection.scan === true).map(([name]) => name)
+		findings.push(...checkScanMigrations(tree.files, scanning))
+	}
 	const bunfig = tree.files.get(BUNFIG_FILE)
 	if (bunfig !== undefined) findings.push(...checkTestSuiteConfig(bunfig))
 	const jobs = contract === undefined ? [] : contractJobs(contract, graph)
