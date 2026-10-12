@@ -6,20 +6,28 @@ import {
 	canonicalizeArtifact,
 	canonicalJson,
 	type ContractArtifact,
+	type DeclaredReach,
 	type EndpointRow,
 	type FileCollectionArtifact,
+	JOB_SITE_PREFIX,
 	type NumberShape,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
-import type { AccessSnapshot } from './snapshot'
+import type { MigrationDeviation } from '@fabrika/platform-node/sql'
+import { type AccessSnapshot, deviationKey } from './snapshot'
 
-/** One plain-language line; `widens` when the change can grant access the baseline did not. */
+/**
+ * One plain-language line; `widens` when the change can grant access the baseline did not. `review: 'closer'` marks a
+ * step off the paved road (declared reach, database code) or a change the diff cannot classify: the approver reads the
+ * code behind it, not only the line.
+ */
 export interface AccessChange {
 	readonly widens: boolean
 	readonly line: string
+	readonly review?: 'closer'
 }
 
 /** `unchanged` and `removal` publish at once; `widening` waits for a human on a protected environment. */
@@ -38,6 +46,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 		removed: (name) => `Migration \`${name}\` is removed`,
 		changed: (name, before, after) => (before.checksum === after.checksum ? [] : [widening(`Migration \`${name}\` changes`)]),
 	})
+	compareDatabaseCode(changes, baseline, candidate)
 	const list = changes.list
 	return { outcome: list.length === 0 ? 'unchanged' : list.some((change) => change.widens) ? 'widening' : 'removal', changes: list }
 }
@@ -52,6 +61,7 @@ class Changes {
 
 const widening = (line: string): AccessChange => ({ widens: true, line })
 const removal = (line: string): AccessChange => ({ widens: false, line })
+const closerWidening = (line: string): AccessChange => ({ widens: true, line, review: 'closer' })
 
 function compareContracts(changes: Changes, before: ContractArtifact | null, after: ContractArtifact | null): void {
 	if (before === null && after === null) return
@@ -60,7 +70,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		return
 	}
 	const candidate = canonicalizeArtifact(after)
-	const baseline = before === null ? emptyArtifact(candidate.app) : canonicalizeArtifact(before)
+	const baseline = before === null ? emptyArtifact(candidate) : canonicalizeArtifact(before)
 	if (before === null) changes.add(widening(`The application becomes the contract application \`${candidate.app}\``))
 	else if (baseline.app !== candidate.app) changes.add(widening(`The contract's application changes from \`${baseline.app}\` to \`${candidate.app}\``))
 	compareEndpoints(changes, baseline, candidate)
@@ -141,6 +151,114 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		removed: (name) => `Table policy \`${name}\` is removed`,
 		changed: tableChanges,
 	})
+	compareDeclared(changes, baseline.declared, candidate.declared)
+}
+
+// ── Steps off the paved road ────────────────────────────────────────────────────────────────────
+
+/**
+ * The reach each site declares (`sql`, `unscoped`, `connect`, link issuing). A site is keyed by its endpoint id or job,
+ * so a handler that moves keeps its site; each effect is compared on its own. A new site, table, connector or mount and
+ * `read` → `write` widen with closer review; a removal and `write` → `read` narrow.
+ */
+function compareDeclared(
+	changes: Changes,
+	before: Readonly<Record<string, DeclaredReach>> | undefined,
+	after: Readonly<Record<string, DeclaredReach>> | undefined,
+): void {
+	if (before !== undefined && after === undefined) {
+		// A `defineContract` contract records no reach: its sites reach what the handlers say, unreviewed.
+		changes.add(closerWidening("The contract leaves the staged kit: its sites' reach off the paved road is no longer declared"))
+		return
+	}
+	if (after === undefined) return
+	if (before === undefined) changes.add(removal('The contract moves to the staged kit: each site reaches only what it declares'))
+	const sites = before ?? {}
+	for (const site of union(Object.keys(sites), Object.keys(after))) {
+		changes.add(...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH))
+	}
+}
+
+const NO_REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: null }
+
+function reachChanges(site: string, from: DeclaredReach, to: DeclaredReach): AccessChange[] {
+	const name = siteName(site)
+	const changes: AccessChange[] = [...modeChange(name, 'raw SQL', from.sql, to.sql)]
+	for (const table of union(Object.keys(from.unscoped), Object.keys(to.unscoped))) {
+		changes.push(...modeChange(name, `table \`${table}\` unscoped`, from.unscoped[table] ?? null, to.unscoped[table] ?? null))
+	}
+	for (const connector of union(from.connect, to.connect)) {
+		if (!from.connect.includes(connector)) changes.push(closerWidening(`${name} calls connector \`${connector}\``))
+		else if (!to.connect.includes(connector)) changes.push(removal(`${name} no longer calls connector \`${connector}\``))
+	}
+	if (from.issues !== to.issues) {
+		if (to.issues !== null) changes.push(closerWidening(`${name} issues share links of mount \`${to.issues}\``))
+		if (from.issues !== null) changes.push(removal(`${name} no longer issues share links of mount \`${from.issues}\``))
+	}
+	return changes
+}
+
+/** `null` is undeclared; `write` reaches more than `read`. */
+function modeChange(name: string, reach: string, from: 'read' | 'write' | null, to: 'read' | 'write' | null): AccessChange[] {
+	if (from === to) return []
+	if (to === null) return [removal(`${name} no longer declares ${reach}`)]
+	if (from === null) return [closerWidening(declaredLine(name, reach, to))]
+	return [
+		to === 'write'
+			? closerWidening(`${name} ${reach} changes from \`read\` to \`write\``)
+			: removal(`${name} ${reach} changes from \`write\` to \`read\``),
+	]
+}
+
+function declaredLine(name: string, reach: string, mode: 'read' | 'write'): string {
+	return `${name} declares ${reach} (\`${mode}\`)`
+}
+
+function siteName(site: string): string {
+	return site.startsWith(JOB_SITE_PREFIX) ? `Job \`${site.slice(JOB_SITE_PREFIX.length)}\`` : `Endpoint \`${site}\``
+}
+
+/**
+ * The database code the migrations declare, keyed by file, kind and object. New code widens with closer review, and so
+ * does code in a file whose text changed, since the diff cannot tell what changed in it; removed code narrows.
+ */
+function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const before = new Map((baseline.databaseCode ?? []).map((deviation) => [deviationKey(deviation), deviation]))
+	const after = new Map((candidate.databaseCode ?? []).map((deviation) => [deviationKey(deviation), deviation]))
+	const beforeFiles = byName(baseline.migrations)
+	const afterFiles = byName(candidate.migrations)
+	for (const key of union([...before.keys()], [...after.keys()])) {
+		const from = before.get(key)
+		const to = after.get(key)
+		if (to === undefined) {
+			if (from !== undefined) changes.add(removal(`Migration \`${from.file}\` no longer declares ${databaseObject(from)}`))
+		} else if (from === undefined) changes.add(closerWidening(databaseCodeLine(to)))
+		else if (beforeFiles.get(to.file)?.checksum !== afterFiles.get(to.file)?.checksum) {
+			changes.add(closerWidening(`Migration \`${to.file}\` changes, and declares ${databaseObject(to)}`))
+		}
+	}
+}
+
+function databaseCodeLine(deviation: MigrationDeviation): string {
+	return `Migration \`${deviation.file}\` declares ${databaseObject(deviation)}`
+}
+
+function databaseObject(deviation: MigrationDeviation): string {
+	if (deviation.kind === 'do') return `a \`DO\` block (\`${deviation.object}\`)`
+	if (deviation.kind === 'expression') return `an expression that calls database code (\`${deviation.object}\`)`
+	return `${deviation.kind} \`${deviation.object}\``
+}
+
+/**
+ * Every step off the paved road a snapshot holds, one line each: the reach its sites declare and the database code its
+ * migrations declare. Each needs closer review; the environment page lists them for the published snapshot.
+ */
+export function snapshotDeviations(snapshot: AccessSnapshot): string[] {
+	const sites = Object.entries(snapshot.contract?.declared ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+	return [
+		...sites.flatMap(([site, reach]) => reachChanges(site, NO_REACH, reach).map((change) => change.line)),
+		...(snapshot.databaseCode ?? []).map(databaseCodeLine),
+	]
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────────────────────────────────
@@ -572,9 +690,10 @@ function byName(migrations: AccessSnapshot['migrations']): Map<string, AccessSna
 	return new Map(migrations.map((migration) => [migration.name, migration]))
 }
 
-function emptyArtifact(app: string): ContractArtifact {
+/** The baseline of a first contract; a staged-kit candidate is compared with sites that declare nothing. */
+function emptyArtifact(candidate: ContractArtifact): ContractArtifact {
 	return {
-		app,
+		app: candidate.app,
 		dimensions: {},
 		actions: {},
 		roles: {},
@@ -587,5 +706,6 @@ function emptyArtifact(app: string): ContractArtifact {
 		tables: {},
 		endpoints: [],
 		reservedPrefixes: [],
+		...(candidate.declared === undefined ? {} : { declared: {} }),
 	}
 }

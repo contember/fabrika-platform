@@ -125,7 +125,11 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 	return {
 		run: toRunDto(run),
 		outcome: classification.outcome,
-		changes: classification.changes.map((change) => ({ widens: change.widens, line: change.line })),
+		changes: classification.changes.map((change) => ({
+			widens: change.widens,
+			line: change.line,
+			...(change.review === undefined ? {} : { review: change.review }),
+		})),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,

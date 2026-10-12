@@ -35,7 +35,7 @@ const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 
 const classificationSchema = z.object({
 	outcome: z.enum(['unchanged', 'removal', 'widening']),
-	changes: z.array(z.object({ widens: z.boolean(), line: z.string() }).strict()),
+	changes: z.array(z.object({ widens: z.boolean(), line: z.string(), review: z.literal('closer').optional() }).strict()),
 	candidateDigest: digest,
 	baselineDigest: digest,
 	baselineRunId: z.string().min(1).nullable(),
@@ -147,16 +147,24 @@ async function readCandidate(
 			...(input.sourceBinding === undefined ? {} : { sourceBinding: input.sourceBinding }),
 			signal: invocation.signal,
 		})
-		snapshot = await readAccessSnapshot(commit, root, input.app.id)
+		const settled = approvedSnapshot(await requireAppEnv(deps.repositories, input.run)).snapshot.migrations
+		snapshot = await readAccessSnapshot(commit, root, input.app.id, settled)
 	} catch (error) {
 		invocation.signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)
-		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; \`fabrika-check\` names the problems`)
+		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; ${refusalHint(error)}`)
 		if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error
 	}
 	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
 	return snapshot
+}
+
+/** Where the author finds what the run log does not name: the checkout's text stays out of the log. */
+function refusalHint(error: SnapshotRefused): string {
+	return error.code === 'migrations-refused' || error.code === 'migrations-unreadable'
+		? '`fabrika db migrate` names each refused statement by file and line'
+		: '`fabrika-check` names the problems'
 }
 
 /** A deploy that would break a connector edge fails, whoever approves it: the consumer would stop working. */
@@ -203,9 +211,10 @@ function logClassification(log: (line: string) => void, classification: StoredCl
 		? 'access only narrows'
 		: `access widens${classification.protected ? ` on protected \`${env}\`` : ''}`
 	const widening = classification.changes.filter((change) => change.widens).length
+	const closer = classification.changes.filter((change) => change.review === 'closer').length
 	// Counts only: the change lines quote the checkout, and the approval page shows them.
 	log(
-		`access: ${summary} (${classification.changes.length} changes, ${widening} widening; against ${
+		`access: ${summary} (${classification.changes.length} changes, ${widening} widening, ${closer} needing closer review; against ${
 			classification.baselineRunId === null ? 'nothing published' : `run ${classification.baselineRunId}`
 		})`,
 	)

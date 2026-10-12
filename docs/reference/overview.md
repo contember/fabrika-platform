@@ -255,8 +255,11 @@ artifact data, or step kinds.
 Right after the provider pins the run's commit, Control reads the run's **access snapshot** at that commit
 ([ADR-0050](../decisions/0050-approved-access.md), `packages/control/src/approval/`): the contract graph and
 `src/db/tables.ts` through the static reader of `@fabrika/check/contract`, which executes nothing, and every
-`db/migrations/` file with its SHA-256. It classifies the snapshot against the environment's active snapshot
-(that of `app_envs.published_run_id`). A widening on an environment with `protected` set (`prod` by
+`db/migrations/` file with its SHA-256 and the database code the runner's classifier finds in it (a refused statement
+fails the run). It classifies the snapshot against the environment's active snapshot (that of
+`app_envs.published_run_id`). A step off the paved road — a site's declared `sql`, `unscoped`, `connect` or link
+issuing, or a migration's database code — is a widening line marked "needs closer review", not a refusal; the
+console's environment page lists the published snapshot's. A widening on an environment with `protected` set (`prod` by
 default) parks the run in `awaiting_approval`; it publishes nothing until a person approves it in the
 console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries

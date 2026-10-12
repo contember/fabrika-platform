@@ -71,6 +71,11 @@ export interface DeploymentDto {
 	logTail: RunLogLine[]
 	/** Present while the run waits for a person to approve its access change (ADR-0050); no MCP token can. */
 	approval: DeploymentApprovalDto | null
+	/**
+	 * The lines of the run's access change that step off the paved road (declared reach, database code) and need a
+	 * person's closer review, parked or not; empty before the run is classified.
+	 */
+	deviations: string[]
 }
 
 export interface DeploymentApprovalDto {
@@ -255,13 +260,15 @@ export async function getDeploymentUseCase(c: WorkspaceUseCaseContext, input: { 
 	) fail(404, 'run not found')
 	const run = await getRunUseCase(c, input.runId)
 	const log = await getRunLogUseCase(c, input.runId)
+	const changes = row.classification_json === null ? [] : parseClassification(row.classification_json).changes
 	const approval = row.status === 'awaiting_approval' && row.classification_json !== null
 		? {
 			url: c.consoleOrigin === undefined ? null : `${c.consoleOrigin}/approvals/${encodeURIComponent(row.id)}`,
-			changes: parseClassification(row.classification_json).changes.map((change) => change.line),
+			changes: changes.map((change) => change.line),
 		}
 		: null
-	return { run, logTail: log.lines.slice(-DEPLOYMENT_LOG_TAIL_LINES), approval }
+	const deviations = changes.filter((change) => change.review === 'closer').map((change) => change.line)
+	return { run, logTail: log.lines.slice(-DEPLOYMENT_LOG_TAIL_LINES), approval, deviations }
 }
 
 export async function createPullRequestUseCase(

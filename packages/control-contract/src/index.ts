@@ -189,6 +189,11 @@ export interface AppEnvDto {
 	protected: boolean
 	/** The run whose snapshot is this environment's active access; null until a run publishes one. */
 	publishedRunId: string | null
+	/**
+	 * The published snapshot's steps off the paved road, one line each: the reach its sites declare and the database code
+	 * its migrations declare. Each needs closer review; listed whether or not the environment is protected.
+	 */
+	deviations: string[]
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto
@@ -411,10 +416,14 @@ export interface RunDto {
 	finishedAt: number | null
 }
 
-/** One plain-language line of an access change; `widens` when it can grant access the baseline did not. */
+/**
+ * One plain-language line of an access change; `widens` when it can grant access the baseline did not. `review: 'closer'`
+ * marks a step off the paved road (declared reach, database code) or a change the diff cannot classify.
+ */
 export interface AccessChangeDto {
 	widens: boolean
 	line: string
+	review?: 'closer'
 }
 
 /** A run's access change against its environment's active snapshot (ADR-0050 §3). */

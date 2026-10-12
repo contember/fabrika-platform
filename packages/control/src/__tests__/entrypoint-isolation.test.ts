@@ -125,6 +125,8 @@ describe('entrypoint isolation', () => {
 		expect(graph.files).toContain('db.ts')
 		expect(graph.files).toContain('platform-cf.ts')
 		expect([...graph.externals]).toContain('cloudflare:workers')
+		// The approval classifies a commit's migrations in the Worker, through the runtime-neutral subpath only.
+		expect([...graph.externals]).toContain('@fabrika/platform-node/sql')
 		expect(packagesOf(graph)).toContain('@fabrika/provider-cloudflare')
 		expect(packagesOf(graph)).not.toContain('@fabrika/provider-zerops')
 	})

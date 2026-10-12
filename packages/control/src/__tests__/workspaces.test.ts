@@ -313,19 +313,23 @@ for (const backend of backends) {
 					run,
 					logTail: [{ ts: 1, stream: 'meta', text: 'building' }],
 					approval: null,
+					deviations: [],
 				})
 				await expect(getDeploymentUseCase(w.context(oauthUser(['source.workspace.read'])), { runId: run.id })).rejects.toMatchObject({
 					httpStatus: 404,
 				})
 			})
 
-			test('a run parked for approval is reported with the approval link and the change, which no MCP token can approve', async () => {
+			test('a run parked for approval is reported with the approval link, the change and its deviations, which no MCP token can approve', async () => {
 				const w = await world()
 				const created = await workspace(w)
 				const run = await deployStageUseCase(w.context(author), { workspaceId: created.id })
 				const classification = {
 					outcome: 'widening',
-					changes: [{ widens: true, line: 'Role `editor` gains `notes.delete`' }],
+					changes: [
+						{ widens: true, line: 'Role `editor` gains `notes.delete`' },
+						{ widens: true, line: 'Endpoint `api.notes.export` declares raw SQL (`read`)', review: 'closer' },
+					],
 					candidateDigest: `sha256:${'a'.repeat(64)}`,
 					baselineDigest: `sha256:${'b'.repeat(64)}`,
 					baselineRunId: null,
@@ -339,8 +343,9 @@ for (const backend of backends) {
 				expect(deployment.run.status).toBe('awaiting_approval')
 				expect(deployment.approval).toEqual({
 					url: `https://console.example.test/approvals/${run.id}`,
-					changes: ['Role `editor` gains `notes.delete`'],
+					changes: ['Role `editor` gains `notes.delete`', 'Endpoint `api.notes.export` declares raw SQL (`read`)'],
 				})
+				expect(deployment.deviations).toEqual(['Endpoint `api.notes.export` declares raw SQL (`read`)'])
 			})
 
 			test('the live head is read once and pinned', async () => {

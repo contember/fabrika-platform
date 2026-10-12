@@ -372,7 +372,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   answers 404 otherwise. Paths are repository-relative (`isRepositoryPath`, at the MCP boundary), and
   protected paths (`zerops.y[a]ml`, every `fabrika.*` but the exact `fabrika.contract.ts`, everything under
   `.github/`) are refused before GitHub is called. `get_deployment` reaches only runs of the caller's own
-  workspace branches, and reports a parked run with its approval link. `get_app_rules`
+  workspace branches, and reports a parked run with its approval link and every run's `deviations` (its lines that
+  need closer review). `get_app_rules`
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
@@ -391,6 +392,16 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   reads as the empty baseline (`approvedSnapshot`). `runs.pending_access_json` is no longer read or written. The
   published snapshot lives in `app_envs.published_snapshot_json`. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
+- **Steps off the paved road are in the reviewed snapshot, never refused by it (`diff.ts`).** Two kinds only: the
+  reach a staged-kit site declares (`ContractArtifact.declared`: `sql`, `unscoped`, `connect`, `issues`), and the
+  database code the migrations declare (`AccessSnapshot.databaseCode`, from `classifyMigrations` of
+  `@fabrika/platform-node/sql`, the runner's own classifier, over every file under `db/migrations/`). A site is keyed by
+  its endpoint id or `job:<name>`, a database object by file, kind and object, never by line, so a moved handler is no
+  change. A new site, table, connector, mount or object, `read` → `write`, an edited file holding code, and a contract
+  that leaves the staged kit widen with `review: 'closer'`; removals narrow. `databaseCode` is absent when empty and
+  the digest appends it only when present, so stored digests stay valid. A refused statement in a file the environment
+  has not published unchanged fails the read (`migrations-refused`, a count, never the statement), as the runner
+  refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviations` lists the published snapshot's.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

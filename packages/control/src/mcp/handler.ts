@@ -202,7 +202,8 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	server.registerTool('get_deployment', {
 		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and the last lines of its build log. '
 			+ 'A run whose access change waits for a person reports status awaiting_approval with the approval link and the change '
-			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve.',
+			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve. '
+			+ 'deviations names the changes off the paved road (declared sql, unscoped, connect, link issuing, database code) that need closer review.',
 		inputSchema: toolInput(toolInputs.getDeployment),
 	}, (input) => run(() => getDeploymentUseCase(c, input)))
 	server.registerTool('create_pull_request', {

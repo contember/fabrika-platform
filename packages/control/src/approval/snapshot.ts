@@ -3,6 +3,7 @@
 
 import { parseContractArtifact, schemaFromContract } from '@fabrika/app/contract'
 import { canonicalArtifactJson, canonicalJson, type ContractArtifact, contractDigest, sha256Hex } from '@fabrika/auth-core'
+import type { MigrationDeviation } from '@fabrika/platform-node/sql'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import type { AppEnvRow } from '../db'
@@ -18,6 +19,11 @@ export interface AccessSnapshot {
 	/** The contract with its table policies; null only in the empty snapshot, since a commit without one is refused. */
 	readonly contract: ContractArtifact | null
 	readonly migrations: readonly MigrationEntry[]
+	/**
+	 * The database code the migration files declare (ADR-0017): each deviation by file, kind and object, in file order.
+	 * Absent when there is none, so a snapshot without database code keeps the digest it had before the field existed.
+	 */
+	readonly databaseCode?: readonly MigrationDeviation[]
 	/** The `@fabrika/check` version that read it; empty for the empty snapshot. */
 	readonly checker: string
 }
@@ -25,10 +31,18 @@ export interface AccessSnapshot {
 /** The baseline of an environment that has published nothing: every item of a candidate is an addition. */
 export const EMPTY_SNAPSHOT: AccessSnapshot = { version: 1, contract: null, migrations: [], checker: '' }
 
+const deviationSchema = z.object({
+	kind: z.enum(['function', 'procedure', 'trigger', 'view', 'materialized view', 'rule', 'policy', 'do', 'expression']),
+	object: z.string().min(1),
+	file: z.string().min(1),
+	line: z.number().int().positive(),
+}).strict() satisfies z.ZodType<MigrationDeviation>
+
 const snapshotSchema = z.object({
 	version: z.literal(1),
 	contract: z.unknown(),
 	migrations: z.array(z.object({ name: z.string().min(1), checksum: z.string().regex(/^[0-9a-f]{64}$/) }).strict()),
+	databaseCode: z.array(deviationSchema).optional(),
 	checker: z.string(),
 	// The gates and IAM schema of an application without a contract, in a snapshot stored before those were refused.
 	artifact: z.unknown().optional(),
@@ -41,6 +55,7 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 		version: parsed.version,
 		contract: parsed.contract === null ? null : parseContractArtifact(parsed.contract),
 		migrations: parsed.migrations,
+		...(parsed.databaseCode === undefined || parsed.databaseCode.length === 0 ? {} : { databaseCode: parsed.databaseCode }),
 		checker: parsed.checker,
 	}
 }
@@ -50,15 +65,25 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 }
 
 /**
- * The digest of the access a snapshot grants: the canonical contract and the migration list. The checker version is not
- * part of it, so reading the same commit with a newer checker approves nothing new. The trailing `null` stood for
- * artifact access; it stays so that the digests stored approvals name do not change.
+ * The digest of the access a snapshot grants: the canonical contract, the migration list and the database code. The
+ * checker version is not part of it, so reading the same commit with a newer checker approves nothing new. The
+ * trailing `null` stood for artifact access; it stays, and the database code follows only when there is some, so that
+ * the digests stored approvals name do not change.
  */
 export function snapshotDigest(snapshot: AccessSnapshot): string {
-	const migrations = [...snapshot.migrations].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+	const migrations = [...snapshot.migrations].sort((a, b) => compareText(a.name, b.name))
 	const contract = snapshot.contract === null ? 'null' : canonicalArtifactJson(snapshot.contract)
-	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\nnull`)}`
+	const deviations = [...snapshot.databaseCode ?? []].sort((a, b) => compareText(deviationKey(a), deviationKey(b)))
+	const databaseCode = deviations.length === 0 ? '' : `\n${canonicalJson(deviations)}`
+	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\nnull${databaseCode}`)}`
 }
+
+/** A deviation's identity across snapshots: its file, kind and object. Its line moves only with an edit of the file. */
+export function deviationKey(deviation: MigrationDeviation): string {
+	return `${deviation.file}\n${deviation.kind}\n${deviation.object}`
+}
+
+const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
 /** What a provider publishes for a snapshot: the contract, its digest and the IAM schema compiled from it. */
 export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess | undefined {

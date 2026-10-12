@@ -1,6 +1,8 @@
 import { isStructuralError } from '@fabrika/app'
 import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
+import { snapshotDeviations } from '../../approval/diff'
+import { approvedSnapshot } from '../../approval/snapshot'
 import { type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../github/triggers/push-event'
 import { fail } from '../domain'
@@ -220,6 +222,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		authoring: row.authoring === 1,
 		protected: row.protected === 1,
 		publishedRunId: row.published_run_id,
+		deviations: snapshotDeviations(approvedSnapshot(row).snapshot),
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
