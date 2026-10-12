@@ -5,7 +5,7 @@ import { checkApplication, formatFinding, generatedTestHeader } from '@fabrika/c
 import { generateSchema } from '@fabrika/db/codegen'
 import { applicationDatabaseSchema, definePostgresApplicationMigrations, dropApplicationDatabase, PostgresDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -291,6 +291,9 @@ const application = (): { root: string; source: DbCommandDependencies['source'];
 }
 
 describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
+	// A test-isolation run makes a throwaway schema and runs every generated case: two of them take about 5 s alone.
+	setDefaultTimeout(30_000)
+
 	test('migrate applies new files once and refuses an edited one', async () => {
 		const { root, source } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
