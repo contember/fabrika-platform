@@ -6,6 +6,7 @@ export const vocabulary = defineVocabulary({
 	actions: {
 		'candidates.read': 'Read a candidate record',
 		'candidates.verify': "Confirm a candidate's e-mail address",
+		'candidates.attach': 'Attach files to a candidate record',
 		'candidates.invite': "Issue a candidate's portal link",
 		'candidates.process': 'Register and invite candidates',
 	},

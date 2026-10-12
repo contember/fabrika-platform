@@ -120,6 +120,11 @@ export type ServedEndpoint =
 		readonly kind: 'file'
 		readonly row: CredentialedEndpoint
 		readonly serve: (request: Request, target: unknown) => Promise<Response | FileDownload>
+		/**
+		 * A link holder's download: the `file:<name>` dimension whose `:fileId` must lie beneath the link's object. Its
+		 * row is `on` the owner's dimension, the link's object; the file is resolved under it.
+		 */
+		readonly beneath?: string
 	}
 	/** The shell of a link mount's share SPA: anonymous, and served with the fragment bootstrap. */
 	| { readonly kind: 'link-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
@@ -441,7 +446,10 @@ export class ContractRuntime {
 		return data
 	}
 
-	/** The access form reads its value from the path parameter it names: `:owner` of an upload, `:fileId` of a download. */
+	/**
+	 * The access form reads its value from the path parameter it names: `:owner` of an upload, `:fileId` of a download.
+	 * A link holder's row names none: its owner is the link's object, checked as a link procedure's is.
+	 */
 	async #file(
 		served: Extract<ServedEndpoint, { kind: 'file' }>,
 		request: Request,
@@ -449,6 +457,9 @@ export class ContractRuntime {
 	): Promise<Response | FileDownload> {
 		const caller = await this.#authorize(served.row, request)
 		const access = served.row.requirement.kind === 'action' ? served.row.requirement.access : null
+		if (access?.form === 'on' && access.from === null && served.row.requirement.kind === 'action') {
+			return await this.#linkFile(served, request, params, caller, served.row.requirement.action, access.dimension)
+		}
 		const from = access?.form === 'on' ? access.from : null
 		const raw = from === null ? undefined : params[from]
 		if (from === null || raw === undefined) {
@@ -459,6 +470,43 @@ export class ContractRuntime {
 			return await runInRequest(frame, async () => {
 				const { context } = await this.#access(served.row, caller, { [from]: decodePathParameter(raw) }, frame, null)
 				return await served.serve(request, context['target'])
+			})
+		} finally {
+			frame.end()
+		}
+	}
+
+	/**
+	 * A link holder's upload or download. The link's mount and its chain are checked as `#linkTarget` checks them; a
+	 * download then resolves `:fileId` beneath that object, and a file of any other object is indistinguishable from a
+	 * missing one.
+	 */
+	async #linkFile(
+		served: Extract<ServedEndpoint, { kind: 'file' }>,
+		request: Request,
+		params: Readonly<Record<string, string>>,
+		caller: Caller,
+		action: string,
+		dimension: string,
+	): Promise<Response | FileDownload> {
+		const frame = new RequestFrame(crypto.randomUUID())
+		try {
+			return await runInRequest(frame, async () => {
+				const owner = await this.#linkTarget(served.row, caller, action, dimension, {}, frame)
+				const beneath = served.beneath
+				if (beneath === undefined) {
+					return await served.serve(request, owner.context['target'])
+				}
+				const raw = params['fileId']
+				const fileId = raw === undefined ? '' : decodePathParameter(raw)
+				const [object, ...containers] = caller.link?.chain ?? []
+				const chain = fileId === '' ? null : await this.#chain(beneath, fileId)
+				const ownedHere = chain !== null && object !== undefined && chain.get(dimension) === object.value
+					&& containers.every((scope) => chain.get(scope.type) === scope.value)
+				if (chain === null || object === undefined || !ownedHere) {
+					throw new NotFoundError('Not found')
+				}
+				return await served.serve(request, this.#parts.mint.ref(frame, beneath, action, caller.subject, fileId, chain))
 			})
 		} finally {
 			frame.end()

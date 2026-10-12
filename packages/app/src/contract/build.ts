@@ -839,8 +839,74 @@ class ArtifactBuilder {
 				input: ID_OBJECT,
 				output: ID_OBJECT,
 			})
+			if (artifact.link) {
+				this.#linkFiles(where, name, collection, owner.scope.dimension)
+			}
 		}
 		return files
+	}
+
+	/**
+	 * The rows a link holder reaches a collection by: under the API prefix of every link mount bound to the owner's
+	 * dimension, caller `link`, the owner being the link's object (no parameter names it). The mount grants the
+	 * collection's write and read actions, so a key of it can do what the rows require.
+	 */
+	#linkFiles(where: string, name: string, collection: FilesDeclaration, ownerDimension: string): void {
+		const mounts = Object.entries(this.#contract.mounts).flatMap(([mountName, mount]) =>
+			mount.kind === 'link' && mount.dimension === ownerDimension ? [{ mountName, mount }] : []
+		)
+		if (mounts.length === 0) {
+			this.#problem(
+				where,
+				`sets link: true, and no link mount is bound to '${ownerDimension}' (allowed: c.link(prefix, { dimension: '${ownerDimension}', … }))`,
+			)
+		}
+		const [firstType, ...otherTypes] = collection.types
+		for (const { mountName, mount } of mounts) {
+			const missing = [collection.write, collection.read].filter((action, index, all) => all.indexOf(action) === index && !mount.grants.includes(action))
+			if (missing.length > 0) {
+				this.#problem(
+					where,
+					`sets link: true, and link mount '${mountName}' grants no ${missing.map((action) => `'${action}'`).join(' or ')} (allowed: grants: [${
+						[...mount.grants, ...missing].map((action) => `'${action}'`).join(', ')
+					}])`,
+				)
+				continue
+			}
+			const source: EndpointSource = { kind: 'mount', name: mountName }
+			const base = joinPath(joinPath(mount.prefix, LINK_API_SEGMENT), `files.${name}`)
+			const ofTheLink = (action: string): EndpointRequirement => ({
+				kind: 'action',
+				action,
+				access: { form: 'on', dimension: ownerDimension, from: null },
+			})
+			if (firstType !== undefined) {
+				this.#row({
+					id: `${mountName}.files.${name}.upload`,
+					source,
+					kind: 'upload',
+					method: 'POST',
+					path: `${base}.upload`,
+					callers: ['link'],
+					requirement: ofTheLink(collection.write),
+					admission: { contentTypes: [firstType, ...otherTypes], maxBytes: collection.maxBytes },
+					input: null,
+					output: ID_OBJECT,
+				})
+			}
+			this.#row({
+				id: `${mountName}.files.${name}.download`,
+				source,
+				kind: 'download',
+				method: 'GET',
+				path: `${base}/:fileId`,
+				callers: ['link'],
+				requirement: ofTheLink(collection.read),
+				admission: null,
+				input: null,
+				output: null,
+			})
+		}
 	}
 
 	#fileCollection(where: string, collection: FilesDeclaration): FileCollectionArtifact {

@@ -19,15 +19,17 @@ import {
 } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
-import { unusedDatabase } from '@fabrika/platform/testing'
+import { MemoryFileObjects, unusedDatabase } from '@fabrika/platform/testing'
 import { Authorizer, MemoryTokenCache, type ResolvedApp } from '@fabrika/proxy-core'
 import { type ContractProxyApp, contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { echoAssets, environment } from '../../../app/src/__tests__/fixtures/implement/harness'
-import { type DeliveryStep, intakeApp, type IntakeWorld } from '../../../app/src/__tests__/fixtures/visitor-intake/app'
+import { contract } from '../../../app/src/__tests__/fixtures/visitor-intake/fabrika.contract'
 import { migration } from '../../../app/src/__tests__/fixtures/visitor-intake/migration'
+import { intakeApp } from '../../../app/src/__tests__/fixtures/visitor-intake/src/app'
 import { tables } from '../../../app/src/__tests__/fixtures/visitor-intake/src/db/tables'
+import type { DeliveryStep, IntakeWorld } from '../../../app/src/__tests__/fixtures/visitor-intake/src/world'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
@@ -46,6 +48,7 @@ const HOST = 'intake.test'
 const APP = 'intake@prod'
 const PROVISIONING_KEY = `px_${'p'.repeat(43)}`
 const DAY = 24 * 60 * 60
+const PDF = new TextEncoder().encode('%PDF-1.7\n%%EOF\n')
 const exec = { waitUntil() {} }
 const schema = applicationSchema(`visitor-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
 const opened: Database[] = []
@@ -110,6 +113,14 @@ class World implements IntakeWorld {
 	}
 }
 
+interface VisitOptions {
+	readonly key?: string
+	/** A JSON body, sent with POST. */
+	readonly body?: unknown
+	/** A file's bytes and their media type, sent with POST. */
+	readonly file?: { readonly bytes: Uint8Array<ArrayBuffer>; readonly type: string }
+}
+
 interface Stack {
 	readonly world: World
 	readonly app: ContractApp
@@ -118,7 +129,7 @@ interface Stack {
 	/** The proxy's clock, Unix seconds: a test moves it to let a cached token come due. */
 	clock: number
 	/** A request decided by the proxy and, when allowed, forwarded to the application with what the proxy adds. */
-	visit(path: string, options?: { readonly key?: string; readonly body?: unknown }): Promise<{ readonly status: number; readonly body: unknown }>
+	visit(path: string, options?: VisitOptions): Promise<{ readonly status: number; readonly body: unknown }>
 	runJob(): Promise<unknown>
 	reconcile(withIssues: boolean): Promise<void>
 	jobToken(): Promise<string>
@@ -126,7 +137,7 @@ interface Stack {
 
 async function stack(): Promise<Stack> {
 	const world = new World()
-	const { contract, implementation } = intakeApp(world)
+	const { implementation, variables } = intakeApp(world)
 	const artifact = compileContract(contract, tables)
 	const h = createHarness()
 	const env = iamEnv(h)
@@ -171,6 +182,7 @@ async function stack(): Promise<Stack> {
 	const workloadTokens = issuerWorkloadTokens(ISSUER, (request) => iamApp.fetch(request, env, exec))
 	const app = boot(implementation, {
 		environment: environment({
+			...variables,
 			FABRIKA_IAM_APP_ID: APP,
 			FABRIKA_IAM_ISSUER: ISSUER,
 			[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
@@ -181,6 +193,7 @@ async function stack(): Promise<Stack> {
 		workloadTokens,
 		membership: rpc,
 		database: connection,
+		files: new MemoryFileObjects(),
 	})
 
 	const proxied: ContractProxyApp = { id: APP, hosts: [HOST], upstream: 'app', scheme: 'https', ...contractProxyTable(artifact) }
@@ -192,9 +205,13 @@ async function stack(): Promise<Stack> {
 		env,
 		clock: Math.floor(Date.now() / 1000),
 		async visit(path, options = {}) {
-			const headers = new Headers({ 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors' })
+			const headers = new Headers({
+				'Content-Type': options.file?.type ?? 'application/json',
+				'Sec-Fetch-Site': 'same-origin',
+				'Sec-Fetch-Mode': 'cors',
+			})
 			if (options.key !== undefined) headers.set('Authorization', `Bearer ${options.key}`)
-			const method = options.body === undefined ? 'GET' : 'POST'
+			const method = options.body === undefined && options.file === undefined ? 'GET' : 'POST'
 			const requestId = Bun.randomUUIDv7()
 			const decision = await authorizer.authorize(resolved, { method, url: new URL(path, `https://${HOST}`), rawPath: path, headers, requestId })
 			if (decision.outcome !== 'allow') {
@@ -206,7 +223,7 @@ async function stack(): Promise<Stack> {
 			forwarded.set('X-Request-Id', requestId)
 			if (decision.token !== null) forwarded.set(PROXY_TOKEN_HEADER, decision.token)
 			if (decision.delegation !== null) forwarded.set(DELEGATION_HEADER, decision.delegation)
-			const body = options.body === undefined ? null : JSON.stringify(options.body)
+			const body = options.file?.bytes ?? (options.body === undefined ? null : JSON.stringify(options.body))
 			const response = await app.fetch(new Request(`https://${HOST}${path}`, { method, headers: forwarded, body }))
 			const text = await response.text()
 			let parsed: unknown = text
@@ -269,6 +286,34 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 		expect(resultOf(await s.visit('/p/api/me', { key, body: {} }))).toEqual({ name: 'Ada', email: 'ada@example.test', verified: true })
 		// The link reaches only its own mount's procedures; without a key the proxy stops the request.
 		expect((await s.visit('/p/api/me', { body: {} })).status).toBe(401)
+	})
+
+	test("a holder uploads to and downloads from its own record only; another record's file is 404", async () => {
+		const s = await stack()
+		await s.visit('/register', { body: { email: 'eve@example.test', name: 'Eve' } })
+		await s.visit('/register', { body: { email: 'fay@example.test', name: 'Fay' } })
+		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
+		const eve = s.world.lastKey('eve@example.test')
+		const fay = s.world.lastKey('fay@example.test')
+		const upload = (key: string) => s.visit('/p/api/files.attachments.upload', { key, file: { bytes: PDF, type: 'application/pdf' } })
+
+		const own = prop(resultOf(await upload(eve)), 'id')
+		const theirs = prop(resultOf(await upload(fay)), 'id')
+		if (typeof own !== 'string' || typeof theirs !== 'string') throw new Error('expected two uploads')
+		const owners = await admin((sql) =>
+			sql.unsafe(
+				`select c.email from ${schema}.fabrika_files_attachments f join ${schema}.candidates c on c.id = f.owner_id where f.id in ($1, $2) order by c.email`,
+				[
+					own,
+					theirs,
+				],
+			)
+		)
+		expect(owners.map((row: { email: string }) => row.email)).toEqual(['eve@example.test', 'fay@example.test'])
+		const downloaded = await s.visit(`/p/api/files.attachments/${own}`, { key: eve })
+		expect(downloaded.status).toBe(200)
+		expect(downloaded.body).toBe(new TextDecoder().decode(PDF))
+		expect((await s.visit(`/p/api/files.attachments/${theirs}`, { key: eve })).status).toBe(404)
 	})
 
 	test('a link the job revoked keeps working only until the proxy must refresh its cached token', async () => {

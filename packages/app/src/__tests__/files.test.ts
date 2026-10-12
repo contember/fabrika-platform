@@ -196,13 +196,13 @@ describe('boot refuses a file collection it cannot serve', () => {
 		])
 	})
 
-	test('with a type whose bytes the framework cannot verify, a share link, or a name that cannot name a table', () => {
+	test('with a type whose bytes the framework cannot verify, a share link no link mount serves, or a name that cannot name a table', () => {
 		const store = new MemoryFileObjects()
 		expect(problemsOf(contractWith({ name: 'attachments', types: ['image/png', 'video/mp4'] }), store)[0]).toStartWith(
 			"files 'attachments' admits 'video/mp4', whose bytes the framework cannot verify",
 		)
 		expect(problemsOf(contractWith({ name: 'attachments', types: ['image/png'], link: true }), store)).toEqual([
-			"files 'attachments' sets link: true, which this version of @fabrika/app does not serve yet",
+			"ContractError: the contract does not compile:\n- files 'attachments': sets link: true, and no link mount is bound to 'note' (allowed: c.link(prefix, { dimension: 'note', … }))",
 		])
 		expect(problemsOf(contractWith({ name: 'Attachments', types: ['image/png'] }), store)[0]).toStartWith("files 'Attachments' needs a lowercase")
 	})

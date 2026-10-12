@@ -482,8 +482,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the error's name or message, the
   input, a header or a row: an application or a driver writes those. The delivery is not awaited; the Worker adapter
   hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).
-- **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`,
-  a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
+- **`boot` refuses to start rather than answer nothing**: a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
   form field that is not a column of its inbox (its honeypot and `challengeToken` excepted), a form whose challenge
   names an application variable that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
@@ -504,6 +503,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   same, so change them together. A `Ref` passed to IAM must be this request's, for the
   endpoint's own dimension and action. A webhook gets neither; a job gets `ctx.links` only as Jobs says. A directory
   does not need the transport to boot: without one only its `list()` and `get()` calls answer 503.
+- **A link holder's file route is a link procedure for its owner** (`#linkFile` in `dispatch.ts`): a `link: true`
+  collection's rows sit under each link mount bound to the owner's dimension (`buildArtifact`'s `#linkFiles`, which
+  refuses a mount that does not grant the collection's write and read), `on` the owner with no parameter. The route
+  checks the mount and the chain with `#linkTarget`, and a download then requires the file's located chain to put it
+  beneath that object (else 404). Never take the owner, or a file of another owner, from the request.
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
   object moves. It admits only a key of its own mount.

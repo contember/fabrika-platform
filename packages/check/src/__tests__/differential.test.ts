@@ -25,6 +25,8 @@ import { contract as scopedContract } from '../../../app/src/__tests__/fixtures/
 import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scoped-notes/src/db/tables'
 import { contract as organizationsContract } from '../../../app/src/__tests__/fixtures/scoped-organizations/fabrika.contract'
 import { tables as organizationsTables } from '../../../app/src/__tests__/fixtures/scoped-organizations/src/db/tables'
+import { contract as visitorIntakeContract } from '../../../app/src/__tests__/fixtures/visitor-intake/fabrika.contract'
+import { tables as visitorIntakeTables } from '../../../app/src/__tests__/fixtures/visitor-intake/src/db/tables'
 import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/fabrika.contract'
 import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -156,6 +158,11 @@ const fixtures: readonly Fixture[] = [
 		root: join(APP_TESTS, 'fixtures', 'connect-catalog'),
 		evaluated: () => compileContract(catalogContract, {}),
 		tables: {},
+	},
+	{
+		name: '@fabrika/app visitor-intake (a job that issues links, link-holder files, forms and a public SPA, read from source)',
+		root: join(APP_TESTS, 'fixtures', 'visitor-intake'),
+		evaluated: () => compileContract(visitorIntakeContract, visitorIntakeTables),
 	},
 	{
 		name: '@fabrika/app connect/shop, whose import reads its digest from the vendored snapshot',

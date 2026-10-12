@@ -257,8 +257,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
 (ADR-0022 rule 5), when the contract
-declares something this version cannot serve yet (a file collection with `link: true`,
-a webhook bound to the whole application), when a job cannot run (see Jobs), when an
+declares something this version cannot serve yet (a webhook bound to the whole
+application), when a job cannot run (see Jobs), when an
 import has no matching snapshot or no owner, when a file collection
 cannot be served (below), when an `on` dimension or a link mount's dimension has no
 table, when an access form reaches a dimension that lies in a container no table can
@@ -536,14 +536,23 @@ the same pipeline:
   applies the same treatment to the answer of the endpoint it selected. The file itself gets `Content-Type` from the recorded type,
   `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
   `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
+- **Link holders' files** (`link: true`). Every link mount bound to the owner's dimension
+  gets `POST <prefix>/api/files.<name>.upload` and `GET <prefix>/api/files.<name>/:fileId`,
+  caller `link`, `on` the owner's dimension with no parameter: the owner is the link's
+  object. Each checks the key's mount and the object's current chain as a link procedure
+  does (a key of another mount is 403, an object that moved 404), and a download resolves
+  `:fileId` beneath that object, so another object's file is 404. Uploads keep the
+  collection's limits.
 - **One table per collection**, `fabrika_files_<name>`, created by an application migration
   with `fileTableSql(name, { table, key, chain })` of `@fabrika/db`, where `chain` lists the
   owner's containment columns, nearest first; the owner table needs `UNIQUE (<key>, <chain
   columns>)`, as a child table's parent does. Codegen leaves the table out; only the
   framework reads it (`@fabrika/db/framework`'s `fileTablesOf`).
 - `boot` refuses a collection whose name is not lowercase snake_case of at most 39
-  characters, which admits a type the framework cannot sniff, which sets `link: true`, or
-  which has no object storage or no `scoped(tables)` data layer. `serveContract` opens the
+  characters, which admits a type the framework cannot sniff, or which has no object storage
+  or no `scoped(tables)` data layer; the contract refuses `link: true` without a link mount
+  bound to the owner's dimension, or with one that does not grant the collection's write and
+  read actions. `serveContract` opens the
   storage (path-style S3, `@fabrika/platform-node`'s `S3BlobStore`) from
   `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a
   partial set stops the boot. On Zerops the platform writes all four into the generated run

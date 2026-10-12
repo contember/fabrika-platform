@@ -1,5 +1,7 @@
-// The fixture's only migration, as `db/migrations/` would hold it. A form appends to its inbox; the intake job drains
-// both inboxes and keeps each candidate's link delivery in the candidate's own row.
+// The fixture's migrations, as `db/migrations/` would hold them. A form appends to its inbox; the intake job drains
+// both inboxes and keeps each candidate's link delivery in the candidate's own row; a candidate owns its attachments.
+import { fileTableSql } from '@fabrika/db'
+
 export const migration = `
 create table candidates (
 	id uuid primary key,
@@ -21,4 +23,5 @@ create table registrations (
 create table resend_requests (
 	email text not null
 );
+${fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })}
 `

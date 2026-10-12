@@ -56,6 +56,8 @@ interface Collection {
 	readonly artifact: FileCollectionArtifact
 	readonly dimension: string
 	readonly table: FileCollectionTable
+	/** The link mounts bound to the owner's dimension, for a `link: true` collection: each serves its link holders. */
+	readonly linkMounts: readonly string[]
 }
 
 /** The media type of a `Content-Type` value, without parameters, lower-cased. */
@@ -187,10 +189,10 @@ export class FileCollections {
 	endpoints(rows: ReadonlyMap<string, EndpointRow>, problems: string[]): ReadonlyMap<string, ServedEndpoint> {
 		const served = new Map<string, ServedEndpoint>()
 		for (const collection of this.#collections) {
-			const row = (suffix: string): CredentialedEndpoint | null => {
-				const found = rows.get(`files.${collection.name}.${suffix}`)
+			const row = (suffix: string, id = `files.${collection.name}.${suffix}`): CredentialedEndpoint | null => {
+				const found = rows.get(id)
 				if (found === undefined || found.requirement === null) {
-					problems.push(`files '${collection.name}' has no '${suffix}' endpoint row`)
+					problems.push(`files '${collection.name}' has no '${id}' endpoint row`)
 					return null
 				}
 				return found
@@ -214,6 +216,22 @@ export class FileCollections {
 					handler: async ({ input, ctx }) => this.#list(collection, 'target' in ctx ? ctx.target : undefined, input),
 					facilities: NO_FACILITIES,
 				})
+			}
+			for (const mount of collection.linkMounts) {
+				const linkRow = (suffix: string): CredentialedEndpoint | null => row(suffix, `${mount}.files.${collection.name}.${suffix}`)
+				const linkUpload = linkRow('upload')
+				const linkDownload = linkRow('download')
+				if (linkUpload !== null) {
+					served.set(linkUpload.id, { kind: 'file', row: linkUpload, serve: (request, target) => this.#upload(collection, request, target) })
+				}
+				if (linkDownload !== null) {
+					served.set(linkDownload.id, {
+						kind: 'file',
+						row: linkDownload,
+						serve: (_request, target) => this.#download(collection, target),
+						beneath: collection.dimension,
+					})
+				}
 			}
 			if (remove !== null) {
 				served.set(remove.id, {
@@ -439,9 +457,6 @@ export function fileCollections(
 	const tables = fileTablesOf(database)
 	const collections: Collection[] = []
 	for (const [name, collection] of entries) {
-		if (collection.link) {
-			problems.push(`files '${name}' sets link: true, which this version of @fabrika/app does not serve yet`)
-		}
 		if (fileTableName(name) === null) {
 			problems.push(`files '${name}' needs a lowercase snake_case name of at most 39 characters: it names the table fabrika_files_<name>`)
 			continue
@@ -458,7 +473,13 @@ export function fileCollections(
 				actions: { read: collection.read, write: collection.write, delete: collection.delete },
 				scan: collection.scan === true,
 			})
-			collections.push({ name, artifact: collection, dimension, table })
+			const ownerDimension = artifact.dimensions[dimension]?.in ?? null
+			const linkMounts = collection.link
+				? Object.entries(artifact.mounts).flatMap((
+					[mount, declared],
+				) => (declared.kind === 'link' && declared.dimension === ownerDimension ? [mount] : []))
+				: []
+			collections.push({ name, artifact: collection, dimension, table, linkMounts })
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : `files '${name}' cannot be served`)
 		}

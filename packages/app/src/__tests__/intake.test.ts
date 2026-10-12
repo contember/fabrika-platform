@@ -17,11 +17,14 @@ import type {
 } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { bootApp, environment, frameworkEnvFor, grant, ISSUER, linkToken, resultOf, send, workloadTokensFor } from './fixtures/implement/harness'
-import { type DeliveryStep, intakeApp, type IntakeWorld, SENDS_PER_DAY } from './fixtures/visitor-intake/app'
 import { migration } from './fixtures/visitor-intake/migration'
+import { intakeApp } from './fixtures/visitor-intake/src/app'
+import { SENDS_PER_DAY } from './fixtures/visitor-intake/src/intake/endpoints'
+import type { DeliveryStep, IntakeWorld } from './fixtures/visitor-intake/src/world'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -53,7 +56,9 @@ beforeAll(async () => {
 beforeEach(async () => {
 	if (!hasPostgres) return
 	await admin((sql) =>
-		sql.unsafe(`truncate ${schema}.candidates, ${schema}.registrations, ${schema}.resend_requests; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_form_admissions`)
+		sql.unsafe(
+			`truncate ${schema}.fabrika_files_attachments, ${schema}.candidates, ${schema}.registrations, ${schema}.resend_requests; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_form_admissions`,
+		)
 	)
 })
 
@@ -152,14 +157,15 @@ interface Running {
 function start(): Running {
 	const world = new World()
 	const iam = new LinkLedger()
-	const { implementation } = intakeApp(world)
+	const { implementation, variables } = intakeApp(world)
 	const connection = Database.postgres({ url, schema, max: 2 })
 	opened.push(connection)
 	const app = bootApp(implementation, {
-		environment: environment({ ...frameworkEnvFor(implementation), FABRIKA_IAM_APP_ID: APP }),
+		environment: environment({ ...frameworkEnvFor(implementation), ...variables, FABRIKA_IAM_APP_ID: APP }),
 		workloadTokens: workloadTokensFor(implementation, undefined, ISSUER, APP),
 		database: connection,
 		membership: iam,
+		files: new MemoryFileObjects(),
 	})
 	const reporter = { report: () => Promise.resolve() }
 	return { app, iam, world, run: () => quietly(() => app.jobs.run('intake', { reporter })) }
