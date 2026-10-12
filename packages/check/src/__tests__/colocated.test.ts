@@ -278,9 +278,10 @@ describe('what the slice keeps, the literal rule reads', () => {
 		expect(refusals('fabrika.contract.ts', handled)).not.toEqual([])
 	})
 
-	test('an exported helper is part of the module: it keeps the import it uses, which the literal rule refuses', () => {
+	test('an exported helper is part of the module: it keeps the import it uses, whose function the literal rule refuses', () => {
 		const exported = DEALS.replace("import { canReopen } from './logic'", "import { canReopen } from './logic'\n\nexport const reopens = canReopen")
-		expect(refusals('src/deals/endpoints.ts', exported)).toContain('src/deals/endpoints.ts:4:10 literal')
+		// The refusal stands at the function the import names, not again at the import.
+		expect(refusals('src/deals/endpoints.ts', exported)).toContain('src/deals/logic.ts:6:26 literal')
 	})
 
 	test('a refusal after a handler keeps its line and column', () => {
