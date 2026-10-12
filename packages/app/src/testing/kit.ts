@@ -31,6 +31,7 @@ import { compileContract } from '../contract/compile'
 import type { AnyContract } from '../contract/define'
 import type { FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
+import type { ChallengeFetch } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -66,6 +67,8 @@ export interface TestKitOptions {
 	 * framework variables, and how a request reaches it — usually the owner kit's `fetch`.
 	 */
 	readonly connect?: Readonly<Record<string, TestConnection>>
+	/** What answers a form's challenge verification in place of the provider: a stand-in for its siteverify. */
+	readonly challengeFetch?: ChallengeFetch
 }
 
 export interface TestConnection {
@@ -212,6 +215,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		database: options.database,
 		files: options.files,
 		...(options.scanner === undefined ? {} : { scanner: options.scanner }),
+		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
 		membership,
 		connectBindings,
 		workloadTokens,

@@ -24,6 +24,7 @@ import {
 	rawRequestTarget,
 	satisfies,
 	scopedValues,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { DataAccess, FrameworkTables } from '@fabrika/db/framework'
@@ -45,19 +46,13 @@ import {
 } from '../errors'
 import type { RequestExecutionContext } from '../fetch'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import {
-	bootstrapPath,
-	bootstrapResponse,
-	type FormRateLimiter,
-	githubAccounts,
-	readBoundedBody,
-	verifyGithubSignature,
-	withBootstrap,
-} from './anonymous'
+import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
+import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
 import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
+import { ACCEPTED_BUCKET, clientBucket, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { endpointData, Invocation, siteData, type SiteDeclaration } from './invocation'
@@ -126,7 +121,7 @@ export type ServedEndpoint =
 	}
 	/** The shell of a link mount's share SPA: anonymous, and served with the fragment bootstrap. */
 	| { readonly kind: 'link-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
-	| { readonly kind: 'form'; readonly row: EndpointRow; readonly form: string; readonly input: Schema }
+	| { readonly kind: 'form'; readonly row: EndpointRow; readonly form: string; readonly input: Schema; readonly admission: FormAdmission }
 	| {
 		readonly kind: 'webhook'
 		readonly row: EndpointRow
@@ -140,6 +135,17 @@ export type ServedEndpoint =
 		/** A staged-kit webhook's declaration: its delivery runs in one transaction, through `ctx.db`. */
 		readonly site?: SiteDeclaration
 	}
+
+/** What a form admits, decided once at boot from the approved artifact and the application's variables. */
+export interface FormAdmission {
+	/** Requests per minute from one client, admitted before the body is read. */
+	readonly perClient: number
+	/** Submissions per minute the form accepts in all: only one that passed its honeypot and its challenge counts. */
+	readonly perForm: number
+	readonly fields: SubmissionFields
+	/** The challenge's verifier, with the secret the application variable holds; `null` without a challenge. */
+	readonly challenge: ChallengeVerifier | null
+}
 
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
@@ -160,9 +166,8 @@ export interface RuntimeParts {
 	readonly assets: SpaAssets | null
 	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
 	readonly membership: IamMembership | null
-	/** The framework's own writes (inboxes, webhook tables); `boot` refuses a form or webhook without them. */
+	/** The framework's own writes (inboxes, admissions, webhook tables); `boot` refuses a form or webhook without them. */
 	readonly framework: FrameworkTables | null
-	readonly forms: FormRateLimiter
 	/** This runtime's capability mint, which `boot` alone holds, and the authority its stores are bound to. */
 	readonly mint: CapabilityMint
 	readonly capabilities: CapabilityAuthority
@@ -571,16 +576,48 @@ export class ContractRuntime {
 		return { context: { target: this.#parts.mint.ref(frame, dimension, action, caller.subject, object.value, chain) }, input }
 	}
 
-	/** A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. */
+	/**
+	 * A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. In order: the
+	 * client's request bucket (before the body is read), the input, the honeypot (a filled one is answered as accepted
+	 * and writes nothing), the challenge, then the form's bucket of accepted submissions, which nothing refused before it
+	 * can empty.
+	 */
 	async #form(served: Extract<ServedEndpoint, { kind: 'form' }>, request: Request): Promise<Response> {
 		admitContentType(served.row, request)
-		if (!this.#parts.forms.take(served.form)) {
-			throw new HttpError(429, 'rate_limited', `'${served.row.id}' takes no more submissions right now; try again in a minute`)
+		const { admission } = served
+		const admissions = this.#framework().forms
+		if (!(await admissions.take(served.form, clientBucket(request), admission.perClient))) {
+			throw formRateLimited(served.row)
 		}
 		const body = await readBoundedBody(request, maxBytesOf(served.row))
-		const values = strictInput(served.row, served.input, parseJson(body))
-		await this.#framework().appendToInbox(served.form, values)
+		const submission = submissionOf(strictInput(served.row, served.input, parseJson(body)), admission.fields)
+		if (submission.trapped) {
+			return jsonResponse({ result: { received: true } }, 200)
+		}
+		if (admission.challenge !== null) {
+			await this.#challenge(served.form, admission.challenge, submission.token, request)
+		}
+		if (!(await admissions.take(served.form, ACCEPTED_BUCKET, admission.perForm))) {
+			throw formRateLimited(served.row)
+		}
+		await this.#framework().appendToInbox(served.form, submission.row)
 		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	/** The token verifies for this host and this form, and was not accepted before: a failure is 400, an unreachable provider 503. */
+	async #challenge(form: string, verifier: ChallengeVerifier, token: string | null, request: Request): Promise<void> {
+		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action: form })
+		if (outcome === 'unavailable') {
+			throw new ServerFault('challenge_unavailable', `the ${verifier.provider} challenge of '${form}' could not be verified`, 503)
+		}
+		if (outcome === 'misconfigured') {
+			throw new ServerFault('challenge_misconfigured', `the ${verifier.provider} challenge of '${form}' refused the application's secret`, 503)
+		}
+		const refused = token === null || outcome === 'failed'
+			|| !(await this.#framework().forms.recordChallenge(form, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs))
+		if (refused) {
+			throw new HttpError(400, 'challenge_failed', 'The challenge did not verify; solve it again')
+		}
 	}
 
 	/**
@@ -738,6 +775,10 @@ function admit(row: CredentialedEndpoint, request: Request): void {
 }
 
 /** The content types an endpoint admits; an anonymous endpoint has no session, so this is its whole admission. */
+function formRateLimited(row: EndpointRow): HttpError {
+	return new HttpError(429, 'rate_limited', `'${row.id}' takes no more submissions right now; try again in a minute`)
+}
+
 function admitContentType(row: EndpointRow, request: Request): void {
 	if (row.admission !== null) {
 		const type = mediaType(request.headers.get('Content-Type'))

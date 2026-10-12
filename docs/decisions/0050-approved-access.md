@@ -156,7 +156,8 @@ covers:
 - anonymous kinds (a new public SPA, or an SPA that becomes public, widens), link mounts and link-reachable file collections;
 - a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
-- CSP extensions;
+- a form's admission (its rate, honeypot and challenge): any change is shown and widens;
+- CSP extensions, `script-src` and `frame-src` included;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.
 

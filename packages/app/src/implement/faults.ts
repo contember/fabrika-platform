@@ -20,6 +20,8 @@ export const SERVER_FAULTS = {
 	file_object_missing: "a file's object is missing from storage",
 	file_object_mismatch: "a file's object has another size than its row records",
 	file_key_taken: "a new file's object key already held an object this upload did not write",
+	challenge_unavailable: "a form's challenge provider could not be reached in time or did not answer as it documents",
+	challenge_misconfigured: "a form's challenge provider refused the application's secret",
 } as const
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS

@@ -13,6 +13,8 @@ import { contract as catalogContract } from '../../../app/src/__tests__/fixtures
 import { contract as shopContract } from '../../../app/src/__tests__/fixtures/connect-shop/fabrika.contract'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
+import { contract as intakeContract } from '../../../app/src/__tests__/fixtures/intake/fabrika.contract'
+import { tables as intakeTables } from '../../../app/src/__tests__/fixtures/intake/src/db/tables'
 import { contract as jobsContract } from '../../../app/src/__tests__/fixtures/jobs-notes/fabrika.contract'
 import { contract as multiTenantContract } from '../../../app/src/__tests__/fixtures/multi-tenant/fabrika.contract'
 import { tables as multiTenantTables } from '../../../app/src/__tests__/fixtures/multi-tenant/src/db/tables'
@@ -143,6 +145,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app multi-tenant (src/db/tables.ts read from source)',
 		root: join(APP_TESTS, 'fixtures', 'multi-tenant'),
 		evaluated: () => compileContract(multiTenantContract, multiTenantTables),
+	},
+	{
+		name: '@fabrika/app intake (a form with a rate, a honeypot and a challenge; src/db/tables.ts read from source)',
+		root: join(APP_TESTS, 'fixtures', 'intake'),
+		evaluated: () => compileContract(intakeContract, intakeTables),
 	},
 	{
 		name: '@fabrika/app connect/catalog, the owner of an export',

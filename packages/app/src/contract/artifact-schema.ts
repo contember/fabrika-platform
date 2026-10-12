@@ -14,6 +14,7 @@ import {
 	type TupleShape,
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
+import { FORM_LIMITS } from './defaults'
 
 const name = z.string().min(1)
 const nullableName = name.nullable()
@@ -138,6 +139,8 @@ const scopeBinding = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('dimension'), dimension: name }),
 ])
 
+const formRate = z.int().positive().max(FORM_LIMITS.maxPerMinute)
+
 const mount = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.tuple([rpcCaller], rpcCaller) }),
 	z.strictObject({
@@ -151,7 +154,14 @@ const mount = z.discriminatedUnion('kind', [
 	}),
 	z.strictObject({ kind: z.literal('spa'), prefix: name, dir: name }),
 	z.strictObject({ kind: z.literal('health'), path: name }),
-	z.strictObject({ kind: z.literal('form'), path: name, appendTo: name }),
+	z.strictObject({
+		kind: z.literal('form'),
+		path: name,
+		appendTo: name,
+		rate: z.strictObject({ perClient: formRate.optional(), perForm: formRate.optional() }).optional(),
+		honeypot: name.optional(),
+		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: z.string().regex(/^[A-Z][A-Z0-9_]*$/) }).optional(),
+	}),
 	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions }),
 ])
 
@@ -222,7 +232,13 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		usedBy: names,
 		timeoutMs: z.int().positive().nullable(),
 	})),
-	csp: z.strictObject({ connectSrc: z.array(cspSource), imgSrc: z.array(cspSource), frameAncestors: z.array(cspSource) }),
+	csp: z.strictObject({
+		connectSrc: z.array(cspSource),
+		imgSrc: z.array(cspSource),
+		frameAncestors: z.array(cspSource),
+		scriptSrc: z.array(cspSource).nonempty().optional(),
+		frameSrc: z.array(cspSource).nonempty().optional(),
+	}),
 	tables: record(tablePolicy),
 	endpoints: z.array(endpointRow).superRefine((rows, context) => {
 		for (const [index, row] of rows.entries()) {

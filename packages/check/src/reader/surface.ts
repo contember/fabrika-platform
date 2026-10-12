@@ -294,6 +294,9 @@ class SurfaceReader {
 					input: this.#schema(options.get('input'), at, 'input'),
 					appendTo: text(options.get('appendTo'), at, 'appendTo'),
 					maxBytes: optionalNumber(options.get('maxBytes'), 'maxBytes'),
+					rate: formRate(options.get('rate')),
+					honeypot: optionalText(options.get('honeypot'), 'honeypot'),
+					challenge: formChallenge(options.get('challenge')),
 					unknownOptions: optionKeys(options, 'form'),
 				}
 			}
@@ -901,8 +904,32 @@ function importDeclaration(name: string, value: LiteralValue): ImportDeclaration
 	}
 }
 
+/** A form's `rate`, as `buildArtifact` reads it: per-minute counts, each optional. */
+function formRate(value: LiteralValue | undefined): { perClient?: number; perForm?: number } | undefined {
+	if (value === undefined) {
+		return undefined
+	}
+	const fields = strictFields(value, 'rate', [], ['perClient', 'perForm'])
+	const perClient = optionalNumber(fields.get('perClient'), 'perClient')
+	const perForm = optionalNumber(fields.get('perForm'), 'perForm')
+	return { ...(perClient === undefined ? {} : { perClient }), ...(perForm === undefined ? {} : { perForm }) }
+}
+
+/** A form's `challenge`: a provider of the closed list and the name of the application variable with its secret. */
+function formChallenge(value: LiteralValue | undefined): { provider: 'turnstile'; secret: string } | undefined {
+	if (value === undefined) {
+		return undefined
+	}
+	const fields = strictFields(value, 'challenge', ['provider', 'secret'], [])
+	const provider = fields.get('provider')
+	if (provider?.kind !== 'string' || provider.value !== 'turnstile') {
+		throw new Refused(provider?.at ?? value.at, 'challenge needs a known provider', "provider: 'turnstile'")
+	}
+	return { provider: provider.value, secret: text(fields.get('secret'), value, 'secret') }
+}
+
 function cspDeclaration(value: LiteralValue): CspDeclaration {
-	const fields = strictFields(value, 'csp', [], ['connectSrc', 'imgSrc', 'frameAncestors'])
+	const fields = strictFields(value, 'csp', [], ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc'])
 	const sources = (key: string): CspSource[] | undefined => {
 		const list = fields.get(key)
 		if (list === undefined) {
@@ -916,5 +943,11 @@ function cspDeclaration(value: LiteralValue): CspDeclaration {
 			return { origin: text(source.get('origin'), item, 'origin'), purpose: text(source.get('purpose'), item, 'purpose') }
 		})
 	}
-	return { connectSrc: sources('connectSrc'), imgSrc: sources('imgSrc'), frameAncestors: sources('frameAncestors') }
+	return {
+		connectSrc: sources('connectSrc'),
+		imgSrc: sources('imgSrc'),
+		frameAncestors: sources('frameAncestors'),
+		scriptSrc: sources('scriptSrc'),
+		frameSrc: sources('frameSrc'),
+	}
 }

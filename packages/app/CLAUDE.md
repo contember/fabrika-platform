@@ -38,6 +38,8 @@ bun test src/__tests__/clamscan.test.ts         # the ClamAV scanner: stand-in b
 bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damaged, encrypted, nested, bombs
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honeypot and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
@@ -103,7 +105,9 @@ src/
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
     capability.ts     Ref, Within, createCapabilityIssuer (a mint and its CapabilityAuthority)
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
-    anonymous.ts      the bounded body read, the form rate limit, the share bootstrap, GitHub's signature
+    anonymous.ts      the bounded body read, the share bootstrap, GitHub's signature
+    form-admission.ts a form's client bucket (`X-Fabrika-Client-Ip` only) and what its submission carries beside the row
+    challenge.ts      a form's challenge: Turnstile's siteverify under a deadline, strictly read
     webhook.ts        the generated binding endpoints and a delivery's principal
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
@@ -461,7 +465,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`,
   a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
-  form field that is not a column of its inbox, a job that cannot run (see Jobs), an endpoint that asks IAM with no
+  form field that is not a column of its inbox (its honeypot and `challengeToken` excepted), a form whose challenge
+  names an application variable that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
   membership transport (`BootOptions.membership`), a handler outside the contract, a
   missing handler, an access form whose containment no table locates. Each refusal
   lifts when its work unit ships the runtime.
@@ -493,8 +498,24 @@ vocabulary (`packages/db/CLAUDE.md`).
   `location.hash` in application code.
 - **The anonymous kinds read no token.** A form appends its declared fields to its inbox
   and answers a constant; it runs no handler and reads nothing. Its body limit is enforced
-  while reading (`readBoundedBody`, 413), because the proxy never sees a body; its rate
-  limit is per form per instance (`FORM_RATE_LIMIT`).
+  while reading (`readBoundedBody`, 413), because the proxy never sees a body.
+- **A form's admission is two buckets in the application's database, in a fixed order** (`#form`): the
+  client's request bucket (`rate.perClient`), before the body is read; the input; the honeypot (a filled one
+  answers the constant and writes nothing); the challenge; then the form's bucket of accepted submissions
+  (`rate.perForm`), just before the insert. Nothing refused before the last bucket takes from it, so a flood of
+  failed challenges cannot empty it; never move it earlier. Each bucket is one statement of `@fabrika/db`'s
+  `FormAdmissions` (`FORM_LIMITS` holds the defaults), never a counter in the process. The client is
+  `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64, kept as a digest; never read another
+  forwarding header. Admission is not authorization.
+- **A form's challenge is verified before its row and recorded after it passed** (`challenge.ts`). The provider
+  list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`, which `buildArtifact` adds to
+  `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the body (`CHALLENGE_LIMITS`),
+  a byte budget and no redirect; it passes only `success` for the request's host, the form's name as `action`
+  and a fresh `challenge_ts`. A token the visitor got wrong is 400 (`challenge_failed`); an unreachable provider or
+  one that refuses the secret is a 503 `ServerFault`. A passed token's digest is recorded under the form
+  (`recordChallenge`): a second use is a replay, whatever the provider answers. The secret is the application
+  variable the contract names (`challenge.secret`), read by `boot`, which refuses to start without it; never put
+  the value in the contract or a log.
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the
   raw body with that binding's secret (401), account (403), input after dropping every
   undeclared field (400, `project` then the strict schema), the webhook's credential (503:

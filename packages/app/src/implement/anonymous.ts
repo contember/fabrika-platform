@@ -1,6 +1,6 @@
 // What the anonymous kinds need beyond the request pipeline: a body read under its limit (the proxy never sees a
-// body, so the framework enforces it), the per-form rate limit, the share SPA's fragment bootstrap and GitHub's
-// delivery signature.
+// body, so the framework enforces it), the share SPA's fragment bootstrap and GitHub's delivery signature. A form's
+// admission is `form-admission.ts`.
 
 import { LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
@@ -13,32 +13,6 @@ export async function readBoundedBody(request: Request, maxBytes: number): Promi
 		throw new HttpError(413, 'too_large', `The body is larger than ${maxBytes} bytes`)
 	}
 	return body
-}
-
-/** A form admits this many submissions at once, then this many per minute, per instance of the application. */
-export const FORM_RATE_LIMIT = { burst: 10, perMinute: 10 } as const
-
-/**
- * The simplest limit an anonymous endpoint can have without a store: one token bucket per form, in this process.
- * Every instance keeps its own, so the effective limit grows with the number of instances.
- */
-export class FormRateLimiter {
-	readonly #buckets = new Map<string, { tokens: number; updatedAt: number }>()
-	readonly #now: () => number
-
-	constructor(now: () => number = Date.now) {
-		this.#now = now
-	}
-
-	/** Takes one submission of `form`; `false` when its bucket is empty. */
-	take(form: string): boolean {
-		const now = this.#now()
-		const bucket = this.#buckets.get(form) ?? { tokens: FORM_RATE_LIMIT.burst, updatedAt: now }
-		const refilled = Math.min(FORM_RATE_LIMIT.burst, bucket.tokens + ((now - bucket.updatedAt) * FORM_RATE_LIMIT.perMinute) / 60_000)
-		const allowed = refilled >= 1
-		this.#buckets.set(form, { tokens: allowed ? refilled - 1 : refilled, updatedAt: now })
-		return allowed
-	}
 }
 
 /**

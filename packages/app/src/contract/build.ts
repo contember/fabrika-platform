@@ -8,6 +8,7 @@ import {
 	BUILTIN_ROLE_KEYS,
 	type Caller,
 	canonicalizeArtifact,
+	type ChallengeProvider,
 	type ContractArtifact,
 	type CspExtensions,
 	type CspSource,
@@ -20,6 +21,9 @@ import {
 	type EndpointSource,
 	type ExportArtifact,
 	type FileCollectionArtifact,
+	type FormChallenge,
+	type FormMountArtifact,
+	type FormRate,
 	type ImportArtifact,
 	JOB_SITE_PREFIX,
 	type JobArtifact,
@@ -41,6 +45,7 @@ import {
 	DECLARED_FIELDS,
 	type ExportDeclaration,
 	type FilesDeclaration,
+	type FormMountDeclaration,
 	type ImportDeclaration,
 	isProcedure,
 	type LinkAccessDeclaration,
@@ -51,12 +56,15 @@ import {
 	type SpaAccessDeclaration,
 } from './declaration'
 import {
+	CHALLENGE_ORIGINS,
 	CONNECT_LIMITS,
 	CONNECT_PREFIX,
 	CONTRACT_DEFAULTS,
 	exportBase,
 	FILE_LIMITS,
 	FILES_PREFIX,
+	FORM_CHALLENGE_FIELD,
+	FORM_LIMITS,
 	joinPath,
 	JSON_ADMISSION,
 	LINK_API_SEGMENT,
@@ -85,7 +93,11 @@ const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'used
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 const DECLARED_ALLOWED = "sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>'"
-const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors']
+const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc']
+/** An environment variable an application reads; a form's challenge names its secret by one. */
+const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
+/** Turnstile's `action`: the form's name, which the verification expects back. */
+const CHALLENGE_ACTION = /^[A-Za-z0-9_-]{1,32}$/
 
 const UUID: SchemaShape = {
 	type: 'string',
@@ -167,6 +179,8 @@ class ArtifactBuilder {
 	#kit = false
 	/** The endpoints that declare `connect`, by the import they name. */
 	readonly #connected = new Map<string, string[]>()
+	/** The forms that declare a challenge: their provider's fixed origins join the CSP. */
+	readonly #challenges: { readonly form: string; readonly provider: ChallengeProvider }[] = []
 
 	constructor(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>, problems: Problems) {
 		this.#contract = contract
@@ -390,7 +404,7 @@ class ArtifactBuilder {
 				this.#objectSchema(`${where} input`, mount.input)
 				this.#nonEmpty(`${where} appendTo`, mount.appendTo)
 				this.#anonymous(name, 'form', 'POST', mount.path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes), mount.input)
-				return { kind: 'form', path: mount.path, appendTo: mount.appendTo }
+				return { kind: 'form', path: mount.path, appendTo: mount.appendTo, ...this.#formAdmission(name, where, mount) }
 			case 'webhook': {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
@@ -412,6 +426,76 @@ class ArtifactBuilder {
 				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
 				return null
 		}
+	}
+
+	/** A form's declared rate, honeypot and challenge, each present in the artifact only when declared. */
+	#formAdmission(name: string, where: string, mount: FormMountDeclaration<SchemaShape>): Pick<FormMountArtifact, 'rate' | 'honeypot' | 'challenge'> {
+		const fields = mount.input.type === 'object' ? mount.input.fields : {}
+		const admission: { rate?: FormRate; honeypot?: string; challenge?: FormChallenge } = {}
+		if (mount.rate !== undefined) {
+			admission.rate = this.#formRate(`${where} rate`, mount.rate)
+		}
+		if (mount.honeypot !== undefined) {
+			const field = fields[mount.honeypot]
+			if (field === undefined) {
+				this.#problem(where, `honeypot '${mount.honeypot}' is not a field of its input (allowed: a z.string() field the form's page hides)`)
+			} else if (!isStringField(field)) {
+				this.#problem(where, `honeypot '${mount.honeypot}' is not a string field (allowed: z.string() or z.optional(z.string()))`)
+			}
+			if (mount.honeypot === FORM_CHALLENGE_FIELD) {
+				this.#problem(where, `honeypot '${mount.honeypot}' is the field the challenge token travels in`)
+			}
+			admission.honeypot = mount.honeypot
+		}
+		if (mount.challenge !== undefined) {
+			admission.challenge = this.#formChallenge(name, where, mount.challenge, fields)
+		}
+		return admission
+	}
+
+	#formRate(where: string, rate: object): FormRate {
+		this.#keys(where, rate, ['perClient', 'perForm'])
+		const parsed: { perClient?: number; perForm?: number } = {}
+		for (const key of ['perClient', 'perForm'] as const) {
+			const value: unknown = Reflect.get(rate, key)
+			if (value === undefined) {
+				continue
+			}
+			if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > FORM_LIMITS.maxPerMinute) {
+				this.#problem(where, `${key} ${String(value)} is not a whole number of submissions per minute from 1 to ${FORM_LIMITS.maxPerMinute}`)
+				continue
+			}
+			parsed[key] = value
+		}
+		return parsed
+	}
+
+	#formChallenge(name: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): FormChallenge | undefined {
+		this.#keys(`${where} challenge`, challenge, ['provider', 'secret'])
+		const provider: unknown = Reflect.get(challenge, 'provider')
+		const secret: unknown = Reflect.get(challenge, 'secret')
+		if (provider !== 'turnstile') {
+			this.#problem(where, `challenge provider ${JSON.stringify(provider)} is not one the framework verifies (allowed: 'turnstile')`)
+			return undefined
+		}
+		if (typeof secret !== 'string' || !APPLICATION_VARIABLE.test(secret) || secret.startsWith('FABRIKA_')) {
+			this.#problem(
+				where,
+				`challenge secret ${
+					JSON.stringify(secret)
+				} is not the name of an application variable (allowed: 'TURNSTILE_SECRET'; never the secret itself, never FABRIKA_*)`,
+			)
+			return undefined
+		}
+		if (!CHALLENGE_ACTION.test(name)) {
+			this.#problem(where, `a form with a challenge is named as the widget's action, at most 32 letters, digits, '_' or '-'`)
+		}
+		const token = fields[FORM_CHALLENGE_FIELD]
+		if (token === undefined || token.type !== 'string') {
+			this.#problem(where, `declares a challenge, so its input needs the required field ${FORM_CHALLENGE_FIELD}: z.string(), the widget's token`)
+		}
+		this.#challenges.push({ form: name, provider })
+		return { provider, secret }
 	}
 
 	/** A holder of the dimension's `members.manage` there binds a provider account to one value, and unbinds it. */
@@ -970,11 +1054,29 @@ class ArtifactBuilder {
 
 	#csp(declaration: CspDeclaration): CspExtensions {
 		this.#keys('csp', declaration, CSP_FIELDS)
+		const scriptSrc = this.#cspSources('csp scriptSrc', this.#withChallengeOrigins('scriptSrc', declaration.scriptSrc ?? []))
+		const frameSrc = this.#cspSources('csp frameSrc', this.#withChallengeOrigins('frameSrc', declaration.frameSrc ?? []))
 		return {
 			connectSrc: this.#cspSources('csp connectSrc', declaration.connectSrc ?? []),
 			imgSrc: this.#cspSources('csp imgSrc', declaration.imgSrc ?? []),
 			frameAncestors: this.#cspSources('csp frameAncestors', declaration.frameAncestors ?? []),
+			...(scriptSrc.length === 0 ? {} : { scriptSrc }),
+			...(frameSrc.length === 0 ? {} : { frameSrc }),
 		}
+	}
+
+	/** The declared sources, plus each fixed origin a form's challenge provider loads that the contract does not name itself. */
+	#withChallengeOrigins(directive: 'scriptSrc' | 'frameSrc', declared: readonly CspSource[]): CspSource[] {
+		const sources = [...declared]
+		for (const provider of new Set(this.#challenges.map((challenge) => challenge.provider))) {
+			const forms = this.#challenges.filter((challenge) => challenge.provider === provider).map((challenge) => challenge.form).sort()
+			for (const origin of CHALLENGE_ORIGINS[provider][directive]) {
+				if (!sources.some((source) => source.origin === origin)) {
+					sources.push({ origin, purpose: `the ${provider} challenge of ${forms.map((form) => `'${form}'`).join(', ')}` })
+				}
+			}
+		}
+		return sources
 	}
 
 	#cspSources(where: string, sources: readonly CspSource[]): CspSource[] {
@@ -1341,6 +1443,11 @@ function isRequiredString(shape: SchemaShape): boolean {
 		default:
 			return false
 	}
+}
+
+/** `z.string()` or `z.optional(z.string())`: a field a page can leave empty, such as a honeypot. */
+function isStringField(shape: SchemaShape): boolean {
+	return shape.type === 'string' || (shape.type === 'optional' && shape.inner.type === 'string')
 }
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {

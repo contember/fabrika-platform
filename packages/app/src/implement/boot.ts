@@ -15,6 +15,7 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_PROXY_SECRET,
+	type FormMountArtifact,
 	type IamMembershipRpc,
 	type Jwks,
 	parseAppEnvironmentId,
@@ -36,7 +37,7 @@ import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { exportBase } from '../contract/defaults'
+import { exportBase, FORM_CHALLENGE_FIELD, FORM_LIMITS } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
@@ -44,13 +45,23 @@ import { fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
-import { FormRateLimiter } from './anonymous'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
+import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
 import { type ConnectFetch, wireImports } from './connect'
-import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type ServedSite, type SpaAssets } from './dispatch'
+import {
+	ContractRuntime,
+	type Facilities,
+	type FormAdmission,
+	NO_FACILITIES,
+	proxySecretDigest,
+	type ServedEndpoint,
+	type ServedSite,
+	type SpaAssets,
+} from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { FailureReports } from './failures'
 import { ServerFault } from './faults'
+import type { SubmissionFields } from './form-admission'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
@@ -100,6 +111,8 @@ export interface BootOptions {
 	readonly workloadTokens?: WorkloadTokenSource
 	/** What posts a report to Operations' ingest; `fetch` by default. */
 	readonly operationsFetch?: (request: Request) => Promise<Response>
+	/** What asks a form's challenge provider to verify a token; `fetch` by default. */
+	readonly challengeFetch?: ChallengeFetch
 }
 
 export interface ContractApp {
@@ -457,7 +470,10 @@ function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTable
 		}
 		if (mount.kind === 'form') {
 			const input = artifact.endpoints.find((row) => row.id === name)?.input
-			const fields = input?.type === 'object' ? Object.keys(input.fields) : []
+			const submitted = submissionFieldsOf(mount)
+			const fields = (input?.type === 'object' ? Object.keys(input.fields) : []).filter((field) =>
+				field !== submitted.honeypot && !(submitted.challenge && field === FORM_CHALLENGE_FIELD)
+			)
 			problems.push(...framework.inboxProblems(name, fields))
 		}
 	}
@@ -465,6 +481,38 @@ function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTable
 
 function isCredentialed(row: EndpointRow | undefined): row is CredentialedEndpoint {
 	return row !== undefined && row.requirement !== null
+}
+
+function submissionFieldsOf(mount: FormMountArtifact): SubmissionFields {
+	return { honeypot: mount.honeypot ?? null, challenge: mount.challenge !== undefined }
+}
+
+/**
+ * A form's admission from its approved mount: the declared rate or the defaults, and a challenge verified with the
+ * secret the application variable it names holds. Without that variable the application does not boot.
+ */
+function formAdmission(name: string, artifact: ContractArtifact, options: BootOptions, problems: string[]): FormAdmission | null {
+	const mount = artifact.mounts[name]
+	if (mount?.kind !== 'form') {
+		return null
+	}
+	let challenge: ChallengeVerifier | null = null
+	if (mount.challenge !== undefined) {
+		const secret: unknown = options.environment.application[mount.challenge.secret]
+		if (typeof secret !== 'string' || secret.trim() === '') {
+			problems.push(
+				`form '${name}' verifies its ${mount.challenge.provider} challenge with the application variable ${mount.challenge.secret}, which is not set`,
+			)
+			return null
+		}
+		challenge = turnstileVerifier(secret.trim(), options.challengeFetch ?? ((request) => fetch(request)))
+	}
+	return Object.freeze({
+		perClient: mount.rate?.perClient ?? FORM_LIMITS.perClient,
+		perForm: mount.rate?.perForm ?? FORM_LIMITS.perForm,
+		fields: Object.freeze(submissionFieldsOf(mount)),
+		challenge,
+	})
 }
 
 /** `frameworkProblems` refused a webhook without the framework tables, so this answers only after a bug. */
@@ -602,8 +650,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			}
 		} else if (mount.kind === 'form') {
 			const row = rows.get(name)
-			if (row !== undefined) {
-				endpoints.set(name, { kind: 'form', row, form: name, input: mount.input })
+			const admission = formAdmission(name, artifact, options, problems)
+			if (row !== undefined && admission !== null) {
+				endpoints.set(name, { kind: 'form', row, form: name, input: mount.input, admission })
 			}
 		} else if (mount.kind === 'webhook') {
 			declared.add(name)
@@ -717,7 +766,6 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		assets: options.assets ?? null,
 		membership: options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId),
 		framework,
-		forms: new FormRateLimiter(),
 		mint: issuer.mint,
 		capabilities: issuer.authority,
 		data,

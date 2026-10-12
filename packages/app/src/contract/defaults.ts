@@ -1,7 +1,7 @@
 // Every default and every generated path of the contract, in one place. `buildArtifact` applies them; a reader of
 // source reaches them only through `buildArtifact`, so both producers emit the same artifact.
 
-import type { BodyAdmission } from '@fabrika/auth-core'
+import type { BodyAdmission, ChallengeProvider } from '@fabrika/auth-core'
 
 export const CONTRACT_DEFAULTS = {
 	/** A failed job run is not retried unless the job asks for it: a retry repeats work. */
@@ -12,6 +12,26 @@ export const CONTRACT_DEFAULTS = {
 	fileLink: false,
 	importTimeoutMs: null,
 } as const
+
+/**
+ * A form's admission, per minute and shared by every instance of the application: the requests it admits from one
+ * client (`X-Fabrika-Client-Ip`) and the submissions it accepts in all. A form may declare its own `rate`, up to
+ * `maxPerMinute` each.
+ */
+export const FORM_LIMITS = {
+	perClient: 10,
+	perForm: 100,
+	maxPerMinute: 10_000,
+} as const
+
+/** The input field that carries a form's challenge token; a form with a challenge declares it as a string. */
+export const FORM_CHALLENGE_FIELD = 'challengeToken'
+
+/** Each challenge provider's fixed browser origins: its widget's script and its frame. */
+export const CHALLENGE_ORIGINS: Readonly<Record<ChallengeProvider, { readonly scriptSrc: readonly string[]; readonly frameSrc: readonly string[] }>> =
+	{
+		turnstile: { scriptSrc: ['https://challenges.cloudflare.com'], frameSrc: ['https://challenges.cloudflare.com'] },
+	}
 
 /** Generated file endpoints live under this prefix, for signed-in people. */
 export const FILES_PREFIX = '/api'

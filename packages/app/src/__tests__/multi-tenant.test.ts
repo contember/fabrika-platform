@@ -2,6 +2,7 @@
 // link's chain re-check, the form's inbox and the webhook tables need it); IAM is a recording stand-in. Skips cleanly
 // when FABRIKA_TEST_POSTGRES_URL is unset (see scoped-database.test.ts).
 
+import { FORM_LIMITS } from '@fabrika/app/contract'
 import { type ContractApp, LINK_BOOTSTRAP_SCRIPT, type SpaAssets, type WorkloadTokenSource } from '@fabrika/app/implement'
 import { DELEGATION_HEADER, type PermissionEntry } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
@@ -52,7 +53,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	}
 }
 
-/** A fresh boot over the shared schema: its own data layer, IAM stand-in, webhook record and form rate limit. */
+/** A fresh boot over the shared schema: its own data layer, IAM stand-in and webhook record; form buckets are the schema's. */
 function start(workloadTokens?: WorkloadTokenSource): { app: ContractApp; iam: RecordingMembership; seen: Seen } {
 	const iam = new RecordingMembership()
 	const seen: Seen = { pushes: [], keys: [], failNextPush: false }
@@ -268,14 +269,20 @@ describe.skipIf(!hasPostgres)('c.form', () => {
 		expect(await count('contact_messages')).toBe(before)
 	})
 
-	test('takes a burst of ten submissions per instance, then answers 429', async () => {
+	test('admits FORM_LIMITS.perClient requests a minute from one client, then answers 429', async () => {
 		const { app } = start()
-		const statuses: number[] = []
-		for (let index = 0; index < 11; index++) {
-			statuses.push((await send(app, '/contact', { body: { email: 'burst@example.com', body: `${index}` }, headers: json })).status)
+		// The bucket is the database's minute; eleven requests started in its last seconds would span two.
+		const [row] = await admin((sql) => sql.unsafe('select extract(second from now())::float8 as second'))
+		if (Number(row?.second) > 55) {
+			await Bun.sleep((61 - Number(row?.second)) * 1000)
 		}
-		expect(statuses).toEqual([...Array.from({ length: 10 }, () => 200), 429])
-	})
+		const statuses: number[] = []
+		for (let index = 0; index <= FORM_LIMITS.perClient; index++) {
+			const headers = { ...json, 'X-Fabrika-Client-Ip': '203.0.113.99' }
+			statuses.push((await send(app, '/contact', { body: { email: 'burst@example.com', body: `${index}` }, headers })).status)
+		}
+		expect(statuses).toEqual([...Array.from({ length: FORM_LIMITS.perClient }, () => 200), 429])
+	}, 20_000)
 })
 
 describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {

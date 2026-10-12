@@ -142,11 +142,11 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 			}),
 		],
 	})
-	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors'] as const) {
+	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc'] as const) {
 		compareSet(
 			changes,
-			baseline.csp[directive].map((source) => source.origin),
-			candidate.csp[directive].map((source) => source.origin),
+			(baseline.csp[directive] ?? []).map((source) => source.origin),
+			(candidate.csp[directive] ?? []).map((source) => source.origin),
 			{
 				added: (origin) => widening(`CSP \`${directive}\` allows \`${origin}\``),
 				removed: (origin) => removal(`CSP \`${directive}\` no longer allows \`${origin}\``),

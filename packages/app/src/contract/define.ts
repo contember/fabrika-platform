@@ -1,7 +1,7 @@
 // `defineContract`: the application's whole access surface as data. Browser-safe: it builds plain objects and
 // holds zod schemas; it validates nothing at runtime, `compileContract` does.
 
-import type { BuiltinRoleKey, RpcCaller } from '@fabrika/auth-core'
+import type { BuiltinRoleKey, ChallengeProvider, RpcCaller } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
 import {
 	type CronDeclaration,
@@ -270,7 +270,14 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 	health(path: Path): HealthMount
 	form<I extends InputSchema>(
 		path: Path,
-		options: { readonly input: I & NotLoose<I>; readonly appendTo: string; readonly maxBytes?: number } & Owned<'kind' | 'path'>,
+		options: {
+			readonly input: I & NotLoose<I>
+			readonly appendTo: string
+			readonly maxBytes?: number
+			readonly rate?: { readonly perClient?: number; readonly perForm?: number }
+			readonly honeypot?: string
+			readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string }
+		} & Owned<'kind' | 'path'>,
 	): FormMount<I>
 	webhook<const B extends D | 'app', const Acts extends readonly [A, ...A[]], I extends InputSchema>(
 		path: Path,
@@ -377,6 +384,9 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			input: options.input,
 			appendTo: options.appendTo,
 			maxBytes: options.maxBytes,
+			rate: options.rate,
+			honeypot: options.honeypot,
+			challenge: options.challenge,
 			unknownOptions: unknownOptions(options, 'form'),
 		}),
 		webhook: (path, options) => ({

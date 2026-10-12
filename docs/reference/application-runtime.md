@@ -603,8 +603,23 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   (a form); every other call still needs a session. `{ public: true }` takes no other key.
 - `c.form` appends one row of its declared fields to its inbox table and answers
   `{ result: { received: true } }`: it reads nothing and runs no handler. The body limit
-  is the framework's (413); the rate limit is a token bucket per form per instance
-  (10 at once, then 10 a minute, 429), so it grows with the number of instances.
+  is the framework's (413). Admission is two counters per database minute in
+  `fabrika_form_admissions`, shared by every instance (429 for either): the requests one client
+  sends (`rate.perClient`, 10 by default), taken before the body is read, and the submissions the
+  form accepts in all (`rate.perForm`, 100 by default), taken just before the insert, so a request
+  refused before it (bad input, a filled honeypot, a failed challenge) never empties it. The client
+  is `X-Fabrika-Client-Ip`, the one address header the proxy deletes and sets itself; an IPv6 client
+  counts by its /64, and a request without the header shares one `unknown` client. On Zerops the
+  header is the balancer until [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md) settles the trusted range, so there the per-client limit
+  is a second per-form one; the challenge is the defense that does not depend on the address.
+  `honeypot: '<field>'` names an input string field that must stay empty: a filled one gets the
+  same answer and writes nothing. `challenge: { provider: 'turnstile', secret: '<VARIABLE>' }`
+  verifies the input field `challengeToken` with Turnstile's siteverify before the insert (5 s, a
+  16 KiB answer, the request's host and the form's name as `action`, a token at most 300 s old),
+  then records its digest in `fabrika_form_challenges`, so a second use is a replay: a failed or
+  replayed token is 400, an unreachable provider or a refused secret 503, and neither writes a row.
+  The secret is the application variable the contract names; without it the application does not
+  boot. Turnstile's origin joins `script-src` and `frame-src`.
 - `c.webhook` (GitHub) answers `POST <path>/:bindingId`. A holder of the bound
   dimension's `members.manage` creates a binding with the generated
   `POST /api/webhooks.<name>.bind` (`{ scope, account }`, where `account` is

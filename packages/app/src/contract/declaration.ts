@@ -2,7 +2,7 @@
 // once described. `buildArtifact` reads only this shape, so a reader that produces it from source (B1) and
 // `compileContract` normalize through the same code.
 
-import type { CspSource, RpcCaller } from '@fabrika/auth-core'
+import type { ChallengeProvider, CspSource, RpcCaller } from '@fabrika/auth-core'
 
 export interface ContractDeclaration<S> {
 	readonly app: string
@@ -42,7 +42,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access'], owned: ['kind', 'prefix'] },
-	form: { options: ['input', 'appendTo', 'maxBytes'], owned: ['kind', 'path'] },
+	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
@@ -185,6 +185,12 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly input: S
 	readonly appendTo: string
 	readonly maxBytes?: number
+	/** Submissions per minute from one client and accepted in all; `FORM_LIMITS` holds the defaults. */
+	readonly rate?: { readonly perClient?: number; readonly perForm?: number }
+	/** An input field that must stay empty. */
+	readonly honeypot?: string
+	/** A challenge verified on the server; `secret` names the application variable that holds the provider's secret. */
+	readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string }
 }
 
 export interface WebhookMountDeclaration<S> extends OptionsRecord {
@@ -248,6 +254,8 @@ export interface CspDeclaration {
 	readonly connectSrc?: readonly CspSource[]
 	readonly imgSrc?: readonly CspSource[]
 	readonly frameAncestors?: readonly CspSource[]
+	readonly scriptSrc?: readonly CspSource[]
+	readonly frameSrc?: readonly CspSource[]
 }
 
 export function isProcedure<S, Access>(

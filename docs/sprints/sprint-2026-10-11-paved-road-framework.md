@@ -821,3 +821,18 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `classifyAccess` reports as a false widening), `ctx.within.values` and the all-orgs case, `aggregate`'s `sum` and the
   safe-integer limit, a job re-reading its row under `getForUpdate`, the test kit's origin (`https://crm.test`), an
   undeclared route answering 403, the formatter in the loop, a test caller with a global grant or a disabled member.
+- **WU16 — anonymous abuse control.** The buckets are fixed per-minute windows of the database clock
+  (`fabrika_form_admissions`, framework migration `0003_form_admissions.sql`), each take one upsert whose update runs
+  only below the limit, pruning 32 expired rows `for update skip locked`; a row of a past minute is expired by its key.
+  Deviations: a form declares `rate: { perClient, perForm }` (the form's ceiling too, because on Zerops the client is
+  the balancer and a fixed ceiling would cap every intake); the ceiling is taken only after the input, the honeypot
+  and the challenge, so refused requests never empty it (review item 6). The challenge token travels in the input
+  field `challengeToken`, which the input must declare (forms take no header the proxy keeps, and the typed page needs
+  the field); Turnstile's `action` is the form's mount name and its hostname the request's host. A passed token's digest
+  is recorded in `fabrika_form_challenges` for 360 s, so a replay fails whatever the provider says. A refused secret
+  (`invalid-input-secret`) is a 503 like an unreachable provider, not the visitor's 400. The provider's fixed origin is
+  added to `scriptSrc`/`frameSrc` by `buildArtifact` (the diff shows it); `rate`, `honeypot`, `challenge`, `scriptSrc`
+  and `frameSrc` are in the artifact only when declared, so other digests and stored snapshots stay, and the manifest
+  parser defaults the two directives for a manifest written before them. An IPv6 client counts by its /64, the
+  address is kept as a SHA-256 digest, and a request without `X-Fabrika-Client-Ip` (the test kit) is one `unknown`
+  client. Any change of a form's admission widens in the approval diff (a mount change), conservatively.
