@@ -1,6 +1,3 @@
-// Who may call what: the slices' groups under /api, the attachments of a deal, the hourly `overdue` job and the SPA.
-// The proxy enforces this file's endpoint table and the data layer the policies of src/db/tables.ts.
-
 import { activities } from './src/activities/endpoints'
 import { app } from './src/app-kit'
 import { companies } from './src/companies/endpoints'

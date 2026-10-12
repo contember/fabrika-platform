@@ -1,5 +1,3 @@
-// What more than one slice and the SPA share; a slice's own inputs and outputs live in its endpoints.ts.
-
 import { z } from 'zod/v4'
 
 export const DEAL_STAGES = ['lead', 'qualified', 'proposal', 'won', 'lost'] as const
@@ -15,7 +13,7 @@ export const MaybeText = z.nullable(z.string())
 export const ScopeValue = z.string().min(1).max(100)
 export const Cursor = z.string().max(500)
 export const Next = z.nullable(z.string())
-export const Person = z.strictObject({ principalId: z.string().min(1).max(200), label: z.string().min(1).max(200) })
+export const PrincipalId = z.string().min(1).max(200)
 
 export const ById = z.strictObject({ id: z.uuid() })
 export const Page = z.strictObject({ after: Cursor.optional() })

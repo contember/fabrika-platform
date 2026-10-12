@@ -1,10 +1,8 @@
-// The deals of a company and the pipeline across the caller's orgs. A won or lost deal is closed: `move` refuses it and
-// `reopen` brings it back to `proposal`, both deciding on the stage they lock.
-
 import { ConflictError, fromRow } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { ById, DEAL_STAGES, Done, MaybeText, Name, Next, OptionalText, Page, Person, Saved, Stage, Versioned } from '../schemas'
+import { picked } from '../orgs/logic'
+import { ById, DEAL_STAGES, Done, MaybeText, Name, Next, OptionalText, Page, PrincipalId, Saved, Stage, Versioned } from '../schemas'
 import { isClosed, safeTotal } from './logic'
 
 const Deal = z.strictObject({
@@ -22,7 +20,7 @@ const DealPage = z.strictObject({ items: z.array(Deal), next: Next })
 const NewDeal = z.strictObject({ companyId: z.uuid(), title: Name, value: z.int().min(0), stage: Stage, source: OptionalText })
 const EditDeal = z.strictObject({ id: z.uuid(), title: Name, value: z.int().min(0), source: OptionalText, expectVersion: z.int().positive() })
 const MoveDeal = z.strictObject({ id: z.uuid(), stage: Stage, expectVersion: z.int().positive() })
-const AssignDeal = z.strictObject({ id: z.uuid(), owner: Person, expectVersion: z.int().positive() })
+const AssignDeal = z.strictObject({ id: z.uuid(), newOwner: PrincipalId, expectVersion: z.int().positive() })
 const StageTotal = z.strictObject({ stage: Stage, count: z.int(), value: z.int() })
 const StageSum = z.strictObject({ stage: Stage, count: z.int(), value: z.string().regex(/^-?[0-9]+$/) })
 const Pipeline = z.strictObject({ stages: z.array(StageTotal) })
@@ -40,8 +38,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 				select s.stage, count(d.id)::int as count, coalesce(sum(d.value), 0) as value
 				from unnest(${[...DEAL_STAGES]}::deal_stage[]) as s (stage)
 				left join deals d on d.stage = s.stage and ${ctx.sql.scope(ctx.within, 'deals', 'd')}
-				group by s.stage
-				order by s.stage`).map((row) => ({ ...row, value: safeTotal(row.value) })),
+				group by s.stage order by s.stage`).map((row) => ({ ...row, value: safeTotal(row.value) })),
 		})),
 	get: r.query({ input: ById, output: Deal, access: { action: 'crm.read', on: 'deal', from: 'id' } })
 		.handle(async ({ ctx }) => fromRow(Deal, await ctx.db.target.get())),
@@ -60,9 +57,10 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			return ctx.db.target.update({ stage: 'proposal' }, { expectVersion: input.expectVersion })
 		}),
 	assign: r.mutation({ input: AssignDeal, output: Saved, access: { action: 'deals.assign', on: 'deal', from: 'id' } })
-		.handle(({ input, ctx }) =>
-			ctx.db.target.update({ owner: input.owner.principalId, owner_label: input.owner.label }, { expectVersion: input.expectVersion })
-		),
+		.handle(async ({ input, ctx }) => {
+			const owner = picked(await ctx.members.get(input.newOwner), 'new owner')
+			return ctx.db.target.update({ owner: owner.principalId, owner_label: owner.label }, { expectVersion: input.expectVersion })
+		}),
 	remove: r.mutation({ input: Versioned, output: Done, access: { action: 'crm.delete', on: 'deal', from: 'id' } })
 		.handle(({ input, ctx }) => ctx.db.target.remove({ expectVersion: input.expectVersion }).then(() => ({ id: ctx.target.value }))),
 }))

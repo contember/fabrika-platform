@@ -1,7 +1,8 @@
 import { fromRow } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { Name, Next, Page, Person, Saved } from '../schemas'
+import { picked } from '../orgs/logic'
+import { Name, Next, Page, PrincipalId, Saved } from '../schemas'
 
 const Task = z.strictObject({
 	id: z.uuid(),
@@ -15,7 +16,7 @@ const Task = z.strictObject({
 	version: z.int(),
 })
 const TaskPage = z.strictObject({ items: z.array(Task), next: Next })
-const NewTask = z.strictObject({ dealId: z.uuid(), title: Name, dueOn: z.iso.date(), assignee: z.nullable(Person) })
+const NewTask = z.strictObject({ dealId: z.uuid(), title: Name, dueOn: z.iso.date(), assignee: z.nullable(PrincipalId) })
 const CompleteTask = z.strictObject({ id: z.uuid(), done: z.boolean(), expectVersion: z.int().positive() })
 
 export const tasks = app.group({ callers: ['human'] }, (r) => ({
@@ -25,15 +26,15 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 			return { items: page.items.map((row) => fromRow(Task, row)), next: page.next }
 		}),
 	create: r.mutation({ input: NewTask, output: Saved, access: { action: 'tasks.write', in: 'deal', from: 'dealId' } })
-		.handle(({ input, ctx }) => {
-			const assignee = input.assignee ?? { principalId: ctx.principal.id, label: ctx.principal.label }
+		.handle(async ({ input, ctx }) => {
+			const assignee = picked(await ctx.members.get(input.assignee ?? ctx.principal.id), 'assignee')
 			return ctx.db.target.tasks.insert({ title: input.title, due_on: input.dueOn, assignee: assignee.principalId, assignee_label: assignee.label })
 		}),
 	complete: r.mutation({ input: CompleteTask, output: Saved, access: { action: 'tasks.write', on: 'task', from: 'id' } })
 		.handle(({ input, ctx }) => ctx.db.target.update({ done: input.done }, { expectVersion: input.expectVersion })),
 }))
 
-/** Marks every open task past its due day, hourly. A retried attempt lists again, so it marks no task twice. */
+/** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
 export const overdue = app.cron('15 * * * *', { actions: ['crm.read', 'tasks.write'], scope: 'app', timeout: '5m', retries: 2 })
 	.handle(async ({ ctx }) => {
 		const today = new Date().toISOString().slice(0, 10)
@@ -43,7 +44,10 @@ export const overdue = app.cron('15 * * * *', { actions: ['crm.read', 'tasks.wri
 			const page = await open.list({ where: [['done', '=', false], ['overdue', '=', false], ['due_on', '<', today]], limit: 100, after })
 			for (const task of page.items) {
 				const ref = await ctx.ref('tasks.write', 'task', task.id)
-				await ctx.transaction((tx) => tx.db.on(ref).update({ overdue: true }, { expectVersion: task.version }))
+				await ctx.transaction(async (tx) => {
+					const locked = await tx.db.on(ref).getForUpdate()
+					if (!locked.done && !locked.overdue) await tx.db.on(ref).update({ overdue: true }, { expectVersion: locked.version })
+				})
 			}
 			after = page.next ?? undefined
 		} while (after !== undefined)

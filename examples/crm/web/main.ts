@@ -190,7 +190,7 @@ async function dealView(id: string): Promise<HTMLElement> {
 				id: 'assign-deal',
 				submit: submit(async (form) => {
 					const owner = memberOf(members, field(form, 'member'))
-					if (owner !== null) await api.deals.assign({ id, owner, expectVersion: deal.version })
+					if (owner !== null) await api.deals.assign({ id, newOwner: owner.principalId, expectVersion: deal.version })
 				}),
 			},
 			memberPicker(members, deal.owner),
@@ -222,7 +222,7 @@ async function dealView(id: string): Promise<HTMLElement> {
 						dealId: id,
 						title: field(form, 'title'),
 						dueOn: field(form, 'dueOn'),
-						assignee: memberOf(members, field(form, 'member')),
+						assignee: memberOf(members, field(form, 'member'))?.principalId ?? null,
 					})
 				),
 			},

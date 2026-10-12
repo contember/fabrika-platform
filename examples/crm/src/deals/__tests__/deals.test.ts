@@ -28,11 +28,14 @@ if (postgres !== null) {
 		kit.testCaller([{ role, scope: { type: 'org', value: org } }], label === undefined ? {} : { label })
 	const apiOf = (caller: TestCaller) => createClient(contract, 'api', { fetch: kit.browser(caller) })
 
-	const manager = apiOf(inOrg('manager', 'acme'))
+	const managerCaller = inOrg('manager', 'acme')
+	const manager = apiOf(managerCaller)
+	const ola = inOrg('sales', 'acme', 'ola@acme.example')
 	const salesCaller = inOrg('sales', 'acme', 'sam@acme.example')
 	const sales = apiOf(salesCaller)
 	const viewer = apiOf(inOrg('viewer', 'acme'))
-	const outsider = apiOf(inOrg('manager', 'globex'))
+	const outsiderCaller = inOrg('manager', 'globex', 'mallory@globex.example')
+	const outsider = apiOf(outsiderCaller)
 
 	const newDeal = async (title: string, stage: 'lead' | 'won' = 'lead', value = 1000) => {
 		const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: `${title} Inc`, website: null })
@@ -77,14 +80,27 @@ if (postgres !== null) {
 	})
 
 	describe('owner and source', () => {
-		test('the creator owns a new deal; a manager hands it to another member, sales cannot', async () => {
+		test('the creator owns a new deal; a manager hands it to another member of the org, sales cannot', async () => {
 			const { id } = await newDeal('Handover')
 			expect(await viewer.deals.get({ id })).toMatchObject({ owner: salesCaller.id, ownerLabel: 'sam@acme.example' })
-			const owner = { principalId: 'user:ola', label: 'ola@acme.example' }
-			expect(await statusOf(sales.deals.assign({ id, owner, expectVersion: 1 }))).toBe(403)
-			expect(await statusOf(outsider.deals.assign({ id, owner, expectVersion: 1 }))).toBe(404)
-			expect(await manager.deals.assign({ id, owner, expectVersion: 1 })).toEqual({ id, version: 2 })
-			expect(await viewer.deals.get({ id })).toMatchObject({ owner: 'user:ola', ownerLabel: 'ola@acme.example' })
+			const newOwner = ola.id
+			expect(await statusOf(sales.deals.assign({ id, newOwner, expectVersion: 1 }))).toBe(403)
+			expect(await statusOf(outsider.deals.assign({ id, newOwner, expectVersion: 1 }))).toBe(404)
+			expect(await manager.deals.assign({ id, newOwner, expectVersion: 1 })).toEqual({ id, version: 2 })
+			expect(await viewer.deals.get({ id })).toMatchObject({ owner: ola.id, ownerLabel: 'ola@acme.example' })
+		})
+
+		test('the new owner must be a member of the org, and the stored label is the directory’s', async () => {
+			const { id } = await newDeal('Picky')
+			expect(await statusOf(manager.deals.assign({ id, newOwner: outsiderCaller.id, expectVersion: 1 }))).toBe(400)
+			expect(await statusOf(manager.deals.assign({ id, newOwner: 'user:nobody', expectVersion: 1 }))).toBe(400)
+			const forged = await kit.browser(managerCaller)('/api/deals.assign', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id, newOwner: ola.id, ownerLabel: 'boss@acme.example', expectVersion: 1 }),
+			})
+			expect(forged.status).toBe(400)
+			expect(await viewer.deals.get({ id })).toMatchObject({ owner: salesCaller.id, ownerLabel: 'sam@acme.example', version: 1 })
 		})
 
 		test('a deal records its source on create and on edit', async () => {

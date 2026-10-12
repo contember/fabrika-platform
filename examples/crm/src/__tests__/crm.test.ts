@@ -123,17 +123,22 @@ if (postgres !== null) {
 			expect((await outsiderApi.tasks.list({})).items).toEqual([])
 		})
 
-		test('a task is assigned to a member picked from the directory', async () => {
+		test('a task is assigned to a member of the org, under the directory’s label; an outsider or a forged label is refused', async () => {
 			const dealId = await newDeal(await newCompany('Delegate'), 'Hand over')
-			const picked = (await salesApi.orgs.members({ orgId: 'acme' })).items.find((member) => member.principalId === managerCaller.id)
-			if (picked?.label == null) throw new Error('the directory lists the manager with a label')
-			const { id } = await salesApi.tasks.create({
-				dealId,
-				title: 'Approve',
-				dueOn: '2026-11-04',
-				assignee: { principalId: picked.principalId, label: picked.label },
+			const { id } = await salesApi.tasks.create({ dealId, title: 'Approve', dueOn: '2026-11-04', assignee: managerCaller.id })
+			expect((await viewerApi.tasks.list({})).items.find((item) => item.id === id)).toMatchObject({
+				assignee: managerCaller.id,
+				assigneeLabel: 'mia@acme.example',
 			})
-			expect((await viewerApi.tasks.list({})).items.find((item) => item.id === id)?.assigneeLabel).toBe('mia@acme.example')
+			expect(await statusOf(salesApi.tasks.create({ dealId, title: 'No', dueOn: '2026-11-04', assignee: outsider.id }))).toBe(400)
+			expect(await statusOf(salesApi.tasks.create({ dealId, title: 'No', dueOn: '2026-11-04', assignee: 'user:nobody' }))).toBe(400)
+			const forged = await kit.browser(sales)('/api/tasks.create', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ dealId, title: 'No', dueOn: '2026-11-04', assignee: managerCaller.id, assigneeLabel: 'boss@acme.example' }),
+			})
+			expect(forged.status).toBe(400)
+			expect((await viewerApi.tasks.list({})).items.filter((item) => item.dealId === dealId)).toHaveLength(1)
 		})
 
 		test('sales complete a task; a viewer and another org cannot', async () => {

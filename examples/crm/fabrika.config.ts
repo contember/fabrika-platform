@@ -4,9 +4,7 @@ import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { contract } from './fabrika.contract'
 import { tables } from './src/db/tables'
 
-/** The runtime service, which the code deploys to. Also the `zerops.yaml` setup name. */
 export const CRM_SERVICE = 'crmapi'
-
 export const crmContract = compileContract(contract, tables)
 
 const services = (): ZeropsServiceSpec[] => [
