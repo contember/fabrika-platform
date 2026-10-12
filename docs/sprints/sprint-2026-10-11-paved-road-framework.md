@@ -896,3 +896,21 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   job's `approvedDeclaration`), so `sql-dispatch.test.ts`'s leaf-only `{ sql }` no longer boots under the orm
   fixture's digest. The test now serves its own kit shell that declares each site's `sql`; its cases are unchanged, and
   the same tree under the orm fixture's shell is refused at boot.
+- **WU7 — before WU7 a declaration-only change published at once on `prod`.** `classifyAccess` never read
+  `ContractArtifact.declared`, so adding `sql: 'read'` changed the digest and classified as `unchanged`. It is compared
+  now: a site by endpoint id or `job:<name>`, each effect on its own; `AccessChange.review?: 'closer'` marks the lines.
+- **WU7 — database code is `AccessSnapshot.databaseCode`** (WU5's `MigrationDeviation[]`, absent when empty; the digest
+  appends it only when present). Its identity is file + kind + object, not WU5's kind + object alone: `DO`'s object is
+  `block <n>` per file, and a `CREATE OR REPLACE` in a new file is new code. An edited file that holds code widens with
+  closer review again, since the diff cannot tell what changed in it.
+- **WU7 — Control refuses as the runner does, not more.** A refused statement fails the read (`migrations-refused`, a
+  count; the log points to `fabrika db migrate`), except in a file the environment's published snapshot holds with
+  the same checksum: the runner skips applied files so a stricter classifier cannot lock an application out. The
+  classifier needs the text of the whole set at once, so the read caps it at 16 Mi characters (`migrations-too-large`).
+- **WU7 — `applicationDatabaseSchema` moved to `@fabrika/platform-node/sql`** (`application-schema.ts`), so Control
+  classifies against the runner's schema name in a Worker; `@fabrika/db`'s `applicationSchema` still duplicates it.
+- **WU7 — the transitions the diff cannot classify site by site:** a kit contract that becomes a `defineContract` one
+  (its reach is no longer in the artifact) widens with closer review; the reverse narrows. `AppEnvDto.deviations` lists
+  the published snapshot's; `get_deployment` answers `deviations` (the run's closer-review lines, parked or not); the
+  builder daemon defaults the field to `[]` for an older Control. Browser check skipped: the dashboard dev server needs
+  a running Control; the components are witnessed by `packages/dashboard/src/__tests__/deviations.test.ts`.
