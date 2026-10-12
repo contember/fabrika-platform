@@ -114,8 +114,10 @@ function sampleOf(table: string, column: CatalogColumn): Primitive {
 	if (type === 'int2' || type === 'int4' || type === 'float4' || type === 'float8') return 1
 	if (type === 'int8' || type === 'numeric') return '1'
 	if (type === 'bool') return false
-	// ISO text, not a Date: the seed binds past the layer's compiler, where Bun.SQL would send Date#toString().
-	if (type === 'date' || type === 'timestamp' || type === 'timestamptz') return new Date().toISOString()
+	// ISO text, not a Date: the seed binds past the layer's compiler, where Bun.SQL would send Date#toString(). A day is
+	// `YYYY-MM-DD`, since the probe's insert sends it through the layer, which takes a `date` only so.
+	if (type === 'date') return new Date().toISOString().slice(0, 10)
+	if (type === 'timestamp' || type === 'timestamptz') return new Date().toISOString()
 	if (type === 'time' || type === 'timetz') return '12:00:00'
 	if (type === 'interval') return '1 hour'
 	throw new Error(`the isolation fixture cannot fill ${table}.${column.column_name} (${type}); give the column a default or make it nullable`)
