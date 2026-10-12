@@ -90,8 +90,10 @@ export interface QuarantinedFile {
 	readonly size: number
 	readonly sha256: string
 	readonly contentType: string
-	/** Earlier passes that gave it no verdict. */
+	/** Earlier passes that gave it no verdict, or whose rejection could not delete its object. */
 	readonly scanAttempts: number
+	/** Since when it waits: its quarantine, or the end of its last retry's wait. Oldest first, across collections. */
+	readonly dueSince: Date
 }
 
 /** A row whose object may be deleted: removed, orphaned by its owner's deletion, or pending past the grace period. */
@@ -123,8 +125,8 @@ export interface FileCollectionTable {
 	/** At most `limit` held files of the owner `owner` (a `Ref` for the read action) after the id `after`, oldest first. */
 	list(owner: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage>
 	/**
-	 * At most `limit` quarantined files that are neither removed nor orphaned and due at `now`: the fewest earlier tries
-	 * first, then the oldest, so files that keep failing never hold back a new one.
+	 * At most `limit` quarantined files that are neither removed nor orphaned and due at `now`, the longest waiting
+	 * first, so neither files that keep failing nor a busy collection hold back the rest.
 	 */
 	quarantined(limit: number, now: Date): Promise<readonly QuarantinedFile[]>
 	/**
@@ -349,7 +351,11 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const grant = grantOf(capability, owner.dimension, spec.actions.write)
 			const scope = ownedFile(grant, id)
 			const pending = allOf([compare(table, 'status', '=', 'pending'), isNull(table, 'deleted_at', false)])
-			const changes = new Map<string, string | number>([['status', ended], ['size', written.size], ['sha256', written.sha256]])
+			const changes = new Map<string, string | number | Date>([['status', ended], ['size', written.size], ['sha256', written.sha256]])
+			if (ended === 'quarantined') {
+				scanning('quarantine')
+				changes.set('scan_after', new Date())
+			}
 			const node = updateNode(table, changes, undefined, scopedWhere(pending, scope), acknowledgement(table, 'id', undefined))
 			await session().transaction(async (transaction) => {
 				await lockOwner(transaction, grant)
@@ -472,9 +478,9 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			scanning('scan batch')
 			const scope = everything()
 			const due = allOf([held(status('quarantined')), anyOf([isNull(table, 'scan_after', false), compare(table, 'scan_after', '<', now)])])
-			const columns = ['id', 'object_key', 'size', 'sha256', 'content_type', 'scan_attempts']
+			const columns = ['id', 'object_key', 'size', 'sha256', 'content_type', 'scan_attempts', 'scan_after', 'created_at']
 			const rows = await session().run<Readonly<Record<string, unknown>>>(
-				selectNode(table, selections(table, columns), due, scope, limit, ['scan_attempts', 'created_at']),
+				selectNode(table, selections(table, columns), due, scope, limit, ['scan_after', 'created_at']),
 				guard('SelectQueryNode', table, scope),
 			)
 			return rows.map((row) =>
@@ -485,6 +491,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 					sha256: text(table, row, 'sha256'),
 					contentType: text(table, row, 'content_type'),
 					scanAttempts: integer(table, row, 'scan_attempts'),
+					dueSince: ownEntry(row, 'scan_after') instanceof Date ? date(table, row, 'scan_after') : date(table, row, 'created_at'),
 				})
 			)
 		},
@@ -506,10 +513,12 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const grant = grantOf(capability, spec.dimension, spec.actions.read)
 			const scope = linksPredicate(table, linkValues(table, fileLinks, grant))
 			const scanned = version === null ? isNull(table, 'object_version', false) : compare(table, 'object_version', '=', version)
-			const changes = new Map<string, string | number | null>([['status', 'quarantined'], ['object_version', null], ['scan_attempts', 0], [
-				'scan_after',
-				null,
-			]])
+			const changes = new Map<string, string | number | Date | null>([
+				['status', 'quarantined'],
+				['object_version', null],
+				['scan_attempts', 0],
+				['scan_after', new Date()],
+			])
 			const node = updateNode(
 				table,
 				changes,

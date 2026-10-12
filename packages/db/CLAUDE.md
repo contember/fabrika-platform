@@ -157,7 +157,9 @@ and the target `Ref`, so no handler can call it.
 - **A file row is `pending`, `quarantined`, `live` or `rejected`** (`FILE_STATUSES`, the named check `<table>_status`).
   A held file (`live`, `quarantined`, `rejected`) is located, found, listed, counted against the quota and removable;
   a removed or orphaned one is purgeable in every held state. A scanning collection's table carries `object_version`,
-  `scan_attempts` and `scan_after`, and only a spec with `scan: true` reads them. The scan writes `promote` (which
+  `scan_attempts` and `scan_after`, and only a spec with `scan: true` reads them. `scan_after` is when a quarantined
+  file became due — its completion, its re-quarantine, or its next try — and `quarantined` returns the due files
+  oldest first by it (`dueSince`), so the scan pass can order every collection's files together. The scan writes `promote` (which
   records the scanned object's version), `reject` and `deferScan` are the only writes keyed by the id alone, and only
   inside a job attempt's lease (`fencedTransaction`; without a fence they throw); `requarantine` takes the download's
   `Ref`. The SQL all readers agree on lives in `@fabrika/platform-node/sql`'s `file-table-ddl.ts`: `fileTableSql` and

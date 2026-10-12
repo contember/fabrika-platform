@@ -25,7 +25,7 @@ export function fileStatusCheck(table: string): string {
 
 /** The index the scan job selects its batch by. */
 export function fileScanIndex(table: string): string {
-	return `CREATE INDEX ${table}_scan ON ${table} (scan_attempts, created_at) WHERE status = 'quarantined'`
+	return `CREATE INDEX ${table}_scan ON ${table} (scan_after) WHERE status = 'quarantined'`
 }
 
 /**

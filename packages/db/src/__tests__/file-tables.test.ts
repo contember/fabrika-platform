@@ -341,6 +341,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 			sha256: SHA,
 			contentType: 'image/png',
 			scanAttempts: 0,
+			dueSince: expect.any(Date),
 		})
 		expect(await inLease(() => files.promote(id, SHA, VERSION))).toBe(true)
 		expect((await files.find(fileRef('notes.read', id, 's1'))).status).toBe('live')
@@ -434,7 +435,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		expect((await files.list(reader, { after: null, limit: 10 })).items).toEqual([])
 	})
 
-	test('a deferred retry waits until its time, and files with fewer tries come first', async () => {
+	test('a deferred retry waits until its time, and the longest waiting file comes first', async () => {
 		await addNote('s8')
 		const failing = await quarantinedFile('s8')
 		await inLease(() => files.deferScan(failing, 1, new Date(Date.now() + HOUR)))
