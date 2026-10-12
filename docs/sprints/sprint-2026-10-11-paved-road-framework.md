@@ -89,8 +89,8 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
 - ⚠ `test:examples` runs only `examples/zerops-app` — root `package.json:14`. WU11 adds `examples/crm`.
 - ⚠ Decision 4 (raw SQL is legitimate) contradicts: the `raw-sql` rule — `packages/check/src/rules/runtime.ts:259-379`,
   `packages/check/CLAUDE.md:86`; "Do not add a method that takes SQL" — `packages/db/CLAUDE.md:179-181`; the skill's
-  refusal list — `packages/app/skill/SKILL.md:137-139`; backlog 104 "Never add a raw handle, a `sql` escape"
-  (deleted by WU9; ADR-0012 Alternatives). WU6, WU9, WU10.
+  refusal list — `packages/app/skill/SKILL.md:137-139`; backlog 104 "Never add a raw handle, a `sql` escape" —
+  `docs/backlog/104-the-query-builder-cannot-express-common-reports.md:36`. WU6, WU9, WU10.
 - ⚠ Decision 3 (a capability reads its own target) contradicts "A write action does not include the read action" —
   `packages/db/CLAUDE.md:162-163`. WU3, WU9.
 - ⚠ Decision 3 (handlers colocated) contradicts "the contract is a literal … no call of the application's own
@@ -149,7 +149,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			rows: await ctx.sql(
 				PipelineRow,
-			)`select stage, count(*) as deals from deals where org_id = ${ctx.target.value} group by stage`,
+			)`select stage, count(*) as deals from deals where org_id = ${ctx.target.id} group by stage`,
 		})),
 }))
 ```
@@ -952,11 +952,28 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   shows). A leak scans every value of the other row's chain (an outer dimension's value leaks too). `serve` refuses a
   contract no kit built, a copy included (`kitOriginOf`), and a tableless kit's `sql` is a type error
   (`kit-mistakes/24`). `architecture-app`'s `stage` is an enum, so its `{ stage: 'won' }` seed stays valid.
-- **WU9 — the ADRs follow the code.** ADR-0012 and ADR-0050 are rewritten in place for WU0–WU8 and WU12, and for
-  WU13a's column write actions and WU13b's member directory (labels only with the dimension's `directory: 'labels'`,
-  a closer-review widening) as they stand in review. ADR-0012 gains §7 (the paved road and the declared steps off
-  it); its old §7 is §8, and `application-runtime.md`'s pointer follows. Backlog 104 is deleted (raw SQL replaces
-  declared report kinds; ADR-0012 Alternatives). Outside the listed touch points, stale `implement` and
-  `ctx.target.id` claims are fixed in `overview.md`, `docs/reference/README.md`, `application-architecture.md` (also
-  its `c.spa` form) and `packages/{auth-core,cli}/CLAUDE.md`. Left for WU10: `packages/app/skill/SKILL.md` and
-  `examples/zerops-app/AGENTS.md` still say `implement` (lines 30, 93, 112) and list raw SQL as refused (line 143).
+- **WU13a — column write actions.** `columns: { <c>: { read?, write? } }`: a column with `write` is updated only by that
+  action (`updatableBy`), never by the table's update action, so the parse refuses it in `update`, a `write` equal to
+  the update action, one on a stamped column, and a column policy with neither field. The action counts as one the table
+  names (own-target read). The artifact's column entry is `{ read?, write? }` (`ColumnPolicyArtifact`, auth-core),
+  each field absent when undeclared, so every existing digest is unchanged; `classifyAccess` widens on a new write
+  action and on a changed one, narrows on a removed one, and a column moved from `update` under one gives a removal line
+  plus a widening line. Outside the listed touch points: one line of `packages/app/src/contract/artifact-schema.ts`
+  (WU13b's directory) accepts `write`. Not done: the generated isolation tests (WU8's scaffold) have no column-write case.
+- **WU13a — update subset.** The handle types already took any subset (Kysely's `Updateable` is all optional); what
+  changed is the runtime: an update that sets no column (`{}`, only `undefined`) is refused (`updateValues`) instead of
+  bumping the version. A type-level non-empty check was tried (a union of one-required-key members) and dropped: it
+  printed the union in every excess-property error.
+- **WU13a — transitive `over`.** `DbIndex.within` (dimension → every table whose chain holds it, and a top-level table
+  its own) replaces `listedChildren`; `reachPredicate` takes the chain link's column. The stores keep the nearest
+  container. A chain above a dimension no table owns is followed at runtime but not in the types (the types reach less).
+  `kit-scale`: 364,886 instantiations (362,509 before).
+- **WU13a — dates.** Codegen: `date` → `string` (`YYYY-MM-DD`), `timestamp(tz)` → `ColumnType<Date, Date | string, …>`;
+  the column list gains `dates: [...]` only for a table with a `date` column, so other generated files are byte-identical
+  (only the db fixture's `created_at` line changed). Bun decodes a `date` to UTC midnight in every time zone, and
+  decodes BC, infinity and years past 9999 wrongly, so those are refused at read. `ctx.sql` and `fromRow` cannot see
+  column types: they read a `Date` as its day for a `z.iso.date()` field only.
+- **WU13a — `RowOf<typeof tables, T, A = read action>`** is new in `@fabrika/db/tables` (and the root); the old
+  three-argument `RowOf<DB, P, T>` of the root is renamed `PolicyRow` (store-internal). The probe app is
+  `packages/app/src/__tests__/probe-tasks/` (`assign`, `close`, `update`, `mine` over org, `markOverdue` on the
+  handles), run on Postgres by `probe-tasks.test.ts`; its vocabulary is named `notes` because the harness signs for it.
