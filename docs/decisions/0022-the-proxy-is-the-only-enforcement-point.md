@@ -501,8 +501,8 @@ principal kind `link`: its token carries no `ptype` and names its link mount and
 
 On Zerops an application has no IAM binding. It reaches IAM's membership operations at `POST /membership/<method>` on
 IAM's public origin, with a **membership transport key** of its application environment as the bearer. Control
-issues that key from the approved snapshot while the contract has an endpoint with a delegation, an endpoint whose
-action is a dimension's `members.list` (its read-only member directory, `ctx.members.list()`) or a share-link mount,
+issues that key from the approved snapshot while the contract has an endpoint with a delegation, an endpoint on, in or
+below a dimension with members (its read-only member directory, `ctx.members.get` and `list`) or a share-link mount,
 rotates it like a workload key, and writes it with IAM's origin as `FABRIKA_IAM_RPC_KEY` and `FABRIKA_IAM_RPC_URL`;
 a reconcile that leaves the application neither deletes it. The key pins the application id: a call for another
 application or environment is refused. It adds no authority, because every operation still acts as the caller's token,

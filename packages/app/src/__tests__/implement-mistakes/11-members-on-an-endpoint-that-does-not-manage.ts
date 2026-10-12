@@ -10,7 +10,7 @@ const store = defineStore(database, 'notes', (t) => ({
 	create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),
 }))
 
-// a handler lists members from an endpoint whose action is not the dimension's members.manage
+// a handler assigns a member from an endpoint whose action is not the dimension's members.manage
 const seen: { pushes: unknown[]; failNextPush: boolean } = { pushes: [], failNextPush: false }
 
 export const app = implement(contract, {
@@ -37,8 +37,8 @@ export const app = implement(contract, {
 			},
 			notes: {
 				get: async ({ ctx }) => {
-					// mistake: notes.read is not the workspace's members.manage, so the endpoint has no ctx.members
-					await ctx.members.list(ctx.target)
+					// mistake: notes.read is not the workspace's members.manage, so the note's directory only reads
+					await ctx.members.assign(ctx.target, { email: 'someone@example.test' }, 'editor')
 					const row = await notes.get(ctx.target)
 					return { id: row.id, title: row.title }
 				},

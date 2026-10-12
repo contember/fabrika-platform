@@ -16,7 +16,7 @@ import type {
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Ref, Within } from '../implement/capability'
-import type { LinkIssuing, MemberDirectory, MemberManagement } from '../implement/membership'
+import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
 import type { ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
@@ -226,19 +226,29 @@ type MembersOf<K extends KitTypes, D extends string> = D extends keyof K['dimens
 	: never
 	: never
 
+/** The nearest dimension, `D` or one containing it, that declares members; `never` when none does. */
+type DirectoryOf<K extends KitTypes, D extends string> = [MembersOf<K, D>] extends [never]
+	? D extends keyof K['dimensions'] ? K['dimensions'][D] extends { readonly in: infer P extends string } ? DirectoryOf<K, P> : never : never
+	: D
+
+/** `ctx.members` below a directory `N`: the list where the action is its `members.list`, the lookup of one member everywhere. */
+type DirectoryContext<K extends KitTypes, N extends string, A extends string> = A extends MembersOf<K, N>['list']
+	? { readonly members: MemberDirectory }
+	: {
+		readonly members:
+			& MemberLookup
+			& { readonly list: Unavailable<`listing the members of ${N} needs the action '${MembersOf<K, N>['list']}'; get(principalId) checks one`> }
+	}
+
 /**
- * `ctx.members` where the action is the target dimension's `members.manage` (management) or `members.list` (the
- * directory): IAM checks that same action live, so the type promises what IAM answers.
+ * `ctx.members` of an endpoint on or in a dimension: management where the action is that dimension's `members.manage`;
+ * otherwise the directory of the nearest dimension, its own or one containing it, that declares members. IAM checks the
+ * endpoint's own action for a lookup and `members.list` for a list, so the type promises what IAM answers.
  */
 type MembersContext<K extends KitTypes, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
-	? [MembersOf<K, D>] extends [never] ? { readonly members: Unavailable<`the dimension ${D} declares no members`> }
-	: A extends MembersOf<K, D>['manage'] ? { readonly members: MemberManagement<D, A, K['role']> }
-	: A extends MembersOf<K, D>['list'] ? { readonly members: MemberDirectory }
-	: {
-		readonly members: Unavailable<
-			`ctx.members needs the action '${MembersOf<K, D>['list']}' (lists the members of ${D}) or '${MembersOf<K, D>['manage']}' (manages them)`
-		>
-	}
+	? A extends MembersOf<K, D>['manage'] ? { readonly members: MemberManagement<D, A, K['role']> }
+	: [DirectoryOf<K, D>] extends [never] ? { readonly members: Unavailable<`neither ${D} nor a dimension containing it declares members`> }
+	: DirectoryContext<K, DirectoryOf<K, D>, A>
 	: { readonly members: Unavailable<'ctx.members needs access on or in a dimension, with the action that lists or manages its members'> }
 
 /** `ctx.links`, only where the endpoint declares the link mount it issues (`issues: '<mount>'`). */

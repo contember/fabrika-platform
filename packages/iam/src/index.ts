@@ -9,6 +9,8 @@ import type {
 	DenyDeviceAuthorizationResult,
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
+	FindMemberInput,
+	FindMemberResult,
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
@@ -152,6 +154,10 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 
 	listMembers(input: ListMembersInput): Promise<ListMembersResult> {
 		return iamRpc(this.env, this.ctx).listMembers(input)
+	}
+
+	findMember(input: FindMemberInput): Promise<FindMemberResult> {
+		return iamRpc(this.env, this.ctx).findMember(input)
 	}
 
 	issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {

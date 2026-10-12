@@ -644,6 +644,7 @@ describe('the entrypoint an application binds', () => {
 		'audit',
 		'createScope',
 		'exchangeAuthCode',
+		'findMember',
 		'getJwks',
 		'issueLink',
 		'listMembers',

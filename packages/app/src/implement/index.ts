@@ -27,8 +27,10 @@ export type {
 	DirectoryMember,
 	IssuedLink,
 	LinkIssuing,
+	Member,
 	MemberDirectory,
 	MemberList,
+	MemberLookup,
 	MemberManagement,
 	MemberTarget,
 } from './membership'

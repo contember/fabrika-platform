@@ -140,6 +140,8 @@ describe('the membership transport', () => {
 		expect(await rolesOf(t.f, member, scope)).toEqual(['editor'])
 		const listed = await client.listMembers({ ...(await caller(owner)), scope })
 		expect(listed.ok && listed.members.map((row) => row.principalId).sort()).toEqual([owner.id, member.id].sort())
+		const found = await client.findMember({ ...(await caller(owner)), scope, principalId: member.id, action: 'notes.read', chain: [scope] })
+		expect(found).toEqual({ ok: true, member: { principalId: member.id, label: 'member@example.test', disabled: false } })
 	})
 
 	test('a write without the delegation grant the proxy obtained is refused', async () => {

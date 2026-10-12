@@ -1,6 +1,7 @@
 import type {
 	AssignMemberResult,
 	CreateScopeResult,
+	FindMemberResult,
 	IamMembershipRpc,
 	IssueLinkResult,
 	ListMembersResult,
@@ -60,6 +61,11 @@ export class IamMembership {
 
 	listMembers(caller: MembershipRequestCaller, scope: Scope): Promise<ListMembersResult> {
 		return this.binding.listMembers({ ...this.caller(caller), scope })
+	}
+
+	/** One principal among the members of `scope`, for an endpoint whose object's `chain` holds `scope` and on which the caller holds `action`. */
+	findMember(caller: MembershipRequestCaller, scope: Scope, principalId: string, action: string, chain: Scope[]): Promise<FindMemberResult> {
+		return this.binding.findMember({ ...this.caller(caller), scope, principalId, action, chain })
 	}
 
 	/** A share link of `mount` for `chain[0]`; `chain` is the object and every value containing it, outward. */

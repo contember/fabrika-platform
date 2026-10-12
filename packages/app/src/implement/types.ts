@@ -8,7 +8,7 @@ import type { Export, InputOf, InputSchema, LinkMount, MemberAccess, Procedure, 
 import type { JobHandlersOf } from '../jobs/types'
 import type { Ref, Within } from './capability'
 import type { ConnectResult } from './connect'
-import type { LinkIssuing, MemberDirectory, MemberManagement } from './membership'
+import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from './membership'
 import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
@@ -33,12 +33,22 @@ type TargetOf<Acc> = Acc extends { readonly action: infer A extends string; read
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? readonly [D, A]
 	: never
 
-/** `ctx.members`, only where the action is the dimension's `members.manage` or `members.list` (ADR-0012 §6). */
+/** The nearest dimension, `D` or one containing it, that declares members; `never` when none does. */
+type DirectoryOf<C, D extends string> = D extends keyof DimensionsOf<C> ? DimensionsOf<C>[D] extends { readonly members: object } ? D
+	: DimensionsOf<C>[D] extends { readonly in: infer P extends string } ? DirectoryOf<C, P>
+	: never
+	: never
+
+/**
+ * `ctx.members` (ADR-0012 §6): management where the action is the dimension's `members.manage`; otherwise the directory
+ * of the nearest dimension that declares members, which lists them only for its `members.list`.
+ */
 type MembersContext<C, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
 	? DimensionsOf<C>[D & keyof DimensionsOf<C>] extends { readonly members: { readonly manage: A } }
 		? { readonly members: MemberManagement<D, A, RoleOf<C>> }
-	: DimensionsOf<C>[D & keyof DimensionsOf<C>] extends { readonly members: { readonly list: A } } ? { readonly members: MemberDirectory }
-	: unknown
+	: [DirectoryOf<C, D>] extends [never] ? unknown
+	: DimensionsOf<C>[DirectoryOf<C, D>] extends { readonly members: { readonly list: A } } ? { readonly members: MemberDirectory }
+	: { readonly members: MemberLookup }
 	: unknown
 
 /** The link mounts whose dimension and issuing action are `D` and `A`. */

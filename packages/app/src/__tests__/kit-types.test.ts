@@ -39,7 +39,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'27-table-the-access-form-does-not-reach.ts': "deals is not under in: 'org' (it lies in company): declare access in: 'company' or on: 'deal'",
 	// The compiler lists a union's fields in no fixed order.
 	'28-raw-row-for-a-camel-case-output.ts': 'where the output is camelCase: map it with fromRow(Schema, row) from @fabrika/app',
-	'29-members-without-the-list-action.ts': "ctx.members needs the action 'crm.read' (lists the members of org) or 'members.manage' (manages them)",
+	'29-members-without-the-list-action.ts': "listing the members of org needs the action 'crm.read'; get(principalId) checks one",
 }
 
 /**

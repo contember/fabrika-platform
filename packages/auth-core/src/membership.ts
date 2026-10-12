@@ -5,7 +5,7 @@
 // A SEPARATE interface from `IamRpc`, like `IamHandoffRpc`: an application's IAM entrypoint serves it,
 // and a platform component that implements `IamRpc` does not have to.
 
-import type { ContractArtifact, EndpointRow } from './contract'
+import type { ContractArtifact, DimensionArtifact, EndpointRow } from './contract'
 import type { Scope } from './types'
 
 /**
@@ -23,6 +23,42 @@ export function endpointMembers(artifact: Pick<ContractArtifact, 'dimensions'>, 
 	}
 	const members = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
 	return members?.manage === action ? 'manage' : members?.list === action ? 'list' : null
+}
+
+/**
+ * The member directory an endpoint reads through `ctx.members` when it does not manage members: the nearest dimension,
+ * its own or one containing it, that declares members. Every such endpoint (access `on` or `in`) may look up one member
+ * it names; IAM checks the endpoint's own action on the object's chain. `lists` where the action is that dimension's
+ * `members.list`: only then may it list the members, which IAM checks live on the directory's value.
+ */
+export interface EndpointDirectory {
+	readonly dimension: string
+	readonly lists: boolean
+}
+
+export function endpointDirectory(artifact: Pick<ContractArtifact, 'dimensions'>, row: EndpointRow): EndpointDirectory | null {
+	if (row.requirement?.kind !== 'action' || endpointMembers(artifact, row) === 'manage') {
+		return null
+	}
+	const { action, access } = row.requirement
+	// A link procedure (`from: null`) acts for an anonymous key holder, which IAM never answers a membership question.
+	if ((access.form !== 'on' && access.form !== 'in') || access.from === null) {
+		return null
+	}
+	const seen = new Set<string>()
+	let dimension: string | null = access.dimension
+	while (dimension !== null && !seen.has(dimension) && Object.hasOwn(artifact.dimensions, dimension)) {
+		seen.add(dimension)
+		const definition: DimensionArtifact | undefined = artifact.dimensions[dimension]
+		if (definition === undefined) {
+			return null
+		}
+		if (definition.members !== null) {
+			return { dimension, lists: definition.members.list === action }
+		}
+		dimension = definition.in
+	}
+	return null
 }
 
 /** Every request carries the caller's own credential; `app` is superseded by the credential's verified app. */
@@ -131,6 +167,28 @@ export interface InvitationItem {
 export type ListMembersResult = { ok: true; members: MemberItem[]; invitations: InvitationItem[] } | MembershipFailure
 
 /**
+ * Look up ONE principal in the members of `scope`, for an endpoint below it. `chain` names the endpoint's object and
+ * every value containing it, outward, as the app resolved it from its database, and holds `scope`. The caller holds
+ * `action`, the endpoint's own, on some value of the chain. Listing stays with `members.list`.
+ */
+export interface FindMemberInput extends MembershipCaller {
+	scope: Scope
+	principalId: string
+	action: string
+	chain: Scope[]
+}
+
+export interface FoundMember {
+	principalId: string
+	/** The principal's display label; null unless the dimension declares `directory: 'labels'` or the caller holds `members.manage` there. */
+	label: string | null
+	disabled: boolean
+}
+
+/** `member` is null for a principal that holds no membership role in `scope`, unknown ones included. */
+export type FindMemberResult = { ok: true; member: FoundMember | null } | MembershipFailure
+
+/**
  * Issue a share link of `mount` for the object `chain[0]`. `chain` names the object and every value
  * containing it, outward, as the app resolved it from its database; the framework re-checks it on every
  * link request, so a link whose object moved stops working. The caller holds the mount's `issuedBy` and
@@ -158,6 +216,7 @@ export interface IamMembershipRpc {
 	assignMember(input: AssignMemberInput): Promise<AssignMemberResult>
 	revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult>
 	listMembers(input: ListMembersInput): Promise<ListMembersResult>
+	findMember(input: FindMemberInput): Promise<FindMemberResult>
 	issueLink(input: IssueLinkInput): Promise<IssueLinkResult>
 	revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult>
 }

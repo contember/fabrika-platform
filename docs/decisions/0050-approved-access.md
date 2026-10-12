@@ -198,7 +198,8 @@ a new link mount to issue each widen; a removal and `write` → `read` narrow. D
 object: new code widens, code in a file whose text changed widens again (the diff cannot tell what changed in it),
 and removed code narrows. A contract that leaves the staged kit, whose sites' reach is then no longer declared,
 widens. A dimension that opts its member directory into labels (`directory: 'labels'`), so every `members.list`
-holder there reads each member's email-derived label, widens too. Each of these widening lines carries
+holder there reads each member's email-derived label and every endpoint below it the label of a member it looks up,
+widens too. Each of these widening lines carries
 `review: 'closer'`: the approval page marks it "needs closer review",
 because the approver must read the code behind the line, not only the line. A diff that cannot classify a change
 also marks it for closer review. On an unprotected environment the run publishes at once, with the same lines.

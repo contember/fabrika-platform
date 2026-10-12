@@ -43,11 +43,28 @@ export interface DirectoryMember {
 	readonly disabled: boolean
 }
 
+/** One member a lookup found: never its email, and its label only where the directory shows labels. */
+export interface Member {
+	readonly principalId: string
+	/** The principal's display label; null unless the dimension declares `directory: 'labels'` or the caller manages its members. */
+	readonly label: string | null
+	readonly disabled: boolean
+}
+
 /**
- * `ctx.members` of an endpoint whose action is its dimension's `members.list`: the members of `ctx.target`, read from
- * IAM, which checks that action live. No emails and no invitations: those stay with `members.manage`.
+ * `ctx.members` of an endpoint on or in a dimension below a member directory (its own dimension's, or the nearest one
+ * containing it): the members of the value its object lies in. IAM checks the endpoint's own action on the object.
  */
-export interface MemberDirectory {
+export interface MemberLookup {
+	/** The principal, when it is a member of the directory's value; null otherwise, an unknown id included. */
+	get(principalId: string): Promise<Member | null>
+}
+
+/**
+ * `ctx.members` of an endpoint whose action is the directory's `members.list`: also every member, read from IAM, which
+ * checks that action live on the directory's value. No emails and no invitations: those stay with `members.manage`.
+ */
+export interface MemberDirectory extends MemberLookup {
 	list(): Promise<readonly DirectoryMember[]>
 }
 
@@ -163,18 +180,69 @@ export function memberManagement(request: MembershipRequest): MemberManagement<s
 	})
 }
 
+/** The directory an endpoint reads: the dimension that declares it, the containers of the endpoint's dimension, nearest first. */
+export interface DirectoryReach {
+	readonly endpoint: string
+	readonly dimension: string
+	readonly lists: boolean
+	readonly containers: readonly string[]
+}
+
+/** The object of the request's own target, then every value containing it that the target's chain holds, outward. */
+function chainOf(grant: RefGrant, containers: readonly string[]): Scope[] {
+	const chain: Scope[] = [scopeOf(grant)]
+	for (const container of containers) {
+		const value = grant.chain.get(container)
+		if (value !== undefined) {
+			chain.push({ type: container, value })
+		}
+	}
+	return chain
+}
+
 /**
- * The members of the request's own target, `target`; IAM requires the dimension's `members.list` there. Every read
- * endpoint of that action has a directory, so a runtime without an IAM membership transport still boots, and only a
- * `list()` call fails.
+ * The member directory of the request's own target, `target`: its dimension's when it declares members, else the
+ * nearest container's, at the value the target's chain holds. A runtime without an IAM membership transport still
+ * boots, and only a call fails.
  */
-export function memberDirectory(request: MembershipRequest | null, target: unknown, endpoint: string): MemberDirectory {
-	return Object.freeze({
-		async list(): Promise<readonly DirectoryMember[]> {
-			if (request === null) {
-				throw new ServerFault('facility_unbound', `'${endpoint}' lists members, and the runtime adapter supplies no IAM membership transport`, 503)
+export function memberDirectory(request: MembershipRequest | null, target: unknown, reach: DirectoryReach): MemberLookup | MemberDirectory {
+	const directoryOf = (): { readonly request: MembershipRequest; readonly grant: RefGrant; readonly scope: Scope } => {
+		if (request === null) {
+			throw new ServerFault('facility_unbound', `'${reach.endpoint}' reads members, and the runtime adapter supplies no IAM membership transport`, 503)
+		}
+		const grant = refGrant(request, target)
+		const value = grant.dimension === reach.dimension ? grant.id : grant.chain.get(reach.dimension)
+		if (value === undefined) {
+			throw new ServerFault(
+				'directory_unlocated',
+				`'${reach.endpoint}' reads the members of ${reach.dimension}, and no table locates the ${grant.dimension}'s ${reach.dimension}`,
+			)
+		}
+		return { request, grant, scope: { type: reach.dimension, value } }
+	}
+	const lookup: MemberLookup = {
+		async get(principalId: string): Promise<Member | null> {
+			const { request, grant, scope } = directoryOf()
+			if (typeof principalId !== 'string' || principalId === '') {
+				return null
 			}
-			const listed = await ask(() => request.iam.listMembers(request.caller, scopeOf(refGrant(request, target))), 'list members')
+			const found = await ask(
+				() => request.iam.findMember(request.caller, scope, principalId, request.action, chainOf(grant, reach.containers)),
+				'look up a member',
+			)
+			return found.member === null
+				? null
+				: Object.freeze({ principalId: found.member.principalId, label: found.member.label, disabled: found.member.disabled })
+		},
+	}
+	if (!reach.lists) {
+		return Object.freeze(lookup)
+	}
+	return Object.freeze({
+		...lookup,
+		async list(): Promise<readonly DirectoryMember[]> {
+			const { request, scope } = directoryOf()
+			const listed = await ask(() => request.iam.listMembers(request.caller, scope), 'list members')
 			return Object.freeze(
 				listed.members.map((member) =>
 					Object.freeze({ principalId: member.principalId, label: member.label, roles: Object.freeze([...member.roles]), disabled: member.disabled })
@@ -209,13 +277,7 @@ export function linkIssuing(
 					`'${options.mount}' is not a link mount this endpoint issues (allowed: ${mounts.map((m) => m.name).join(', ')})`,
 				)
 			}
-			const chain: Scope[] = [scopeOf(grant)]
-			for (const container of containers) {
-				const value = grant.chain.get(container)
-				if (value !== undefined) {
-					chain.push({ type: container, value })
-				}
-			}
+			const chain = chainOf(grant, containers)
 			const issued = await ask(() => request.iam.issueLink(request.caller, mount.name, chain, options.days), 'issue a share link')
 			return Object.freeze({ id: issued.id, url: `${joinPath(mount.prefix, '')}#${issued.key}`, expiresAt: issued.expiresAt })
 		},

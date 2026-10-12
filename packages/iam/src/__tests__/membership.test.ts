@@ -10,7 +10,17 @@ import {
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
-import { acceptInvitation, assignMember, createScope, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from '../membership'
+import {
+	acceptInvitation,
+	assignMember,
+	createScope,
+	findMember,
+	issueLink,
+	listMembers,
+	requestDelegation,
+	revokeLink,
+	revokeMember,
+} from '../membership'
 import { unixNow } from '../repositories/sql'
 import { BUILTIN_ROLES } from '../roles'
 import { createIamRpc } from '../rpc'
@@ -553,6 +563,73 @@ describe('members.list', () => {
 			ok: false,
 			reason: 'not_allowed',
 		})
+	})
+})
+
+describe('members.find: one member, for an endpoint below the directory', () => {
+	/** A workspace with an editor, a note in it, and a writer who holds `notes.write` on that note alone. */
+	async function findFixture() {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const editor = await f.person('editor')
+		await assign(f, owner, scope, 'editor', { principalId: editor.id })
+		const chain: Scope[] = [{ type: 'note', value: 'n1' }, scope]
+		const writer = await f.person('writer')
+		await f.repositories.grants.createGrant({ principalId: writer.id, app: APP, permissions: ['notes.write'], scopeType: 'note', scopeValue: 'n1' })
+		const find = async (person: Person, principalId: string, overrides: { chain?: Scope[]; action?: string; scope?: Scope } = {}) =>
+			findMember(f.services, CALLER_ENV, f.ctx, {
+				...(await caller(person)),
+				scope: overrides.scope ?? scope,
+				principalId,
+				action: overrides.action ?? 'notes.write',
+				chain: overrides.chain ?? chain,
+			})
+		return { f, owner, scope, editor, writer, chain, find }
+	}
+
+	test("the endpoint's own action on the chain finds a member, without its label unless the caller manages the members", async () => {
+		const { f, owner, editor, writer, find } = await findFixture()
+		expect(await find(writer, editor.id)).toEqual({ ok: true, member: { principalId: editor.id, label: null, disabled: false } })
+		expect(await find(owner, editor.id)).toEqual({ ok: true, member: { principalId: editor.id, label: 'editor@example.test', disabled: false } })
+		const elsewhere = await f.person('elsewhere')
+		await assign(f, owner, await workspaceOf(f, owner), 'editor', { principalId: elsewhere.id })
+		expect(await find(writer, elsewhere.id)).toEqual({ ok: true, member: null })
+		expect(await find(writer, 'no-such-principal')).toEqual({ ok: true, member: null })
+		expect(await find(writer, '')).toEqual({ ok: true, member: null })
+	})
+
+	test("a dimension that declares directory: 'labels' answers the label to every endpoint below it", async () => {
+		const { f, editor, writer, find } = await findFixture()
+		const labelled: AppSchema = {
+			...NOTES_SCHEMA,
+			scopes: NOTES_SCHEMA.scopes.map((scope): AppScopeDef => (scope.type === 'workspace' ? { ...scope, directory: 'labels' } : scope)),
+		}
+		expect((await f.putSchema(labelled)).status).toBe(200)
+		expect(await find(writer, editor.id)).toEqual({ ok: true, member: { principalId: editor.id, label: 'editor@example.test', disabled: false } })
+	})
+
+	test('a caller without the action on the chain, or a chain that is not one, is refused before anything is read', async () => {
+		const { f, owner, scope, editor, writer, find } = await findFixture()
+		const stranger = await f.person('stranger')
+		expect(await find(stranger, editor.id)).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await find(writer, editor.id, { action: 'notes.read' })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await find(writer, editor.id, { chain: [{ type: 'note', value: 'n2' }, scope] })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await find(writer, editor.id, { chain: [{ type: 'note', value: 'n1' }] })).toMatchObject({ ok: false, reason: 'invalid_request' })
+		expect(await find(writer, editor.id, { chain: [{ type: 'note', value: 'n1' }, { ...scope, value: 'w-other' }] })).toMatchObject({
+			ok: false,
+			reason: 'invalid_request',
+		})
+		expect(await find(owner, editor.id, { scope: { type: 'note', value: 'n1' } })).toMatchObject({ ok: false, reason: 'invalid_request' })
+	})
+
+	test('a link holder is no member caller', async () => {
+		const { f, owner, scope, editor, chain } = await findFixture()
+		const issued = await issueLink(f.services, CALLER_ENV, f.ctx, { ...(await caller(owner)), mount: 'shared', chain, days: 1 })
+		if (!issued.ok) throw new Error('expected a link')
+		const holder = { app: APP, credential: issued.key, requestId: 'req-holder' }
+		const found = await findMember(f.services, CALLER_ENV, f.ctx, { ...holder, scope, principalId: editor.id, action: 'notes.read', chain })
+		expect(found).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 })
 

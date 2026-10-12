@@ -66,6 +66,7 @@ import {
 	auditSchema,
 	createScopeSchema,
 	exchangeAuthCodeSchema,
+	findMemberSchema,
 	issueKeySchema,
 	issueLinkSchema,
 	listMembersSchema,
@@ -155,6 +156,8 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershi
 				return json(await rpc.revokeMember(revokeMemberSchema.parse(body)))
 			case 'listMembers':
 				return json(await rpc.listMembers(listMembersSchema.parse(body)))
+			case 'findMember':
+				return json(await rpc.findMember(findMemberSchema.parse(body)))
 			case 'issueLink':
 				return json(await rpc.issueLink(issueLinkSchema.parse(body)))
 			case 'revokeLink':

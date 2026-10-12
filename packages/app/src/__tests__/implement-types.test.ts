@@ -12,7 +12,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'08-input-field-removed-by-on.ts': "Property 'id' does not exist on type",
 	'09-ref-for-wrong-action.ts': `Type '"notes.read"' is not assignable to type '"notes.delete"'`,
 	'10-handler-for-health-mount.ts': "'health' is a health mount; it takes no handler. Remove it from handlers.",
-	'11-members-on-an-endpoint-that-does-not-manage.ts': "Property 'members' does not exist on type",
+	'11-members-on-an-endpoint-that-does-not-manage.ts': "Property 'assign' does not exist on type 'MemberDirectory'",
 	'12-link-of-a-mount-the-ref-cannot-issue.ts': `Type '"public"' is not assignable to type '"shared"'`,
 	'13-webhook-ref-for-undeclared-action.ts': "Property 'notes.read' does not exist on type",
 	'14-handler-for-form-mount.ts': "'contact' is a form mount; it takes no handler. Remove it from handlers.",

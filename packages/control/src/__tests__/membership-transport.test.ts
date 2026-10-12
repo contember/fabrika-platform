@@ -65,7 +65,7 @@ describe('needsMembershipTransport', () => {
 		expect(needsMembershipTransport(null)).toBe(false)
 	})
 
-	test("an endpoint whose action is its dimension's members.list needs it for its member directory; another read does not", () => {
+	test('an endpoint on or in a dimension with members, or below one, needs it for its member directory; a list over one does not', () => {
 		const reads = notesArtifact.endpoints.flatMap((row) => (row.id === 'api.notes.list' && row.requirement !== null ? [row] : []))
 		const listing: ContractArtifact = {
 			...notesArtifact,
@@ -77,6 +77,15 @@ describe('needsMembershipTransport', () => {
 		}
 		expect(needsMembershipTransport(listing)).toBe(true)
 		expect(needsMembershipTransport({ ...listing, endpoints: reads })).toBe(false)
+		// An endpoint on an object below the dimension looks a member up in its directory, whatever its action.
+		const below: ContractArtifact = {
+			...listing,
+			endpoints: reads.map((row) => ({
+				...row,
+				requirement: { kind: 'action', action: 'notes.write', access: { form: 'on', dimension: 'note', from: 'id' } },
+			})),
+		}
+		expect(needsMembershipTransport(below)).toBe(true)
 	})
 })
 

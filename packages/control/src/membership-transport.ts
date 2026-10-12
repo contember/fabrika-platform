@@ -1,12 +1,12 @@
 // The membership transport key of one application environment without an IAM service binding (ADR-0022 rule 6). A
 // deploy reconciles it from the APPROVED snapshot: while the contract has an endpoint that spends a delegation grant or
-// lists its target's members, or a share-link mount, IAM issues one key for `<app>@<env>`, sealed in the vault and
+// reads a member directory, or a share-link mount, IAM issues one key for `<app>@<env>`, sealed in the vault and
 // handed to the provider as `FABRIKA_IAM_RPC_KEY`. The key only authenticates the application to IAM's `/membership/*`
 // and pins its application id; the authority of each operation stays the end user's token, plus the proxy's delegation
 // grant for scope creation and membership changes. Never logged, never returned over the API.
 
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
-import { appEnvironmentId, type ContractArtifact, endpointDelegation, endpointMembers, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
+import { appEnvironmentId, type ContractArtifact, endpointDelegation, endpointDirectory, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import type { MembershipKeyRepository } from './db'
 import type { Vault, VaultSecretPurpose } from './vault'
@@ -34,15 +34,15 @@ export interface MembershipTransportPort {
 
 /**
  * Whether the contract calls a membership operation: an endpoint that spends a delegation grant (`creates`, or a
- * dimension's `members.manage`), an endpoint whose action is a dimension's `members.list` (its member directory), or a
- * share-link mount. IAM keeps the key while the schema they compile to has a delegation, a link mount or a dimension
+ * dimension's `members.manage`), an endpoint on or in a dimension below a member directory (`ctx.members.get`, and
+ * `list` for its `members.list`), or a share-link mount. IAM keeps the key while the schema they compile to has a delegation, a link mount or a dimension
  * that lists its members.
  */
 export function needsMembershipTransport(artifact: ContractArtifact | null): boolean {
 	if (artifact === null) {
 		return false
 	}
-	return artifact.endpoints.some((row) => endpointDelegation(artifact, row) !== null || endpointMembers(artifact, row) === 'list')
+	return artifact.endpoints.some((row) => endpointDelegation(artifact, row) !== null || endpointDirectory(artifact, row) !== null)
 		|| Object.values(artifact.mounts).some((mount) => mount.kind === 'link')
 }
 

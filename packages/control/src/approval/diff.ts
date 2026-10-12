@@ -680,12 +680,19 @@ function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionAr
 	return [...valueChange(`Dimension \`${name}\``, fromRest, toRest), ...directoryChange(name, before, after)]
 }
 
-/** A directory that shows labels lets every `members.list` holder read each member's label, which spells an address. */
+/**
+ * A directory that shows labels lets every `members.list` holder read each member's label, which spells an address, and
+ * every endpoint on, in or below the dimension read the label of a member it looks up (`ctx.members.get`).
+ */
 function directoryChange(name: string, before: 'labels' | undefined, after: 'labels' | undefined): AccessChange[] {
 	if (before === after) return []
 	return after === 'labels'
-		? [closerWidening(`Holders of the members.list action of \`${name}\` see each member's label, which spells a user's email address`)]
-		: [removal(`Holders of the members.list action of \`${name}\` no longer see member labels`)]
+		? [
+			closerWidening(
+				`Holders of the members.list action of \`${name}\` see each member's label, and every endpoint on, in or below \`${name}\` reads the label of a member it looks up; a label spells a user's email address`,
+			),
+		]
+		: [removal(`Holders of the members.list action of \`${name}\` and the endpoints below \`${name}\` no longer see member labels`)]
 }
 
 /** Any change of a value the diff does not order widens. */

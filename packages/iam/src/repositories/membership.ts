@@ -156,6 +156,21 @@ export class MembershipRepository {
 		return results
 	}
 
+	/** Every active grant of a membership role of `scope.type` in `scope` held by `principalId`, with the principal. */
+	async listMemberGrantsOf(app: string, scope: Scope, principalId: string): Promise<MemberGrantRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at
+				FROM grants g
+				JOIN principals p ON p.id = g.principal_id
+				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+				WHERE g.app = ? AND g.scope_type = ? AND g.scope_value = ? AND r.member_scope = ? AND g.principal_id = ?
+					AND (g.expires_at IS NULL OR g.expires_at > ?)
+				ORDER BY g.role_key`)
+			.bind(app, scope.type, scope.value, scope.type, principalId, unixNow())
+			.all<MemberGrantRow>()
+		return results
+	}
+
 	/**
 	 * Grant a membership role in `scope`. Returns the row when this call granted or renewed it, null when it was held;
 	 * `audit` is written exactly then.

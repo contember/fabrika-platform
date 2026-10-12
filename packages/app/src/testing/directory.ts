@@ -1,10 +1,12 @@
-// The test kit's stand-in for IAM's membership transport: it answers a member directory (`ctx.members.list()`) from
-// the kit's own callers, as IAM answers it from its grants. Scope creation, membership changes and share links need a
+// The test kit's stand-in for IAM's membership transport: it answers a member directory (`ctx.members.list()` and
+// `get()`) from the kit's own callers, as IAM answers it from its grants. Scope creation, membership changes and share links need a
 // real or a hand-written `IamMembershipRpc` (`testKit(app, { membership })`); the stand-in refuses them by name.
 
 import {
 	type ContractArtifact,
 	endpointMembers,
+	type FindMemberInput,
+	type FindMemberResult,
 	type IamMembershipRpc,
 	type ListMembersInput,
 	type ListMembersResult,
@@ -58,11 +60,7 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, inpu
 	const manager = permits([...caller.perms], dimension.members.manage, input.scope)
 	const members: MemberItem[] = []
 	for (const { caller: member, memberships } of callers.all()) {
-		const roles = memberships
-			.filter(({ role, scope }) =>
-				scope.type === input.scope.type && scope.value === input.scope.value && artifact.roles[role]?.member?.scope === scope.type
-			)
-			.map(({ role }) => role)
+		const roles = rolesIn(artifact, memberships, input.scope)
 		if (roles.length === 0) continue
 		members.push({
 			principalId: member.id,
@@ -75,11 +73,41 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, inpu
 	return { ok: true, members, invitations: [] }
 }
 
+/** The membership roles held in exactly `scope`, as IAM counts a member of its dimension. */
+function rolesIn(artifact: ContractArtifact, memberships: readonly TestMembership[], scope: TestScope): string[] {
+	return memberships
+		.filter((held) => held.scope.type === scope.type && held.scope.value === scope.value && artifact.roles[held.role]?.member?.scope === scope.type)
+		.map(({ role }) => role)
+}
+
+function findMember(artifact: ContractArtifact, callers: DirectoryCallers, input: FindMemberInput): FindMemberResult {
+	const caller = input.credential === null ? undefined : callers.byCredential(input.credential)
+	if (caller === undefined) return { ok: false, reason: 'invalid_token' }
+	const dimension = Object.hasOwn(artifact.dimensions, input.scope.type) ? artifact.dimensions[input.scope.type] : undefined
+	if (dimension?.members === null || dimension?.members === undefined) {
+		return { ok: false, reason: 'invalid_request', message: `scope '${input.scope.type}' declares no members` }
+	}
+	if (!input.chain.some((scope) => scope.type === input.scope.type && scope.value === input.scope.value)) {
+		return { ok: false, reason: 'invalid_request', message: `the chain of the lookup does not hold the ${input.scope.type} it looks in` }
+	}
+	if (!input.chain.some((scope) => permits([...caller.perms], input.action, scope))) return { ok: false, reason: 'not_allowed' }
+	const found = callers.all().find(({ caller: member, memberships }) =>
+		member.id === input.principalId && rolesIn(artifact, memberships, input.scope).length > 0
+	)
+	if (found === undefined) return { ok: true, member: null }
+	const manager = permits([...caller.perms], dimension.members.manage, input.scope)
+	return {
+		ok: true,
+		member: { principalId: found.caller.id, label: manager || dimension.directory === 'labels' ? found.caller.label : null, disabled: false },
+	}
+}
+
 /** The kit's default membership transport: the directory of its callers, and a refusal for every write. */
 export function kitDirectory(artifact: ContractArtifact, callers: DirectoryCallers): IamMembershipRpc {
 	const refused = () => Promise.resolve(ONLY_DIRECTORY)
 	return {
 		listMembers: (input) => Promise.resolve(listMembers(artifact, callers, input)),
+		findMember: (input) => Promise.resolve(findMember(artifact, callers, input)),
 		requestDelegation: refused,
 		createScope: refused,
 		assignMember: refused,

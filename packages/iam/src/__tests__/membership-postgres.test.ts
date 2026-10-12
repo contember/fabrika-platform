@@ -8,7 +8,7 @@ import { PostgresDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
-import { acceptInvitation, assignMember, createScope, issueLink, listMembers, requestDelegation, revokeMember } from '../membership'
+import { acceptInvitation, assignMember, createScope, findMember, issueLink, listMembers, requestDelegation, revokeMember } from '../membership'
 import { hashToken } from '../secret'
 import {
 	CALLER_ENV,
@@ -97,6 +97,20 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const listed = await listMembers(f.services, CALLER_ENV, f.ctx, { app: APP, credential: await owner.token(), requestId: 'pg-list', scope })
 		if (!listed.ok) throw new Error('expected a list')
 		expect(listed.members.map((member) => member.principalId).sort()).toEqual([owner.id, editor.id, invitee.id].sort())
+
+		const lookup = {
+			app: APP,
+			credential: await owner.token(),
+			requestId: 'pg-find',
+			scope,
+			action: 'notes.read',
+			chain: [{ type: 'note', value: 'n1' }, scope],
+		}
+		expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...lookup, principalId: editor.id })).toEqual({
+			ok: true,
+			member: { principalId: editor.id, label: `editor-${fixtureSeq}@example.test`, disabled: false },
+		})
+		expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...lookup, principalId: 'no-such-principal' })).toEqual({ ok: true, member: null })
 
 		const link = await issueLink(f.services, CALLER_ENV, f.ctx, {
 			app: APP,

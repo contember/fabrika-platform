@@ -10,6 +10,7 @@ import {
 	type CredentialedEndpoint,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
+	type EndpointDirectory,
 	type EndpointPlan,
 	type EndpointRow,
 	type ExportDescription,
@@ -78,8 +79,11 @@ export interface SpaAssets {
 
 /** What a procedure's context carries beyond its access form, decided once from the artifact. */
 export interface Facilities {
-	/** `ctx.members`: management where the action is the dimension's `members.manage`, the directory where it is `members.list`. */
-	readonly members: 'manage' | 'list' | null
+	/**
+	 * `ctx.members`: management where the action is the dimension's `members.manage`; otherwise the member directory of the
+	 * nearest dimension, the endpoint's own or one containing it, that declares members (`endpointDirectory`).
+	 */
+	readonly members: 'manage' | EndpointDirectory | null
 	/** The link mounts whose dimension and issuing action are the endpoint's. */
 	readonly links: readonly IssuableLink[]
 }
@@ -463,7 +467,9 @@ export class ContractRuntime {
 		membership: MembershipRequest | null,
 		target: unknown,
 	): Readonly<Record<string, unknown>> {
-		const directory = facilities.members === 'list' ? { members: memberDirectory(membership, target, row.id) } : {}
+		const reads = facilities.members === null || facilities.members === 'manage' || row.requirement.kind !== 'action' ? null : facilities.members
+		const containers = row.requirement.kind === 'action' ? (this.#parts.containers.get(row.requirement.access.dimension) ?? []) : []
+		const directory = reads === null ? {} : { members: memberDirectory(membership, target, { endpoint: row.id, ...reads, containers }) }
 		if (facilities.members !== 'manage' && facilities.links.length === 0) {
 			return directory
 		}

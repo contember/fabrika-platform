@@ -15,7 +15,17 @@ import type {
 	Unavailable,
 	WebhookKitContext,
 } from '@fabrika/app/contract'
-import type { ConnectResult, DirectoryMember, LinkIssuing, MemberDirectory, MemberManagement, Ref, Within } from '@fabrika/app/implement'
+import type {
+	ConnectResult,
+	DirectoryMember,
+	LinkIssuing,
+	Member,
+	MemberDirectory,
+	MemberLookup,
+	MemberManagement,
+	Ref,
+	Within,
+} from '@fabrika/app/implement'
 import type { DbIndex, ScopeTarget, Tables } from '@fabrika/db/tables'
 import type { contract } from './fabrika.contract'
 import type { app } from './src/app-kit'
@@ -150,17 +160,18 @@ export type Matrix = [
 			Unavailable<"insert on companies needs the action 'crm.write', and this endpoint holds 'orgs.create'">
 		>
 	>,
-	// ctx.members only where the action manages the dimension's members, or lists them (a read-only directory).
+	// ctx.members: management where the action manages the dimension's members; elsewhere on, in or below the dimension
+	// the directory of the nearest one that declares members, listed only with its members.list action.
 	Expect<Equal<Manages['members'], MemberManagement<'org', 'members.manage', 'starter' | 'viewer' | 'owner'>>>,
 	Expect<Equal<OffRoad['members'], MemberDirectory>>,
 	Expect<Equal<Returned<OffRoad['members']['list']>, readonly DirectoryMember[]>>,
-	Expect<
-		Equal<
-			InMutation['members'],
-			Unavailable<"ctx.members needs the action 'crm.read' (lists the members of org) or 'members.manage' (manages them)">
-		>
-	>,
-	Expect<Equal<OnQuery['members'], Unavailable<'the dimension deal declares no members'>>>,
+	Expect<Equal<Returned<OffRoad['members']['get']>, Member | null>>,
+	Expect<Equal<InMutation['members']['get'], MemberLookup['get']>>,
+	Expect<Equal<InMutation['members']['list'], Unavailable<"listing the members of org needs the action 'crm.read'; get(principalId) checks one">>>,
+	// A deal lies in a company in an org: its endpoints read the org's directory.
+	Expect<Equal<OnQuery['members'], MemberDirectory>>,
+	Expect<Equal<Returned<OnMutation['members']['get']>, Member | null>>,
+	Expect<Equal<OnMutation['members']['list'], Unavailable<"listing the members of org needs the action 'crm.read'; get(principalId) checks one">>>,
 ]
 
 type Unscoped = Context<

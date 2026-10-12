@@ -153,11 +153,15 @@ describe('classifyAccess', () => {
 		const members = "workspace: { creator: 'owner', members: { manage: 'notes.delete', list: 'notes.read' } }"
 		const listed = snapshot(edited("workspace: { creator: 'owner' }", members))
 		const labelled = snapshot(edited("workspace: { creator: 'owner' }", members.replace(' } }', " }, directory: 'labels' }")))
-		const line = "Holders of the members.list action of `workspace` see each member's label, which spells a user's email address"
+		const line =
+			"Holders of the members.list action of `workspace` see each member's label, and every endpoint on, in or below `workspace` reads the label of a member it looks up; a label spells a user's email address"
 		expect(classifyAccess(listed, labelled)).toEqual({ outcome: 'widening', changes: [{ widens: true, line, review: 'closer' }] })
 		expect(classifyAccess(labelled, listed)).toEqual({
 			outcome: 'removal',
-			changes: [{ widens: false, line: 'Holders of the members.list action of `workspace` no longer see member labels' }],
+			changes: [{
+				widens: false,
+				line: 'Holders of the members.list action of `workspace` and the endpoints below `workspace` no longer see member labels',
+			}],
 		})
 		expect(classifyAccess(EMPTY_SNAPSHOT, labelled).changes).toContainEqual({ widens: true, line, review: 'closer' })
 	})

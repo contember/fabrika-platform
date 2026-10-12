@@ -21,6 +21,7 @@ import { logError } from './log'
 import {
 	assignMemberSchema,
 	createScopeSchema,
+	findMemberSchema,
 	issueLinkSchema,
 	listMembersSchema,
 	revokeLinkSchema,
@@ -53,6 +54,7 @@ const OPERATIONS: ReadonlyMap<string, Operation> = new Map<string, Operation>([
 	['assignMember', pinned((body) => assignMemberSchema.parse(body), (rpc, input) => rpc.assignMember(input))],
 	['revokeMember', pinned((body) => revokeMemberSchema.parse(body), (rpc, input) => rpc.revokeMember(input))],
 	['listMembers', pinned((body) => listMembersSchema.parse(body), (rpc, input) => rpc.listMembers(input))],
+	['findMember', pinned((body) => findMemberSchema.parse(body), (rpc, input) => rpc.findMember(input))],
 	['issueLink', pinned((body) => issueLinkSchema.parse(body), (rpc, input) => rpc.issueLink(input))],
 	['revokeLink', pinned((body) => revokeLinkSchema.parse(body), (rpc, input) => rpc.revokeLink(input))],
 ])

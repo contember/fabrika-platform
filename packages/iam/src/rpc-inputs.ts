@@ -74,6 +74,13 @@ export const revokeMemberSchema = z.object({
 	]),
 }).catch(rejectRpcInput)
 export const listMembersSchema = z.object({ ...caller, scope: memberScopeSchema }).catch(rejectRpcInput)
+export const findMemberSchema = z.object({
+	...caller,
+	scope: memberScopeSchema,
+	principalId: z.string(),
+	action: z.string(),
+	chain: z.array(memberScopeSchema),
+}).catch(rejectRpcInput)
 export const issueLinkSchema = z.object({ ...caller, mount: z.string(), chain: z.array(memberScopeSchema), days: z.number().finite() }).catch(
 	rejectRpcInput,
 )

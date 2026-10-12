@@ -15,6 +15,8 @@ import {
 	type CreateScopeInput,
 	type CreateScopeResult,
 	DELEGATION_GRANT_TTL_SECONDS,
+	type FindMemberInput,
+	type FindMemberResult,
 	type IssueLinkInput,
 	type IssueLinkResult,
 	type ListMembersInput,
@@ -510,6 +512,47 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 		}))
 		: []
 	return { ok: true, members: [...members.values()], invitations }
+}
+
+/**
+ * One principal among the members of `scope`, for an endpoint whose object lies in it. The caller holds the endpoint's
+ * `action` on some value of `chain`, the object's containment chain, which holds `scope`; it needs no `members.list`,
+ * so it learns only whether the principal it named is a member, and its label where the directory shows labels.
+ */
+export async function findMember(services: Services, env: CallerEnv, ctx: RequestContext, input: FindMemberInput): Promise<FindMemberResult> {
+	const resolved = await resolveMemberCaller(services, env, input, false)
+	if (!resolved.ok) return resolved
+	const { caller } = resolved
+	const [object] = input.chain
+	if (object === undefined) return invalid('a member lookup names the chain of its object')
+	const problem = scopeProblem(input.scope) ?? (await chainProblem(services, caller.app, object.type, input.chain))
+	if (problem !== null) return invalid(problem)
+	if (!input.chain.some((scope) => scope.type === input.scope.type && scope.value === input.scope.value)) {
+		return invalid(`the chain of the lookup does not hold the ${input.scope.type} it looks in`)
+	}
+	const dimension = await services.repositories.appSchema.getScope(caller.app, input.scope.type)
+	if (dimension === null || dimension.members_list === null) {
+		return invalid(`scope '${input.scope.type}' declares no members`)
+	}
+	if (!input.chain.some((scope) => permits(caller.permissions, input.action, scope))) {
+		return NOT_ALLOWED
+	}
+	if (input.principalId === '' || input.principalId.length > MAX_SCOPE_PART_LENGTH) {
+		return { ok: true, member: null }
+	}
+	const [grant] = await services.repositories.membership.listMemberGrantsOf(caller.app, input.scope, input.principalId)
+	if (grant === undefined) {
+		return { ok: true, member: null }
+	}
+	const manager = dimension.members_manage !== null && permits(caller.permissions, dimension.members_manage, input.scope)
+	return {
+		ok: true,
+		member: {
+			principalId: grant.principal_id,
+			label: manager || dimension.members_directory === 'labels' ? grant.label : null,
+			disabled: grant.disabled_at !== null,
+		},
+	}
 }
 
 // ── Invitation acceptance (IAM's own page) ────────────────────────────────────

@@ -172,7 +172,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   rule 6, `src/membership-http.ts`, mounted by the Bun composition only). The bearer is the environment's membership
   transport key (`membership_transport_keys`, hash only, no `credentials` row, so no `px_` path finds it and it mints
   nothing); a call whose `app` is not the key's is `not_allowed` before the operation runs. It serves `createScope`,
-  `assignMember`, `revokeMember`, `listMembers`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
+  `assignMember`, `revokeMember`, `listMembers`, `findMember`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
   proxy obtains a grant. The caller is still the token in the body. `membershipKeys.issue` (admin RPC) issues a key
   for an `<app>@<env>` id only, ≤30 days, and deletes every other key of it except `keep`; a reconcile that leaves the
   app no delegated endpoint, no link mount and no dimension that lists its members deletes its keys in the same
@@ -230,13 +230,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   the admin grant API). `listMembers` needs `members.list` there and shows ids and roles (an
   application's member directory); labels only to `members.manage`, or to `members.list` too where the dimension
   declares `directory: 'labels'` (`app_scopes.members_directory`) — a user's label spells its address; emails and
-  open invitations only to `members.manage`.
+  open invitations only to `members.manage`. `findMember` answers ONE principal for an endpoint below the dimension:
+  the caller holds the endpoint's action on some value of the object's chain (validated against the schema's
+  containment, and holding the scope), and the answer is the member (label by the same rule) or `null`, never which
+  check failed for an unknown id.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE
   its binding is compared, like a handoff code, and the endpoint's purpose and dimension are read from
   the schema again at use. One grant serves one operation, so a request makes one membership write.
-  `listMembers` and the link operations take none: they spend no membership authority.
+  `listMembers`, `findMember` and the link operations take none: they spend no membership authority.
 - **THE LAST CREATOR STAYS.** `createScope` records the value in `membership_scopes` and grants the
   creator role in one batch; a revoke removes a creator grant only while another principal holds the
   role there. Its batch first creates the value's `membership_scopes` row on demand (an administrator

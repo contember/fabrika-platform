@@ -9,6 +9,7 @@ import {
 	contractDigest,
 	type CredentialedEndpoint,
 	endpointDigest,
+	endpointDirectory,
 	endpointMembers,
 	type EndpointRow,
 	FABRIKA_CONTRACT_DIGEST,
@@ -428,7 +429,8 @@ function facilitiesOf(artifact: ContractArtifact, row: EndpointRow): Facilities 
 	const links = Object.entries(artifact.mounts).flatMap(([name, mount]) =>
 		mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action ? [{ name, prefix: mount.prefix }] : []
 	)
-	return Object.freeze({ members: endpointMembers(artifact, row), links: Object.freeze(links) })
+	const members = endpointMembers(artifact, row) === 'manage' ? 'manage' : endpointDirectory(artifact, row)
+	return Object.freeze({ members, links: Object.freeze(links) })
 }
 
 /**
