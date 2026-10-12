@@ -21,6 +21,7 @@ import {
 import { z } from 'zod/v4'
 import { hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
 import { runApplicationStatement, type Session, type SqlParameter } from './database'
+import { dayText } from './days'
 import { QueryRefusedError, SqlRowError } from './errors'
 
 /** What a site declares: `'read'` runs queries only, `'write'` also `INSERT`, `UPDATE` and `DELETE`. */
@@ -225,7 +226,10 @@ function camel(column: string): string {
 /** A text Postgres sends for a `bigint` or `numeric` column. */
 const NUMERIC_TEXT = /^-?[0-9]+(\.[0-9]+)?$/
 
-/** One row as `row` parses it: snake_case columns as camelCase fields, a `Date` as ISO text. No value reaches a message. */
+/**
+ * One row as `row` parses it: snake_case columns as camelCase fields, a `Date` as ISO text (a day for a `z.iso.date()`
+ * field). No value reaches a message.
+ */
 function parseRow<S extends z.core.$ZodType>(row: S, value: unknown, index: number): z.output<S> {
 	const fields: Record<string, unknown> = {}
 	const columnOf = new Map<string, string>()
@@ -238,13 +242,25 @@ function parseRow<S extends z.core.$ZodType>(row: S, value: unknown, index: numb
 		}
 		columnOf.set(field, column)
 		const cell: unknown = ownDescriptor(record, column)?.value
-		Object.defineProperty(fields, field, { value: cell instanceof Date ? cell.toISOString() : cell, enumerable: true })
+		Object.defineProperty(fields, field, { value: cell instanceof Date ? dateField(row, field, cell, column) : cell, enumerable: true })
 	}
 	const parsed = z.safeParse(row, fields)
 	if (parsed.success) {
 		return parsed.data
 	}
 	throw new SqlRowError(rowIssue(row, parsed.error.issues[0], fields, columnOf, index))
+}
+
+/**
+ * A `Date` cell as its field reads it: a day (`YYYY-MM-DD`) for a `z.iso.date()` field, ISO 8601 text otherwise. The
+ * driver decodes a `date` column to UTC midnight, which only the row schema tells apart from a timestamp.
+ */
+function dateField(row: z.core.$ZodType, field: string, value: Date, column: string): string {
+	let schema: z.core.$ZodType | undefined = row instanceof z.ZodObject && hasOwn(row.shape, field) ? row.shape[field] : undefined
+	while (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable || schema instanceof z.ZodDefault) {
+		schema = schema.unwrap()
+	}
+	return schema instanceof z.ZodISODate ? dayText(value, `ctx.sql: the column '${column}'`) : value.toISOString()
 }
 
 /** A top-level field of an object row schema: the one part of an issue's path that is the schema's, not the data's. */

@@ -4,15 +4,18 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { applicationDatabaseSchema } from '../../../platform-node/src/application-schema'
+import { namesOf } from '../builtins'
 import { applicationSchema, Database } from '../database'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, isScopedDatabase } from '../framework'
+import { modelOf, tableModels, updatableBy } from '../policy'
 import { defineStore, scoped } from '../store'
 import { isTables, readTables, tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 import { RecordingDialect } from './fixtures/recording-dialect'
 import { columns } from './fixtures/schema'
 import { tables, vocabulary } from './fixtures/tables'
+import { columns as tasksColumns, tables as tasksTables, vocabulary as tasksVocabulary } from './fixtures/tasks'
 
 const notes = {
 	scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
@@ -88,7 +91,7 @@ describe('readTables refuses what nobody type-checked', () => {
 			{ notes: { ...notes, scope: { dimension: 'nte' } } },
 			'notes: scope.dimension names nte, which is not a dimension of the vocabulary',
 		],
-		['a column policy with an extra field', { notes: { ...notes, columns: { title: { read: 'notes.read', write: 'x' } } } }, 'columns.title: write'],
+		['a column policy with an extra field', { notes: { ...notes, columns: { title: { read: 'notes.read', hide: 'x' } } } }, 'columns.title: hide'],
 		['an action that is not a string', { notes: { ...notes, actions: { read: 7 } } }, 'actions.read must be a non-empty string'],
 	]
 	for (const [name, policies, message] of refusals) {
@@ -236,3 +239,89 @@ function policiesOf(): unknown {
 		contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },
 	}
 }
+
+describe('a column write action and the date columns, as the one parse reads them', () => {
+	const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value))
+	const taskPolicy = {
+		scope: { dimension: 'task' },
+		actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write' },
+		insert: ['title'],
+		update: ['title'],
+		version: 'version',
+		createdBy: 'created_by',
+		columns: { assignee: { write: 'tasks.assign' } },
+	}
+	const read = (task: Readonly<Record<string, unknown>>, columns: unknown = tasksColumns) => () =>
+		readTables(plain(columns), plain({ ...tasksPolicies, tasks: task }), plain(tasksVocabulary))
+	const tasksPolicies = {
+		projects: { scope: { dimension: 'project' }, actions: { read: 'tasks.read' } },
+		task_comments: { scope: { child: 'tasks' }, actions: { read: 'tasks.read' } },
+	}
+
+	test('the artifact carries each column policy as declared: a write action alone, a read action alone', () => {
+		expect(tablePolicies(tasksTables)['tasks']?.columns).toEqual({ cost: { read: 'tasks.assign' }, assignee: { write: 'tasks.assign' } })
+	})
+
+	test('the update action does not write a column of its own write action, and that action writes nothing else', () => {
+		const tasks = modelOf(tableModels(tasksTables), 'tasks')
+		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.assign'))).toEqual(['assignee'])
+		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.write'))).toEqual(['title', 'status', 'due_on', 'closed_at', 'overdue'])
+		expect(tasks === undefined ? [] : namesOf(updatableBy(tasks, 'tasks.read'))).toEqual([])
+		expect(tasks === undefined ? [] : namesOf(tasks.dates)).toEqual(['due_on'])
+	})
+
+	const refusals: readonly (readonly [string, Readonly<Record<string, unknown>>, string])[] = [
+		[
+			'a column in update that declares its own write action',
+			{ ...taskPolicy, columns: { title: { write: 'tasks.assign' } } },
+			"tasks: title is in update, which the table's update action writes, and declares its own write action tasks.assign; remove it from update",
+		],
+		[
+			"a column write action that is the table's update action",
+			{ ...taskPolicy, columns: { assignee: { write: 'tasks.write' } } },
+			"tasks: columns.assignee.write names tasks.write, the table's update action; list assignee in update instead",
+		],
+		[
+			'a write action the vocabulary does not declare',
+			{ ...taskPolicy, columns: { assignee: { write: 'tasks.asign' } } },
+			'tasks: columns.assignee.write names tasks.asign, which is not an action of the vocabulary',
+		],
+		[
+			'a column policy with no action',
+			{ ...taskPolicy, columns: { assignee: {} } },
+			'tasks: columns.assignee declares no action; it takes read, write or both',
+		],
+		['a write action on the key', { ...taskPolicy, columns: { id: { write: 'tasks.assign' } } }, 'tasks: the key id takes no action of its own'],
+		[
+			'a write action on a stamped column',
+			{ ...taskPolicy, columns: { created_by: { write: 'tasks.assign' } } },
+			'tasks: created_by is stamped by the layer; it takes no write action of its own',
+		],
+		[
+			'a write action on a containment column',
+			{ ...taskPolicy, columns: { org_id: { write: 'tasks.assign' } } },
+			'tasks: org_id is stamped by the layer; it takes no write action of its own',
+		],
+	]
+	for (const [name, task, message] of refusals) {
+		test(name, () => {
+			expect(read(task)).toThrow(PolicyError)
+			expect(read(task)).toThrow(message)
+		})
+	}
+
+	test('a reference table takes no column write action', () => {
+		const countries = { scope: { reference: 'lookup' }, actions: { read: 'tasks.read' }, columns: { name: { write: 'tasks.assign' } } }
+		const columns = plain({ ...tasksColumns, countries: { columns: ['code', 'name'], foreignKeys: [] } })
+		expect(() => readTables(columns, plain({ ...tasksPolicies, tasks: taskPolicy, countries }), plain(tasksVocabulary))).toThrow(
+			'countries: a reference table is never written by a handler',
+		)
+	})
+
+	test('dates names columns of the table only', () => {
+		const columns = plain(tasksColumns)
+		const withDates = (dates: unknown) => JSON.parse(JSON.stringify(columns).replace('"dates":["due_on"]', `"dates":${JSON.stringify(dates)}`))
+		expect(read(taskPolicy, withDates(['due']))).toThrow('tasks: dates names due, which is not a column')
+		expect(read(taskPolicy, withDates('due_on'))).toThrow('tasks: the column list entry takes dates, a plain array of column names')
+	})
+})

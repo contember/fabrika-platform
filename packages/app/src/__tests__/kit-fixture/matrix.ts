@@ -101,9 +101,9 @@ export type Matrix = [
 	>,
 	Expect<Equal<Parameters<InMutation['db']['target']['companies']['insert']>[0], { name: string }>>,
 	Expect<Equal<InMutation['db']['target']['update'], Unavailable<'update acts on one object: declare access with on'>>>,
-	// over: keyset lists, counts and aggregates of every table listed in the dimension; no single target.
+	// over: keyset lists, counts and aggregates of every table whose chain holds the dimension; no single target.
 	Expect<Equal<Returned<OverQuery['db']['within']['companies']['list']>['items'][number]['name'], string>>,
-	Expect<Equal<keyof OverQuery['db']['within'], 'orgs' | 'companies'>>,
+	Expect<Equal<keyof OverQuery['db']['within'], 'orgs' | 'companies' | 'deals' | 'deal_activities'>>,
 	Expect<Equal<OverQuery['within'], Within<'org', 'crm.read'>>>,
 	Expect<Equal<keyof OverCompany['db']['within'], 'deals' | 'deal_activities'>>,
 	Expect<Equal<Returned<OverCompany['db']['within']['deal_activities']['list']>['items'][number]['body'], string>>,

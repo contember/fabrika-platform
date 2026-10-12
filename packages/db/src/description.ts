@@ -57,6 +57,8 @@ export interface TableShape {
 	readonly table: string
 	readonly visible: NameSet
 	readonly joinable: Readonly<Record<string, JoinShape>>
+	/** The `date` columns, which a read answers as `YYYY-MM-DD` text. */
+	readonly dates: NameSet
 }
 
 export interface JoinShape {

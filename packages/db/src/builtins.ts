@@ -83,6 +83,11 @@ export function setOwn<V>(record: Record<string, V>, key: string, value: V): voi
 	define(record, key, { value, enumerable: true, writable: true, configurable: true })
 }
 
+/** Redefines an own data property of any object, as `setOwn` does for a record. */
+export function defineValue(target: object, key: string, value: unknown): void {
+	define(target, key, { value, enumerable: true, writable: true, configurable: true })
+}
+
 /** An own property of a record, or undefined: an inherited one is never read. */
 export function ownEntry<V>(record: Readonly<Record<string, V>>, key: string): V | undefined {
 	return hasOwn(record, key) ? record[key] : undefined

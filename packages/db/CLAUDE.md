@@ -12,7 +12,7 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm (need FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm, data-ergonomics (need FABRIKA_TEST_POSTGRES_URL)
 ```
 
 | Module                 | What it owns                                                                                                                                                   |
@@ -24,6 +24,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`; `dataAccess`.                            |
 | `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                                           |
 | `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                                          |
+| `days.ts`              | A `date` column's `YYYY-MM-DD` text: `dayText` and `answerDays`, which every read of a table's rows applies.                                                   |
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                        |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                         |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                 |
@@ -112,7 +113,8 @@ and the target `Ref`, so no handler can call it.
 - **A capability reads a column that declares its own read action only when its action is exactly that one**
   (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The row type omits
   the hidden column (`Omit<DealsTable, "margin">`, which a diagnostic names), so a read of it is TypeScript's plain
-  "does not exist" error; reference and unscoped rows read through the table's read action. A job's handles outside
+  "does not exist" error; reference and unscoped rows read through the table's read action. `RowOf<typeof tables, T, A>`
+  (`@fabrika/db/tables`) is that row for an application's mapper; `A` defaults to the table's read action. A job's handles outside
   its transaction read only: every write is an `Unavailable` that names `ctx.transaction((tx) => …)` and `tx.db`. The static reader reads
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.
 - **Only the framework binds a layer, once, and only one `scoped` created.** The object `scoped` returns has no
@@ -191,6 +193,10 @@ and the target `Ref`, so no handler can call it.
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
   shape (`checkRoot`); without the parenthesis, `true or 1=1` followed by the scope would match every
   row. An insert carries no WHERE and gets its scope columns stamped from the capability instead.
+- **A handle's `Within` lists every table whose containment chain holds its dimension** (`reachColumn`,
+  `reachPredicate`), and a top-level table its own: tasks under a `Within` of `org` through their stamped `org_id`.
+  The predicate, the keyset page, the projection and the hidden columns are the nearest container's. The stores'
+  `select`/`aggregate` keep the nearest container only.
 - **A Within's predicate is `column in (values)`, plus one `<chain column> in (values)` disjunct per container
   grant, in one parenthesis.** The container grants stay separate from the values (`WithinGrant.containers`), so
   the statement judges each row by the chain it carries now; a scope moved out of a container is out. A container
@@ -272,6 +278,13 @@ and the target `Ref`, so no handler can call it.
   The key, scope columns, version and `createdBy` are stamped by the layer and can never be written.
 - **A column with its own read action** (`columns: { c: { read } }`) is read, filtered and sorted only by a capability
   of exactly that action reading its own target; a read by the table's read action never returns it.
+- **A column with its own write action** (`columns: { assignee: { write: 'tasks.assign' } }`) is updated only by a
+  capability of that action, through a handle's `update` (`updatingRef` + `updatableBy`), and the table's update action
+  does not update it: such a column is not in `update`, its action is not the table's update action, and no stamped
+  column takes one (the parse refuses each). The action counts as one the table names, so its `Ref` reads its own row.
+  It is in the artifact (`columns.<c>.write`), so the static reader reads it and a new one widens the approval diff.
+- **An update sets a non-empty subset of the columns its action updates** (`updateValues`); one that sets none (`{}`,
+  or only `undefined` values) is refused before anything is sent, rather than bumping the version alone.
 - **An invocation's transaction ends once, and never commits after a refused statement.** `InvocationTransaction`
   opens on its first statement (setting `idle_in_transaction_session_timeout`), and a statement the database refused
   marks it failed: Postgres answers a COMMIT of an aborted transaction with a silent ROLLBACK, so `commit()` rolls back
@@ -292,8 +305,10 @@ and the target `Ref`, so no handler can call it.
 - **Every handle checks its site first** (`DataSite.check`, the framework's binding to its invocation), then refuses
   what the site's kind or declaration does not allow with the message its type gives, then runs the store's own
   checks. A handle is built per invocation; never cache one across invocations or skip the check for a read.
-- **Codegen types a column exactly as `Bun.SQL` decodes it, or refuses it.** `int8` and `numeric` are
-  strings (bound as a number, bigint or string), dates are `Date`, an enum is its label union; JSON,
+- **Codegen types a column exactly as the layer answers it, or refuses it.** `int8` and `numeric` are
+  strings (bound as a number, bigint or string); a `date` is `YYYY-MM-DD` text, which the layer converts from the
+  UTC-midnight `Date` `Bun.SQL` decodes (the column list's `dates`, `days.ts`; a day outside 0001–9999 is refused, as
+  Bun decodes those wrong); a timestamp is a `Date` that a write also takes as ISO text; an enum is its label union; JSON,
   `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
   them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the

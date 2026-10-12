@@ -27,6 +27,8 @@ export interface TasksTable {
 	parent_project: string
 	org_id: string
 	title: string
+	assignee: string | null
+	due_on: string | null
 }
 
 export interface DB {
@@ -81,6 +83,8 @@ export const columns: TypedColumnList<DB> = {
 			'parent_project',
 			'org_id',
 			'title',
+			'assignee',
+			'due_on',
 		],
 		foreignKeys: [
 			{
@@ -89,5 +93,6 @@ export const columns: TypedColumnList<DB> = {
 				references: ['id', 'org_id'],
 			},
 		],
+		dates: ['due_on'],
 	},
 }

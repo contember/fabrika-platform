@@ -20,6 +20,7 @@ import {
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 import type { Unavailable } from './orm-types'
+export type { RowOf } from './orm-types'
 import type { ColumnTypes, DefineVocabularyPolicies, TableVocabulary } from './vocabulary-tables'
 
 export interface DimensionScope<Col extends string> {
@@ -62,11 +63,20 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col> {
 }
 
 /**
- * A column's own read action. Without one, a column falls back to the table's read action. Every read needs the
- * table's read action, so in v1 a column with a different read action is never returned, filtered or sorted by;
- * it can still be written.
+ * A column's own actions. `read`: only a capability of exactly that action reads, filters or sorts by the column;
+ * without one it falls back to the table's read action. `write`: only a capability of that action updates the column,
+ * and the table's update action does not, so the column is not in `update`.
  */
-export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
+export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: ColumnPolicy<A> }
+
+/** A column's own read action, its own write action, or both. */
+export interface ColumnPolicy<A extends string> {
+	readonly read?: A
+	readonly write?: A
+}
+
+/** A table no handler writes (a reference or an inbox) declares column read actions only. */
+export type ColumnReadPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
 
 export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
 	readonly scope: DimensionScope<Col>
@@ -81,7 +91,7 @@ interface ReadOnlyPolicy<Col extends string, A extends string> {
 	readonly update?: never
 	readonly version?: never
 	readonly createdBy?: never
-	readonly columns?: ColumnPolicies<Col, A>
+	readonly columns?: ColumnReadPolicies<Col, A>
 }
 
 export interface ReferencePolicy<Col extends string, A extends string> extends ReadOnlyPolicy<Col, A> {
@@ -108,6 +118,8 @@ export interface ForeignKey<Col extends string = string, Table extends string = 
 export interface TableColumns<Col extends string = string, Table extends string = string> {
 	readonly columns: readonly Col[]
 	readonly foreignKeys: readonly ForeignKey<Col, Table>[]
+	/** The columns of Postgres type `date`, which a read answers as `YYYY-MM-DD` text; absent when there are none. */
+	readonly dates?: readonly Col[]
 }
 
 /** The columns and foreign keys of every table, generated next to the schema types. */
@@ -146,6 +158,10 @@ export interface TableModel {
 	readonly createdBy: string | undefined
 	/** The columns that declare their own read action, as declared (also those equal to the table's). */
 	readonly columnReads: Readonly<Record<string, string>>
+	/** The columns that declare their own write action: only a capability of it updates them. */
+	readonly columnWrites: Readonly<Record<string, string>>
+	/** The columns of Postgres type `date`, read as `YYYY-MM-DD` text. */
+	readonly dates: NameSet
 	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
 	readonly foreignKeys: readonly ForeignKey[]
 	/**
@@ -267,7 +283,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
 }
 
-const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys'])
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
 const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete'])
@@ -276,7 +292,7 @@ const CONTAINER_FIELDS = nameSet(['dimension', 'column'])
 const CHILD_FIELDS = nameSet(['child', 'key', 'column', 'inherit'])
 const REFERENCE_FIELDS = nameSet(['reference'])
 const INBOX_FIELDS = nameSet(['inbox', 'read'])
-const COLUMN_FIELDS = nameSet(['read'])
+const COLUMN_FIELDS = nameSet(['read', 'write'])
 
 /** A copy of a plain object's own data properties; anything else (an instance, a symbol key, an accessor) is refused. */
 function plainRecord(value: unknown, what: string): Readonly<Record<string, unknown>> {
@@ -402,32 +418,48 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const createdBy = createdByInput === undefined ? undefined : column(createdByInput, 'createdBy')
 	const restricted: string[] = []
 	const columnReads: Record<string, string> = {}
+	const columnWrites: Record<string, string> = {}
 	const columnsInput = ownEntry(policy, 'columns')
 	const columnPolicies = columnsInput === undefined ? freeze({}) : plainRecord(columnsInput, `${table}: columns`)
-	const restrictable = ownKeys(columnPolicies)
-	for (let index = 0; index < restrictable.length; index++) {
-		const name = column(restrictable[index], 'columns')
+	const declared = ownKeys(columnPolicies)
+	for (let index = 0; index < declared.length; index++) {
+		const name = column(declared[index], 'columns')
 		const columnPolicy = plainRecord(ownEntry(columnPolicies, name), `${table}: columns.${name}`)
 		onlyFields(columnPolicy, COLUMN_FIELDS, `${table}: columns.${name}`)
-		const read = action(ownEntry(columnPolicy, 'read'), `columns.${name}.read`)
-		setOwn(columnReads, name, read)
-		if (read !== actions.read) {
-			restricted[restricted.length] = name
+		const readInput = ownEntry(columnPolicy, 'read')
+		const writeInput = ownEntry(columnPolicy, 'write')
+		if (readInput === undefined && writeInput === undefined) {
+			throw new PolicyError(`${table}: columns.${name} declares no action; it takes read, write or both`)
+		}
+		if (readInput !== undefined) {
+			const read = action(readInput, `columns.${name}.read`)
+			setOwn(columnReads, name, read)
+			if (read !== actions.read) {
+				restricted[restricted.length] = name
+			}
+		}
+		if (writeInput !== undefined) {
+			setOwn(columnWrites, name, columnWrite(table, name, action(writeInput, `columns.${name}.write`), actions, update))
 		}
 	}
 	const hidden = nameSet(restricted)
 
 	// Every capability reads the key and the version: a page is ordered by the key, and a write answers both.
-	if ((scope.mode === 'dimension' || scope.mode === 'child') && hasOwn(columnReads, scope.key)) {
-		throw new PolicyError(`${table}: the key ${scope.key} takes no read action of its own`)
+	if ((scope.mode === 'dimension' || scope.mode === 'child') && hasOwn(columnPolicies, scope.key)) {
+		throw new PolicyError(`${table}: the key ${scope.key} takes no action of its own`)
 	}
-	if (version !== undefined && hasOwn(columnReads, version)) {
-		throw new PolicyError(`${table}: the version ${version} takes no read action of its own`)
+	if (version !== undefined && hasOwn(columnPolicies, version)) {
+		throw new PolicyError(`${table}: the version ${version} takes no action of its own`)
 	}
 	const writable = scope.mode === 'dimension' || scope.mode === 'child'
-	if (!writable && (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined)) {
+	if (
+		!writable
+		&& (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined
+			|| ownKeys(columnWrites).length > 0)
+	) {
 		throw new PolicyError(`${table}: a ${scope.mode} table is never written by a handler`)
 	}
+	const dates = parseDates(table, ownEntry(entry, 'dates'), column)
 	const visible: string[] = []
 	for (let index = 0; index < columnNames.length; index++) {
 		const name = columnNames[index] ?? ''
@@ -446,8 +478,70 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		version,
 		createdBy,
 		columnReads: freeze(columnReads),
+		columnWrites: freeze(columnWrites),
+		dates,
 		foreignKeys,
 	}
+}
+
+/**
+ * A column's own write action takes the column away from the table's update action: one action writes a column, so
+ * the column is not in `update`, and the action is not the update action (that one lists the column in `update`).
+ */
+function columnWrite(table: string, name: string, write: string, actions: ActionModel, update: NameSet): string {
+	if (inSet(update, name)) {
+		throw new PolicyError(
+			`${table}: ${name} is in update, which the table's update action writes, and declares its own write action ${write}; remove it from update`,
+		)
+	}
+	if (write === actions.update) {
+		throw new PolicyError(`${table}: columns.${name}.write names ${write}, the table's update action; list ${name} in update instead`)
+	}
+	return write
+}
+
+/** The column list's `date` columns, each one of the table's. */
+function parseDates(table: string, input: unknown, column: (name: unknown, field: string) => string): NameSet {
+	if (input === undefined) {
+		return nameSet([])
+	}
+	const names = parseList(input, (name) => column(name, 'dates'))
+	if (names === undefined) {
+		throw new PolicyError(`${table}: the column list entry takes dates, a plain array of column names`)
+	}
+	return nameSet(names)
+}
+
+/**
+ * The columns a capability of `action` updates in `model`: the update list for the table's update action, the
+ * columns that declare it as their own write action for any other; none for an action that writes nothing here.
+ */
+export function updatableBy(model: TableModel, action: string): NameSet {
+	if (action === model.actions.update) {
+		return model.update
+	}
+	const names = ownKeys(model.columnWrites)
+	const columns: string[] = []
+	for (let index = 0; index < names.length; index++) {
+		const name = names[index] ?? ''
+		if (model.columnWrites[name] === action) {
+			columns[columns.length] = name
+		}
+	}
+	return nameSet(columns)
+}
+
+/** Every action that updates a column of `model`: its update action and each column's own write action. */
+export function updateActions(model: TableModel): readonly string[] {
+	const actions: string[] = model.actions.update === undefined ? [] : [model.actions.update]
+	const names = ownKeys(model.columnWrites)
+	for (let index = 0; index < names.length; index++) {
+		const write = model.columnWrites[names[index] ?? '']
+		if (write !== undefined && !includes(actions, write)) {
+			actions[actions.length] = write
+		}
+	}
+	return actions
 }
 
 /** The table's foreign keys, each column one of its own; the referenced side is checked once every table is parsed. */
@@ -623,6 +717,9 @@ function checkStamps(table: ParsedTable, chain: readonly Container[]): void {
 		}
 		if (inSet(table.insert, stamp.column) || inSet(table.update, stamp.column)) {
 			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; remove it from insert and update`)
+		}
+		if (hasOwn(table.columnWrites, stamp.column)) {
+			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; it takes no write action of its own`)
 		}
 	}
 }
@@ -879,13 +976,15 @@ type Flat<T> = { [K in keyof T]: T[K] }
 
 type ColumnPoliciesOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } ? C : never
 type TableReadAction<P, T> = PolicyOf<P, T> extends { readonly scope: { readonly read: infer A } } ? A : ActionOf<P, T, 'read'>
-/** Columns whose own read action is not the table's: no read returns them. */
+/** Columns whose own read action is not the table's: no read by the table's read action returns them. */
 type RestrictedColumns<P, T> = [ColumnPoliciesOf<P, T>] extends [never] ? never
 	: {
-		[K in keyof ColumnPoliciesOf<P, T>]: ColumnPoliciesOf<P, T>[K] extends { readonly read: TableReadAction<P, T> } | undefined ? never : K
+		[K in keyof ColumnPoliciesOf<P, T>]: ColumnPoliciesOf<P, T>[K] extends { readonly read: infer R } ? (R extends TableReadAction<P, T> ? never : K)
+			: never
 	}[keyof ColumnPoliciesOf<P, T>]
 
-export type RowOf<DB, P, T> = T extends keyof DB ? Flat<Omit<Selectable<DB[T]>, RestrictedColumns<P, T>>> : never
+/** A row of table `T` as a store reads it, by the table's read action. */
+export type PolicyRow<DB, P, T> = T extends keyof DB ? Flat<Omit<Selectable<DB[T]>, RestrictedColumns<P, T>>> : never
 export type InsertValues<DB, P, T> = T extends keyof DB ? Flat<Pick<Insertable<DB[T]>, ListedColumns<P, T, 'insert'> & keyof Insertable<DB[T]>>>
 	: never
 export type UpdateValues<DB, P, T> = T extends keyof DB ? Flat<Pick<Updateable<DB[T]>, ListedColumns<P, T, 'update'> & keyof Updateable<DB[T]>>>
@@ -908,5 +1007,9 @@ export type VersionArguments<P, T> = PolicyOf<P, T> extends { readonly version: 
 
 /** Children of T that a select of T can join: their read action is T's read action. */
 export type JoinableChildren<DB, P, T> = {
-	[K in ChildTableName<P> as ParentOf<P, K> extends T ? (ActionOf<P, K, 'read'> extends ActionOf<P, T, 'read'> ? K : never) : never]: RowOf<DB, P, K>
+	[K in ChildTableName<P> as ParentOf<P, K> extends T ? (ActionOf<P, K, 'read'> extends ActionOf<P, T, 'read'> ? K : never) : never]: PolicyRow<
+		DB,
+		P,
+		K
+	>
 }

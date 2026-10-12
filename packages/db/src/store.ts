@@ -20,6 +20,7 @@ import {
 } from './builtins'
 import { type CapabilityAuthority, MAX_WITHIN_VALUES, type Ref, type RefGrant, type Within, type WithinGrant } from './capability'
 import { type Database, InvocationTransaction, type Session, sessionOf } from './database'
+import { answerDays } from './days'
 import {
 	finishSelect,
 	isPrimitive,
@@ -72,11 +73,12 @@ import {
 	type MoveAcknowledgement,
 	type Operation,
 	type ParentOf,
-	type RowOf,
+	type PolicyRow,
 	type TableModel,
 	type TableModels,
 	tableModels,
 	type Tables,
+	updateActions,
 	type UpdateValues,
 	type VersionArguments,
 } from './policy'
@@ -272,6 +274,69 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 	return withinPredicate(context.model, scope.parent.container?.column ?? scope.column, grant)
 }
 
+/**
+ * The column that places a row of `model` in `dimension`: the column of that link of its containment chain, or a
+ * top-level table's own key; `undefined` when no `Within` of the dimension reaches the table.
+ */
+export function reachColumn(model: TableModel, dimension: string): string | undefined {
+	if (model.scope.mode === 'dimension' && model.scope.container === undefined && model.scope.dimension === dimension) {
+		return model.scope.key
+	}
+	for (let index = 0; index < model.chain.length; index++) {
+		const link = model.chain[index]
+		if (link?.dimension === dimension) {
+			return link.column
+		}
+	}
+	return undefined
+}
+
+/**
+ * Rows of a table a `Within` of any dimension of its chain lists, by the table's read action: tasks under a `Within` of
+ * `org` through their stamped `org_id`, as under one of `project` through `project_id`.
+ */
+export function reachPredicate(context: TableContext, capability: unknown): OperationNode | undefined {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const table = context.model.name
+	if (grant.kind !== 'within') {
+		throw new CapabilityError(`a list of ${table} needs a Within, got a Ref`)
+	}
+	const action = requiredAction(context, 'read')
+	if (grant.action !== action) {
+		throw new CapabilityError(`read on ${table} requires ${action}; the capability holds ${grant.action}`)
+	}
+	const column = reachColumn(context.model, grant.dimension)
+	if (column === undefined) {
+		throw new CapabilityError(`a Within of ${grant.dimension} does not reach ${table}: its containment chain does not hold ${grant.dimension}`)
+	}
+	return withinPredicate(context.model, column, grant)
+}
+
+/**
+ * A `Ref` of `dimension` whose action updates columns of the table: its update action, or a column's own write action.
+ * Which columns it updates follows from the action (`updatableBy`).
+ */
+export function updatingRef(context: TableContext, capability: unknown, dimension: string): RefGrant {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const table = context.model.name
+	if (grant.kind !== 'ref') {
+		throw new CapabilityError(`update on ${table} needs a Ref of ${dimension}, got a Within`)
+	}
+	if (grant.dimension !== dimension) {
+		throw new CapabilityError(`update on ${table} needs a ref of ${dimension}, got a ref of ${grant.dimension}`)
+	}
+	const actions = updateActions(context.model)
+	if (actions.length === 0) {
+		throw new CapabilityError(`${table} allows no update; its policy declares no update action`)
+	}
+	for (let index = 0; index < actions.length; index++) {
+		if (actions[index] === grant.action) {
+			return grant
+		}
+	}
+	throw new CapabilityError(`update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
+}
+
 export function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
 	const scope = childScope(context)
 	if (typeof key !== 'string' || key.length === 0) {
@@ -358,6 +423,18 @@ export function readValues(values: unknown, allowed: NameSet, what: 'insert' | '
 	return copied
 }
 
+/**
+ * An update's values: any subset of the columns `allowed` names, and at least one of them set. An update that sets
+ * no column would only bump the version.
+ */
+export function updateValues(values: unknown, allowed: NameSet, table: string): Map<string, Primitive | null> {
+	const changes = readValues(values, allowed, 'update', table)
+	if (changes.size === 0) {
+		throw new QueryRefusedError(`update sets no column of ${table}; set at least one (update columns: ${namesOf(allowed).join(', ') || 'none'})`)
+	}
+	return changes
+}
+
 function stampInsert(context: TableContext, grant: RefGrant, values: Map<string, Primitive | null>, key: string, keyValue: string): void {
 	values.set(key, keyValue)
 	if (context.model.version !== undefined) {
@@ -392,14 +469,36 @@ async function selectRows<S>(context: TableContext, scope: OperationNode | undef
 	if (scope === undefined) {
 		return []
 	}
-	return (await run.read()).run<S>(selectNode(state, context.model.visible, scope), guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<S>(selectNode(state, context.model.visible, scope), guard(context, 'SelectQueryNode', scope))
+	return answerDays(context.model.name, joinedDays(context.model.dates, state), rows)
+}
+
+/** The `date` columns of a select's rows: the table's own, and each joined child's under its `<child>.<column>` alias. */
+function joinedDays(own: NameSet, state: SelectState): NameSet {
+	if (state.joins.length === 0) {
+		return own
+	}
+	const names: string[] = []
+	const ownDates = namesOf(own)
+	for (let index = 0; index < ownDates.length; index++) {
+		names[names.length] = ownDates[index] ?? ''
+	}
+	for (let index = 0; index < state.joins.length; index++) {
+		const shape = state.joins[index]?.join.shape
+		const dates = shape === undefined ? [] : namesOf(shape.dates)
+		for (let position = 0; position < dates.length; position++) {
+			names[names.length] = `${shape?.table}.${dates[position]}`
+		}
+	}
+	return nameSet(names)
 }
 
 /** One row by its scope predicate, with `visible` columns (the table's read action's, unless a capability reads its own). */
 export async function selectOne<O>(context: TableContext, run: Runner, scope: OperationNode, visible = context.model.visible): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
-	const [row] = await (await run.read()).run<O>(selectNode(state, visible, scope), guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<O>(selectNode(state, visible, scope), guard(context, 'SelectQueryNode', scope))
+	const [row] = answerDays(context.model.name, context.model.dates, rows)
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
@@ -630,7 +729,25 @@ export async function aggregateRows<Row, O>(
 		return []
 	}
 	const node = aggregateNode(context.model.name, columns, filter?.conditions ?? [], scope)
-	return (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
+	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
+	return answerDays(context.model.name, aggregateDays(context.model.dates, columns), rows)
+}
+
+/** The `date` columns of an aggregate's rows: a grouped one by its name, and its `min_` and `max_`. */
+function aggregateDays(dates: NameSet, columns: AggregateColumns): NameSet {
+	const names: string[] = []
+	const add = (prefix: string, list: readonly string[]) => {
+		for (let index = 0; index < list.length; index++) {
+			const name = list[index] ?? ''
+			if (inSet(dates, name)) {
+				names[names.length] = `${prefix}${name}`
+			}
+		}
+	}
+	add('', columns.groupBy)
+	add('min_', columns.min)
+	add('max_', columns.max)
+	return nameSet(names)
 }
 
 /** `DimensionTable.insert` over a capability nobody type-checked; the table probe of `@fabrika/db/testing` calls it too. */
@@ -664,7 +781,7 @@ export function insertIntoChild<O>(context: TableContext, run: Runner, parent: u
 }
 
 type ReadAction<P, T> = ActionOf<P, T, 'read'>
-type Row<DB, P, T> = RowOf<DB, P, T>
+type Row<DB, P, T> = PolicyRow<DB, P, T>
 type Joinable<DB, P, T> = JoinableChildren<DB, P, T>
 type ParentDimension<P, T> = DimensionOf<P, ParentOf<P, T>>
 
@@ -708,7 +825,7 @@ export class DimensionTable<DB, P, T extends string> {
 	): Promise<Acknowledgement<P, T>> {
 		const context = this.#context
 		const scope = objectPredicate(context, ref, 'update')
-		const changes = readValues(values, context.model.update, 'update', context.model.name)
+		const changes = updateValues(values, context.model.update, context.model.name)
 		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
@@ -791,7 +908,7 @@ export class ChildTable<DB, P, T extends string> {
 	): Promise<Acknowledgement<P, T>> {
 		const context = this.#context
 		const scope = childObjectPredicate(context, parent, key, 'update')
-		const changes = readValues(values, context.model.update, 'update', context.model.name)
+		const changes = updateValues(values, context.model.update, context.model.name)
 		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
@@ -880,7 +997,7 @@ function destinationOf(models: TableModels, model: TableModel, parent: TableMode
 }
 
 function shapeOf(model: TableModel, joinable: Readonly<Record<string, JoinShape>>): TableShape {
-	return freeze({ table: model.name, visible: nameSet(model.visible), joinable })
+	return freeze({ table: model.name, visible: nameSet(model.visible), joinable, dates: model.dates })
 }
 
 function joinShapes(models: TableModels, parent: TableModel): Readonly<Record<string, JoinShape>> {

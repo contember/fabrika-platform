@@ -8,29 +8,29 @@ import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
 import type { CapabilityGrant, RefGrant } from './capability'
 import type { InvocationTransaction, Session } from './database'
+import { answerDays } from './days'
 import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
 import { CapabilityError, NotFoundError, QueryRefusedError } from './errors'
 import { linksPredicate, linkValues } from './links'
 import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
-import { modelOf, type TableModel, type TableModels } from './policy'
+import { modelOf, type TableModel, type TableModels, updatableBy } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	aggregateRows,
 	type AggregateSpec,
-	childListPredicate,
 	childObjectPredicate,
 	childScope,
 	type DataLayerRuntime,
-	dimensionListPredicate,
 	insertIntoChild,
 	insertIntoDimension,
 	insertRow,
 	keyOf,
-	listDimension,
 	objectPredicate,
 	ownerOf,
 	parentPredicate,
+	reachColumn,
+	reachPredicate,
 	readValues,
 	removeRow,
 	type Runner,
@@ -39,6 +39,8 @@ import {
 	selfLinks,
 	type TableContext,
 	updateRow,
+	updateValues,
+	updatingRef,
 	versionArgument,
 } from './store'
 
@@ -152,9 +154,19 @@ function writing<A extends unknown[], R>(
 	return refusal === undefined ? bound(site, method) : refused(site, refusal)
 }
 
+/** Whether the table names `action`: one of its table actions, or a column's own write action. */
 function names(model: TableModel, action: string): boolean {
 	const { read, insert, update, delete: remove } = model.actions
-	return action === read || action === insert || action === update || action === remove
+	if (action === read || action === insert || action === update || action === remove) {
+		return true
+	}
+	const columns = ownKeys(model.columnWrites)
+	for (let index = 0; index < columns.length; index++) {
+		if (model.columnWrites[columns[index] ?? ''] === action) {
+			return true
+		}
+	}
+	return false
 }
 
 /**
@@ -276,7 +288,8 @@ function targetRow(
 		const scope = targetPredicate(context, grant)
 		const node = lockedSelectNode(context.model.name, visibleFor(context.model, grant.action), scope)
 		const session = await run.read()
-		const [row] = await session.run(node, { root: 'SelectQueryNode', table: context.model.name, joins: {}, scope, lock: 'update' })
+		const rows = await session.run(node, { root: 'SelectQueryNode', table: context.model.name, joins: {}, scope, lock: 'update' })
+		const [row] = answerDays(context.model.name, context.model.dates, rows)
 		if (row === undefined) {
 			throw new NotFoundError(`${context.model.name} not found`)
 		}
@@ -291,9 +304,9 @@ function targetRow(
 		: refused(site, 'getForUpdate locks one object: declare access with on')
 	const update = form === 'on'
 		? writing(site, 'update', async (values: unknown, ...options: unknown[]) => {
-			const scope = objectPredicate(context, capability, 'update')
-			const changes = readValues(values, context.model.update, 'update', context.model.name)
-			return updateRow(context, run, { scope }, changes, versionArgument(context, options))
+			const grant = updatingRef(context, capability, dimension)
+			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model.name)
+			return updateRow(context, run, { scope: targetPredicate(context, grant) }, changes, versionArgument(context, options))
 		})
 		: refused(site, onOnly('update'))
 	const remove = form === 'on'
@@ -324,8 +337,12 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 		}),
 		insert: writing(site, 'insert', async (values: unknown) => insertIntoChild(context, run, capability, values)),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
-			const scope = childObjectPredicate(context, capability, id, 'update')
-			const changes = readValues(values, context.model.update, 'update', context.model.name)
+			if (typeof id !== 'string' || id.length === 0) {
+				throw new QueryRefusedError(`a ${context.model.name} row is addressed by its parent Ref and its ${key}`)
+			}
+			const grant = updatingRef(context, capability, parent)
+			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model.name)
+			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
 			return updateRow(context, run, { scope }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
@@ -360,17 +377,10 @@ function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capabi
 	const tables = ownKeys(parts.models)
 	for (let index = 0; index < tables.length; index++) {
 		const model = modelOf(parts.models, tables[index] ?? '')
-		if (model === undefined) {
-			continue
-		}
-		if (model.scope.mode === 'dimension' && listDimension(model.scope) === grant.dimension) {
+		const listable = model?.scope.mode === 'dimension' || model?.scope.mode === 'child'
+		if (model !== undefined && listable && reachColumn(model, grant.dimension) !== undefined) {
 			const context = parts.contextOf(model.name)
-			setOwn(handle, model.name, listedRows(context, site, run, () => dimensionListPredicate(context, capability, 'read')))
-		} else if (model.scope.mode === 'child') {
-			const context = parts.contextOf(model.name)
-			if (listDimension(childScope(context).parent) === grant.dimension) {
-				setOwn(handle, model.name, listedRows(context, site, run, () => childListPredicate(context, capability, 'read')))
-			}
+			setOwn(handle, model.name, listedRows(context, site, run, () => reachPredicate(context, capability)))
 		}
 	}
 	return freeze(handle)
@@ -459,7 +469,8 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		get: bound(site, async (id: unknown) => {
 			const scope = everything()
 			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id))
-			const [row] = await (await run.read()).run(node, { root: 'SelectQueryNode', table, joins: {}, scope })
+			const rows = await (await run.read()).run(node, { root: 'SelectQueryNode', table, joins: {}, scope })
+			const [row] = answerDays(table, model.dates, rows)
 			if (row === undefined) {
 				throw new NotFoundError(`${table} not found`)
 			}
@@ -467,7 +478,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		}),
 		insert: write('insert', async (values: unknown) => insertUnscoped(context, run, site.principal, values)),
 		update: write('update', async (id: unknown, values: unknown, ...options: unknown[]) => {
-			const changes = readValues(values, model.update, 'update', table)
+			const changes = updateValues(values, model.update, table)
 			return updateRow(context, run, { scope: everything(), conditions: byKey(id) }, changes, versionArgument(context, options))
 		}),
 		remove: write('remove', async (id: unknown, ...options: unknown[]) => {
@@ -540,8 +551,8 @@ function readOptions(options: unknown, allowed: readonly string[], what: string)
 	return read
 }
 
-function shapeFor(table: string, visible: readonly string[]): TableShape {
-	return freeze({ table, visible: nameSet(visible), joinable: freeze({}) })
+function shapeFor(model: TableModel, visible: readonly string[]): TableShape {
+	return freeze({ table: model.name, visible: nameSet(visible), joinable: freeze({}), dates: model.dates })
 }
 
 function conditionsOf(shape: TableShape, where: unknown): (Compare | Contains)[] {
@@ -699,7 +710,7 @@ async function listRows(
 ): Promise<{ readonly items: Readonly<Record<string, unknown>>[]; readonly next: string | null }> {
 	const table = context.model.name
 	const options = readOptions(input, ['where', 'orderBy', 'limit', 'after'], 'list')
-	const shape = shapeFor(table, visible)
+	const shape = shapeFor(context.model, visible)
 	const conditions = conditionsOf(shape, options['where'])
 	const order = orderOf(shape, options['orderBy'], tiebreak)
 	const limit = limitOf(options['limit'])
@@ -718,7 +729,7 @@ async function listRows(
 		joins: {},
 		scope,
 	})
-	const page = rows.slice(0, limit)
+	const page = answerDays(table, context.model.dates, rows.slice(0, limit))
 	const last = page[page.length - 1]
 	return {
 		items: page.map((row) => withoutCursor(row, order)),
@@ -735,7 +746,7 @@ async function countRows(
 ): Promise<number> {
 	const table = context.model.name
 	const options = readOptions(input, ['where'], 'count')
-	const conditions = conditionsOf(shapeFor(table, visible), options['where'])
+	const conditions = conditionsOf(shapeFor(context.model, visible), options['where'])
 	if (scope === undefined) {
 		return 0
 	}

@@ -5,6 +5,7 @@
 import {
 	canonicalizeArtifact,
 	canonicalJson,
+	type ColumnPolicyArtifact,
 	type ContractArtifact,
 	type DeclaredReach,
 	type EndpointRow,
@@ -582,15 +583,24 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 	const table = `Table \`${name}\``
 	const columns: AccessChange[] = []
 	for (const column of union(Object.keys(from.columns), Object.keys(to.columns))) {
-		const before = from.columns[column]
-		const after = to.columns[column]
-		if (before === undefined && after !== undefined) {
-			columns.push(removal(`Column \`${name}.${column}\` is read with \`${after.read}\` instead of \`${from.actions.read}\``))
-		} else if (before !== undefined && after === undefined) {
+		const subject = `Column \`${name}.${column}\``
+		const before: ColumnPolicyArtifact = from.columns[column] ?? {}
+		const after: ColumnPolicyArtifact = to.columns[column] ?? {}
+		if (before.read === undefined && after.read !== undefined) {
+			columns.push(removal(`${subject} is read with \`${after.read}\` instead of \`${from.actions.read}\``))
+		} else if (before.read !== undefined && after.read === undefined) {
 			// Without its own policy the column falls back to the table's read action (ADR-0050 §3).
-			columns.push(widening(`Column \`${name}.${column}\` loses its read policy \`${before.read}\` and is read with \`${to.actions.read}\``))
-		} else if (before !== undefined && after !== undefined) {
-			columns.push(...valueChange(`Column \`${name}.${column}\` read action`, before.read, after.read))
+			columns.push(widening(`${subject} loses its read policy \`${before.read}\` and is read with \`${to.actions.read}\``))
+		} else if (before.read !== undefined && after.read !== undefined) {
+			columns.push(...valueChange(`${subject} read action`, before.read, after.read))
+		}
+		// A column's own write action is one more action that updates the table; the update list's lines cover the rest.
+		if (before.write === undefined && after.write !== undefined) {
+			columns.push(widening(`${subject} is updated with its own write action \`${after.write}\``))
+		} else if (before.write !== undefined && after.write === undefined) {
+			columns.push(removal(`${subject} is no longer updated with its own write action \`${before.write}\``))
+		} else if (before.write !== undefined && after.write !== undefined) {
+			columns.push(...valueChange(`${subject} write action`, before.write, after.write))
 		}
 	}
 	return [

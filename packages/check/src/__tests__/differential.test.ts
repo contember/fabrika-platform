@@ -421,6 +421,12 @@ describe('the staged kit: read from source and evaluated agree', () => {
 			})
 		})
 
+		test('a column write action reads the same, in the artifact the approval diff compares', () => {
+			expect(read['tasks']?.columns).toEqual({ assignee: { write: 'tasks.assign' } })
+			expect(read['tasks']?.update).toEqual(['title', 'due_on'])
+			expect(read['tasks']).toEqual(evaluated['tasks'])
+		})
+
 		test('in: { column } off the convention reads the same', () => {
 			expect(read['tasks']).toEqual(evaluated['tasks'])
 			expect(read['tasks']?.scope).toEqual({
@@ -484,8 +490,10 @@ describe('the staged kit: read from source and evaluated agree', () => {
 				},
 				tasks: {
 					scope: { dimension: 'task', in: { column: 'parent_project' } },
-					actions: { read: 'tasks.read', insert: 'tasks.write' },
+					actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write' },
 					insert: ['title'],
+					update: ['title', 'due_on'],
+					columns: { assignee: { write: 'tasks.assign' } },
 				},
 				task_comments: { scope: { child: 'tasks' }, actions: { read: 'tasks.read', insert: 'tasks.write' }, insert: ['body'] },
 			}
@@ -513,8 +521,8 @@ describe('the staged kit: read from source and evaluated agree', () => {
 				}),
 			)
 			expect(action).toEqual({
-				reader: 'orgs: actions.read names tasks.raed, which is not an action of the vocabulary (actions: tasks.read, tasks.write)',
-				runtime: 'orgs: actions.read names tasks.raed, which is not an action of the vocabulary (actions: tasks.read, tasks.write)',
+				reader: 'orgs: actions.read names tasks.raed, which is not an action of the vocabulary (actions: tasks.read, tasks.write, tasks.assign)',
+				runtime: 'orgs: actions.read names tasks.raed, which is not an action of the vocabulary (actions: tasks.read, tasks.write, tasks.assign)',
 			})
 			const column = refusals(
 				fixtureTables.replace(
@@ -527,6 +535,22 @@ describe('the staged kit: read from source and evaluated agree', () => {
 			)
 			expect(column.reader).toStartWith('orgs: columns.name.read names tasks.raed, which is not an action of the vocabulary')
 			expect(column.runtime).toBe(column.reader)
+		})
+
+		test('a column write action outside the vocabulary, or on a column the update action writes, is refused from source too', () => {
+			const tasksPolicy = (columns: string) => fixtureTables.replace("columns: { assignee: { write: 'tasks.assign' } }", `columns: { ${columns} }`)
+			const tasksWith = (columns: Readonly<Record<string, unknown>>) =>
+				policiesOf((all) => {
+					all['tasks'] = { ...all['tasks'], columns }
+				})
+			const action = refusals(tasksPolicy("assignee: { write: 'tasks.asign' }"), tasksWith({ assignee: { write: 'tasks.asign' } }))
+			expect(action.reader).toStartWith('tasks: columns.assignee.write names tasks.asign, which is not an action of the vocabulary')
+			expect(action.runtime).toBe(action.reader)
+			const listed = refusals(tasksPolicy("title: { write: 'tasks.assign' }"), tasksWith({ title: { write: 'tasks.assign' } }))
+			expect(listed.reader).toBe(
+				"tasks: title is in update, which the table's update action writes, and declares its own write action tasks.assign; remove it from update",
+			)
+			expect(listed.runtime).toBe(listed.reader)
 		})
 
 		test('a dimension no table owns keeps the vocabulary ancestry from source, as at runtime', () => {

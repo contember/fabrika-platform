@@ -346,16 +346,18 @@ declaration. `serve` puts each site into the handler tree as a `siteHandler(hand
 a site runs with is the approved artifact's (`ContractArtifact.declared`, which the contract's digest covers); a leaf
 whose own `declared` differs does not boot. The API matrix:
 
-| Access form | query                                                                                                 | mutation (adds)                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `on`        | `ctx.db.target.get()`; child tables `list`/`get`                                                      | `getForUpdate()`, `update(v, { expectVersion })`, `remove({ expectVersion })`; child `insert`/`update`/`remove`            |
-| `in`        | `ctx.db.target.get()` (the container); `.<table>.list`                                                | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's |
-| `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`         | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
-| `creates`   | —                                                                                                     | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                               |
-| `member`    | no application data                                                                                   | no application data                                                                                                        |
-| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage` | —                                                                                                                          |
+| Access form | query                                                                                                                                      | mutation (adds)                                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `on`        | `ctx.db.target.get()`; child tables `list`/`get`                                                                                           | `getForUpdate()`, `update(v, { expectVersion })`, `remove({ expectVersion })`; child `insert`/`update`/`remove`            |
+| `in`        | `ctx.db.target.get()` (the container); `.<table>.list`                                                                                     | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's |
+| `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`; every table whose chain holds the dimension | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
+| `creates`   | —                                                                                                                                          | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                               |
+| `member`    | no application data                                                                                                                        | no application data                                                                                                        |
+| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage`                                      | —                                                                                                                          |
 
-"Target subtree" is the target's child tables and the dimension tables it contains. A job and a webhook bind the same
+"Target subtree" is the target's child tables and the dimension tables it contains. An `over` lists every table whose
+containment chain holds its dimension, through the stamped chain column: `over: 'org'` lists tasks two levels down by
+their `org_id`, with the same keyset pages, projection and hidden columns as the nearest container's tables. A job and a webhook bind the same
 handles to a capability they minted or received: `ctx.db.on(ref)`, `ctx.db.in(ref)`, `ctx.db.over(within)`. A member
 a site may not use is a type error at its call (`Unavailable`) and, should the types be defeated, a refusal that
 names the same fix at runtime.
@@ -365,7 +367,16 @@ names the same fix at runtime.
   statement, as it is out of the row type. A `Within` lists by the table's read action. A `Ref` of an action the
   table does not name reads nothing of it.
 - **Writes answer `{ id, version }`** (`{ id }` for a table without a version), never row data. A versioned table's
-  `update` and `remove` take `{ expectVersion }`: a row that changed since is 409, a missing one 404.
+  `update` and `remove` take `{ expectVersion }`: a row that changed since is 409, a missing one 404. `update` takes any
+  non-empty subset of the columns its action updates; one that sets no column is refused.
+- **A column write action** (`columns: { assignee: { write: 'tasks.assign' } }` in `src/db/tables.ts`) lets a capability
+  of that action update exactly those columns through `ctx.db.target.update` (or a child table's `update`); the
+  table's update action keeps the rest and does not update them. The action reads its own target like any action the
+  table names. It is part of the access snapshot, so a new one, or a column moved under one, widens.
+- **A `date` column is `YYYY-MM-DD` text** in the generated types, every handle's rows, filters and writes; `fromRow`
+  and `ctx.sql` read a `Date` as its day for a `z.iso.date()` field. A timestamp reads as a `Date` and a write takes a
+  `Date` or its ISO text. `RowOf<typeof tables, 'tasks', 'tasks.read'>` (`@fabrika/db/tables`) is the row an action
+  reads, for a mapper that takes rows.
 - **`getForUpdate()`** is `SELECT … FOR UPDATE` on the target's whole chain, in a mutation `on` an object only: a
   precondition read that a concurrent write of the same row waits behind, so of two concurrent "reopen a won deal"
   requests one wins and the other sees the change and answers 409. It is the one lock the guard admits besides a

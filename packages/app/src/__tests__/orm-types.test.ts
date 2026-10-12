@@ -1,5 +1,5 @@
 // The type half of the mini-ORM: each file in `orm-mistakes/` is one data mistake a handler makes, refused on the line
-// after its `// mistake:` marker. The API matrix itself is pinned by `kit-fixture/matrix.ts` (`kit-types.test.ts`).
+// after its `// mistake:` marker. 08–11 run on the probe task tracker (`probe-tasks/`). The API matrix itself is pinned by `kit-fixture/matrix.ts` (`kit-types.test.ts`).
 
 import { describe } from 'bun:test'
 import { join } from 'node:path'
@@ -13,6 +13,13 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'05-update-under-in.ts': `Type 'Unavailable<"update acts on one object: declare access with on">' has no call signatures.`,
 	'06-saved-is-not-the-row.ts': "Property 'title' does not exist on type '{ readonly id: string; readonly version: number; }'.",
 	'07-from-row-missing-column.ts': "Property 'name' is missing in type '{ id: string; }'",
+	'08-update-a-column-another-action-writes.ts':
+		"Object literal may only specify known properties, and 'title' does not exist in type '{ assignee?: string | null | undefined; }'.",
+	'09-update-with-an-action-that-writes-nothing.ts':
+		`Type 'Unavailable<"update on tasks needs the action 'tasks.write' or a column's own write action, and this endpoint holds 'tasks.read'">' has no call signatures.`,
+	'10-a-day-as-a-date.ts': "Type 'Date' is not assignable to type 'string'.",
+	'11-row-of-an-action-the-table-does-not-name.ts':
+		`Type '"tasks.raed"' does not satisfy the constraint '"tasks.read" | "tasks.write" | "tasks.assign"'.`,
 }
 
 /**

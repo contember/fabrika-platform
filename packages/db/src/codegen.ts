@@ -21,7 +21,10 @@ const STRING: ScalarType = { select: 'string' }
 const NUMBER: ScalarType = { select: 'number' }
 /** Bun decodes `int8` and `numeric` to strings, by column type; a bound number or bigint is accepted. */
 const DECIMAL_STRING: ScalarType = { select: 'string', write: 'bigint | number | string' }
-const DATE: ScalarType = { select: 'Date' }
+/** A calendar day: the layer answers `YYYY-MM-DD` text for the `Date` Bun decodes, and binds the same text. */
+const DAY: ScalarType = { select: 'string' }
+/** A point in time: Bun decodes a `Date`; a write binds a `Date` or its ISO 8601 text. */
+const TIMESTAMP: ScalarType = { select: 'Date', write: 'Date | string' }
 
 /** Exactly the types whose decoding by `Bun.SQL` the codegen test pins; anything else is refused, not guessed. */
 const SCALAR_TYPES: ReadonlyMap<string, ScalarType> = new Map([
@@ -39,9 +42,9 @@ const SCALAR_TYPES: ReadonlyMap<string, ScalarType> = new Map([
 	['int8', DECIMAL_STRING],
 	['numeric', DECIMAL_STRING],
 	['bool', { select: 'boolean' }],
-	['date', DATE],
-	['timestamp', DATE],
-	['timestamptz', DATE],
+	['date', DAY],
+	['timestamp', TIMESTAMP],
+	['timestamptz', TIMESTAMP],
 ])
 
 export class CodegenError extends Error {
@@ -267,11 +270,16 @@ export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: rea
 		)
 		return `\t\tforeignKeys: [\n${rendered.join('')}\t\t],\n`
 	}
+	/** A table's `date` columns, which the layer answers as `YYYY-MM-DD`; a table without one has no `dates`. */
+	const datesOf = (table: string): string => {
+		const dates = (tables.get(table) ?? []).filter((column) => column.type_type === 'b' && column.type_name === 'date')
+		return dates.length === 0 ? '' : `\t\tdates: [${dates.map((column) => quote(column.column_name)).join(', ')}],\n`
+	}
 	const columns = names
 		.map((table) =>
 			`\t'${table}': {\n\t\tcolumns: [\n${(tables.get(table) ?? []).map((column) => `\t\t\t'${column.column_name}',\n`).join('')}\t\t],\n${
 				keysOf(table)
-			}\t},\n`
+			}${datesOf(table)}\t},\n`
 		)
 		.join('')
 	return [

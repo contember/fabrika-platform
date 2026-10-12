@@ -12,8 +12,9 @@ export const vocabulary = defineVocabulary({
 	actions: {
 		'tasks.read': 'Read projects and tasks',
 		'tasks.write': 'Edit projects and tasks',
+		'tasks.assign': 'Assign tasks',
 	},
 	roles: {
-		owner: { grants: ['tasks.read', 'tasks.write'], member: { scope: 'org', assignableBy: ['owner'] } },
+		owner: { grants: ['tasks.read', 'tasks.write', 'tasks.assign'], member: { scope: 'org', assignableBy: ['owner'] } },
 	},
 })

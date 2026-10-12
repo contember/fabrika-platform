@@ -97,6 +97,32 @@ describe('classifyAccess', () => {
 		})
 	})
 
+	test('a new column write action widens, and so does a column that moves under one; dropping one only removes', () => {
+		const assigned = snapshot(BASE, { notes: { ...NOTES_TABLE, columns: { ...NOTES_TABLE.columns, owner: { write: 'notes.delete' } } } })
+		expect(classifyAccess(snapshot(), assigned)).toEqual({
+			outcome: 'widening',
+			changes: [{ widens: true, line: 'Column `notes.owner` is updated with its own write action `notes.delete`' }],
+		})
+		expect(classifyAccess(assigned, snapshot())).toEqual({
+			outcome: 'removal',
+			changes: [{ widens: false, line: 'Column `notes.owner` is no longer updated with its own write action `notes.delete`' }],
+		})
+
+		// `title` leaves the update action's list for an action of its own: one line narrows, the other widens.
+		const moved = snapshot(BASE, { notes: { ...NOTES_TABLE, update: [], columns: { ...NOTES_TABLE.columns, title: { write: 'notes.delete' } } } })
+		expect(classifyAccess(snapshot(), moved)).toEqual({
+			outcome: 'widening',
+			changes: [
+				{ widens: false, line: 'Table `notes` no longer accepts updates of `title`' },
+				{ widens: true, line: 'Column `notes.title` is updated with its own write action `notes.delete`' },
+			],
+		})
+		const rewritten = snapshot(BASE, { notes: { ...NOTES_TABLE, update: [], columns: { ...NOTES_TABLE.columns, title: { write: 'notes.write' } } } })
+		expect(classifyAccess(moved, rewritten).outcome).toBe('widening')
+		expect(lines(moved, rewritten)).toEqual(['Column `notes.title` write action changes from `"notes.delete"` to `"notes.write"`'])
+		expect(classifyAccess(moved, snapshot()).outcome).toBe('widening')
+	})
+
 	test('a new or changed migration widens; a removed one only removes', () => {
 		const one = { name: '20260101000000_init.sql', checksum: 'a'.repeat(64) }
 		const two = { name: '20260102000000_more.sql', checksum: 'b'.repeat(64) }

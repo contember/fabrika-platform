@@ -362,8 +362,17 @@ export interface TablePolicyArtifact {
 	readonly update: readonly string[]
 	readonly version: string | null
 	readonly createdBy: string | null
-	/** Column → its own read action. A column without one falls back to the table's read action. */
-	readonly columns: Readonly<Record<string, { readonly read: string }>>
+	/**
+	 * Column → its own actions. A column without a read action falls back to the table's; a column with a write action
+	 * is updated by that action only, never by the table's update action.
+	 */
+	readonly columns: Readonly<Record<string, ColumnPolicyArtifact>>
+}
+
+/** A column's own read action, its own write action, or both; an absent one is left out. */
+export interface ColumnPolicyArtifact {
+	readonly read?: string
+	readonly write?: string
 }
 
 export type TableScope =

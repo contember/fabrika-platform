@@ -586,7 +586,7 @@ describe('writes take declared columns and plain values only', () => {
 			'expectVersion',
 		)
 		const rename = layer.workspaceRef('workspaces.admin')
-		refused(await layer.attempt(() => call(layer.raw.workspaces, 'update', rename, {})), QueryRefusedError, 'nothing to update')
+		refused(await layer.attempt(() => call(layer.raw.workspaces, 'update', rename, {})), QueryRefusedError, 'update sets no column of workspaces')
 	})
 
 	test('a child update takes a non-empty key', async () => {

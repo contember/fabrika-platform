@@ -1,8 +1,8 @@
 // @fabrika/db/tables — the table policies of `src/db/tables.ts` as data. Browser- and Worker-safe: no Bun API and no
 // driver, so `@fabrika/app/contract` and the static contract reader in `@fabrika/check` import it.
 
-import type { TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
-import { freeze, namesOf, ownKeys, setOwn } from './builtins'
+import type { ColumnPolicyArtifact, TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
+import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
 import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
 export { PolicyError } from './errors'
@@ -22,8 +22,10 @@ export type {
 	ReferenceRows,
 	ReferenceTables,
 	RowFor,
+	RowOf,
 	Saved,
 	ScopeTarget,
+	TableNameOf,
 	TargetForm,
 	TargetRow,
 	Unavailable,
@@ -91,11 +93,13 @@ export function tablePolicies<DB, P>(tables: Tables<DB, P>): TablePolicies {
 }
 
 function artifactOf(model: TableModel): TablePolicyArtifact {
-	const columns: Record<string, { readonly read: string }> = {}
-	const declared = ownKeys(model.columnReads)
+	const columns: Record<string, ColumnPolicyArtifact> = {}
+	const declared = [...ownKeys(model.columnReads), ...ownKeys(model.columnWrites)]
 	for (let index = 0; index < declared.length; index++) {
 		const name = declared[index] ?? ''
-		setOwn(columns, name, { read: model.columnReads[name] ?? '' })
+		const read = ownEntry(model.columnReads, name)
+		const write = ownEntry(model.columnWrites, name)
+		setOwn(columns, name, { ...(read === undefined ? {} : { read }), ...(write === undefined ? {} : { write }) })
 	}
 	return {
 		scope: scopeOf(model.scope),

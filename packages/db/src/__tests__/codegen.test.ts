@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import ts from 'typescript'
 import { type CatalogColumn, CodegenError, generateSchema, introspectSchema, renderSchema } from '../codegen'
 import { migration } from './fixtures/schema'
+import { migration as tasksMigration } from './fixtures/tasks'
 
 const column = (table: string, name: string, type: string, extra: Partial<CatalogColumn> = {}): CatalogColumn => ({
 	table_name: table,
@@ -52,14 +53,15 @@ describe('renderSchema', () => {
 	amount: ColumnType<string | null, bigint | number | string | null, bigint | number | string | null>
 	ratio: number
 	done: boolean
-	due: Date | null
-	created_at: Generated<Date>
+	due: string | null
+	created_at: ColumnType<Date, Date | string | undefined, Date | string>
 	serial: ColumnType<string, bigint | number | string | undefined, bigint | number | string>
 	total: GeneratedAlways<number>
 	state: 'draft' | 'it\\'s'
 }
 `)
-		expect(source).toContain("import type { ColumnType, Generated, GeneratedAlways } from 'kysely'\n")
+		expect(source).toContain("import type { ColumnType, GeneratedAlways } from 'kysely'\n")
+		expect(source).toContain("\t\tforeignKeys: [],\n\t\tdates: ['due'],\n\t},\n")
 	})
 
 	test('leaves out framework tables and imports only what it uses', () => {
@@ -271,6 +273,11 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		expect(await generateSchema(url, schema, [])).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text())
 	})
 
+	test('regenerates the task tracker fixture: a date column is listed as a day, a timestamp takes ISO text', async () => {
+		const schema = await migrated(tasksMigration)
+		expect(await generateSchema(url, schema, [])).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'tasks.generated.ts')).text())
+	})
+
 	test('types each supported column as Bun.SQL decodes it', async () => {
 		const schema = await migrated(`
 			CREATE TYPE mood AS ENUM ('calm', 'busy');
@@ -311,9 +318,9 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 	ratio: number
 	share: number
 	done: boolean
-	due: Date
-	seen: Date
-	created_at: Generated<Date>
+	due: string
+	seen: ColumnType<Date, Date | string, Date | string>
+	created_at: ColumnType<Date, Date | string | undefined, Date | string>
 	starts: string
 	starts_tz: string
 	length: string
