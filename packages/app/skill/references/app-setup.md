@@ -102,7 +102,7 @@ export default serve(contract, { database: scoped(tables) })
 ```
 
 - Mounts: `c.rpc(prefix, groups)` once per prefix, `c.spa(prefix, { dir, access })`, `c.health('/healthz')` (required
-  on Zerops), `c.form(path, { input, appendTo })` (an anonymous form that appends one row and runs no handler), a
+  on Zerops), `c.form(path, { input, appendTo, then? })` (an anonymous form that appends one row and runs no handler), a
   webhook, a link mount. Sections: `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`,
   `scriptSrc`, `frameSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). No path under
   `/__fabrika`.
@@ -116,6 +116,12 @@ export default serve(contract, { database: scoped(tables) })
   never the value; without it the application does not boot. Neither field reaches the inbox, so neither is a
   column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
   per-form limit: raise it, and use the challenge.
+- `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
+  once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
+  and never waits for it. Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
+  submit), so the job still drains its inbox in batches under its own budgets. Keep its schedule: it is the recovery
+  path for a kicked run that died. A kick carries nothing; the job reads its inbox. `kit.runJob` first waits for the
+  kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`.
