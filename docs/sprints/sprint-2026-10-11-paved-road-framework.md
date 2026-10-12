@@ -365,22 +365,29 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   chain, read from the database for the access form (`#chain` in `dispatch.ts`). IAM's `issueLink` already takes such
   a chain and checks it against the schema's containment (`chainProblem`). The scaffold samples a string as `'x'`; the
   endpoint access kit treats a 400 as a broken fixture.
-- **Decision: authorization.** A single-member lookup is authorized by the endpoint's OWN action on the object's
-  chain, checked live by IAM (`findMember`); listing stays with the directory's `members.list`, checked live on the
-  directory's value. The lookup answers one id the caller named: the member (id, label, disabled) or `null`, never
-  which check failed. It cannot enumerate, the caller already holds an action on an object of that org, and labels
-  stay opt-in: `null` unless the dimension declares `directory: 'labels'` or the caller manages its members. It is no
-  second enforcement decision (ADR-0022): the proxy and the access form admitted the request, and IAM authorizes its
-  own operation, as it does for `listMembers` and `issueLink`.
+- **Decision: authorization (review round 1).** A single-member lookup is authorized by the endpoint's OWN action,
+  which IAM checks itself (`findMember`) from nothing the application asserts: the action must be one of the
+  dimension's `lookups` in the reconciled schema (the actions of the approved endpoints that read this directory), and
+  the caller must hold it on the directory's value itself, global grants included. IAM knows no containment below a
+  value, so the coarse rule holds: a grant on a contained object (a company, a deal) does not count. The application
+  can still misstate which of its approved lookup endpoints asks, never the org, the action's eligibility or the
+  caller's authority. Listing stays with the directory's `members.list`, checked live on the directory's value. The
+  lookup answers one id the caller named: the member (id, label, disabled) or `null`, never which check failed. It
+  cannot enumerate, and labels stay opt-in: `null` unless the dimension declares `directory: 'labels'` or the caller
+  manages its members. It is no second enforcement decision (ADR-0022): the proxy and the access form admitted the
+  request, and IAM authorizes its own operation, as it does for `listMembers` and `issueLink`.
 - **Decision: the ancestor.** The nearest dimension, the endpoint's own or one containing it, that declares
   `members`, at the value the `Ref`'s chain holds: the owner chain the framework already read from the database for
-  the access form, never the token's scopes and never the input. IAM checks the chain against the schema's
-  containment and that it holds the directory's value.
-- **Decision: the static shell and approval.** Nothing new is declared: the reach follows from the dimension's
-  `members` (and `directory`), already in the artifact and reviewed. One function (`endpointDirectory`) derives it for
-  `boot`, Control's transport key and the test kit, and the kit's types mirror it. It is not a widening by itself; the
-  `directory: 'labels'` widening line now names the endpoints below the dimension too. Control issues the Zerops
-  membership key for any contract with such an endpoint.
+  the access form, never the token's scopes and never the input.
+- **Decision: the artifact and approval (review round 1).** `buildArtifact` records each endpoint's reach in
+  `ContractArtifact.directories` (`{ dimension, lists }` by endpoint id, absent when none, so other digests stay);
+  `directoryReach` derives it and nothing else does, and `endpointDirectory` reads only the record, so an artifact
+  without it grants no reach. The digest covers it, `schemaFromContract` gives IAM each dimension's `lookups` from it
+  (IAM migration 0009, `app_scopes.members_lookup`), and `classifyAccess` widens on a new reach ("looks up one member
+  of", "lists the members of"), with closer review where the dimension shows labels. A baseline compiled before the
+  record counts only WU13b's reach (`list()` of the own dimension's `members.list`), so an unchanged endpoint that
+  gains a lookup widens on its next approval. Control issues the Zerops membership key for any contract that records
+  a reach.
 - **Scope.**
   1. `endpointDirectory` (auth-core); `IamMembershipRpc.findMember` (auth-core, `@fabrika/auth`'s client and HTTP
      transport, IAM's operation, binding, `/rpc/*` and `/membership/*`, and its repository query).
@@ -395,9 +402,12 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
 - **Acceptance / witness.** `packages/local-stack/__tests__/member-lookup.test.ts` (Postgres, the real IAM, the
   production proxy, the fixture org → company → deal): a deal endpoint's lookup answers the org's member with its
   label and `null` for a member of another org and for an unknown id; an assignment stores the directory's label and
-  refuses an outsider (400); a caller holding the endpoint's action on the company alone looks a member up; a caller
-  holding `crm.read` on the company alone is refused the org's list (403, IAM's live check); another org's caller gets
-  404. `packages/app/src/__tests__/members-lookup.test.ts`: the type fixture (a deal endpoint's `ctx.members`, and
+  refuses an outsider (400); a caller holding the endpoint's action on the org, without `crm.read`, looks a member up,
+  and one holding it on the company alone is refused (403); a caller holding `crm.read` on the company alone is refused
+  the org's list (403, IAM's live check); another org's caller gets 404. IAM's `findMember` refuses a substituted
+  scope with a grant it cannot place, an action no lookup endpoint holds (the global creation action included) and
+  another application's action. `classifyAccess` widens on a recorded reach against a baseline without the record.
+  The leak cases catch a handler that answers another org's member, for `on` and `in`. `packages/app/src/__tests__/members-lookup.test.ts`: the type fixture (a deal endpoint's `ctx.members`, and
   `Unavailable` where no dimension above declares members), the kit's directory, and the fixture's committed generated
   tests (with a `members` field), which pass and are current. IAM's `findMember` rules in `membership.test.ts` and on
   Postgres.
@@ -699,3 +709,12 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU22 — one process, one binding.** The root `bun test` runs every file in one process, and a data layer binds
   once. The fixture's `src/app.ts` is booted by its own generated tests, so every other suite over the fixture boots
   `serve(contract, { database: scoped(tables) })` of its own.
+- **WU22 review round 1.** (1) `findMember` trusted the application's chain and action: a grant on a note with a
+  substituted parent, or the global creation action, found a member of another workspace. IAM now derives the
+  authority itself: the action must be one of the dimension's reconciled `lookups`, held on the directory's value
+  (the coarse rule; IAM holds no containment below a value), and the input names no chain. A lookup from a caller who
+  holds the action only on a company is now 403, as a list was; the endpoint access kit grants every directory
+  endpoint's case its action on the directory's value. (2) The reach is recorded in the artifact (`directories`), so
+  the digest covers it and a baseline without it widens. (3) A generated member's id and label are the other side's
+  markers, so `kit.leaked` catches a cross-org member in an answer. After the rebase onto WU20, the new throw sites
+  name `facility_unbound`, `directory_unlocated` (new) and `iam_answer_mismatch` (a lookup answered for another id).
