@@ -87,6 +87,11 @@ export interface AppScopeDef {
 	 * labels stay with `members.manage`.
 	 */
 	directory?: 'labels'
+	/**
+	 * The actions of the endpoints on, in or below this dimension that look up one of its members (`findMember`). IAM
+	 * answers a lookup only for one of them, held on the directory's value. Absent, no endpoint looks one up.
+	 */
+	lookups?: string[]
 }
 
 /**

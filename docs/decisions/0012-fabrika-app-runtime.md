@@ -205,14 +205,18 @@ metadata from the application's schema: containment, the creator role, the membe
   lies below one: it reads the nearest such dimension's members, at the value the object's chain (resolved from the
   database, as the access form resolved it) holds. `ctx.members.get(principalId)` answers one member — principal id,
   label, whether disabled — or `null`, so a handler validates a picked person and takes its label from IAM, never from
-  the input; IAM checks the endpoint's own action on the object's chain (`findMember`), so the lookup needs no second
-  action. `ctx.members.list()` (with roles) exists only where the endpoint's action is that dimension's
-  `members.list`, and IAM checks that action live on the directory's value itself. Neither spends a delegation grant.
+  the input. IAM establishes a lookup's authority itself (`findMember`): the endpoint's own action must be one of the
+  dimension's `lookups`, which the reconciled schema takes from the approved artifact's `directories`, and the caller
+  must hold it on the directory's value itself. IAM knows no containment below a value, so a grant on a contained
+  object does not count, and the application cannot widen a lookup by what it sends: it can misstate only which of its
+  approved endpoints asks. The lookup needs no second action. `ctx.members.list()` (with roles) exists only where the
+  endpoint's action is that dimension's `members.list`, and IAM checks that action live on the directory's value
+  itself. Neither spends a delegation grant. Each endpoint's reach is recorded in the artifact (`directories`), so the
+  digest covers it and its first appearance widens.
   A member's label is derived from its email, so both answer it as `null` unless the dimension opts in with
   `directory: 'labels'` in the vocabulary; that opt-in is in the approved artifact and widens with closer review
   ([ADR-0050](0050-approved-access.md) §3). Emails and open invitations stay with `members.manage`. A lookup tells a
-  caller whether one id it names is a member: it cannot enumerate, and its reach comes with the dimension's `members`
-  declaration, which the approver already reviews.
+  caller whether one id it names is a member: it cannot enumerate.
 - **Share links** (`ctx.links.issue`) exist on an endpoint that declares `issues: '<mount>'` and whose `Ref` carries
   that mount's `issuedBy` for its dimension. IAM binds the key to the object's whole chain.
 

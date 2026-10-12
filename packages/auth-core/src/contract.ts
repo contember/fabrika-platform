@@ -26,6 +26,12 @@ export interface ContractArtifact extends EndpointTable {
 	 * reach only what they declare; absent for a `defineContract` one, so its digest stays what it was.
 	 */
 	readonly declared?: Readonly<Record<string, DeclaredReach>>
+	/**
+	 * The member directory each endpoint reads (`ctx.members` without management), by endpoint id: derived from the
+	 * dimensions by `directoryReach` and recorded so the approval sees and the digest covers it. Absent when no endpoint
+	 * reads one, so the digest of such a contract stays.
+	 */
+	readonly directories?: Readonly<Record<string, { readonly dimension: string; readonly lists: boolean }>>
 }
 
 // ── The endpoint table ──────────────────────────────────────────────────────────────────────────

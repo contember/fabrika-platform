@@ -80,6 +80,8 @@ interface Stack {
 	member(worlds: IsolationWorlds, name: string, role: 'manager' | 'viewer', world: 'own' | 'other'): Promise<Caller>
 	/** A person holding only `action` on the company of the own deal: no role, no grant on the org. */
 	inCompany(worlds: IsolationWorlds, name: string, action: string): Promise<Caller>
+	/** A person holding only `action` on the org of the own deal, outside any membership role. */
+	inOrg(worlds: IsolationWorlds, name: string, action: string): Promise<Caller>
 }
 
 const orgOf = (worlds: IsolationWorlds, world: 'own' | 'other'): string => {
@@ -164,6 +166,17 @@ async function start(): Promise<Stack> {
 			})
 			return keyed(held)
 		},
+		async inOrg(worlds, name, action) {
+			const held = await person(name)
+			await f.repositories.grants.createGrant({
+				principalId: held.id,
+				app: APP,
+				permissions: [action],
+				scopeType: 'org',
+				scopeValue: orgOf(worlds, 'own'),
+			})
+			return keyed(held)
+		},
 		async inCompany(worlds, name, action) {
 			const held = await person(name)
 			const company = worlds.own.chain.find((link) => link.type === 'company')
@@ -216,14 +229,20 @@ describe.skipIf(postgres === null)("ctx.members of a deal endpoint reads the org
 		expect(owner).toEqual({ owner: viewer.id, ownerLabel: viewer.label })
 	})
 
-	test("a lookup needs only the endpoint's own action on the deal: a caller holding it on the company alone looks a member up", async () => {
+	test("a lookup needs the endpoint's own action on the org, not the directory's: a holder on the company alone is refused by IAM", async () => {
 		const s = await stack()
 		const worlds = await s.seed()
 		const viewer = await s.member(worlds, 'viewer', 'viewer', 'own')
-		const writer = await s.inCompany(worlds, 'writer', 'deals.write')
+		// deals.write on the org, without the directory's crm.read, looks a member up.
+		const writer = await s.inOrg(worlds, 'writer', 'deals.write')
 		const answered = await s.call(writer.key, 'candidate', { id: worlds.own.key, principalId: viewer.id })
 		expect(answered.status).toBe(200)
 		expect(Found.parse(Result.parse(answered.body).result).member).toEqual({ principalId: viewer.id, label: viewer.label })
+		// IAM holds no containment below the org, so a grant on the deal's company does not authorize a lookup there.
+		const company = await s.inCompany(worlds, 'company-writer', 'deals.write')
+		const refused = await s.call(company.key, 'candidate', { id: worlds.own.key, principalId: viewer.id })
+		expect(refused.status).toBe(403)
+		expect(JSON.stringify(refused.body)).toContain('IAM checked its live permissions')
 	})
 
 	test("listing the org's members from a deal needs the org's members.list action on the org: a holder on the company alone is refused by IAM", async () => {

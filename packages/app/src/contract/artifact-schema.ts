@@ -241,6 +241,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		connect: names,
 		issues: nullableName,
 	})).optional(),
+	directories: record(z.strictObject({ dimension: name, lists: z.boolean() })).optional(),
 })
 
 /** Parses JSON that should be a contract artifact; throws a `ZodError` naming every mismatch. */

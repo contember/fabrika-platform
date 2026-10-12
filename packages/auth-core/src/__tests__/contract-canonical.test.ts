@@ -7,6 +7,7 @@ import { notesArtifact } from './fixtures/notes-artifact'
 function reversed(artifact: ContractArtifact): ContractArtifact {
 	const flip = <T>(record: Readonly<Record<string, T>>): Record<string, T> => Object.fromEntries(Object.entries(record).reverse())
 	return {
+		...(artifact.directories === undefined ? {} : { directories: flip(artifact.directories) }),
 		reservedPrefixes: [...artifact.reservedPrefixes].reverse(),
 		endpoints: [...artifact.endpoints].reverse().map((row) => ({
 			...row,

@@ -70,7 +70,12 @@ describe('schemaFromContract', () => {
 			scopes: [
 				{ type: 'file:attachments', in: 'note' },
 				{ type: 'note', in: 'workspace' },
-				{ type: 'workspace', creator: 'owner', members: { manage: 'notes.admin', list: 'notes.read' } },
+				{
+					type: 'workspace',
+					creator: 'owner',
+					members: { manage: 'notes.admin', list: 'notes.read' },
+					lookups: ['notes.delete', 'notes.write'],
+				},
 			],
 			actions: [
 				{ action: 'contacts.read', description: 'Read contact messages' },

@@ -515,26 +515,25 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 }
 
 /**
- * One principal among the members of `scope`, for an endpoint whose object lies in it. The caller holds the endpoint's
- * `action` on some value of `chain`, the object's containment chain, which holds `scope`; it needs no `members.list`,
- * so it learns only whether the principal it named is a member, and its label where the directory shows labels.
+ * One principal among the members of `scope`, for an endpoint on, in or below its dimension. IAM establishes the
+ * authority itself, from nothing the application asserts: `action` must be one of the dimension's `lookups` (the
+ * actions of the approved endpoints that read this directory, from the reconciled schema), and the caller must hold it
+ * on `scope` itself (global included). IAM holds no containment below a value, so a grant on a contained object does
+ * not count. The caller learns only whether the principal it named is a member, and its label where the directory
+ * shows labels; an unknown id answers the same `null` as a non-member.
  */
 export async function findMember(services: Services, env: CallerEnv, ctx: RequestContext, input: FindMemberInput): Promise<FindMemberResult> {
 	const resolved = await resolveMemberCaller(services, env, input, false)
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
-	const [object] = input.chain
-	if (object === undefined) return invalid('a member lookup names the chain of its object')
-	const problem = scopeProblem(input.scope) ?? (await chainProblem(services, caller.app, object.type, input.chain))
+	const problem = scopeProblem(input.scope)
 	if (problem !== null) return invalid(problem)
-	if (!input.chain.some((scope) => scope.type === input.scope.type && scope.value === input.scope.value)) {
-		return invalid(`the chain of the lookup does not hold the ${input.scope.type} it looks in`)
-	}
 	const dimension = await services.repositories.appSchema.getScope(caller.app, input.scope.type)
 	if (dimension === null || dimension.members_list === null) {
 		return invalid(`scope '${input.scope.type}' declares no members`)
 	}
-	if (!input.chain.some((scope) => permits(caller.permissions, input.action, scope))) {
+	const lookups = dimension.members_lookup === null ? [] : parseStoredPermissions(dimension.members_lookup)
+	if (!lookups.includes(input.action) || !permits(caller.permissions, input.action, input.scope)) {
 		return NOT_ALLOWED
 	}
 	if (input.principalId === '' || input.principalId.length > MAX_SCOPE_PART_LENGTH) {

@@ -13,6 +13,8 @@ import {
 	type CspSource,
 	type DeclaredReach,
 	type DimensionArtifact,
+	directoryReach,
+	type EndpointDirectory,
 	type EndpointRequirement,
 	type EndpointRow,
 	type EndpointSource,
@@ -197,6 +199,7 @@ class ArtifactBuilder {
 		const tables = this.#checkTables()
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'files') ? FILES_PREFIX : null)
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'export') ? CONNECT_PREFIX : null)
+		const directories = this.#directories(dimensions)
 		const artifact: ContractArtifact = {
 			app: contract.app,
 			dimensions,
@@ -212,6 +215,7 @@ class ArtifactBuilder {
 			endpoints: this.#endpoints,
 			reservedPrefixes: this.#reservedPrefixes,
 			...(this.#kit ? { declared: this.#declared } : {}),
+			...(Object.keys(directories).length === 0 ? {} : { directories }),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -219,6 +223,18 @@ class ArtifactBuilder {
 			this.#problem('endpoints', error instanceof Error ? error.message : String(error))
 		}
 		return artifact
+	}
+
+	/** The member directory each endpoint reads, recorded so the approval and the digest cover the reach. */
+	#directories(dimensions: ContractArtifact['dimensions']): Record<string, EndpointDirectory> {
+		const directories: Record<string, EndpointDirectory> = {}
+		for (const row of this.#endpoints) {
+			const reach = directoryReach(dimensions, row)
+			if (reach !== null) {
+				directories[row.id] = reach
+			}
+		}
+		return directories
 	}
 
 	// ── Vocabulary ──────────────────────────────────────────────────────────────────────────────

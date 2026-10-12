@@ -10,6 +10,7 @@ import {
 	type AppWorkloadDef,
 	type ContractArtifact,
 	type DimensionArtifact,
+	directoryLookups,
 	endpointDelegation,
 	type EndpointRow,
 	type LinkMountArtifact,
@@ -25,7 +26,9 @@ import {
  */
 export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 	return {
-		scopes: Object.entries(artifact.dimensions).sort(([a], [b]) => byCodeUnit(a, b)).map(([type, dimension]) => scopeDef(type, dimension)),
+		scopes: Object.entries(artifact.dimensions).sort(([a], [b]) => byCodeUnit(a, b)).map(([type, dimension]) =>
+			scopeDef(type, dimension, directoryLookups(artifact, type))
+		),
 		actions: Object.entries(artifact.actions).sort(([a], [b]) => byCodeUnit(a, b)).map(([action, description]) => ({ action, description })),
 		roles: Object.fromEntries(Object.entries(artifact.roles).map(([key, role]) => [key, roleDef(key, role)])),
 		contract: true,
@@ -65,13 +68,14 @@ function byCodeUnit(a: string, b: string): number {
 	return a < b ? -1 : a > b ? 1 : 0
 }
 
-function scopeDef(type: string, dimension: DimensionArtifact): AppScopeDef {
+function scopeDef(type: string, dimension: DimensionArtifact, lookups: readonly string[]): AppScopeDef {
 	return {
 		type,
 		...(dimension.in === null ? {} : { in: dimension.in }),
 		...(dimension.creator === null ? {} : { creator: dimension.creator }),
 		...(dimension.members === null ? {} : { members: { manage: dimension.members.manage, list: dimension.members.list } }),
 		...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
+		...(lookups.length === 0 ? {} : { lookups: [...lookups] }),
 	}
 }
 

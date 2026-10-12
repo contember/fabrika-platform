@@ -575,10 +575,12 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   carries one grant, so it makes one membership change.
 - On every other endpoint `on` or `in` a dimension that declares members, or one below it,
   `ctx.members` is a read-only directory of the nearest such dimension, at the value the
-  `Ref`'s chain holds (`endpointDirectory` of `@fabrika/auth-core`): a deal endpoint reads
-  its org's. `ctx.members.get(principalId)` answers that member (`principalId`, `label`,
-  `disabled`) or `null`; IAM's `findMember` checks the endpoint's own action on the object's
-  chain, so an assignment validates the person it stores without a second action.
+  `Ref`'s chain holds: a deal endpoint reads its org's. The artifact records each endpoint's
+  reach (`directories`, derived by `directoryReach` and read by `endpointDirectory` of
+  `@fabrika/auth-core`). `ctx.members.get(principalId)` answers that member (`principalId`,
+  `label`, `disabled`) or `null`; IAM's `findMember` requires the endpoint's own action, one
+  of the dimension's reconciled `lookups`, held on the org itself (a grant on a company does
+  not count), so an assignment validates the person it stores without a second action.
   `ctx.members.list()` (with `roles`) exists only where the action is the directory's
   `members.list`, and IAM checks that action live on the directory's value, so a caller who
   holds it only below (on a company) is refused 403. No delegation grant, no email, no

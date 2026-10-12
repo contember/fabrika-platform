@@ -79,7 +79,6 @@ export const findMemberSchema = z.object({
 	scope: memberScopeSchema,
 	principalId: z.string(),
 	action: z.string(),
-	chain: z.array(memberScopeSchema),
 }).catch(rejectRpcInput)
 export const issueLinkSchema = z.object({ ...caller, mount: z.string(), chain: z.array(memberScopeSchema), days: z.number().finite() }).catch(
 	rejectRpcInput,

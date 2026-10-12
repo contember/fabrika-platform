@@ -151,6 +151,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				creatorRole: s.creator ?? null,
 				members: s.members ?? null,
 				directory: s.directory ?? null,
+				lookups: s.lookups ?? null,
 			})),
 			actions: schema.actions.map((a) => ({ action: a.action, description: a.description ?? null })),
 			roles: Object.entries(schema.roles).map(([roleKey, def]) => ({
@@ -210,6 +211,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 			...(r.creator_role !== null ? { creator: r.creator_role } : {}),
 			...(r.members_manage !== null && r.members_list !== null ? { members: { manage: r.members_manage, list: r.members_list } } : {}),
 			...(r.members_directory === 'labels' ? { directory: 'labels' } : {}),
+			...(r.members_lookup === null ? {} : { lookups: parseStoredPermissions(r.members_lookup) }),
 		})),
 		actions: actionRows.map((r) => ({ action: r.action, ...(r.description !== null ? { description: r.description } : {}) })),
 		roles,

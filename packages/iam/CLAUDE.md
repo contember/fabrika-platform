@@ -230,10 +230,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   the admin grant API). `listMembers` needs `members.list` there and shows ids and roles (an
   application's member directory); labels only to `members.manage`, or to `members.list` too where the dimension
   declares `directory: 'labels'` (`app_scopes.members_directory`) — a user's label spells its address; emails and
-  open invitations only to `members.manage`. `findMember` answers ONE principal for an endpoint below the dimension:
-  the caller holds the endpoint's action on some value of the object's chain (validated against the schema's
-  containment, and holding the scope), and the answer is the member (label by the same rule) or `null`, never which
-  check failed for an unknown id.
+  open invitations only to `members.manage`. `findMember` answers ONE principal for an endpoint on, in or below the
+  dimension, from nothing the application asserts: the action must be one of the dimension's `lookups` (reconciled
+  from the approved contract's `directories`, `app_scopes.members_lookup`) and the caller must hold it on the scope
+  itself; IAM knows no containment below a value, so a grant on a contained object never counts. The answer is the
+  member (label by the same rule) or `null`, the same for an unknown id.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE

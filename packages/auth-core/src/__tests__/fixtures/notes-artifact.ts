@@ -331,4 +331,9 @@ export const notesArtifact: ContractArtifact = {
 	},
 	endpoints,
 	reservedPrefixes: ['/api', '/machine', '/s/api', '/__fabrika/connect'],
+	// The procedures on or in a dimension below the workspace's member directory: each looks up one member.
+	directories: {
+		'api.notes.remove': { dimension: 'workspace', lists: false },
+		'machine.importNotes': { dimension: 'workspace', lists: false },
+	},
 }

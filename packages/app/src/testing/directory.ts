@@ -4,6 +4,7 @@
 
 import {
 	type ContractArtifact,
+	directoryLookups,
 	endpointMembers,
 	type FindMemberInput,
 	type FindMemberResult,
@@ -87,10 +88,10 @@ function findMember(artifact: ContractArtifact, callers: DirectoryCallers, input
 	if (dimension?.members === null || dimension?.members === undefined) {
 		return { ok: false, reason: 'invalid_request', message: `scope '${input.scope.type}' declares no members` }
 	}
-	if (!input.chain.some((scope) => scope.type === input.scope.type && scope.value === input.scope.value)) {
-		return { ok: false, reason: 'invalid_request', message: `the chain of the lookup does not hold the ${input.scope.type} it looks in` }
+	// As IAM: one of the dimension's lookup actions, held on the directory's value itself.
+	if (!directoryLookups(artifact, input.scope.type).includes(input.action) || !permits([...caller.perms], input.action, input.scope)) {
+		return { ok: false, reason: 'not_allowed' }
 	}
-	if (!input.chain.some((scope) => permits([...caller.perms], input.action, scope))) return { ok: false, reason: 'not_allowed' }
 	const found = callers.all().find(({ caller: member, memberships }) =>
 		member.id === input.principalId && rolesIn(artifact, memberships, input.scope).length > 0
 	)

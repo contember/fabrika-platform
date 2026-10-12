@@ -14,6 +14,7 @@ const scopeSchema = z.object({
 	creator: z.string().min(1).optional(),
 	members: z.object({ manage: z.string().min(1), list: z.string().min(1) }).optional(),
 	directory: z.literal('labels').optional(),
+	lookups: z.array(z.string().min(1)).optional(),
 })
 const actionSchema = z.object({ action: z.string().min(1), description: z.string().min(1).optional() })
 const roleSchema = z.object({
@@ -72,6 +73,12 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 		if (scope.members !== undefined) {
 			exactAction(['scopes', index, 'members', 'manage'], scope.members.manage)
 			exactAction(['scopes', index, 'members', 'list'], scope.members.list)
+		}
+		if (scope.lookups !== undefined && scope.members === undefined) {
+			issues.push({ path: ['scopes', index, 'lookups'], message: `scope ${quote(scope.type)} declares lookups without members` })
+		}
+		for (const [lookup, action] of (scope.lookups ?? []).entries()) {
+			exactAction(['scopes', index, 'lookups', lookup], action)
 		}
 	}
 	for (const scope of schema.scopes) {

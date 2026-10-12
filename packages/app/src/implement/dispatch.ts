@@ -468,8 +468,7 @@ export class ContractRuntime {
 		target: unknown,
 	): Readonly<Record<string, unknown>> {
 		const reads = facilities.members === null || facilities.members === 'manage' || row.requirement.kind !== 'action' ? null : facilities.members
-		const containers = row.requirement.kind === 'action' ? (this.#parts.containers.get(row.requirement.access.dimension) ?? []) : []
-		const directory = reads === null ? {} : { members: memberDirectory(membership, target, { endpoint: row.id, ...reads, containers }) }
+		const directory = reads === null ? {} : { members: memberDirectory(membership, target, { endpoint: row.id, ...reads }) }
 		if (facilities.members !== 'manage' && facilities.links.length === 0) {
 			return directory
 		}

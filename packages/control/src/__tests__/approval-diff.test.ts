@@ -166,6 +166,40 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(EMPTY_SNAPSHOT, labelled).changes).toContainEqual({ widens: true, line, review: 'closer' })
 	})
 
+	test('the member directory an endpoint reads is recorded: an approval before it was recorded widens, labels for closer review', () => {
+		const members = "workspace: { creator: 'owner', members: { manage: 'notes.delete', list: 'notes.read' } }"
+		const listed = snapshot(edited("workspace: { creator: 'owner' }", members))
+		const labelled = snapshot(edited("workspace: { creator: 'owner' }", members.replace(' } }', " }, directory: 'labels' }")))
+		/** The same contract as a framework compiled it before it recorded any directory reach. */
+		const unrecorded = (current: AccessSnapshot): AccessSnapshot => {
+			if (current.contract === null) throw new Error('the snapshot has a contract')
+			const { directories, ...contract } = current.contract
+			expect(directories).toEqual({ 'api.get': { dimension: 'workspace', lists: true }, 'api.remove': { dimension: 'workspace', lists: false } })
+			return { ...current, contract }
+		}
+		expect(classifyAccess(unrecorded(listed), listed)).toEqual({
+			outcome: 'widening',
+			changes: [{ widens: true, line: 'Endpoint `api.get` lists the members of `workspace`' }, {
+				widens: true,
+				line: 'Endpoint `api.remove` looks up one member of `workspace`',
+			}],
+		})
+		expect(classifyAccess(unrecorded(labelled), labelled).changes).toEqual([
+			{
+				widens: true,
+				line: "Endpoint `api.get` lists the members of `workspace`, with their labels, which spell users' email addresses",
+				review: 'closer',
+			},
+			{
+				widens: true,
+				line: "Endpoint `api.remove` looks up one member of `workspace`, with their labels, which spell users' email addresses",
+				review: 'closer',
+			},
+		])
+		expect(classifyAccess(listed, listed).outcome).toBe('unchanged')
+		expect(lines(listed, snapshot())).toContain('Endpoint `api.remove` no longer reads the members of `workspace`')
+	})
+
 	test('a membership role that loses its scope widens: it could then be granted globally', () => {
 		const candidate = snapshot(
 			edited(

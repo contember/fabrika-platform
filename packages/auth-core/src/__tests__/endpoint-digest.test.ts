@@ -97,7 +97,7 @@ describe('an application row keeps its digest byte for byte', () => {
 
 	test('every endpoint of the notes artifact, and the contract digest', () => {
 		expect(Object.fromEntries(notesArtifact.endpoints.map((endpoint) => [endpoint.id, endpointDigest(notesArtifact, endpoint)]))).toEqual(RECORDED)
-		expect(contractDigest(notesArtifact)).toBe('sha256:453d550ebe2c8a8215a06661e001e78cdec9ce9abf3dae96c460f88edcf72500')
+		expect(contractDigest(notesArtifact)).toBe('sha256:ff117b4a84bd00e4501b10fc3c222e8bd6e47dd6d7b10fae8e6277807ad6b023')
 	})
 })
 

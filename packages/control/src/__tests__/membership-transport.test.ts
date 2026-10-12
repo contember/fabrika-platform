@@ -2,7 +2,7 @@
 // a membership or share-link operation, sealed in the vault, rotated before IAM stops honouring it, and forgotten with
 // the need.
 
-import { type ContractArtifact, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
+import { type ContractArtifact, directoryReach, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
@@ -66,6 +66,16 @@ describe('needsMembershipTransport', () => {
 	})
 
 	test('an endpoint on or in a dimension with members, or below one, needs it for its member directory; a list over one does not', () => {
+		/** The artifact with the directory reach `buildArtifact` records for its endpoints. */
+		const recorded = (artifact: ContractArtifact): ContractArtifact => {
+			const directories = Object.fromEntries(
+				artifact.endpoints.flatMap((row) => {
+					const reach = directoryReach(artifact.dimensions, row)
+					return reach === null ? [] : [[row.id, reach]]
+				}),
+			)
+			return { ...artifact, directories }
+		}
 		const reads = notesArtifact.endpoints.flatMap((row) => (row.id === 'api.notes.list' && row.requirement !== null ? [row] : []))
 		const listing: ContractArtifact = {
 			...notesArtifact,
@@ -75,8 +85,8 @@ describe('needsMembershipTransport', () => {
 				requirement: { kind: 'action', action: 'notes.read', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
 			})),
 		}
-		expect(needsMembershipTransport(listing)).toBe(true)
-		expect(needsMembershipTransport({ ...listing, endpoints: reads })).toBe(false)
+		expect(needsMembershipTransport(recorded(listing))).toBe(true)
+		expect(needsMembershipTransport(recorded({ ...listing, endpoints: reads }))).toBe(false)
 		// An endpoint on an object below the dimension looks a member up in its directory, whatever its action.
 		const below: ContractArtifact = {
 			...listing,
@@ -85,7 +95,9 @@ describe('needsMembershipTransport', () => {
 				requirement: { kind: 'action', action: 'notes.write', access: { form: 'on', dimension: 'note', from: 'id' } },
 			})),
 		}
-		expect(needsMembershipTransport(below)).toBe(true)
+		expect(needsMembershipTransport(recorded(below))).toBe(true)
+		// The reach is what the approved artifact records: one that records none reads no directory.
+		expect(needsMembershipTransport({ ...below, directories: {} })).toBe(false)
 	})
 })
 

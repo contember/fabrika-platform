@@ -5,7 +5,7 @@
 export const SERVER_FAULTS = {
 	iam_unavailable: 'IAM could not be reached or could not complete the operation',
 	delegation_missing: "a membership endpoint was reached without the proxy's delegation grant",
-	iam_answer_mismatch: 'IAM answered for another scope than the request asked for',
+	iam_answer_mismatch: 'IAM answered for another scope or principal than the request asked for',
 	link_mount: 'the endpoint asked for a link of a mount it does not issue',
 	directory_unlocated: "no table locates the value of the member directory's dimension that the endpoint's object lies in",
 	facility_unbound: 'a facility the endpoint needs (assets, data layer, framework tables or IAM transport) was not bound at boot',

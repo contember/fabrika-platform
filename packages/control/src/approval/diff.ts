@@ -9,6 +9,8 @@ import {
 	type ContractArtifact,
 	type DeclaredReach,
 	type DimensionArtifact,
+	type EndpointDirectory,
+	endpointMembers,
 	type EndpointRow,
 	type FileCollectionArtifact,
 	JOB_SITE_PREFIX,
@@ -157,6 +159,56 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: tableChanges,
 	})
 	compareDeclared(changes, baseline.declared, candidate.declared)
+	compareDirectories(changes, baseline, candidate)
+}
+
+// ── Member directories ──────────────────────────────────────────────────────────────────────────
+
+type Directories = Readonly<Record<string, EndpointDirectory>>
+
+/**
+ * The directory reach of the baseline: what it records, or, for an artifact compiled before it recorded any, the one
+ * reach the runtime gave then: `list()` of an endpoint whose action is its own dimension's `members.list`.
+ */
+function baselineDirectories(artifact: ContractArtifact): Directories {
+	if (artifact.directories !== undefined) return artifact.directories
+	const implied: Record<string, EndpointDirectory> = {}
+	for (const row of artifact.endpoints) {
+		if (row.requirement?.kind === 'action' && endpointMembers(artifact, row) === 'list') {
+			implied[row.id] = { dimension: row.requirement.access.dimension, lists: true }
+		}
+	}
+	return implied
+}
+
+/**
+ * The member directory each endpoint reads. A new reach widens: an endpoint that looks a member up learns whether a
+ * person it names is a member, one that lists learns them all; where the dimension shows labels, the approver reads
+ * the code behind it, because a label spells an email address. A removed reach narrows.
+ */
+function compareDirectories(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): void {
+	const before = baselineDirectories(baseline)
+	const after = candidate.directories ?? {}
+	const reachOf = (reach: EndpointDirectory): string =>
+		reach.lists ? `lists the members of \`${reach.dimension}\`` : `looks up one member of \`${reach.dimension}\``
+	for (const endpoint of union(Object.keys(before), Object.keys(after))) {
+		const from = before[endpoint]
+		const to = after[endpoint]
+		if (to === undefined) {
+			if (from !== undefined) changes.add(removal(`Endpoint \`${endpoint}\` no longer reads the members of \`${from.dimension}\``))
+			continue
+		}
+		if (from !== undefined && from.dimension === to.dimension && (from.lists || !to.lists)) {
+			if (from.lists && !to.lists) changes.add(removal(`Endpoint \`${endpoint}\` no longer lists the members of \`${to.dimension}\``))
+			continue
+		}
+		const labels = candidate.dimensions[to.dimension]?.directory === 'labels'
+		changes.add(
+			labels
+				? closerWidening(`Endpoint \`${endpoint}\` ${reachOf(to)}, with their labels, which spell users' email addresses`)
+				: widening(`Endpoint \`${endpoint}\` ${reachOf(to)}`),
+		)
+	}
 }
 
 // ── Steps off the paved road ────────────────────────────────────────────────────────────────────

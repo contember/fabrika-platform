@@ -203,7 +203,7 @@ describe('the membership methods over /rpc/*', () => {
 		{ method: 'listMembers', body: { ...caller, scope }, result: { ok: true, members: [], invitations: [] } },
 		{
 			method: 'findMember',
-			body: { ...caller, scope, principalId: 'p', action: 'notes.read', chain: [{ type: 'note', value: 'n1' }, scope] },
+			body: { ...caller, scope, principalId: 'p', action: 'notes.read' },
 			result: { ok: true, member: { principalId: 'p', label: null, disabled: false } },
 		},
 		{
@@ -234,7 +234,7 @@ describe('the membership methods over /rpc/*', () => {
 			field: 'member',
 		},
 		{ method: 'issueLink', body: { ...caller, mount: 'shared', chain: [{ type: 'note' }], days: 3 }, field: 'chain' },
-		{ method: 'findMember', body: { ...caller, scope, action: 'notes.read', chain: [scope] }, field: 'principalId' },
+		{ method: 'findMember', body: { ...caller, scope, action: 'notes.read' }, field: 'principalId' },
 		{ method: 'createScope', body: { ...caller, dimension: 'workspace' }, field: 'delegation' },
 	])('$method refuses a malformed $field before it reaches IAM', async ({ method, body, field }) => {
 		const { rpc, response } = call(method, body)

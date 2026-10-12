@@ -53,7 +53,7 @@ export interface Member {
 
 /**
  * `ctx.members` of an endpoint on or in a dimension below a member directory (its own dimension's, or the nearest one
- * containing it): the members of the value its object lies in. IAM checks the endpoint's own action on the object.
+ * containing it): the members of the value its object lies in. IAM checks the endpoint's own action on that value.
  */
 export interface MemberLookup {
 	/** The principal, when it is a member of the directory's value; null otherwise, an unknown id included. */
@@ -180,24 +180,11 @@ export function memberManagement(request: MembershipRequest): MemberManagement<s
 	})
 }
 
-/** The directory an endpoint reads: the dimension that declares it, the containers of the endpoint's dimension, nearest first. */
+/** The directory an endpoint reads: the dimension that declares it, and whether the endpoint may list it. */
 export interface DirectoryReach {
 	readonly endpoint: string
 	readonly dimension: string
 	readonly lists: boolean
-	readonly containers: readonly string[]
-}
-
-/** The object of the request's own target, then every value containing it that the target's chain holds, outward. */
-function chainOf(grant: RefGrant, containers: readonly string[]): Scope[] {
-	const chain: Scope[] = [scopeOf(grant)]
-	for (const container of containers) {
-		const value = grant.chain.get(container)
-		if (value !== undefined) {
-			chain.push({ type: container, value })
-		}
-	}
-	return chain
 }
 
 /**
@@ -206,7 +193,7 @@ function chainOf(grant: RefGrant, containers: readonly string[]): Scope[] {
  * boots, and only a call fails.
  */
 export function memberDirectory(request: MembershipRequest | null, target: unknown, reach: DirectoryReach): MemberLookup | MemberDirectory {
-	const directoryOf = (): { readonly request: MembershipRequest; readonly grant: RefGrant; readonly scope: Scope } => {
+	const directoryOf = (): { readonly request: MembershipRequest; readonly scope: Scope } => {
 		if (request === null) {
 			throw new ServerFault('facility_unbound', `'${reach.endpoint}' reads members, and the runtime adapter supplies no IAM membership transport`, 503)
 		}
@@ -218,21 +205,22 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 				`'${reach.endpoint}' reads the members of ${reach.dimension}, and no table locates the ${grant.dimension}'s ${reach.dimension}`,
 			)
 		}
-		return { request, grant, scope: { type: reach.dimension, value } }
+		return { request, scope: { type: reach.dimension, value } }
 	}
 	const lookup: MemberLookup = {
 		async get(principalId: string): Promise<Member | null> {
-			const { request, grant, scope } = directoryOf()
+			const { request, scope } = directoryOf()
 			if (typeof principalId !== 'string' || principalId === '') {
 				return null
 			}
-			const found = await ask(
-				() => request.iam.findMember(request.caller, scope, principalId, request.action, chainOf(grant, reach.containers)),
-				'look up a member',
-			)
-			return found.member === null
-				? null
-				: Object.freeze({ principalId: found.member.principalId, label: found.member.label, disabled: found.member.disabled })
+			const found = await ask(() => request.iam.findMember(request.caller, scope, principalId, request.action), 'look up a member')
+			if (found.member === null) {
+				return null
+			}
+			if (found.member.principalId !== principalId) {
+				throw new ServerFault('iam_answer_mismatch', `IAM answered '${found.member.principalId}' for a lookup of another principal`)
+			}
+			return Object.freeze({ principalId: found.member.principalId, label: found.member.label, disabled: found.member.disabled })
 		},
 	}
 	if (!reach.lists) {
@@ -277,7 +265,13 @@ export function linkIssuing(
 					`'${options.mount}' is not a link mount this endpoint issues (allowed: ${mounts.map((m) => m.name).join(', ')})`,
 				)
 			}
-			const chain = chainOf(grant, containers)
+			const chain: Scope[] = [scopeOf(grant)]
+			for (const container of containers) {
+				const value = grant.chain.get(container)
+				if (value !== undefined) {
+					chain.push({ type: container, value })
+				}
+			}
 			const issued = await ask(() => request.iam.issueLink(request.caller, mount.name, chain, options.days), 'issue a share link')
 			return Object.freeze({ id: issued.id, url: `${joinPath(mount.prefix, '')}#${issued.key}`, expiresAt: issued.expiresAt })
 		},

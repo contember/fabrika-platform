@@ -3,7 +3,7 @@
 // batch — and the one property no single connection can show: two concurrent revokes of the last two
 // holders of the creator role leave one holder. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
-import type { Scope } from '@fabrika/auth-core'
+import type { AppSchema, AppScopeDef, Scope } from '@fabrika/auth-core'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -98,14 +98,14 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		if (!listed.ok) throw new Error('expected a list')
 		expect(listed.members.map((member) => member.principalId).sort()).toEqual([owner.id, editor.id, invitee.id].sort())
 
-		const lookup = {
-			app: APP,
-			credential: await owner.token(),
-			requestId: 'pg-find',
-			scope,
-			action: 'notes.read',
-			chain: [{ type: 'note', value: 'n1' }, scope],
+		const lookups: AppSchema = {
+			...NOTES_SCHEMA,
+			scopes: NOTES_SCHEMA.scopes.map((
+				dimension,
+			): AppScopeDef => (dimension.type === 'workspace' ? { ...dimension, lookups: ['notes.read'] } : dimension)),
 		}
+		expect((await f.putSchema(lookups)).status).toBe(200)
+		const lookup = { app: APP, credential: await owner.token(), requestId: 'pg-find', scope, action: 'notes.read' }
 		expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...lookup, principalId: editor.id })).toEqual({
 			ok: true,
 			member: { principalId: editor.id, label: `editor-${fixtureSeq}@example.test`, disabled: false },

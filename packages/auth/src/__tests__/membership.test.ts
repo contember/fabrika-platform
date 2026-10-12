@@ -69,7 +69,7 @@ describe('IamMembership', () => {
 		expect(await membership.createScope(caller, 'g', 'workspace')).toEqual({ ok: true, scope, role: 'owner' })
 		expect(await membership.revokeMember(caller, 'g', scope, { principalId: 'p1' })).toEqual({ ok: false, reason: 'last_creator' })
 		expect(await membership.issueLink(caller, 'shared', [scope], 3)).toEqual({ ok: true, key: 'px_k', id: 'c1', expiresAt: 2 })
-		expect(await membership.findMember(caller, scope, 'p2', 'notes.read', [scope])).toEqual({
+		expect(await membership.findMember(caller, scope, 'p2', 'notes.read')).toEqual({
 			ok: true,
 			member: { principalId: 'p2', label: null, disabled: false },
 		})

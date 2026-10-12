@@ -28,16 +28,22 @@ export function endpointMembers(artifact: Pick<ContractArtifact, 'dimensions'>, 
 /**
  * The member directory an endpoint reads through `ctx.members` when it does not manage members: the nearest dimension,
  * its own or one containing it, that declares members. Every such endpoint (access `on` or `in`) may look up one member
- * it names; IAM checks the endpoint's own action on the object's chain. `lists` where the action is that dimension's
- * `members.list`: only then may it list the members, which IAM checks live on the directory's value.
+ * it names; `lists` where its action is that dimension's `members.list`, which alone may list them. IAM checks either
+ * action live on the directory's value itself.
  */
 export interface EndpointDirectory {
 	readonly dimension: string
 	readonly lists: boolean
 }
 
-export function endpointDirectory(artifact: Pick<ContractArtifact, 'dimensions'>, row: EndpointRow): EndpointDirectory | null {
-	if (row.requirement?.kind !== 'action' || endpointMembers(artifact, row) === 'manage') {
+/**
+ * The directory reach an endpoint's access form gives it, from the dimensions alone: what `buildArtifact` records in
+ * `ContractArtifact.directories`. Nothing else derives it, so an approved artifact holds every reach the runtime grants.
+ */
+export function directoryReach(dimensions: ContractArtifact['dimensions'], row: EndpointRow): EndpointDirectory | null {
+	// Only a procedure of an RPC mount has a handler with `ctx.members`: a file endpoint and an export have none.
+	const procedure = (row.kind === 'query' || row.kind === 'mutation') && row.source.kind === 'mount'
+	if (!procedure || row.requirement?.kind !== 'action' || endpointMembers({ dimensions }, row) === 'manage') {
 		return null
 	}
 	const { action, access } = row.requirement
@@ -47,9 +53,9 @@ export function endpointDirectory(artifact: Pick<ContractArtifact, 'dimensions'>
 	}
 	const seen = new Set<string>()
 	let dimension: string | null = access.dimension
-	while (dimension !== null && !seen.has(dimension) && Object.hasOwn(artifact.dimensions, dimension)) {
+	while (dimension !== null && !seen.has(dimension) && Object.hasOwn(dimensions, dimension)) {
 		seen.add(dimension)
-		const definition: DimensionArtifact | undefined = artifact.dimensions[dimension]
+		const definition: DimensionArtifact | undefined = dimensions[dimension]
 		if (definition === undefined) {
 			return null
 		}
@@ -59,6 +65,26 @@ export function endpointDirectory(artifact: Pick<ContractArtifact, 'dimensions'>
 		dimension = definition.in
 	}
 	return null
+}
+
+/** The directory reach the artifact records for the endpoint; an artifact compiled before it recorded any grants none. */
+export function endpointDirectory(artifact: Pick<ContractArtifact, 'directories'>, row: EndpointRow): EndpointDirectory | null {
+	const directories = artifact.directories
+	return directories !== undefined && Object.hasOwn(directories, row.id) ? (directories[row.id] ?? null) : null
+}
+
+/**
+ * The actions of the endpoints whose directory is `dimension`, sorted: what IAM's schema holds as the dimension's
+ * `lookups`, so IAM answers a lookup only for an action an approved endpoint below the dimension holds.
+ */
+export function directoryLookups(artifact: Pick<ContractArtifact, 'directories' | 'endpoints'>, dimension: string): string[] {
+	const actions = new Set<string>()
+	for (const row of artifact.endpoints) {
+		if (row.requirement?.kind === 'action' && endpointDirectory(artifact, row)?.dimension === dimension) {
+			actions.add(row.requirement.action)
+		}
+	}
+	return [...actions].sort()
 }
 
 /** Every request carries the caller's own credential; `app` is superseded by the credential's verified app. */
@@ -167,15 +193,14 @@ export interface InvitationItem {
 export type ListMembersResult = { ok: true; members: MemberItem[]; invitations: InvitationItem[] } | MembershipFailure
 
 /**
- * Look up ONE principal in the members of `scope`, for an endpoint below it. `chain` names the endpoint's object and
- * every value containing it, outward, as the app resolved it from its database, and holds `scope`. The caller holds
- * `action`, the endpoint's own, on some value of the chain. Listing stays with `members.list`.
+ * Look up ONE principal in the members of `scope`, for an endpoint on, in or below its dimension. `action` is the
+ * endpoint's own: IAM answers only when the schema lists it among the dimension's `lookups` and the caller holds it on
+ * `scope` itself, so the application names no chain IAM would have to trust. Listing stays with `members.list`.
  */
 export interface FindMemberInput extends MembershipCaller {
 	scope: Scope
 	principalId: string
 	action: string
-	chain: Scope[]
 }
 
 export interface FoundMember {
