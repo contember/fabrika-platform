@@ -3,7 +3,7 @@
 // files may import.
 
 import type { FileTables } from './file-tables'
-import type { FormAdmissions } from './form-admissions'
+import type { FormAdmissions, InboxQuota } from './form-admissions'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { DataAccess } from './orm'
@@ -16,8 +16,11 @@ export type Locator = (dimension: string, id: string) => Promise<ReadonlyMap<str
 export interface FrameworkTables {
 	/** Why `fields` of form `form` cannot be appended to an inbox table of this layer; empty when they can. */
 	inboxProblems(form: string, fields: readonly string[]): readonly string[]
-	/** Appends one row of `values` (column → value) to the inbox table of `form`. */
-	appendToInbox(form: string, values: Readonly<Record<string, unknown>>): Promise<void>
+	/**
+	 * Appends one row of `values` (column → value) to the inbox table of `form`, taking one from `quota` in the same
+	 * transaction; `false`, with nothing written, when the bucket is full.
+	 */
+	appendToInbox(form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota): Promise<boolean>
 	readonly webhooks: WebhookTables
 	readonly jobs: JobLeases
 	/** A form's admission counters and the challenge tokens it accepted. */

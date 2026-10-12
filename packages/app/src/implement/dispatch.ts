@@ -579,8 +579,8 @@ export class ContractRuntime {
 	/**
 	 * A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. In order: the
 	 * client's request bucket (before the body is read), the input, the honeypot (a filled one is answered as accepted
-	 * and writes nothing), the challenge, then the form's bucket of accepted submissions, which nothing refused before it
-	 * can empty.
+	 * and writes nothing), the challenge, then the form's bucket of accepted submissions with the row, in one
+	 * transaction, so nothing refused or failed can empty it.
 	 */
 	async #form(served: Extract<ServedEndpoint, { kind: 'form' }>, request: Request): Promise<Response> {
 		admitContentType(served.row, request)
@@ -597,10 +597,10 @@ export class ContractRuntime {
 		if (admission.challenge !== null) {
 			await this.#challenge(served.form, admission.challenge, submission.token, request)
 		}
-		if (!(await admissions.take(served.form, ACCEPTED_BUCKET, admission.perForm))) {
+		// One transaction: a row that fails to insert gives its place in the form's bucket back.
+		if (!(await this.#framework().appendToInbox(served.form, submission.row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }))) {
 			throw formRateLimited(served.row)
 		}
-		await this.#framework().appendToInbox(served.form, submission.row)
 		return jsonResponse({ result: { received: true } }, 200)
 	}
 
@@ -828,7 +828,42 @@ function strictInput(row: EndpointRow, schema: Schema, value: unknown): Readonly
 	if (!isRecord(parsed.data)) {
 		throw new BadRequestError(`'${row.id}': the input is not an object`)
 	}
+	const unstorable = nulAt(parsed.data, [])
+	if (unstorable !== null) {
+		const path = unstorable.join('.')
+		throw new HttpError(400, 'validation', `${path || 'input'}: a string may not contain U+0000`, {
+			issues: [{ path, code: 'invalid_format', message: 'a string may not contain U+0000' }],
+		})
+	}
 	return parsed.data
+}
+
+/**
+ * The path of the first string, or record key, holding U+0000. Postgres `text` cannot store one, so a value the schema
+ * admits would otherwise fail its statement as a 500 after the request was admitted.
+ */
+function nulAt(value: unknown, path: readonly string[]): readonly string[] | null {
+	if (typeof value === 'string') {
+		return value.includes('\u0000') ? path : null
+	}
+	if (Array.isArray(value)) {
+		for (const [index, item] of value.entries()) {
+			const found = nulAt(item, [...path, String(index)])
+			if (found !== null) {
+				return found
+			}
+		}
+		return null
+	}
+	if (isRecord(value)) {
+		for (const [key, item] of Object.entries(value)) {
+			const found = key.includes('\u0000') ? [...path, key] : nulAt(item, [...path, key])
+			if (found !== null) {
+				return found
+			}
+		}
+	}
+	return null
 }
 
 /** The strictly parsed input; a procedure without input takes an empty body or `{}`. */
@@ -856,11 +891,16 @@ async function readInput(
 
 /** A canonical path's segments all decode; a value that does not is no id of anything. */
 function decodePathParameter(raw: string): string {
+	let decoded: string
 	try {
-		return decodeURIComponent(raw)
+		decoded = decodeURIComponent(raw)
 	} catch {
 		throw new BadRequestError('A path parameter does not decode')
 	}
+	if (decoded.includes('\u0000')) {
+		throw new BadRequestError('A path parameter may not contain U+0000')
+	}
+	return decoded
 }
 
 /** Removes the `from` field: the only copy of that id the handler gets is the checked capability. */

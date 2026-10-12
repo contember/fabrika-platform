@@ -33,7 +33,7 @@ import {
 } from './description'
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { fileTables } from './file-tables'
-import { formAdmissions } from './form-admissions'
+import { formAdmissions, type InboxQuota, takeFromBucket } from './form-admissions'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
@@ -1161,7 +1161,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		files: fileTables(models, () => runtimeOf(connection)),
 		framework: freeze({
 			inboxProblems: (form: string, fields: readonly string[]) => inboxProblems(models, form, fields),
-			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>) => appendToInbox(models, runtimeOf(connection), form, values),
+			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota) =>
+				appendToInbox(models, runtimeOf(connection), form, values, quota),
 			webhooks: webhookTables(() => runtimeOf(connection)),
 			jobs: jobLeases(() => runtimeOf(connection)),
 			forms: formAdmissions(() => runtimeOf(connection)),
@@ -1241,18 +1242,34 @@ function inboxProblems(models: TableModels, form: string, fields: readonly strin
 	return problems
 }
 
-/** One row of the form's declared fields; an inbox answers nothing, so the form reads nothing back. */
-async function appendToInbox(models: TableModels, runtime: DataLayerRuntime, form: string, values: Readonly<Record<string, unknown>>): Promise<void> {
+/**
+ * One row of the form's declared fields, taken from the form's `quota` bucket in the same transaction: a row that
+ * fails to insert gives its place back. `false`, with nothing written, when the bucket is full. An inbox answers
+ * nothing, so the form reads nothing back.
+ */
+async function appendToInbox(
+	models: TableModels,
+	runtime: DataLayerRuntime,
+	form: string,
+	values: Readonly<Record<string, unknown>>,
+	quota: InboxQuota,
+): Promise<boolean> {
 	const inbox = inboxOf(models, form)
 	if (inbox === undefined) {
 		throw new QueryRefusedError('unknown_table', `no table is the inbox of ${form}`)
 	}
 	const row = readValues(values, inbox.columns, 'insert', inbox)
-	await sessionOf(runtime).run(insertNode(inbox.name, row, undefined), {
-		root: 'InsertQueryNode',
-		table: inbox.name,
-		joins: {},
-		scope: undefined,
+	return await sessionOf(runtime).transaction(async (transaction) => {
+		if (!(await takeFromBucket(transaction, form, quota.bucket, quota.limit))) {
+			return false
+		}
+		await transaction.run(insertNode(inbox.name, row, undefined), {
+			root: 'InsertQueryNode',
+			table: inbox.name,
+			joins: {},
+			scope: undefined,
+		})
+		return true
 	})
 }
 

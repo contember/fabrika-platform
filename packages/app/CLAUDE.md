@@ -364,7 +364,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   boot without one (or with one under 32 characters); the Worker adapter and the test kit set none.
 - **Per request, in this order** (ADR-0012 §5): proxy secret → canonical path → `planEndpoint` →
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
-  requirement (`satisfies`) → admission → strict input → access form → remove the
+  requirement (`satisfies`) → admission → strict input (a string or key holding U+0000, which Postgres `text` cannot
+  store, is a 400 like any other refused value; so is a path parameter holding one) → access form → remove the
   `from` field → handler → output projection → the header policy. Caller kind,
   requirement and access form are authorization; same-origin and content type are
   admission. Neither is the proxy's enforcement decision; never reorder them so that admission or input
@@ -502,9 +503,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **A form's admission is two buckets in the application's database, in a fixed order** (`#form`): the
   client's request bucket (`rate.perClient`), before the body is read; the input; the honeypot (a filled one
   answers the constant and writes nothing); the challenge; then the form's bucket of accepted submissions
-  (`rate.perForm`), just before the insert. Nothing refused before the last bucket takes from it, so a flood of
-  failed challenges cannot empty it; never move it earlier. Each bucket is one statement of `@fabrika/db`'s
-  `FormAdmissions` (`FORM_LIMITS` holds the defaults), never a counter in the process. The client is
+  (`rate.perForm`), taken in the insert's own transaction (`appendToInbox`'s quota), so a row the database refuses
+  gives its place back. Nothing refused or failed takes from it, so a flood of failed challenges or broken rows
+  cannot empty it; never move it before the challenge or out of that transaction. Each bucket is one statement of
+  `@fabrika/db`'s `FormAdmissions` (`FORM_LIMITS` holds the defaults), never a counter in the process. The client is
   `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64, kept as a digest; never read another
   forwarding header. Admission is not authorization.
 - **A form's challenge is verified before its row and recorded after it passed** (`challenge.ts`). The provider

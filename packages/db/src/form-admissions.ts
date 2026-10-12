@@ -4,10 +4,16 @@
 // `frameworkTablesOf`. Each operation is one statement, so two instances never read a counter and then write it, and
 // each prunes a bounded batch of expired rows of its own table, so neither table grows past what the last minutes hold.
 
-import { runFixedStatement, sessionOf } from './database'
+import { runFixedStatement, type Session, sessionOf } from './database'
 import { QueryRefusedError } from './errors'
 import { FORM_ADMISSIONS_TABLE, FORM_CHALLENGES_TABLE } from './migrations'
 import type { DataLayerRuntime } from './store'
+
+/** The bucket of `fabrika_form_admissions` an inbox append takes from, in the append's own transaction. */
+export interface InboxQuota {
+	readonly bucket: string
+	readonly limit: number
+}
 
 export interface FormAdmissions {
 	/**
@@ -57,13 +63,16 @@ function positiveInteger(value: number, what: string): number {
 	return value
 }
 
+/** One take of `bucket` in `session`, which may be a transaction: rolled back with it, the take is given back. */
+export async function takeFromBucket(session: Session, form: string, bucket: string, limit: number): Promise<boolean> {
+	const rows = await runFixedStatement(session, SQL_TAKE, [form, bucket, positiveInteger(limit, 'a form limit')])
+	return rows.length > 0
+}
+
 export function formAdmissions(runtime: () => DataLayerRuntime): FormAdmissions {
 	const session = () => sessionOf(runtime())
 	return Object.freeze({
-		async take(form: string, bucket: string, limit: number): Promise<boolean> {
-			const rows = await runFixedStatement(session(), SQL_TAKE, [form, bucket, positiveInteger(limit, 'a form limit')])
-			return rows.length > 0
-		},
+		take: (form: string, bucket: string, limit: number): Promise<boolean> => takeFromBucket(session(), form, bucket, limit),
 
 		async recordChallenge(form: string, tokenDigest: string, retainMs: number): Promise<boolean> {
 			const rows = await runFixedStatement(session(), SQL_RECORD_CHALLENGE, [form, tokenDigest, positiveInteger(retainMs, 'a retention')])

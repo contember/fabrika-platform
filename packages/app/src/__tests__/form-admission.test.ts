@@ -195,6 +195,46 @@ describe.skipIf(!hasPostgres)("the form's ceiling", () => {
 		expect(await count('messages')).toBe(4)
 	})
 
+	test('a row the database refuses gives its place back: failed inserts cannot empty the ceiling', async () => {
+		const app = start()
+		await admin((sql) => sql.unsafe(`alter table ${schema}.messages add constraint messages_short check (length(body) < 50)`))
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			for (let index = 0; index < 6; index++) {
+				expect((await contact(app, `198.51.100.${index + 40}`, 'x'.repeat(60))).status).toBe(500)
+			}
+		} finally {
+			log.mockRestore()
+			await admin((sql) => sql.unsafe(`alter table ${schema}.messages drop constraint messages_short`))
+		}
+		const statuses: number[] = []
+		for (let index = 0; index < 5; index++) {
+			statuses.push((await contact(app, `192.0.2.${index + 40}`)).status)
+		}
+		expect(statuses).toEqual([200, 200, 200, 200, 429])
+		expect(await count('messages')).toBe(4)
+	})
+
+	test('a string holding U+0000, which the schema admits and text cannot store, is a 400 that takes nothing from the ceiling', async () => {
+		const app = start()
+		for (let index = 0; index < 6; index++) {
+			const sent = await contact(app, `198.51.100.${index + 60}`, 'nul \u0000 here')
+			expect(sent.status).toBe(400)
+			expect(sent.body).toEqual({
+				error: {
+					type: 'validation',
+					message: 'body: a string may not contain U+0000',
+					issues: [{ path: 'body', code: 'invalid_format', message: 'a string may not contain U+0000' }],
+				},
+			})
+		}
+		const statuses: number[] = []
+		for (let index = 0; index < 5; index++) {
+			statuses.push((await contact(app, `192.0.2.${index + 60}`)).status)
+		}
+		expect(statuses).toEqual([200, 200, 200, 200, 429])
+	})
+
 	test('a past minute is expired: the next admission prunes its rows', async () => {
 		const app = start()
 		await admin((sql) =>

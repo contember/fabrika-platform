@@ -57,6 +57,8 @@ afterAll(async () => {
 })
 
 const W1 = { type: 'workspace', value: 'w1' }
+/** A bucket no test fills: these appends are about the row, not the form's admission. */
+const QUOTA = { bucket: 'accepted', limit: 1000 }
 
 describe('the inbox check, before anything is bound', () => {
 	test('names a form without an inbox and a field that is not a column', () => {
@@ -79,17 +81,34 @@ describe('the inbox check, before anything is bound', () => {
 
 describe.skipIf(!hasPostgres)('the framework tables on Postgres', () => {
 	test('an inbox append writes one row of the declared columns and answers nothing', async () => {
-		await framework.appendToInbox('contact', { id: 'm1', email: 'a@example.com', body: 'hello' })
+		expect(await framework.appendToInbox('contact', { id: 'm1', email: 'a@example.com', body: 'hello' }, QUOTA)).toBe(true)
 		const rows = await admin((sql) => sql.unsafe(`select id, email, body from ${schema}.contact_messages`))
 		expect([...rows]).toEqual([{ id: 'm1', email: 'a@example.com', body: 'hello' }])
 	})
 
+	test("a row that fails to insert gives its place in the form's bucket back, and a full bucket appends nothing", async () => {
+		const quota = { bucket: `accepted-${Bun.randomUUIDv7()}`, limit: 2 }
+		const taken = async () => {
+			const [row] = await admin((sql) => sql.unsafe(`select count from ${schema}.fabrika_form_admissions where bucket = $1`, [quota.bucket]))
+			return row?.count ?? 0
+		}
+		const id = `q-${Bun.randomUUIDv7()}`
+		expect(await framework.appendToInbox('contact', { id, email: 'a@example.com', body: 'first' }, quota)).toBe(true)
+		// The same key again: the insert fails, and its take is rolled back with it.
+		await expect(framework.appendToInbox('contact', { id, email: 'a@example.com', body: 'again' }, quota)).rejects.toThrow()
+		expect(await taken()).toBe(1)
+		expect(await framework.appendToInbox('contact', { id: `${id}-2`, email: 'a@example.com', body: 'second' }, quota)).toBe(true)
+		expect(await framework.appendToInbox('contact', { id: `${id}-3`, email: 'a@example.com', body: 'third' }, quota)).toBe(false)
+		const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.contact_messages where id like $1`, [`${id}%`]))
+		expect(row?.n).toBe(2)
+	})
+
 	test('an inbox append refuses an undeclared column and a value the layer cannot bind', async () => {
-		await expect(framework.appendToInbox('contact', { id: 'm2', email: 'a@example.com', body: 'x', admin: true })).rejects.toBeInstanceOf(
+		await expect(framework.appendToInbox('contact', { id: 'm2', email: 'a@example.com', body: 'x', admin: true }, QUOTA)).rejects.toBeInstanceOf(
 			QueryRefusedError,
 		)
-		await expect(framework.appendToInbox('contact', { id: 'm3', email: ['a', 'b'], body: 'x' })).rejects.toBeInstanceOf(QueryRefusedError)
-		await expect(framework.appendToInbox('feedback', { id: 'm4' })).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(framework.appendToInbox('contact', { id: 'm3', email: ['a', 'b'], body: 'x' }, QUOTA)).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(framework.appendToInbox('feedback', { id: 'm4' }, QUOTA)).rejects.toBeInstanceOf(QueryRefusedError)
 	})
 
 	test('a binding is found only under its own webhook, and removed only from its own scope', async () => {

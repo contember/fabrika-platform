@@ -56,7 +56,8 @@ provisioning credential `FABRIKA_APP_DATABASE_URL`, on `app_<FABRIKA_APP_ID>`; `
 the runtime's `CapabilityAuthority` (one per `boot`), which binds each capability to its request, through
 `@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
 table's containment columns. `frameworkTablesOf` gives the framework the writes no store makes: a `c.form`
-appends one row to its inbox table (the declared columns only, answering nothing), and `c.webhook` keeps its
+appends one row to its inbox table (the declared columns only, answering nothing), taking one from the form's
+accepted bucket in the same transaction, and `c.webhook` keeps its
 bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. The job runner of
 `@fabrika/app` takes a job's lease in `fabrika_job_leases` (`frameworkTablesOf(…).jobs`), and a form's admission
 takes from its per-minute buckets in `fabrika_form_admissions` and records accepted challenge tokens in

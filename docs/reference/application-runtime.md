@@ -606,8 +606,9 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   is the framework's (413). Admission is two counters per database minute in
   `fabrika_form_admissions`, shared by every instance (429 for either): the requests one client
   sends (`rate.perClient`, 10 by default), taken before the body is read, and the submissions the
-  form accepts in all (`rate.perForm`, 100 by default), taken just before the insert, so a request
-  refused before it (bad input, a filled honeypot, a failed challenge) never empties it. The client
+  form accepts in all (`rate.perForm`, 100 by default), taken in the insert's own transaction, so a
+  request refused before it (bad input, a filled honeypot, a failed challenge) or a row the database
+  refuses never empties it. The client
   is `X-Fabrika-Client-Ip`, the one address header the proxy deletes and sets itself; an IPv6 client
   counts by its /64, and a request without the header shares one `unknown` client. On Zerops the
   header is the balancer until [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md) settles the trusted range, so there the per-client limit
@@ -619,7 +620,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   then records its digest in `fabrika_form_challenges`, so a second use is a replay: a failed or
   replayed token is 400, an unreachable provider or a refused secret 503, and neither writes a row.
   The secret is the application variable the contract names; without it the application does not
-  boot. Turnstile's origin joins `script-src` and `frame-src`.
+  boot. Turnstile's origin joins `script-src` and `frame-src` (`frame-src 'self' <origins>`, so a
+  declared frame origin only extends the same-origin frames `default-src 'self'` allows).
 - `c.webhook` (GitHub) answers `POST <path>/:bindingId`. A holder of the bound
   dimension's `members.manage` creates a binding with the generated
   `POST /api/webhooks.<name>.bind` (`{ scope, account }`, where `account` is

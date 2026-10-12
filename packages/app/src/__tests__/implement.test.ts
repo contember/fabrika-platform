@@ -114,6 +114,16 @@ describe('access forms', () => {
 		expect(removed.status).toBe(403)
 	})
 
+	test('a string holding U+0000, which no text column stores, is a 400 before the handler runs', async () => {
+		const rows = seed()
+		const own = bootApp(notesApp(rows))
+		const user = await token('user', [inW1('notes.write')])
+		const sent = await send(own, '/api/notes.create', { token: user, body: { workspaceId: 'w1', title: 'a\u0000b' } })
+		expect(sent.status).toBe(400)
+		expect(errorType(sent)).toBe('validation')
+		expect([...rows.values()].map((row) => row.title)).not.toContain('a\u0000b')
+	})
+
 	test('the input is strict: an undeclared field is 400', async () => {
 		const sent = await send(app, '/api/notes.get', { token: await token('user', [inW1('notes.read')]), body: { id: N1, ownerId: 'u2' } })
 		expect(sent.status).toBe(400)

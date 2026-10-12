@@ -836,3 +836,9 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   parser defaults the two directives for a manifest written before them. An IPv6 client counts by its /64, the
   address is kept as a SHA-256 digest, and a request without `X-Fabrika-Client-Ip` (the test kit) is one `unknown`
   client. Any change of a form's admission widens in the approval diff (a mount change), conservatively.
+- **WU16 review round 1.** The form's accepted bucket was taken in its own statement before the insert, so a row
+  the database refused (a schema-valid string holding U+0000) consumed the shared quota and the next valid client got
+  429. `appendToInbox` now takes from the bucket in the insert's transaction (`InboxQuota`); the per-client bucket stays
+  its own statement. Every strict input (procedures, forms, webhooks) and every path parameter refuses a string or key
+  holding U+0000 with a 400, because Postgres `text` cannot store it. A declared `frame-src` keeps `'self'`, so removing
+  the last frame origin narrows, as the approval diff already says.
