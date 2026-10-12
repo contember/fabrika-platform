@@ -15,7 +15,7 @@ export interface DealsTable {
 	company_id: string
 	org_id: string
 	title: string
-	stage: string
+	stage: 'lead' | 'proposal' | 'won' | 'lost'
 	version: Generated<number>
 }
 

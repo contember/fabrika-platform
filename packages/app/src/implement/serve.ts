@@ -4,7 +4,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { AnyContract, Schema } from '../contract/define'
-import { handlerOf, isTableless, snapshotsOf } from '../contract/handled'
+import { handlerOf, kitOriginOf, snapshotsOf } from '../contract/handled'
 import { ContractError } from '../contract/problems'
 import {
 	type ApplicationEnvironment,
@@ -68,10 +68,14 @@ export interface ServeOptions {
  * `ContractError` naming every endpoint, job and webhook that took no `.handle(…)`.
  */
 export function serve<const C extends AnyContract>(contract: C, options: ServeOptions): ContractImplementation<C> {
+	const origin = kitOriginOf(contract)
+	if (origin === undefined) {
+		throw new ContractError(['serve: takes the contract app.contract(…) returned, itself; a copy or another object loses what the kit keeps beside it'])
+	}
 	handlerTree(contract, (work) => work())
-	if (isTableless(contract) !== (options.database === null)) {
+	if ((origin === 'tableless') !== (options.database === null)) {
 		throw new ContractError([
-			isTableless(contract)
+			origin === 'tableless'
 				? 'serve: defineApp(vocabulary) declares no tables, so it takes database: null'
 				: 'serve: the kit declares tables, so it takes database: scoped(tables) from @fabrika/db',
 		])

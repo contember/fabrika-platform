@@ -36,7 +36,7 @@ import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import { exportBase } from '../contract/defaults'
 import type { Schema } from '../contract/define'
-import { isTableless } from '../contract/handled'
+import { kitOriginOf } from '../contract/handled'
 import { fileCollections } from '../files/collections'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
@@ -654,7 +654,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const data = bound?.data ?? null
-	if (data === null && isTableless(app.contract)) {
+	if (data === null && kitOriginOf(app.contract) === 'tableless') {
 		servedWithoutData(endpoints, problems)
 	}
 	const site = [...endpoints.values()].find((served) => (served.kind === 'procedure' || served.kind === 'webhook') && served.site !== undefined)

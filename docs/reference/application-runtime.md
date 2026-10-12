@@ -176,7 +176,8 @@ does not give and a write in a query are type errors. `serve` refuses an endpoin
 handler reads them with `get()`. `scoped(tables)` of `@fabrika/db` has no connection, no locator and no handle of its
 own; nothing reaches the database until `boot` binds it. An application without tables (on Cloudflare, which has no
 data layer yet) writes `defineApp(vocabulary)` and `serve(contract, { database: null })`; its handlers have no
-`ctx.db`. The mirrored handler tree of `implement` is the framework's own test entry, not on the application surface.
+`ctx.db`, and its `sql` declaration is a type error. `serve` takes only the object `app.contract` returned: a copy
+loses what the kit keeps beside it (the handlers, whether it has tables) and is refused. The mirrored handler tree of `implement` is the framework's own test entry, not on the application surface.
 
 `fabrika app build` writes `fabrika/entry.generated.ts` for an application with a
 `fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
@@ -812,7 +813,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
     scope asks first, then a caller of one scope asks for its own (`in`: for the scope value of every table that lies
     in the dimension). Each own answer must be one the application gave — a 2xx, or a 4xx other than 401, 403 and 404,
     so a precondition's 409 passes — and hold no key, scope value or text marker of the other scope's rows
-    (`{ answered: true, leaked: [] }`). An endpoint that declares `unscoped` reaches across scopes by design and has no
+    (`{ answered: true, leaked: [] }`). The scanned values are every key, parent, dimension value of the row's chain and
+    text marker of the other scope. An endpoint that declares `unscoped` reaches across scopes by design and has no
     leak case; it keeps its denial.
   - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
     (a write-only role), a caller holding only that action asks for its own object and gets 200: the capability
@@ -833,8 +835,11 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   the seeded value.
 - **Seeds.** A precondition (`restore` only a note in the trash) is the author's seed in the same file:
   `export const seeds = { '<endpoint id>': { <column>: <value> } }`, the state of the row of the table that owns the
-  endpoint's dimension, written into both scopes' rows before every case of that endpoint. A seed may not set a column
-  that places the row in its scope. A seed of no `on` or `in` endpoint is an `endpoint-fixture` finding.
+  endpoint's dimension, written into both scopes' rows. It adds a second, seeded leak case beside the unseeded one,
+  which always runs, so a seed meets a precondition without setting aside the state that leaks, and it reaches the
+  own-target case; the denial runs unseeded. A seed may not set a column that places the row in its scope, nor a text
+  column, which holds the marker the leak cases look for. A seed of no `on` or `in` endpoint is an `endpoint-fixture`
+  finding.
 - **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
   `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
   which captures Bun's own functions before any application module loads, and a case that

@@ -80,7 +80,8 @@ export interface TestDatabase {
 	readonly schema: string
 	/**
 	 * Seeds one row of `table` in each of two fresh chains, with every container row a table owns. `values` (column →
-	 * value) are written into both rows of `table`: the state an endpoint's precondition needs.
+	 * value) are written into both rows of `table`: the state an endpoint's precondition needs. A text column keeps its
+	 * marker, so a seed of one, or of a column that places the row, throws.
 	 */
 	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string, values?: Readonly<Record<string, SampleValue>>): Promise<IsolationWorlds>
 	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled. */
@@ -390,12 +391,17 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			}
 		}
 		const assigned = placement(model, values, key)
-		for (const [column, value] of Object.entries(seed)) {
-			await columnOf(model.name, column)
-			if (assigned.has(column)) {
-				throw new Error(`${model.name}.${column} places the row in its scope; a seed sets only the row's own state`)
+		for (const [name, value] of Object.entries(seed)) {
+			const column = await columnOf(model.name, name)
+			if (assigned.has(name)) {
+				throw new Error(`${model.name}.${name} places the row in its scope; a seed sets only the row's own state`)
 			}
-			assigned.set(column, value)
+			if (isMarkable(column)) {
+				throw new Error(
+					`${model.name}.${name} holds a text marker the leak cases look for; a seed sets a column of another type (an enum, a boolean, a number)`,
+				)
+			}
+			assigned.set(name, value)
 		}
 		const row = await insert(model.name, assigned, markers)
 		const updates: Record<string, SampleValue> = {}

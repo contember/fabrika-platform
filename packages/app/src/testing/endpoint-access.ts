@@ -125,9 +125,10 @@ function fieldOf(input: SchemaShape | null, from: string | null): SchemaShape | 
 	return input?.type === 'object' && from !== null ? input.fields[from] : undefined
 }
 
+/** Every value of the other world a leak shows: its key, parent, every dimension value it lies in, and its markers. */
 function worldValues(worlds: IsolationWorlds, world: 'own' | 'other'): string[] {
 	const row = worlds[world]
-	return [row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.markers]
+	return [...new Set([row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.chain.map((link) => link.value), ...row.markers])]
 }
 
 /**

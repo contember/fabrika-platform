@@ -32,10 +32,15 @@ export type DeclaredFields<S, U, Cn, Is, Tables extends string> =
 		/** `ctx.links.issue` for this link mount, on an endpoint whose action is the mount's `issuedBy`. */
 		readonly issues?: Is
 	}
-	& ([S] extends [never] ? unknown : { readonly sql: S })
+	& ([S] extends [never] ? unknown : { readonly sql: S & NoInfer<SqlReach<Tables>> })
 	& ([U] extends [never] ? unknown : { readonly unscoped: U & NoInfer<ExactTables<U, Tables>> })
 	& ([Cn] extends [never] ? unknown : { readonly connect: Cn & NoInfer<LiteralList<Cn>> })
 	& ([Is] extends [never] ? unknown : { readonly issues: Is & NoInfer<OneLiteral<Is>> })
+
+/** `ctx.sql` runs on `@fabrika/db`, so a kit without tables declares no `sql`. */
+type SqlReach<Tables extends string> = [Tables] extends [never]
+	? Unavailable<'ctx.sql runs on @fabrika/db: a kit without tables (defineApp(vocabulary)) declares no sql'>
+	: unknown
 
 /** A list typed only by its element (`readonly 'catalog'[]`) may hold none of them; the declaration is a literal tuple. */
 type LiteralList<Cn> = Cn extends readonly unknown[]

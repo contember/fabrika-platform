@@ -947,3 +947,8 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   `note_labels`, codegen from a real migrate) and the fixtures re-pinned.
 - **WU8 → WU10.** `packages/app/skill/SKILL.md` (and so `AGENTS.md`) still describe `implement`, `src/db/database.ts`,
   `defineStore` and `connect` on `implement` (lines 13, 68–69, 93, 112): prose, no code block, so left for WU10.
+- **WU8 review round 1.** A seed now only adds a seeded leak case: the unseeded one always runs (a handler that leaks
+  only in the state a seed sets aside is caught), and a seed of a text column is refused (its marker is what a leak
+  shows). A leak scans every value of the other row's chain (an outer dimension's value leaks too). `serve` refuses a
+  contract no kit built, a copy included (`kitOriginOf`), and a tableless kit's `sql` is a type error
+  (`kit-mistakes/24`). `architecture-app`'s `stage` is an enum, so its `{ stage: 'won' }` seed stays valid.

@@ -304,7 +304,8 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 - **A leak case accepts any answer the application gave; a denial is exact.** `leaked` passes a 2xx and a 4xx other
   than 401, 403 and 404 that holds nothing of the other scope (a precondition's 409), so it never forces an author to
   weaken a rule; `denied` stays exactly 404 or 403. An `unscoped` endpoint has no leak case: it reaches across scopes
-  by declaration, which the approver reviews. A precondition is a seed in the fixtures file, never an edited test.
+  by declaration, which the approver reviews. A precondition is a seed in the fixtures file, never an edited test, and
+  a seed only adds a seeded leak case: the unseeded one always runs, since a seed could set aside the state that leaks.
 - **A file collection's endpoints get cross-scope cases like every `on` endpoint** (`fileCases`), over files the kit
   seeds through the upload endpoint. Their names carry the collection's actions, so weakening one (a `delete` of the
   `read` action) makes the committed test stale; never drop a file endpoint from the generated tests.

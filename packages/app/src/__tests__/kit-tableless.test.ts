@@ -1,5 +1,6 @@
 // A kit without tables (`defineApp(vocabulary)`, an application on Cloudflare, which has no data layer): it is served
-// with `database: null` and only so, its handlers have no `ctx.db`, and a site that declares `sql` does not boot.
+// with `database: null` and only so, its handlers have no `ctx.db`, and `serve` refuses a copy of any kit's contract.
+// Its `sql` declaration is a type error (`kit-mistakes/24`).
 
 import { defineApp, defineVocabulary, type Unavailable } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
@@ -45,12 +46,10 @@ describe('a kit without tables', () => {
 		expect(() => serve(withTables, { database: null })).toThrow('the kit declares tables, so it takes database: scoped(tables)')
 	})
 
-	test('a site that declares sql does not boot: ctx.sql runs on @fabrika/db', () => {
-		const reports = app.group({ callers: ['human'] }, (r) => ({
-			count: r.query({ output: Readable, access: { action: 'projects.read', over: 'project' }, sql: 'read' })
-				.handle(() => ({ values: [], db: false })),
-		}))
-		const declaring = app.contract((c) => ({ api: c.rpc('/api', { reports }), health: c.health('/healthz') }))
-		expect(() => testKit(serve(declaring, { database: null }))).toThrow("'api.reports.count' declares sql, which runs on @fabrika/db")
+	test('a copy of a contract is refused, so the kit it came from cannot be lost', () => {
+		const copy = { ...contract }
+		expect(() => serve(copy, { database: scoped(tables) })).toThrow('serve: takes the contract app.contract(…) returned, itself')
+		expect(() => serve(copy, { database: null })).toThrow('serve: takes the contract app.contract(…) returned, itself')
+		expect(() => serve({ ...withTables }, { database: scoped(tables) })).toThrow('serve: takes the contract app.contract(…) returned, itself')
 	})
 })

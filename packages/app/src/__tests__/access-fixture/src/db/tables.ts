@@ -11,4 +11,10 @@ export const tables = defineTables(vocabulary, columns)({
 		version: 'version',
 		createdBy: 'created_by',
 	},
+	workspaces: {
+		scope: { dimension: 'workspace' },
+		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write' },
+		insert: ['name'],
+		update: ['name'],
+	},
 })

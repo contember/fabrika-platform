@@ -68,7 +68,7 @@ application runner (`migrate`, as the migration role: the framework's tables, th
 `fabrika db migrate` applies them), connects and seeds as its runtime role, so every test of
 application code runs least-privileged, or answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
 chains that share no value, every container row a table owns first, with the author's seed values in the table's own
-row (never a column that places it), and answers each row's `chain` of dimension values (a share link's chain); `tableProbe` reaches one table of a layer by
+row (never a column that places it, nor a text column, whose marker the leak cases look for), and answers each row's `chain` of dimension values (a share link's chain); `tableProbe` reaches one table of a layer by
 name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer.
 There is no generated `move` case yet: an access form hands a handler one capability, and `t.move` needs the source

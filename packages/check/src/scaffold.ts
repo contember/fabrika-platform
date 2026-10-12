@@ -163,42 +163,51 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 	const input = inputOf(row, fixtures)
 	if (input === undefined) return []
 	const seed = fixtures.seeds[row.id]
-	const args = `${quote(row.id)}, ${renderSample(input)}${seed === undefined ? '' : `, ${renderSample(seed)}`}`
+	const args = `${quote(row.id)}, ${renderSample(input)}`
+	const seeded = seed === undefined ? args : `${args}, ${renderSample(seed)}`
 	const declared = artifact.declared?.[row.id]
 	const unscoped = declared !== undefined && Object.keys(declared.unscoped).length > 0
 	const read = access.form === 'on' ? ownerRead(policies, access.dimension) : undefined
 	const own = read !== undefined && (linked || read !== action)
 	const cases: Case[] = []
-	const leaked = () =>
+	// The unseeded probe always runs: a seed meets a precondition, and must not also set aside the state that leaks.
+	const leaked = (): Case[] => [
 		testCase(
 			`${row.id}: the answer to one scope holds nothing of the scope answered before it`,
 			`expect(await kit.leaked(${args})).toEqual({ answered: true, leaked: [] })`,
-		)
+		),
+		...(seed === undefined ? [] : [
+			testCase(
+				`${row.id}: with its seed, the answer to one scope holds nothing of the scope answered before it`,
+				`expect(await kit.leaked(${seeded})).toEqual({ answered: true, leaked: [] })`,
+			),
+		]),
+	]
 	if (linked) {
 		if (own) {
 			cases.push(
-				testCase(`${row.id}: the holder of a link to a ${access.dimension} reaches it`, `expect(await kit.own(${args})).toEqual({ status: 200 })`),
+				testCase(`${row.id}: the holder of a link to a ${access.dimension} reaches it`, `expect(await kit.own(${seeded})).toEqual({ status: 200 })`),
 			)
 		}
 		return cases
 	}
 	if (access.form === 'on') {
 		cases.push(testCase(`${row.id}: the ${access.dimension} of another scope is 404`, `expect(await kit.denied(${args})).toEqual({ status: 404 })`))
-		if (!unscoped) cases.push(leaked())
+		if (!unscoped) cases.push(...leaked())
 		if (own) {
 			cases.push(
 				testCase(
 					`${row.id}: a caller with only ${action} reaches its own ${access.dimension}`,
-					`expect(await kit.own(${args})).toEqual({ status: 200 })`,
+					`expect(await kit.own(${seeded})).toEqual({ status: 200 })`,
 				),
 			)
 		}
 	}
 	if (access.form === 'in') {
 		cases.push(testCase(`${row.id}: the ${access.dimension} of another scope is 403`, `expect(await kit.denied(${args})).toEqual({ status: 403 })`))
-		if (declared !== undefined && declared.sql !== null && !unscoped) cases.push(leaked())
+		if (declared !== undefined && declared.sql !== null && !unscoped) cases.push(...leaked())
 	}
-	if (access.form === 'over' && !unscoped) cases.push(leaked())
+	if (access.form === 'over' && !unscoped) cases.push(...leaked())
 	return cases
 }
 

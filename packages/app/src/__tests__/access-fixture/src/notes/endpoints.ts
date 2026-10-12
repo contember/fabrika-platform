@@ -1,9 +1,10 @@
 // The cases of the endpoint access kit: a write that reads its own target, a precondition (`restore` only a trashed
-// note), a report in a workspace through `ctx.sql`, one that forgets its scope, and a link holder's read.
+// note), a report in an organization through `ctx.sql`, ones that forget their scope (also only in the state a seed would
+// skip, or only in an outer dimension's values), and a link holder's read.
 
 import { ConflictError } from '@fabrika/app'
 import { app } from '../app-kit'
-import { ById, InWorkspace, Note, Notes, Saved, Titles, Versioned } from '../schemas'
+import { ById, InOrganization, Note, Notes, OrganizationId, Organizations, Saved, Title, Titles, Versioned } from '../schemas'
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
 	get: r.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })
@@ -22,14 +23,33 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 			if (!(await ctx.db.target.getForUpdate()).trashed) throw new ConflictError('only a trashed note is restored')
 			return ctx.db.target.update({ trashed: false }, { expectVersion: input.expectVersion })
 		}),
-	titles: r.query({ input: InWorkspace, output: Titles, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' }, sql: 'read' })
+	titles: r.query({ input: InOrganization, output: Titles, access: { action: 'notes.read', in: 'organization', from: 'organizationId' }, sql: 'read' })
 		.handle(async ({ ctx }) => ({
-			titles: (await ctx.sql(Note)`select id, title, trashed from notes where workspace_id = ${ctx.target.value} order by title`).map((note) =>
+			titles: (await ctx.sql(Note)`select id, title, trashed from notes where organization_id = ${ctx.target.value} order by title`).map((note) =>
 				note.title
 			),
 		})),
-	everyTitle: r.query({ input: InWorkspace, output: Titles, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' }, sql: 'read' })
+	everyTitle: r.query({
+		input: InOrganization,
+		output: Titles,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
 		.handle(async ({ ctx }) => ({ titles: (await ctx.sql(Note)`select id, title, trashed from notes order by title`).map((note) => note.title) })),
+	peek: r.query({ input: ById, output: Titles, access: { action: 'notes.read', on: 'note', from: 'id' }, sql: 'read' })
+		.handle(async ({ ctx }) => {
+			if ((await ctx.db.target.get()).trashed) return { titles: [] }
+			return { titles: (await ctx.sql(Title)`select title from notes order by title`).map((row) => row.title) }
+		}),
+	organizationIds: r.query({
+		input: InOrganization,
+		output: Organizations,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => ({
+			ids: (await ctx.sql(OrganizationId)`select distinct organization_id from notes order by organization_id`).map((row) => row.organizationId),
+		})),
 }))
 
 export const shared = app.link('/s', {

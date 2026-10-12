@@ -45,7 +45,7 @@ import {
 	type WebhookMount,
 } from './define'
 import type { DeclaredFields, Endpoint, ExportKit, Group, GroupBuild, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
-import { withHandler, withoutTables, withSnapshots } from './handled'
+import { withHandler, withKitOrigin, withSnapshots } from './handled'
 import { ContractError } from './problems'
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 
@@ -422,7 +422,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 				surface: declared,
 			}
 			const built = withSnapshots(contract, Object.fromEntries(Object.entries(imports ?? {}).map(([name, imported]) => [name, imported.snapshot])))
-			return tables ? built : withoutTables(built)
+			return withKitOrigin(built, tables ? 'tables' : 'tableless')
 		},
 	}
 }

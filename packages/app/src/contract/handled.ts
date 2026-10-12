@@ -30,15 +30,21 @@ export function snapshotsOf(contract: object): Readonly<Record<string, ConnectSn
 	return snapshots.get(contract) ?? {}
 }
 
-const tableless = new WeakSet<object>()
+/** Which kit built a contract: one with tables, `defineApp(vocabulary, tables)`, or one without, `defineApp(vocabulary)`. */
+export type KitOrigin = 'tables' | 'tableless'
 
-/** `contract` as built by a kit without tables, `defineApp(vocabulary)`. */
-export function withoutTables<T extends object>(contract: T): T {
-	tableless.add(contract)
+const origins = new WeakMap<object, KitOrigin>()
+
+/** `contract` as `app.contract` built it, with the kind of kit that built it. */
+export function withKitOrigin<T extends object>(contract: T, origin: KitOrigin): T {
+	origins.set(contract, origin)
 	return contract
 }
 
-/** Whether a kit without tables built `contract`: its sites are served without `ctx.db`, and `serve` takes no database. */
-export function isTableless(contract: object): boolean {
-	return tableless.has(contract)
+/**
+ * The kind of kit that built `contract`, or `undefined` for any other object, a copy of a kit's contract included: a
+ * copy loses what is kept beside the original, so `serve` refuses it.
+ */
+export function kitOriginOf(contract: object): KitOrigin | undefined {
+	return origins.get(contract)
 }

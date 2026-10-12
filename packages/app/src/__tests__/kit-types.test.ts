@@ -32,6 +32,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'21-group-typed-to-admit-pending-endpoints.ts': 'add .handle(…) to group.* (its type admits an endpoint without a handler)',
 	'22-job-update-outside-its-transaction.ts': 'a job writes inside ctx.transaction((tx) => …): use tx.db there',
 	'23-job-unscoped-insert-outside-its-transaction.ts': 'a job writes inside ctx.transaction((tx) => …): use tx.db there',
+	'24-sql-on-a-kit-without-tables.ts': 'ctx.sql runs on @fabrika/db: a kit without tables (defineApp(vocabulary)) declares no sql',
 }
 
 /**

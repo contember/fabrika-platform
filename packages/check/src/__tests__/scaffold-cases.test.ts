@@ -1,7 +1,8 @@
 // The endpoint access cases the scaffold writes for a kit application (`@fabrika/app`'s `access-fixture/`): a write
 // that reads its own target and a link holder get an own-target case, a report `in` a scope through `ctx.sql` gets a
-// leak case, an `unscoped` endpoint keeps its denial and loses its leak case, and an author's seed reaches every case of
-// its endpoint. The kit runs these cases against Postgres in `@fabrika/app`'s `endpoint-access.test.ts`.
+// leak case, an `unscoped` endpoint keeps its denial and loses its leak case, and an author's seed adds a seeded leak case
+// beside the unseeded one and reaches the own-target case. The kit runs these cases against Postgres in `@fabrika/app`'s
+// `endpoint-access.test.ts`.
 
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -44,8 +45,8 @@ describe('the endpoint access cases of a kit application', () => {
 
 	test('a report in a scope through ctx.sql gets a leak case; an in endpoint without sql keeps only its denial', async () => {
 		const text = await endpointTest(tree())
-		expect(text).toContain("expect(await kit.leaked('api.notes.titles', { workspaceId: 'x' })).toEqual({ answered: true, leaked: [] })")
-		expect(text).toContain("expect(await kit.denied('api.notes.titles', { workspaceId: 'x' })).toEqual({ status: 403 })")
+		expect(text).toContain("expect(await kit.leaked('api.notes.titles', { organizationId: 'x' })).toEqual({ answered: true, leaked: [] })")
+		expect(text).toContain("expect(await kit.denied('api.notes.titles', { organizationId: 'x' })).toEqual({ status: 403 })")
 	})
 
 	test('an endpoint that declares unscoped keeps its denial and has no leak case', async () => {
@@ -61,12 +62,14 @@ describe('the endpoint access cases of a kit application', () => {
 		expect(text).not.toContain("kit.leaked('api.notes.get'")
 	})
 
-	test("the author's seed reaches every case of its endpoint, and a seed of no addressed row is a finding", async () => {
+	test('the unseeded leak case always runs, the seed adds a seeded one and reaches the own-target case, and a seed of no addressed row is a finding', async () => {
 		const seeded = new Map([...tree(), [ENDPOINT_FIXTURES_FILE, "export const seeds = { 'api.notes.restore': { trashed: true } }\n"]])
 		const text = await endpointTest(seeded)
-		for (const call of ['denied', 'leaked', 'own']) {
-			expect(text).toContain(`kit.${call}('api.notes.restore', ${VERSIONED}, { trashed: true })`)
-		}
+		expect(text).toContain(`expect(await kit.leaked('api.notes.restore', ${VERSIONED})).toEqual({ answered: true, leaked: [] })`)
+		expect(text).toContain(`expect(await kit.leaked('api.notes.restore', ${VERSIONED}, { trashed: true })).toEqual({ answered: true, leaked: [] })`)
+		expect(text).toContain("test('api.notes.restore: with its seed, the answer to one scope holds nothing of the scope answered before it'")
+		expect(text).toContain(`kit.own('api.notes.restore', ${VERSIONED}, { trashed: true })`)
+		expect(text).toContain(`kit.denied('api.notes.restore', ${VERSIONED})`)
 		expect(missingEndpointFixtures(scaffoldInputs(seeded))).toEqual([])
 		const stray = new Map([...seeded, [ENDPOINT_FIXTURES_FILE, "export const seeds = { 'api.notes.list': { trashed: true } }\n"]])
 		expect(missingEndpointFixtures(scaffoldInputs(stray)).map((finding) => finding.message)).toEqual([

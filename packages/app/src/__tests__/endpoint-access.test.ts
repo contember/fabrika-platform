@@ -153,8 +153,29 @@ describe.skipIf(accessPostgres === null)('the endpoint access kit over a kit app
 
 	test('a report in a scope through ctx.sql answers its own scope only; one that forgets the scope is caught', async () => {
 		const kit = accessKit()
-		expect(await kit.leaked('api.notes.titles', { workspaceId: 'x' })).toEqual({ answered: true, leaked: [] })
-		const leaky = await kit.leaked('api.notes.everyTitle', { workspaceId: 'x' })
+		expect(await kit.leaked('api.notes.titles', { organizationId: 'x' })).toEqual({ answered: true, leaked: [] })
+		const leaky = await kit.leaked('api.notes.everyTitle', { organizationId: 'x' })
+		expect(leaky.answered).toBe(true)
+		expect(leaky.leaked.length).toBeGreaterThan(0)
+	})
+
+	test('a handler that leaks only in the state a seed sets aside is caught by the unseeded probe', async () => {
+		const kit = accessKit()
+		const leaky = await kit.leaked('api.notes.peek', { id: VERSIONED.id })
+		expect(leaky.answered).toBe(true)
+		expect(leaky.leaked.length).toBeGreaterThan(0)
+		expect(await kit.leaked('api.notes.peek', { id: VERSIONED.id }, { trashed: true })).toEqual({ answered: true, leaked: [] })
+	})
+
+	test('a seed may not replace a text marker the leak cases look for', async () => {
+		const kit = accessKit()
+		await expect(kit.leaked('api.notes.get', { id: VERSIONED.id }, { title: 'authored title' })).rejects.toThrow(
+			'notes.title holds a text marker the leak cases look for',
+		)
+	})
+
+	test("a report in an outer scope that answers another scope's values of it is caught", async () => {
+		const leaky = await accessKit().leaked('api.notes.organizationIds', { organizationId: 'x' })
 		expect(leaky.answered).toBe(true)
 		expect(leaky.leaked.length).toBeGreaterThan(0)
 	})

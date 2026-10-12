@@ -293,7 +293,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `ctx.connect` only for its `connect`. Only a `siteHandler` leaf gets `ctx.db`. A `defineContract` contract keeps its
   reach by its imports' `usedBy` and its link mounts (`kit-reach.test.ts`).
 - **A kit without tables** is `defineApp(vocabulary)` (`NoTablesIndex`; on Cloudflare, which has no data layer):
-  `serve(contract, { database: null })`, and only then `null` (`isTableless`, `handled.ts`); its procedures are served
+  `serve(contract, { database: null })`, and only then `null` (`kitOriginOf`, `handled.ts`: `serve` refuses a contract no kit built, a copy included, so the origin cannot be lost); its procedures are served
   without `ctx.db` (`servedWithoutData` in `boot.ts`), and a site that declares `sql` does not boot.
 - **`implement` is not on the application surface.** `@fabrika/app/implement` exports `serve`; the mirrored handler
   tree (`implement/implement.ts`) is the framework's own test entry, imported by relative path. Never re-export it.
@@ -641,7 +641,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   storage: `kit.file` seeds one file per scope through the real upload endpoint. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
-  holder, reaches its own object); each takes the author's seed, the state `seedWorlds` writes into both rows. A subpath of its
+  holder, reaches its own object); each takes the author's seed, the state `seedWorlds` writes into both rows. A leak scans every value of
+  the other row's chain, so an outer dimension's value is a leak too. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
   kit does not. Its API is what `fabrika db test-scaffold` writes against: a change
   regenerates `packages/cli`'s fixture tests, `examples/zerops-app`'s and `packages/check`'s `architecture-app`.
