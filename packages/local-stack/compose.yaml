@@ -245,6 +245,9 @@ services:
   # `followNotesDeploy` points it at another fixture commit the emulator activated (`src/notes-follow.ts`).
   notes:
     <<: *bun
+    # The application image: Bun with ClamAV, so a `scan: true` collection's scan job finds its scanner.
+    image: fabrika-local-app:clamav
+    build: app-image
     working_dir: ${FABRIKA_LOCAL_NOTES_ROOT:-/workspace/examples/zerops-app}
     command:
       - sh
