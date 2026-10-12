@@ -1,5 +1,6 @@
 import { compileEndpointTable, SESSION_COOKIE } from '@fabrika/auth-core'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HttpIamRpc } from '../../../../auth/src/rpc-http'
 import { startDaemon } from '../../../../builder/daemon/src/index'
@@ -21,7 +22,7 @@ import { createHarness as createControlHarness } from './harness'
 import { unusedSourceConnection } from './source-connection'
 
 export async function integrationFixture() {
-	const directory = mkdtempSync('/tmp/opencode/builder-cross-plane-')
+	const directory = mkdtempSync(join(tmpdir(), 'builder-cross-plane-'))
 	const root = join(directory, 'project')
 	const id = 'cross-plane'
 	const iam = createIamHarness()

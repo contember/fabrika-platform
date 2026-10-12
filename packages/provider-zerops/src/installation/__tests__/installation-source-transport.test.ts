@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test'
+import { tmpdir } from 'node:os'
 import {
 	decodeZeropsNamespaceProxySource,
 	prepareZeropsDescriptor,
@@ -49,7 +50,7 @@ describe('exact installation source', () => {
 	}
 
 	test('a different checkout cannot supply the executing module and manifest', async () => {
-		await expect(prepareInstallationSource('/tmp/opencode', new AbortController().signal)).rejects.toThrow('run bun packages/cli/src/index.ts')
+		await expect(prepareInstallationSource(tmpdir(), new AbortController().signal)).rejects.toThrow('run bun packages/cli/src/index.ts')
 	})
 
 	for (const invalid of ['prepare', 'setup']) {
