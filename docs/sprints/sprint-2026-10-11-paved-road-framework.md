@@ -489,6 +489,47 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   (test database role), `docs/decisions/0017-service-owned-postgres-migrations.md` (the role paragraph),
   `docs/backlog/{110-…md,README.md}`.
 
+### WU13a — Paved-road data ergonomics from the probes (M)
+
+- **Problem.** Two fresh-agent probes (`probe/opus`, `probe/gpt` branches, `examples/probe-tasks/PROBE.md`) built a
+  task tracker on main after WU6. Both left the paved road for ordinary needs: a separate `tasks.assign` action cannot
+  update one column, `update` needs every writable field, `over: 'org'` cannot list tasks two levels down, there is no
+  exported row type, a `date` column comes back as a timestamp and a `timestamptz` write needs a `Date`.
+- **Scope.**
+  1. A column write action: `columns: { assignee: { write: 'tasks.assign' } }` lets a capability of that action update
+     exactly those columns through `ctx.db.target.update`; the table's update action keeps the rest. Read by the static
+     reader and part of the access snapshot, so a new column write action widens.
+  2. `update` takes a non-empty subset of the writable fields.
+  3. `over` and `within` reach any table whose containment chain includes the dimension (tasks under `over: 'org'`
+     through their stamped `org_id`), not only the nearest container.
+  4. A row type: `RowOf<typeof tables, 'tasks', 'tasks.read'>` (the projected row an action reads).
+  5. `date` columns are `YYYY-MM-DD` strings end to end (codegen, handles, `fromRow`, `ctx.sql`); timestamp writes accept
+     an ISO string as well as a `Date`.
+- **Acceptance / witness.** Postgres tests per item; type fixtures for each misuse at its line; the probe app's
+  `tasks.assign`, `tasks.close` and the overdue job rewritten on the handles without `ctx.sql` compile.
+- **Touch points.** `packages/db/src/{policy.ts,vocabulary-tables.ts,orm.ts,orm-types.ts,codegen.ts,guard.ts}`,
+  `packages/check/src/reader/tables.ts`, `packages/control/src/approval/diff.ts` (column write actions), their tests.
+
+### WU13b — Shell and checker ergonomics from the probes (M)
+
+- **Problem.** The probes hit errors that point at the wrong line or reveal limits only late.
+- **Scope.**
+  1. A reserved role name (`admin`) is a type error at `defineVocabulary`, naming the reserved names.
+  2. A handler body's type error no longer cascades into "add .handle(…)" at the mount; a missing table under an
+     access form names the table and the form in one line, no `DbIndex<…>` dump; returning a raw row where the output
+     is camelCase names `fromRow`.
+  3. The static reader accepts modifiers on an imported literal schema (`Status.optional()`, `.nullable()`, `.array()`)
+     and reports a refusal at the offending call, not at the importing group.
+  4. The `raw-sql` rule refuses a driver's `sql` by its origin (import), not by a parameter's name; `queries.ts`
+     functions that take the declared `ctx.sql` tag are allowed, as the architecture doc says.
+  5. A read-only member directory through IAM: `ctx.members.list()` (id, label) for an endpoint whose access action
+     reads the dimension, without the member-management action, for assignee pickers and membership checks.
+- **Acceptance / witness.** Type fixtures for 1–2 (≤2 lines, no dump); checker pairs for 3–4; an IAM-backed test for 5
+  (a member lists, a non-member gets 403 through the proxy, the list is scoped to the dimension).
+- **Touch points.** `packages/app/src/contract/{vocabulary,group,kit,context}.ts`, `packages/check/src/{reader/value.ts,
+  rules/literal.ts,rules/runtime.ts}`, `packages/app/src/implement/membership.ts`, `packages/iam` (read path only),
+  `packages/auth-core` if the RPC needs it, their tests.
+
 ## Out of scope (explicit)
 
 - **Declared operations** (`c.read`/`c.update` with `when`/`set`/`inc`): rejected by the owner as too declarative.
@@ -570,7 +611,8 @@ below say who owns which cases. Each unit edits only its own packages' `CLAUDE.m
 | 2    | WU2, WU3, WU4       | `policy.ts`/`reader/tables.ts` · `store.ts`/`guard.ts`/`orm.ts`/`implement/{boot,dispatch,types,webhook}` · `contract/{kit,group,define}`/`serve.ts`/slice |
 | 3    | WU6, WU12           | `ctx.sql` on WU3's session and WU5's lexer · the role on WU5's runner                                                                                      |
 | 4    | WU7, WU8 (+ WU12)   | WU7 needs WU4–WU6; WU8 needs WU2–WU4 and WU6; WU12 may still run, outside both territories                                                                 |
-| 5    | WU9, WU10           | the ADRs and the skill describe what is built                                                                                                              |
+| 5    | WU13a, WU13b        | the probes' fixes, after WU8; disjoint: db+reader · shell+checker+IAM                                                                                      |
+| 5b   | WU9, WU10           | the ADRs and the skill describe what is built                                                                                                              |
 | 6    | WU11                | the CRM, the counts and both trials                                                                                                                        |
 
 Shared tests in step 2: `differential.test.ts` — WU0 writes the skeletons, WU2 owns the table cases, WU4 the slice
