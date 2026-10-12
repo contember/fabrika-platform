@@ -43,6 +43,7 @@
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/db": "workspace:*",
+		"@fabrika/platform-node": "workspace:*",
 		"zod": "^3.25.76"
 	}
 }

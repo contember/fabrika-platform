@@ -1,3 +1,4 @@
+import { fileTableScanReady } from '@fabrika/platform-node/sql'
 import type { Finding } from '../finding'
 import { MIGRATIONS_DIR } from '../layout'
 
@@ -31,52 +32,56 @@ export const checkMigrationNames = (paths: readonly string[]): Finding[] => {
 	return findings
 }
 
-/** One statement of a migration file, split on `;` with `--` comments blanked: enough to find a file table's DDL. */
-interface Statement {
-	readonly path: string
-	readonly line: number
-	readonly text: string
-}
-
-const statementsOf = (path: string, sql: string): Statement[] => {
-	const statements: Statement[] = []
-	let line = 1
-	for (const part of sql.replace(/--[^\n]*/g, '').split(';')) {
-		const leading = part.length - part.trimStart().length
-		statements.push({ path, line: line + (part.slice(0, leading).match(/\n/g)?.length ?? 0), text: part })
-		line += part.match(/\n/g)?.length ?? 0
-	}
-	return statements
-}
-
 /**
- * A `scan: true` collection whose table an earlier `fileTableSql` created admits only `pending` and `live`, so every
- * upload would fail at its `quarantined` row. It needs the migration `fileScanSql` writes. A collection whose table no
- * migration creates is not this rule's.
+ * A `scan: true` collection whose table no migration lets hold the scan states — the earlier `fileTableSql` DDL, which
+ * admits only `pending` and `live`, without `fileScanSql` after it — would fail every upload at its `quarantined`
+ * row. Only the named check of every state with the scan columns, or the exact `fileScanSql` statement, counts
+ * (`fileTableScanReady`). A collection whose table no migration creates is not this rule's.
  */
-export const checkScanMigrations = (files: ReadonlyMap<string, string>, scanning: readonly string[]): Finding[] => {
-	const statements = [...files.entries()]
-		.filter(([path]) => path.startsWith(MIGRATIONS_DIR) && path.endsWith('.sql'))
+export const checkScanMigrations = (
+	files: ReadonlyMap<string, string>,
+	scanning: readonly string[],
+): Finding[] => {
+	const migrations = [...files.entries()]
+		.filter(
+			([path]) => path.startsWith(MIGRATIONS_DIR) && path.endsWith('.sql'),
+		)
 		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-		.flatMap(([path, sql]) => statementsOf(path, sql))
 	const findings: Finding[] = []
 	for (const name of scanning) {
 		const table = `fabrika_files_${name}`
-		const names = new RegExp(`\\b${table}\\b`, 'i')
-		const creates = new RegExp(`^\\s*create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?${table}\\b`, 'i')
-		const created = statements.find((statement) => creates.test(statement.text))
-		const widened = statements.some((statement) => names.test(statement.text) && statement.text.includes("'quarantined'"))
-		if (created === undefined || widened) continue
+		if (
+			fileTableScanReady(
+				migrations.map(([, sql]) => sql),
+				table,
+			) !== false
+		) {
+			continue
+		}
+		const creating = migrations.find(
+			([, sql]) => fileTableScanReady([sql], table) !== undefined,
+		)
+		const path = creating?.[0] ?? MIGRATIONS_DIR
+		const line = creating === undefined ? 1 : lineOf(creating[1], table)
 		findings.push({
-			file: created.path,
-			line: created.line,
+			file: path,
+			line,
 			column: 1,
 			severity: 'refusal',
 			rule: 'file-scan-migration',
 			message: `files '${name}' sets scan: true, and no migration lets ${table} hold a quarantined file`,
 			allowed:
-				`a new migration holding fileScanSql('${name}') of @fabrika/db: ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS …, ADD CONSTRAINT ${table}_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected'))`,
+				`a new migration holding fileScanSql('${name}') of @fabrika/db, exactly as it writes it: ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS …, ADD CONSTRAINT ${table}_status CHECK (…), ADD COLUMN object_version TEXT, …`,
 		})
 	}
 	return findings
+}
+
+/** The line of the `CREATE TABLE` of `table` in `sql`. */
+function lineOf(sql: string, table: string): number {
+	const match = new RegExp(
+		`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?${table}\\b`,
+		'i',
+	).exec(sql)
+	return match === null ? 1 : sql.slice(0, match.index).split('\n').length
 }

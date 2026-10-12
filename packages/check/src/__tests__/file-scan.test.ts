@@ -21,6 +21,7 @@ const OWNER = { table: 'notes', key: { column: 'id', type: 'text' }, chain: [{ c
 const EARLIER_DDL = fileTableSql('attachments', OWNER)
 	.replace(/CONSTRAINT \S+ CHECK \(status IN \([^)]*\)\)/, "CHECK (status IN ('pending', 'live'))")
 	.replace(/^CREATE INDEX \S+_scan .*$/m, '')
+	.replace(/^\t(object_version|scan_attempts|scan_after) .*\n/gm, '')
 
 const application = (options: string, migrations: Readonly<Record<string, string>>): Record<string, string> => ({
 	...CLEAN_APPLICATION,
@@ -49,9 +50,17 @@ describe('a collection that turns scanning on', () => {
 		expect(findings.find((finding) => finding.rule === 'file-scan-migration')?.allowed).toContain("fileScanSql('attachments')")
 	})
 
-	test('passes once a migration widens the check, when the table was created by the current DDL, and when it does not scan', async () => {
+	test('passes once fileScanSql widens the check, never for an index or a comment that mentions quarantined, for the current DDL, and without scan', async () => {
 		const widened = { ...created, 'db/migrations/20261012000000_scan_attachments.sql': fileScanSql('attachments') }
 		expect(locations(await check(application(', scan: true', widened)), 'file-scan-migration')).toEqual([])
+		const indexOnly = {
+			...created,
+			'db/migrations/20261012000000_scan_index.sql':
+				"CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (created_at) WHERE status = 'quarantined';\n-- fileScanSql('attachments')\n",
+		}
+		expect(locations(await check(application(', scan: true', indexOnly)), 'file-scan-migration')).toEqual([
+			'db/migrations/20261001000000_attachments.sql:2:1',
+		])
 		const current = { 'db/migrations/20261001000000_attachments.sql': fileTableSql('attachments', OWNER) }
 		expect(locations(await check(application(', scan: true', current)), 'file-scan-migration')).toEqual([])
 		expect(locations(await check(application('', created)), 'file-scan-migration')).toEqual([])
