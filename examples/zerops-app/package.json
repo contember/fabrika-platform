@@ -13,6 +13,7 @@
 		"@fabrika/db": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",
 		"@fabrika/proxy-core": "^0.0.4",
+		"@sentry/browser": "10.69.0",
 		"kysely": "0.29.6",
 		"zod": "^3.25.76"
 	},

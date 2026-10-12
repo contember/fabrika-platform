@@ -31,9 +31,9 @@ async function createBrowserIdentity(role: BrowserIdentityRole, outputId: string
 			...(role === 'operations-notes' ? { scopeType: 'app', scopeValue: 'browser-notes' } : {}),
 		})
 		if (role === 'admin') {
-			// An application's token carries no cross-app grant (ADR-0022 rule 6), so the local stack's SDK witness, whose
-			// page admits a member only, needs a grant of its own.
-			await runtime.env.REPOSITORIES.grants.createGrant({ principalId: principal.id, app: 'sdk-witness@prod', permissions: ['witness.capture'] })
+			// An application's token carries no cross-app grant (ADR-0022 rule 6), so the local Notes example, whose SPA
+			// admits a member only and lists the notes it may read, needs a grant of its own.
+			await runtime.env.REPOSITORIES.grants.createGrant({ principalId: principal.id, app: 'notes@prod', permissions: ['notes.read'] })
 		}
 
 		const session = generateToken()

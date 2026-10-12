@@ -19,6 +19,7 @@ import {
 } from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { type ContractProxyTable, contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { buildWeb } from 'fabrika-example-zerops/build-web'
 import { NOTES_APP_ID, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -26,8 +27,6 @@ import { resolve } from 'node:path'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { applicationFixtureRoot } from './local-source-fixtures/generate'
-import { witnessContract } from './operations-witness/contract'
-import { WITNESS_HOST, WITNESS_IAM_APP_ID, WITNESS_UPSTREAM } from './operations-witness/placement'
 import { ensureLocalGitHubApps } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -53,7 +52,7 @@ const randomSecret = (): string => {
 
 const randomBase64Key = (): string => randomBytes(32).toString('base64')
 
-const writeEnv = async (directory: string, name: string, values: Record<string, string>): Promise<void> => {
+export const writeEnv = async (directory: string, name: string, values: Record<string, string>): Promise<void> => {
 	const lines = Object.entries(values).map(([key, value]) => {
 		if (value.includes('\n') || value.includes('\r')) {
 			throw new Error(`${key} cannot contain a newline`)
@@ -90,7 +89,6 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 		'apps-proxy.env',
 		'notes.env',
 		'apps-proxy-secret.env',
-		'operations-witness.env',
 		'emulator.env',
 	]
 	const existingFiles = requiredFiles.filter((file) => existsSync(resolve(directory, file)))
@@ -108,7 +106,6 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	const appsDatabasePassword = randomSecret()
 	const appsStorageSecret = randomSecret()
 	const notesProxySecret = randomSecret()
-	const witnessProxySecret = randomSecret()
 	const storagePassword = randomSecret()
 	const rpcKey = `px_${randomSecret()}`
 	const proxyKey = `px_${randomSecret()}`
@@ -162,9 +159,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 		// The apps proxy's Caddy sends it as `X-Fabrika-Proxy-Secret`; the auth service only checks that it is set.
 		writeEnv(directory, 'apps-proxy-secret.env', {
 			[proxySecretVariable(LOCAL_NOTES_IAM_APP_ID)]: notesProxySecret,
-			[proxySecretVariable(WITNESS_IAM_APP_ID)]: witnessProxySecret,
 		}),
-		writeEnv(directory, 'operations-witness.env', { FABRIKA_PROXY_SECRET: witnessProxySecret }),
 		writeEnv(directory, 'emulator.env', { LOCAL_ZEROPS_TOKEN: emulatorToken }),
 	])
 	await ensureObjectStorageSecrets(directory)
@@ -291,8 +286,8 @@ export const LOCAL_NOTES_IAM_APP_ID = appEnvironmentId(NOTES_APP_ID, LOCAL_NOTES
 
 /**
  * The apps proxy fronts the Notes example by its contract's endpoint table, as a namespace proxy fronts a contract
- * application whose snapshot Control approved, and the SDK witness by its own contract's table. `followNotesDeploy` passes the table
- * Control published instead; the placement stays local.
+ * application whose snapshot Control approved. `followNotesDeploy` passes the table Control published instead; the
+ * placement stays local.
  */
 export const localAppsProxyManifest = (table: ContractProxyTable = contractProxyTable(notesContract)): ProxyManifest => ({
 	apps: [
@@ -305,15 +300,6 @@ export const localAppsProxyManifest = (table: ContractProxyTable = contractProxy
 			operationsOrigin: LOCAL_OPERATIONS_ORIGIN,
 			...table,
 		},
-		{
-			id: WITNESS_IAM_APP_ID,
-			hosts: [WITNESS_HOST],
-			upstream: WITNESS_UPSTREAM,
-			scheme: 'http',
-			// The witness's page reports to the local ingest origin.
-			operationsOrigin: LOCAL_OPERATIONS_ORIGIN,
-			...contractProxyTable(witnessContract),
-		},
 	],
 })
 
@@ -323,11 +309,15 @@ export const writeNotesContractDigest = (digest: string): Promise<void> =>
 
 /**
  * Rewritten on every prepare, so a contract edit reaches the composed container: its digest (the container refuses to
- * start under another) and the entrypoint the platform build writes.
+ * start under another), the entrypoint the platform build writes and the SPA its `site` mount serves.
  */
 const prepareNotesApplication = async (): Promise<void> => {
 	await writeNotesContractDigest(contractDigest(notesContract))
 	await writeGeneratedEntry(applicationFixtureRoot, 'bun')
+	const built = await buildWeb(resolve(applicationFixtureRoot, 'dist', 'web'))
+	if (!built.success) {
+		throw new Error(`the Notes SPA did not build:\n${built.logs.map(String).join('\n')}`)
+	}
 }
 
 /** The apps proxy's manifest and its Caddy configuration; the containers read them when they start. */

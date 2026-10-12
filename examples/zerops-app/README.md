@@ -26,7 +26,7 @@ directly.
 | `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start. Never edited.    |
 | `src/__tests__/endpoint-access.fixtures.ts`                  | The seed the generated tests need: only a note in the trash is restored.                           |
 | `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin; the job runs too. |
-| `web/`, `build-web.ts`                                       | The SPA and its build through `@fabrika/check/bun-plugin`, which leaves the handlers out.          |
+| `web/`, `build-web.ts`                                       | The SPA, its error reporting, and its build through `@fabrika/check/bun-plugin` (no handlers).     |
 | `fabrika.config.ts`                                          | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table.  |
 | `fabrika.cheap.config.ts`                                    | The cheap tier: the bucket and the runtime, on the namespace's shared PostgreSQL.                  |
 | `zerops.yaml`                                                | The build base and the SPA build. The platform generates the rest of the setup (ADR-0043).         |
@@ -48,7 +48,8 @@ On Zerops the platform owns the setup. The build runs the SPA build (`bun run bu
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
 
-Not built yet on Zerops: handing the browser its Operations DSN (fabrika-platform backlog 102). This example has no
+The SPA reports its uncaught errors to Operations: `web/operations.ts` reads the DSN and the release from the
+framework's `/__fabrika-config.json` and starts `@sentry/browser`. This example has no
 `creates`, members or share links; an application that has them gets IAM's membership transport (`FABRIKA_IAM_RPC_URL`,
 `FABRIKA_IAM_RPC_KEY`) from the platform.
 

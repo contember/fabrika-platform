@@ -279,23 +279,6 @@ services:
       timeout: 2s
       retries: 60
 
-  # The Operations browser SDK witness: a stand-in behind a minimal contract, serving its own page, because a contract
-  # application cannot hand its browser the managed DSN yet (backlog 102).
-  operations-witness:
-    <<: *bun
-    command: bun packages/local-stack/src/operations-witness/server.ts
-    env_file: .state/operations-witness.env
-    environment:
-      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
-      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
-      FABRIKA_RELEASE: fabrika/local-notes/local/default/0000000000000000000000000000000000000000
-    networks: [apps-prod, iam-public]
-    healthcheck:
-      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
   apps-proxy-auth:
     <<: *bun
     command: bun packages/proxy/src/main.ts
@@ -316,8 +299,6 @@ services:
       - 127.0.0.1:18081:18081
     depends_on:
       notes:
-        condition: service_healthy
-      operations-witness:
         condition: service_healthy
       platform-proxy-auth:
         condition: service_healthy

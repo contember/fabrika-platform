@@ -23,8 +23,6 @@ import { controlSchema } from '@fabrika/control/schema'
 import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
 import { readStateEnv } from './machine-key'
-import { WITNESS_SCHEMA } from './operations-witness/contract'
-import { WITNESS_IAM_APP_ID, WITNESS_ORIGIN } from './operations-witness/placement'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
@@ -55,7 +53,6 @@ function notesSchema(): AppSchema {
 export const localApps: readonly LocalApp[] = [
 	{ id: 'vozka', schema: controlSchema, returnOrigins: ['http://control.fabrika.localhost:18080'] },
 	{ id: LOCAL_NOTES_IAM_APP_ID, schema: notesSchema(), returnOrigins: ['http://notes.fabrika.localhost:18081'] },
-	{ id: WITNESS_IAM_APP_ID, schema: WITNESS_SCHEMA, returnOrigins: [WITNESS_ORIGIN] },
 ]
 
 export const registerLocalApps = async (): Promise<void> => {

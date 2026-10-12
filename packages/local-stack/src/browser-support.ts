@@ -5,9 +5,9 @@ import { readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { z } from 'zod'
 import { type browserFixtureSourceSchema, type browserIdentitySchema, parseBrowserFixtures, parseBrowserIdentity } from './browser-fixture-schemas'
-import { compose } from './compose'
+import { BROWSER_COMPOSE_ENV, compose } from './compose'
 import { seedNotesAgentChange } from './notes-agent-change'
-import { STATE_DIR } from './prepare'
+import { STATE_DIR, writeEnv } from './prepare'
 import {
 	alertChannelFixtureSchema,
 	alertsFixtureSchema,
@@ -89,13 +89,11 @@ async function seedBrowserFixtures(): Promise<void> {
 		{ browser: true },
 	)
 	const fixtures = readFixtures()
-	await compose(['up', '--detach', '--wait', '--force-recreate', 'operations-witness'], {
-		browser: true,
-		env: {
-			FABRIKA_BROWSER_OPERATIONS_DSN: buildOperationsDsn(OPERATIONS_ORIGIN, fixtures.visible.publicKey, fixtures.visible.ingestProjectId),
-			FABRIKA_BROWSER_RELEASE: fixtures.visible.release.name,
-		},
+	await writeEnv(STATE_DIR, BROWSER_COMPOSE_ENV, {
+		FABRIKA_BROWSER_OPERATIONS_DSN: buildOperationsDsn(OPERATIONS_ORIGIN, fixtures.visible.publicKey, fixtures.visible.ingestProjectId),
+		FABRIKA_BROWSER_RELEASE: fixtures.visible.release.name,
 	})
+	await compose(['up', '--detach', '--wait', '--force-recreate', 'notes'], { browser: true })
 	await Promise.all([
 		seedSourceEvents(fixtures.visible, 'Browser fixture primary failure', 2),
 		seedSourceEvents(fixtures.visible, 'Browser fixture merge candidate', 1),

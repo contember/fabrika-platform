@@ -37,7 +37,6 @@ async function seedExistingState(): Promise<void> {
 			'platform-proxy.env',
 			'apps-proxy.env',
 			'apps-proxy-secret.env',
-			'operations-witness.env',
 			'emulator.env',
 		]
 	) {

@@ -1,8 +1,9 @@
 import { browserTest, byLabel, byRole, expect, getContext, getPage, invariant, step } from '@opice/harness'
 
 const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
-const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://sdk.fabrika.localhost:18081'
-const WITNESS_URL = `${APP_URL}/operations-sdk`
+// The Notes example: its SPA reads the DSN and the release from the framework's `/__fabrika-config.json`.
+const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
+const CONFIG_URL = `${APP_URL}/__fabrika-config.json`
 
 interface ManagedConfig {
 	dsn: string
@@ -95,6 +96,15 @@ function parseEnvelopeItemTypes(bytes: Uint8Array): string[] {
 	return itemTypes
 }
 
+/**
+ * An uncaught error in the page, which the SDK's global handler reports. The marker names the throwing function, so the
+ * server-side grouping (type and frames) keeps each run's issue apart and folds two captures of one run together.
+ */
+async function throwUncaught(marker: string): Promise<void> {
+	const name = `notesWitness_${marker.replaceAll('-', '_')}`
+	await getPage().evaluate(`setTimeout(function ${name}() { throw new Error(${JSON.stringify(witnessMessage(marker))}) }, 0)`)
+}
+
 async function captureManagedEnvelope(config: ManagedConfig): Promise<string[]> {
 	const endpoint = envelopeEndpoint(config.dsn)
 	const responsePromise = getPage().waitForResponse((response) => {
@@ -102,7 +112,7 @@ async function captureManagedEnvelope(config: ManagedConfig): Promise<string[]> 
 		const url = new URL(response.url())
 		return url.origin === endpoint.origin && url.pathname === endpoint.pathname
 	})
-	await byRole('button', 'Capture managed error', { exact: true }).click()
+	await throwUncaught(requireMarker(runMarker))
 	const response = await responsePromise
 	expect(response.status()).toBe(202)
 	const body = response.request().postDataBuffer()
@@ -148,8 +158,19 @@ function requireMarker(value: string | null): string {
 	return value
 }
 
+function witnessMessage(marker: string): string {
+	return `Fabrika Operations SDK witness [${marker}]`
+}
+
 function issueTitle(marker: string): string {
-	return `Error: Fabrika Operations SDK witness [${marker}]`
+	return `Error: ${witnessMessage(marker)}`
+}
+
+/** The notes page has rendered its list, which it does only after the SDK started. */
+async function openNotes(): Promise<void> {
+	await getPage().goto(APP_URL, { waitUntil: 'domcontentloaded' })
+	await expect(byRole('heading', 'Notes', { exact: true, level: 1 })).toBeVisible()
+	await expect(getPage().locator('#limits')).toHaveText(/^Up to \d+ attachments/)
 }
 
 function issueFact(label: string) {
@@ -159,7 +180,7 @@ function issueFact(label: string) {
 browserTest(
 	{
 		name: 'The official browser SDK creates one managed Operations issue',
-		url: WITNESS_URL,
+		url: APP_URL,
 		feature: 'operations-adoption-sdk',
 		seeds: ['operations-browser-fixtures'],
 		roles: ['admin'],
@@ -171,37 +192,34 @@ browserTest(
 		const capturedItemTypes: string[][] = []
 		const scenarioMarker = crypto.randomUUID()
 
-		await step('the application exposes the bounded SDK witness without managed values in HTML', {
+		await step('the framework hands the SPA only the managed DSN and release, never in the HTML', {
 			intent: 'the browser receives only the public DSN and release through the application runtime boundary',
-			manual: 'Open the Operations SDK witness. Verify that it is ready to capture a managed error.',
+			manual: 'Open the Notes example. Verify that its list of notes renders.',
 		}, async () => {
-			await getPage().goto(`${WITNESS_URL}?marker=${encodeURIComponent(scenarioMarker)}`, { waitUntil: 'domcontentloaded' })
-			await expect(byRole('heading', 'Operations SDK witness', { exact: true, level: 1 })).toBeVisible()
-			await expect(byRole('status')).toHaveText('Ready')
-			runMarker = await byLabel('Error marker').inputValue()
-			expect(runMarker).toBe(scenarioMarker)
+			runMarker = scenarioMarker
+			await openNotes()
 
-			const configResponse = await getContext().request.get(`${APP_URL}/operations-sdk/config`, { failOnStatusCode: false })
+			const configResponse = await getContext().request.get(CONFIG_URL, { failOnStatusCode: false })
 			expect(configResponse.status()).toBe(200)
 			const configValue: unknown = await configResponse.json()
+			expect(isRecord(configValue) ? Object.keys(configValue).sort() : null).toEqual(['dsn', 'release'])
 			managedConfig = parseManagedConfig(configValue)
 
-			const documentResponse = await getContext().request.get(`${APP_URL}/operations-sdk`, { failOnStatusCode: false })
+			const documentResponse = await getContext().request.get(`${APP_URL}/`, { failOnStatusCode: false })
 			expect(documentResponse.status()).toBe(200)
 			const documentHtml = await documentResponse.text()
 			const config = requireConfig(managedConfig)
 			if (documentHtml.includes(config.dsn) || documentHtml.includes(config.release)) {
-				throw new Error('Operations SDK witness HTML embeds managed configuration')
+				throw new Error('the Notes document embeds managed configuration')
 			}
 		})
 
-		await step('the official SDK sends the marked exception through the managed DSN', {
+		await step('the official SDK sends an uncaught exception through the managed DSN', {
 			intent: 'the tested @sentry/browser version reaches Fabrika ingest using its native envelope transport',
-			manual: 'Select "Capture managed error". Verify that the page reports the event as sent.',
+			manual: 'Throw an uncaught error in the page (the browser console). Verify that the SDK posts one envelope.',
 		}, async () => {
 			capturedItemTypes.push(await captureManagedEnvelope(requireConfig(managedConfig)))
 			expect(capturedItemTypes[0]).toEqual(['event'])
-			await expect(byRole('status')).toHaveText(/^Sent [0-9a-f]{32}$/)
 		})
 
 		await step('the first event becomes one grouped issue with the managed release', {
@@ -222,14 +240,11 @@ browserTest(
 
 		await step('a second equivalent SDK exception increments the same issue', {
 			intent: 'native SDK events use stable server-side grouping instead of creating duplicate issues',
-			manual: 'Capture the managed error once more. Return to the same issue and verify that its occurrence count increased.',
+			manual: 'Throw the same uncaught error once more. Return to the same issue and verify that its occurrence count increased.',
 		}, async () => {
-			await getPage().goto(WITNESS_URL, { waitUntil: 'domcontentloaded' })
-			await expect(byRole('status')).toHaveText('Ready')
-			await expect(byLabel('Error marker')).toHaveValue(requireMarker(runMarker))
+			await openNotes()
 			capturedItemTypes.push(await captureManagedEnvelope(requireConfig(managedConfig)))
 			expect(capturedItemTypes[1]).toEqual(['event'])
-			await expect(byRole('status')).toHaveText(/^Sent [0-9a-f]{32}$/)
 
 			const retainedIssueId = requireIssueId(issueId)
 			await getPage().goto(`${CONTROL_URL}/operations/errors/${retainedIssueId}`, { waitUntil: 'domcontentloaded' })

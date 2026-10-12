@@ -36,18 +36,18 @@ interface AuthResolveContext {
 
 const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? 'http://control.fabrika.localhost:18080'
 const IAM_ORIGIN = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabrika.localhost:18080'
-// The Operations SDK witness, the one application host a scenario visits; a contract application serves no `/` to start a handoff at.
-const WITNESS_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://sdk.fabrika.localhost:18081'
+// The Notes example, the one application host a scenario visits; its member SPA at `/` starts the handoff.
+const NOTES_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
 
 /**
  * Every host a scenario is signed in to, with the app id IAM knows it by and the roles that hold a permission there.
  * `registerLocalApps` in `@fabrika/local-stack` registers exactly these origins, so a name added here without a
- * registration there is a 400 at sign-in rather than a silent miss. The witness admits a member only, and only the
+ * registration there is a 400 at sign-in rather than a silent miss. Notes admits a member only, and only the
  * admin's grant reaches every application.
  */
 const APP_HOSTS: readonly { app: string; origin: string; roles: readonly BrowserIdentityRole[] }[] = [
 	{ app: 'vozka', origin: CONTROL_ORIGIN, roles: ['admin', 'operations-notes'] },
-	{ app: 'sdk-witness', origin: WITNESS_ORIGIN, roles: ['admin'] },
+	{ app: 'notes', origin: NOTES_ORIGIN, roles: ['admin'] },
 ]
 
 /** Where a scenario reads the principal it is signed in as. Mirrored in `support/fixtures.ts`. */

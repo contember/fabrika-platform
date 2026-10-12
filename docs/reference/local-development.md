@@ -126,16 +126,11 @@ webhook, where it waits for approval. The scenario
 `tests/browser/notes-agent-adds-endpoint-and-table.test.ts` approves it in the console and
 follows the deploy. Every `up` returns the container to the workspace example.
 
-The apps proxy also fronts the Operations browser SDK witness at
-`http://sdk.fabrika.localhost:18081` (`src/operations-witness/`). It is a stand-in,
-because a contract application cannot hand its browser the managed DSN yet
-(backlog 102). It sits behind a minimal contract (`contract.ts`, app `sdk-witness`):
-an anonymous `health` row and an SPA row that admits any member. The apps proxy
-fronts it with `contractProxyTable(witnessContract)` and `operationsOrigin`, and with
-its own proxy secret (`.state/operations-witness.env`, `apps-proxy-secret.env`). The
-witness checks the proxy secret and the injected token itself. Only the browser
-suite's `admin` role signs in to its host. It never takes Control's application path:
-`local:prepare` writes its entry into the apps proxy manifest and Compose runs it.
+Every prepare also builds the example's SPA (`dist/web`), which Notes serves at `/`. The
+SPA reads the managed DSN and release from the framework's `/__fabrika-config.json` and
+initializes `@sentry/browser` from them; the browser stack recreates Notes with the DSN of a
+seeded Operations source, so `tests/browser/operations-sdk-ingest.test.ts` finds its events
+there.
 
 ## Immutable source fixtures
 
@@ -207,7 +202,6 @@ the source fixture tests commit/digest/archive and lifecycle behavior.
 | IAM auth and public JWKS | `http://iam.fabrika.localhost:18080`     |
 | Operations public ingest | `http://errors.fabrika.localhost:18080`  |
 | Notes example app        | `http://notes.fabrika.localhost:18081`   |
-| Operations SDK witness   | `http://sdk.fabrika.localhost:18081`     |
 
 ## Signing in
 
@@ -257,9 +251,8 @@ That is the production round trip verbatim, including the handoff, because since
 session to reach an application's host — no cookie is shared between hosts, and
 `__Host-` makes the browser enforce it. What makes it work locally is that `local:up`
 **registers the local apps with IAM** once the composition is healthy: `vozka` with
-`http://control.fabrika.localhost:18080`, `notes` with
-`http://notes.fabrika.localhost:18081` and the SDK witness with
-`http://sdk.fabrika.localhost:18081`, through the same `reconcileSchema` call a
+`http://control.fabrika.localhost:18080` and `notes` with
+`http://notes.fabrika.localhost:18081`, through the same `reconcileSchema` call a
 deploy makes. Locally nothing deploys fabrika into its own composition, so the stack
 stands in for the deploy — the same way it already provisions the machine key. An app
 IAM has no return origin for answers `400` naming the address rather than trying
@@ -308,7 +301,7 @@ tracked files.
 
 The composition runs these real components:
 
-- IAM, Operations, control, notes and the SDK witness Bun servers;
+- IAM, Operations, control and notes Bun servers;
 - their real PostgreSQL migrations and data stores;
 - SeaweedFS through the production S3-compatible run-log and Operations blob-store
   adapters;

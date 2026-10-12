@@ -84,12 +84,9 @@ bun run test:browser  # the opice suites in tests/browser/
   fixture copied to `.state/notes-source/` (`FABRIKA_LOCAL_NOTES_ROOT`). Every `up` returns it to the example. The
   `notes-agent-change` browser seed (`src/notes-agent-change.ts`) deploys and approves the pinned commit, follows it,
   and parks the agent change commit (`fixtures/source/notes-agent-change.patch`, pinned as `agentChange`) for its scenario.
-- **The Operations SDK witness is a stand-in behind a minimal contract on its own host** (`src/operations-witness/`),
-  because a contract application cannot hand its browser the managed DSN yet (backlog 102). Delete it when that lands.
-  Its `contract.ts` (app `sdk-witness`) has an anonymous `health` row and an SPA row for any member; the apps proxy
-  fronts it with `contractProxyTable(witnessContract)` and `operationsOrigin`, and its own proxy secret
-  (`.state/operations-witness.env`, `apps-proxy-secret.env`). The witness checks the proxy secret and the injected token
-  itself. It never goes through Control: `prepare.ts` writes its entry into the apps proxy manifest and Compose runs it.
+- **The Operations SDK witness is the Notes example's SPA.** `prepare.ts` builds it (`dist/web`) on every prepare; it
+  reads the DSN and the release from the framework's `/__fabrika-config.json`. The browser stack recreates `notes` with
+  a seeded source's DSN (`FABRIKA_BROWSER_OPERATIONS_DSN`, `compose.browser.yaml`).
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
   remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.

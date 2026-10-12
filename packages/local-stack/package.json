@@ -39,8 +39,7 @@
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
-		"@fabrika/platform-node": "workspace:*",
-		"@sentry/browser": "10.69.0"
+		"@fabrika/platform-node": "workspace:*"
 	},
 	"devDependencies": {
 		"@fabrika/check": "workspace:*",

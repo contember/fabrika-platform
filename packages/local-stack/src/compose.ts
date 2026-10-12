@@ -1,6 +1,13 @@
-import { COMPOSE_FILE, REPO_ROOT } from './prepare'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
 
 export const BROWSER_COMPOSE_FILE = `${import.meta.dir}/../compose.browser.yaml`
+/**
+ * The browser stack's seeded Operations source, which `compose.browser.yaml` interpolates into Notes. Read by every
+ * browser compose call, so a later recreate of Notes (following a deploy) keeps reporting there.
+ */
+export const BROWSER_COMPOSE_ENV = 'browser-compose.env'
 
 export interface ComposeOptions {
 	browser?: boolean
@@ -15,9 +22,14 @@ const composeCommand = (args: string[], browser: boolean): string[] => [
 	'fabrika-local',
 	'--file',
 	COMPOSE_FILE,
-	...(browser ? ['--file', BROWSER_COMPOSE_FILE] : []),
+	...(browser ? ['--file', BROWSER_COMPOSE_FILE, ...browserEnvFile()] : []),
 	...args,
 ]
+
+function browserEnvFile(): string[] {
+	const path = resolve(STATE_DIR, BROWSER_COMPOSE_ENV)
+	return existsSync(path) ? ['--env-file', path] : []
+}
 
 export async function compose(args: string[], options: ComposeOptions = {}): Promise<void> {
 	const showOutput = options.showOutput ?? true
