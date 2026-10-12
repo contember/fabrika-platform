@@ -618,3 +618,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   ones older than three days); `ALTER TABLE fabrika_files_*` was refused everywhere, so `fileScanSql` and its exact
   classifier exemption exist; `scan` is in the artifact only when true, so other digests stay; every file collection
   gains `files.<name>.list`; the local stack's `notes` service runs `app-image/` (not started, only built).
+- **WU17 review rounds 1–2.** ClamAV answers OK for an LZMA entry, a damaged deflate stream and a ZIP after a prefix
+  whose entry sizes are in a data descriptor, so the framework checks archives itself and fails closed: a ZIP-based
+  type starts at offset 0, any other file holding a ZIP signature is rejected (about once per 1400 MB of random
+  binary data, accepted), and the end record must be unique and end the file. A download reads only the scanned
+  version (`If-Match` on the recorded ETag); object keys are written once. A file without a verdict, or whose delete
+  failed, waits with backoff and is retried alone; the batch takes the oldest due files across collections. An empty
+  upload to a scanning collection is refused (400 `empty`) rather than promoted without a verdict.
