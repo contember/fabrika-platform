@@ -991,3 +991,30 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
 - **WU13a, from WU10's integration.** The scaffold wrote a hidden-column case for a column with only a write action;
   it now writes one only for a column with its own read action (`scaffold-cases.test.ts`). Not done: a generated
   column-write case, which needs a probe mutation of the column's action in `@fabrika/app/testing/isolation`.
+- **WU13b — the cascade was the compiler's error type, not `any`.** A handler whose body reads a missing property
+  returns the error type, and every unwrapped conditional over it answers the error type too, so `PendingIn` called
+  the endpoint pending. `IsPending` now checks inside tuples only (`kit-mistakes/25`). A table the access form does not
+  reach is an `Unavailable` property naming the table, the form and the form that reaches it (`Reaching` in
+  `context.ts`), so `keyof ctx.db.target` now lists every table; `matrix.ts` asserts reach with `Reached<…>`. WU13a:
+  your `over` reach change edits the same `matrix.ts` lines (106, 108).
+- **WU13b — `fromRow` hint.** `.handle`'s return constraint is F-bounded (`HandlerReturn<F, O>`): it admits a
+  snake_case row only when the handler returns one, so `ExactReturn` names `fromRow`; any other wrong return keeps
+  the compiler's own message. `kit-scale`: 395,185 instantiations (362,617 at HEAD before the unit).
+- **WU13b — reserved roles** are `RoleDefs` (`RoleDef & ReservedRoleMessage` on a key of `BuiltinRoleKey`, a literal
+  type now exported by `@fabrika/auth-core`) in `defineVocabulary` and `defineContract`: two lines, at the role.
+- **WU13b — member directory, the rule.** `ctx.members` is the read-only `MemberDirectory` exactly where the action is
+  the target dimension's `members.list` (access `on`/`in`), decided by `endpointMembers` (`@fabrika/auth-core`) in
+  the types, `facilitiesOf` and Control alike: the proxy admitted the caller for that action on that value and IAM
+  re-checks the same action live, so the type promises what IAM answers. Another read action would type a list IAM
+  refuses. **IAM change:** `listMembers` shows labels to every `members.list` holder (it showed them to
+  `members.manage` only, since a user's label spells its address); emails and invitations stay with
+  `members.manage`. A directory does not make `boot` require a transport (every read endpoint of that action has
+  one); without it only `list()` answers 503. **Outside the touch points:** Control's `needsMembershipTransport`
+  issues the Zerops key for a list endpoint too, and IAM's schema reconcile keeps it while a dimension declares
+  members (IAM's schema has no per-endpoint list fact). WU10: the skill's "Members" line and `AGENTS.md` still say
+  `manage` only.
+- **WU13b — checker.** A schema method on a literal const (`Status.optional()`) is read by applying it to the
+  const's schema; a const whose initializer is refused is reported there only, not again at each import (three
+  `direct-forms` expectations dropped their import-site lines). `raw-sql` refuses a call, tag or helper by the
+  module's `sql` binding (`rawSqlBindings`: an import of `sql` under any alias, a destructured load), so an aliased
+  driver tag is refused now and a `queries.ts` parameter named `sql` is not.
