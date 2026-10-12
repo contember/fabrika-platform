@@ -40,8 +40,8 @@ export const vocabulary = defineVocabulary({
 - An **action** is an exact name; a role lists actions and there is no `*`. Give an operation that only some roles
   may do its own action (`tasks.assign`).
 - A **membership role** (`member: { scope, assignableBy }`) is granted in one value of `scope`.
-  `members: { manage, list }` on a dimension gives `ctx.members` to endpoints of those actions
-  (`references/endpoint.md`).
+  `members: { manage, list }` on a dimension gives `ctx.members` to the endpoints on, in or below it: a lookup of one
+  member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.
 - `creator: '<role>'` on a top-level dimension lets an endpoint with `creates: '<dimension>'` make a new value and
   grant the caller that role there.
@@ -70,6 +70,7 @@ CREATE TABLE tasks (
 	title TEXT NOT NULL,
 	status task_status NOT NULL DEFAULT 'open',
 	assignee TEXT,
+	assignee_label TEXT,
 	due_on DATE,
 	overdue BOOLEAN NOT NULL DEFAULT false,
 	created_by TEXT NOT NULL,
@@ -161,7 +162,10 @@ export const tables = defineTables(vocabulary, columns)({
 		update: ['title', 'status', 'due_on', 'overdue'],
 		version: 'version',
 		createdBy: 'created_by',
-		columns: { assignee: { write: 'tasks.assign' } },
+		columns: {
+			assignee: { write: 'tasks.assign' },
+			assignee_label: { write: 'tasks.assign' },
+		},
 	},
 	task_comments: {
 		scope: { child: 'tasks' },

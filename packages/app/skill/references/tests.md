@@ -20,6 +20,7 @@ fixtures, never in the test: do not loosen access to make it pass.
 
 ```ts src/__tests__/endpoint-access.fixtures.ts
 export const seeds = { 'api.tasks.close': { status: 'doing' } }
+export const members = { 'api.tasks.assign': ['assignee'] }
 ```
 
 - `export const fixtures = { '<endpoint id>': { … } }` is an input for an endpoint whose schema the scaffold cannot
@@ -27,6 +28,9 @@ export const seeds = { 'api.tasks.close': { status: 'doing' } }
   `{ 'webhooks.github.bind': { scope: 'acme', account: 'installation:1' } }`. The checker names each missing one,
   and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
   replaced by the seeded scope.
+- `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
+  `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
+  it they send a sample, the handler answers 400, and the case fails.
 - `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
   endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
   sets neither a column that places the row nor a text column.
@@ -157,8 +161,8 @@ if (postgres !== null) {
   registers no test. A skip proves nothing: run with the variable set.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. `kind:
   'machine'` presents a `px_` key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
-- A member directory (`ctx.members.list()`) answers from the kit's own callers: everyone `testCaller` gave a
-  membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
+- A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`
+  gave a membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
   `members.manage` holder). To list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.

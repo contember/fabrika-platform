@@ -25,7 +25,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 ## The paved road
 
 ```ts src/tasks/endpoints.ts
-import { ConflictError, fromRow } from '@fabrika/app'
+import { BadRequestError, ConflictError, fromRow } from '@fabrika/app'
 import { app } from '../app-kit'
 import {
 	AssignTask,
@@ -106,11 +106,18 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 		output: Saved,
 		access: { action: 'tasks.assign', on: 'task', from: 'id' },
 	})
-		.handle(({ input, ctx }) =>
-			ctx.db.target.update({ assignee: input.assignee }, {
-				expectVersion: input.expectVersion,
-			})
-		),
+		.handle(async ({ input, ctx }) => {
+			const member = input.assignee === null
+				? null
+				: await ctx.members.get(input.assignee)
+			if (input.assignee !== null && member === null) {
+				throw new BadRequestError('the assignee is not a member of the org')
+			}
+			return ctx.db.target.update({
+				assignee: member?.principalId ?? null,
+				assignee_label: member?.label ?? null,
+			}, { expectVersion: input.expectVersion })
+		}),
 	start: r.mutation({
 		input: Versioned,
 		output: Saved,
@@ -153,7 +160,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
 - Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
-  the caller.
+  the caller. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
+  anyone outside the org, and its label comes from that answer, never from the input.
 
 ## Off the road: declare it
 
@@ -494,6 +502,7 @@ export const Task = z.strictObject({
 	title: z.string(),
 	status: TaskStatus,
 	assignee: z.nullable(z.string()),
+	assigneeLabel: z.nullable(z.string()),
 	dueOn: z.nullable(z.iso.date()),
 	overdue: z.boolean(),
 	version: z.int(),
@@ -798,14 +807,22 @@ should hold. The generated tests skip the other-scope leak case for such an endp
 
 ## Members
 
-An endpoint `on` or `in` a dimension with `members` gets `ctx.members`:
+`ctx.members` of an endpoint `on` or `in` a dimension reads the members of the nearest dimension, its own or one
+containing it, that declares `members`: a task endpoint reads its org's. A dimension with no such container has none.
 
-- with the dimension's `members.list` action: the read-only directory `ctx.members.list()`, answering
-  `{ principalId, label, roles, disabled }` per member, for an assignee picker or a membership check. `label` is
-  `null` unless the caller also holds `members.manage` there, or the dimension opts in with `directory: 'labels'`,
-  which widens like any other access change.
-- with its `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
+- Every such endpoint: `ctx.members.get(principalId)` answers `{ principalId, label, disabled }` when that principal
+  is a member of the value the object lies in, and `null` otherwise (another org's member, an unknown id). IAM checks
+  the endpoint's own action on the object, so `tasks.assign` validates the person it assigns without a second action.
+  Use it for every picked person: store `member.principalId` and `member.label`, never a label from the input.
+- With the directory's `members.list` action (`tasks.read` here) also `ctx.members.list()`, answering
+  `{ principalId, label, roles, disabled }` per member, for an assignee picker. IAM checks that action on the org
+  itself: a caller who holds it only on a project is refused (403).
+- `label` is `null` unless the caller also holds `members.manage` there, or the dimension opts in with
+  `directory: 'labels'`, which widens like any other access change: then every endpoint below it reads labels too.
+- With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
+- Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
+  those as the caller's own identity (`client-identity`).
 
 ```ts src/members/endpoints.ts
 import { z } from 'zod/v4'
@@ -833,7 +850,8 @@ export const members = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-IAM answers the directory, so do the data work first and call `ctx.members` after it.
+IAM answers the directory. A lookup only reads, so it may come before the write that needs its answer (`assign` in
+`SKILL.md`); do every other data work first.
 
 ---
 
@@ -853,7 +871,7 @@ The refusals agents meet most, and their fix:
 | `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                    | the message names the field                                                            |
 | `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                    | another name; a registry range such as `^0.0.4`                                        |
 | `generated-test-hash` | a generated test is missing, edited or stale                                                                         | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, or a fixture or seed names no endpoint                                        | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint  | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
 | `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                           | the handles, or `sql: 'read'` and `ctx.sql`                                            |
 | `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                         | the handles, a file collection, a connector                                            |
 | `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` as a value in a server module | the handles; state lives in a table, not in a global                                   |
@@ -882,24 +900,25 @@ The first run may report only the contract's refusals: the generated-test findin
 
 A kit error lands on the line of the mistake, in one or two lines that name the fix. Read the last line first.
 
-| The compiler says                                                                   | Fix                                                                     |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `add .handle(…) to tasks.get: every endpoint takes its handler beside it`           | add the handler; when the handler exists, fix the error inside it first |
-| `the handler returns version, which the output does not declare`                    | return only the output's fields                                         |
-| `… where the output is camelCase: map it with fromRow(Schema, row)`                 | `fromRow(Schema, row)`                                                  |
-| `update on tasks needs the action 'tasks.write', and this endpoint holds '…'`       | the endpoint's action, a column write action, or a separate endpoint    |
-| `getForUpdate locks the row, so it runs only in a mutation`                         | `r.mutation`                                                            |
-| `update acts on one object: declare access with on`                                 | access `on`, not `in` or `over`                                         |
-| `tasks is not under in: 'org' (it lies in project): declare …`                      | the access form the message names                                       |
-| `ctx.sql needs a declaration: add sql: 'read' …`                                    | declare `sql` on the endpoint                                           |
-| `tasks is outside this site's scope: declare unscoped: { tasks: 'read' } on it`     | declare it, or use the capability's handles                             |
-| `a job writes inside ctx.transaction((tx) => …): use tx.db there`                   | move the write into the transaction                                     |
-| `ctx.members needs the action '…' (lists the members of org) or '…' (manages them)` | the dimension's `members.list` or `members.manage` action               |
-| `admin is a role IAM defines itself for every application (reserved: admin)`        | another role name                                                       |
-| `Property 'id' does not exist on type 'Ref<…>'`                                     | `ctx.target.value`                                                      |
-| `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`             | the column has its own read action, which this capability lacks         |
-| `Type 'Date' is not assignable to type 'string'` on a `date` column                 | a `YYYY-MM-DD` string                                                   |
-| `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                    | `bun install` (at the repository root in a monorepo)                    |
+| The compiler says                                                               | Fix                                                                     |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `add .handle(…) to tasks.get: every endpoint takes its handler beside it`       | add the handler; when the handler exists, fix the error inside it first |
+| `the handler returns version, which the output does not declare`                | return only the output's fields                                         |
+| `… where the output is camelCase: map it with fromRow(Schema, row)`             | `fromRow(Schema, row)`                                                  |
+| `update on tasks needs the action 'tasks.write', and this endpoint holds '…'`   | the endpoint's action, a column write action, or a separate endpoint    |
+| `getForUpdate locks the row, so it runs only in a mutation`                     | `r.mutation`                                                            |
+| `update acts on one object: declare access with on`                             | access `on`, not `in` or `over`                                         |
+| `tasks is not under in: 'org' (it lies in project): declare …`                  | the access form the message names                                       |
+| `ctx.sql needs a declaration: add sql: 'read' …`                                | declare `sql` on the endpoint                                           |
+| `tasks is outside this site's scope: declare unscoped: { tasks: 'read' } on it` | declare it, or use the capability's handles                             |
+| `a job writes inside ctx.transaction((tx) => …): use tx.db there`               | move the write into the transaction                                     |
+| `listing the members of org needs the action '…'; get(principalId) checks one`  | `ctx.members.get(id)`, or an endpoint of the directory's `members.list` |
+| `neither task nor a dimension containing it declares members`                   | declare `members` on the dimension whose people the endpoint picks      |
+| `admin is a role IAM defines itself for every application (reserved: admin)`    | another role name                                                       |
+| `Property 'id' does not exist on type 'Ref<…>'`                                 | `ctx.target.value`                                                      |
+| `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |
+| `Type 'Date' is not assignable to type 'string'` on a `date` column             | a `YYYY-MM-DD` string                                                   |
+| `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                | `bun install` (at the repository root in a monorepo)                    |
 
 ## Runtime answers
 
@@ -907,7 +926,7 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400    | the input does not match its schema; `BadRequestError`                                                                                                                                          |
 | 401    | no valid credential. In a test, the caller is missing                                                                                                                                           |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                                                 |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself      |
 | 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                         |
 | 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                            |
 | 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
@@ -1171,8 +1190,8 @@ export const vocabulary = defineVocabulary({
 - An **action** is an exact name; a role lists actions and there is no `*`. Give an operation that only some roles
   may do its own action (`tasks.assign`).
 - A **membership role** (`member: { scope, assignableBy }`) is granted in one value of `scope`.
-  `members: { manage, list }` on a dimension gives `ctx.members` to endpoints of those actions
-  (`references/endpoint.md`).
+  `members: { manage, list }` on a dimension gives `ctx.members` to the endpoints on, in or below it: a lookup of one
+  member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.
 - `creator: '<role>'` on a top-level dimension lets an endpoint with `creates: '<dimension>'` make a new value and
   grant the caller that role there.
@@ -1201,6 +1220,7 @@ CREATE TABLE tasks (
 	title TEXT NOT NULL,
 	status task_status NOT NULL DEFAULT 'open',
 	assignee TEXT,
+	assignee_label TEXT,
 	due_on DATE,
 	overdue BOOLEAN NOT NULL DEFAULT false,
 	created_by TEXT NOT NULL,
@@ -1292,7 +1312,10 @@ export const tables = defineTables(vocabulary, columns)({
 		update: ['title', 'status', 'due_on', 'overdue'],
 		version: 'version',
 		createdBy: 'created_by',
-		columns: { assignee: { write: 'tasks.assign' } },
+		columns: {
+			assignee: { write: 'tasks.assign' },
+			assignee_label: { write: 'tasks.assign' },
+		},
 	},
 	task_comments: {
 		scope: { child: 'tasks' },
@@ -1338,6 +1361,7 @@ fixtures, never in the test: do not loosen access to make it pass.
 
 ```ts src/__tests__/endpoint-access.fixtures.ts
 export const seeds = { 'api.tasks.close': { status: 'doing' } }
+export const members = { 'api.tasks.assign': ['assignee'] }
 ```
 
 - `export const fixtures = { '<endpoint id>': { … } }` is an input for an endpoint whose schema the scaffold cannot
@@ -1345,6 +1369,9 @@ export const seeds = { 'api.tasks.close': { status: 'doing' } }
   `{ 'webhooks.github.bind': { scope: 'acme', account: 'installation:1' } }`. The checker names each missing one,
   and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
   replaced by the seeded scope.
+- `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
+  `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
+  it they send a sample, the handler answers 400, and the case fails.
 - `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
   endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
   sets neither a column that places the row nor a text column.
@@ -1475,8 +1502,8 @@ if (postgres !== null) {
   registers no test. A skip proves nothing: run with the variable set.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. `kind:
   'machine'` presents a `px_` key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
-- A member directory (`ctx.members.list()`) answers from the kit's own callers: everyone `testCaller` gave a
-  membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
+- A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`
+  gave a membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
   `members.manage` holder). To list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.

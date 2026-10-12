@@ -14,7 +14,7 @@ The refusals agents meet most, and their fix:
 | `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                    | the message names the field                                                            |
 | `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                    | another name; a registry range such as `^0.0.4`                                        |
 | `generated-test-hash` | a generated test is missing, edited or stale                                                                         | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, or a fixture or seed names no endpoint                                        | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint  | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
 | `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                           | the handles, or `sql: 'read'` and `ctx.sql`                                            |
 | `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                         | the handles, a file collection, a connector                                            |
 | `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` as a value in a server module | the handles; state lives in a table, not in a global                                   |
@@ -43,24 +43,25 @@ The first run may report only the contract's refusals: the generated-test findin
 
 A kit error lands on the line of the mistake, in one or two lines that name the fix. Read the last line first.
 
-| The compiler says                                                                   | Fix                                                                     |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `add .handle(…) to tasks.get: every endpoint takes its handler beside it`           | add the handler; when the handler exists, fix the error inside it first |
-| `the handler returns version, which the output does not declare`                    | return only the output's fields                                         |
-| `… where the output is camelCase: map it with fromRow(Schema, row)`                 | `fromRow(Schema, row)`                                                  |
-| `update on tasks needs the action 'tasks.write', and this endpoint holds '…'`       | the endpoint's action, a column write action, or a separate endpoint    |
-| `getForUpdate locks the row, so it runs only in a mutation`                         | `r.mutation`                                                            |
-| `update acts on one object: declare access with on`                                 | access `on`, not `in` or `over`                                         |
-| `tasks is not under in: 'org' (it lies in project): declare …`                      | the access form the message names                                       |
-| `ctx.sql needs a declaration: add sql: 'read' …`                                    | declare `sql` on the endpoint                                           |
-| `tasks is outside this site's scope: declare unscoped: { tasks: 'read' } on it`     | declare it, or use the capability's handles                             |
-| `a job writes inside ctx.transaction((tx) => …): use tx.db there`                   | move the write into the transaction                                     |
-| `ctx.members needs the action '…' (lists the members of org) or '…' (manages them)` | the dimension's `members.list` or `members.manage` action               |
-| `admin is a role IAM defines itself for every application (reserved: admin)`        | another role name                                                       |
-| `Property 'id' does not exist on type 'Ref<…>'`                                     | `ctx.target.value`                                                      |
-| `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`             | the column has its own read action, which this capability lacks         |
-| `Type 'Date' is not assignable to type 'string'` on a `date` column                 | a `YYYY-MM-DD` string                                                   |
-| `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                    | `bun install` (at the repository root in a monorepo)                    |
+| The compiler says                                                               | Fix                                                                     |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `add .handle(…) to tasks.get: every endpoint takes its handler beside it`       | add the handler; when the handler exists, fix the error inside it first |
+| `the handler returns version, which the output does not declare`                | return only the output's fields                                         |
+| `… where the output is camelCase: map it with fromRow(Schema, row)`             | `fromRow(Schema, row)`                                                  |
+| `update on tasks needs the action 'tasks.write', and this endpoint holds '…'`   | the endpoint's action, a column write action, or a separate endpoint    |
+| `getForUpdate locks the row, so it runs only in a mutation`                     | `r.mutation`                                                            |
+| `update acts on one object: declare access with on`                             | access `on`, not `in` or `over`                                         |
+| `tasks is not under in: 'org' (it lies in project): declare …`                  | the access form the message names                                       |
+| `ctx.sql needs a declaration: add sql: 'read' …`                                | declare `sql` on the endpoint                                           |
+| `tasks is outside this site's scope: declare unscoped: { tasks: 'read' } on it` | declare it, or use the capability's handles                             |
+| `a job writes inside ctx.transaction((tx) => …): use tx.db there`               | move the write into the transaction                                     |
+| `listing the members of org needs the action '…'; get(principalId) checks one`  | `ctx.members.get(id)`, or an endpoint of the directory's `members.list` |
+| `neither task nor a dimension containing it declares members`                   | declare `members` on the dimension whose people the endpoint picks      |
+| `admin is a role IAM defines itself for every application (reserved: admin)`    | another role name                                                       |
+| `Property 'id' does not exist on type 'Ref<…>'`                                 | `ctx.target.value`                                                      |
+| `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |
+| `Type 'Date' is not assignable to type 'string'` on a `date` column             | a `YYYY-MM-DD` string                                                   |
+| `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                | `bun install` (at the repository root in a monorepo)                    |
 
 ## Runtime answers
 
@@ -68,7 +69,7 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400    | the input does not match its schema; `BadRequestError`                                                                                                                                          |
 | 401    | no valid credential. In a test, the caller is missing                                                                                                                                           |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                                                 |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself      |
 | 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                         |
 | 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                            |
 | 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |

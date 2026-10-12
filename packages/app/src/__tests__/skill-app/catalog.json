@@ -616,6 +616,16 @@
 		},
 		{
 			"table_name": "tasks",
+			"column_name": "assignee_label",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
 			"column_name": "due_on",
 			"type_name": "date",
 			"type_type": "b",

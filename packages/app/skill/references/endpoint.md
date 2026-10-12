@@ -25,6 +25,7 @@ export const Task = z.strictObject({
 	title: z.string(),
 	status: TaskStatus,
 	assignee: z.nullable(z.string()),
+	assigneeLabel: z.nullable(z.string()),
 	dueOn: z.nullable(z.iso.date()),
 	overdue: z.boolean(),
 	version: z.int(),
@@ -329,14 +330,22 @@ should hold. The generated tests skip the other-scope leak case for such an endp
 
 ## Members
 
-An endpoint `on` or `in` a dimension with `members` gets `ctx.members`:
+`ctx.members` of an endpoint `on` or `in` a dimension reads the members of the nearest dimension, its own or one
+containing it, that declares `members`: a task endpoint reads its org's. A dimension with no such container has none.
 
-- with the dimension's `members.list` action: the read-only directory `ctx.members.list()`, answering
-  `{ principalId, label, roles, disabled }` per member, for an assignee picker or a membership check. `label` is
-  `null` unless the caller also holds `members.manage` there, or the dimension opts in with `directory: 'labels'`,
-  which widens like any other access change.
-- with its `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
+- Every such endpoint: `ctx.members.get(principalId)` answers `{ principalId, label, disabled }` when that principal
+  is a member of the value the object lies in, and `null` otherwise (another org's member, an unknown id). IAM checks
+  the endpoint's own action on the object, so `tasks.assign` validates the person it assigns without a second action.
+  Use it for every picked person: store `member.principalId` and `member.label`, never a label from the input.
+- With the directory's `members.list` action (`tasks.read` here) also `ctx.members.list()`, answering
+  `{ principalId, label, roles, disabled }` per member, for an assignee picker. IAM checks that action on the org
+  itself: a caller who holds it only on a project is refused (403).
+- `label` is `null` unless the caller also holds `members.manage` there, or the dimension opts in with
+  `directory: 'labels'`, which widens like any other access change: then every endpoint below it reads labels too.
+- With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
+- Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
+  those as the caller's own identity (`client-identity`).
 
 ```ts src/members/endpoints.ts
 import { z } from 'zod/v4'
@@ -364,4 +373,5 @@ export const members = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-IAM answers the directory, so do the data work first and call `ctx.members` after it.
+IAM answers the directory. A lookup only reads, so it may come before the write that needs its answer (`assign` in
+`SKILL.md`); do every other data work first.

@@ -33,7 +33,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 ## The paved road
 
 ```ts src/tasks/endpoints.ts
-import { ConflictError, fromRow } from '@fabrika/app'
+import { BadRequestError, ConflictError, fromRow } from '@fabrika/app'
 import { app } from '../app-kit'
 import {
 	AssignTask,
@@ -114,11 +114,18 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 		output: Saved,
 		access: { action: 'tasks.assign', on: 'task', from: 'id' },
 	})
-		.handle(({ input, ctx }) =>
-			ctx.db.target.update({ assignee: input.assignee }, {
-				expectVersion: input.expectVersion,
-			})
-		),
+		.handle(async ({ input, ctx }) => {
+			const member = input.assignee === null
+				? null
+				: await ctx.members.get(input.assignee)
+			if (input.assignee !== null && member === null) {
+				throw new BadRequestError('the assignee is not a member of the org')
+			}
+			return ctx.db.target.update({
+				assignee: member?.principalId ?? null,
+				assignee_label: member?.label ?? null,
+			}, { expectVersion: input.expectVersion })
+		}),
 	start: r.mutation({
 		input: Versioned,
 		output: Saved,
@@ -161,7 +168,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
 - Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
-  the caller.
+  the caller. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
+  anyone outside the org, and its label comes from that answer, never from the input.
 
 ## Off the road: declare it
 
