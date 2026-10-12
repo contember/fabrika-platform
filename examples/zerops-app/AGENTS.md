@@ -1355,6 +1355,7 @@ visitor do. The visitor never reaches a handler without a credential:
    alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
    a known address would tell a stranger who registered.
 3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
+   Each form kicks it (`then: 'intake'`), so it runs within seconds of a submission; its schedule is the recovery.
 4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
 5. **A second form** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
 
@@ -1534,11 +1535,13 @@ export const contract = app.contract((c) => ({
 		maxBytes: 4096,
 		honeypot: 'website',
 		challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' },
+		then: 'intake',
 	}),
 	resend: c.form('/resend', {
 		input: Resend,
 		appendTo: 'resend_requests',
 		maxBytes: 1024,
+		then: 'intake',
 	}),
 	portal,
 	api: c.rpc('/api', { candidates }),
@@ -1581,9 +1584,11 @@ export const contract = app.contract((c) => ({
   `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
 - **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): its
   download answers 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
-
-<!-- WU15b: when a form may name its job (`then: 'intake'`), add it to the register and resend forms here, and drop the
-"within a minute" sentence below. -->
+- **The kick.** `then: 'intake'` makes each accepted submission start a run of the job within seconds, once its row
+  committed, under the job's own key. The visitor's answer is the same constant and never waits for the run. Kicks
+  coalesce on the job's lease (at most one run and one pending, however many visitors submit), so a flood adds no
+  work: the run still drains the inbox in batches of 50, within each address's budget. A kick carries nothing; the
+  job reads its inbox.
 
 ## The job: inbox → record → link → e-mail
 
@@ -1773,9 +1778,11 @@ More on the job:
   approver sees the job's `issues` marked "needs closer review".
 - **`sql: 'write'`** is the declared reach into the inboxes: `delete … returning` takes each row exactly once. A job is
   app-wide, so its statements need no scope fragment (`tx.sql.scope` of its `Within` is every row).
-- **The latency.** The e-mail leaves on the job's next run, within a minute at `* * * * *`, while the address has an
-  e-mail of its daily budget left; a spent one waits until a day after the window's first e-mail. `retries: 0`: the
-  next minute's run is the retry, and it finishes whatever a stopped run left, within the budget.
+- **The latency.** The forms' kick starts a run within seconds of a submission, so the e-mail leaves seconds later,
+  while the address has an e-mail of its daily budget left; a spent one waits until a day after the window's first
+  e-mail. Keep the schedule (`* * * * *`): it is the recovery path. A kicked run that dies (a crash, a deploy, a
+  refused e-mail) leaves its rows, and the next scheduled run finishes them, within a minute. `retries: 0`: that run
+  is the retry. A failed run leaves a pending kick to the schedule too.
 - **A revoked link** still works until the token the proxy holds for it expires, at most 5 minutes. Revocation is the
   stop at IAM; it is not instant.
 - The e-mail goes through `deps` (`src/mail.ts`), built from application variables the human sets (`INTAKE_ORIGIN`,
@@ -2060,6 +2067,8 @@ export const fixtures = {
   TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`. Test each stop of a
   delivery (a refused e-mail, IAM down, a crash after each step): the next run must leave exactly one live, e-mailed
   link.
+- A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
+  submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
 
 ---
 
