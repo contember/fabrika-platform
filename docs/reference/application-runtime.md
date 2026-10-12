@@ -353,7 +353,7 @@ whose own `declared` differs does not boot. The API matrix:
 | `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`; every table whose chain holds the dimension | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
 | `creates`   | —                                                                                                                                          | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                               |
 | `member`    | no application data                                                                                                                        | no application data                                                                                                        |
-| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage` or `members.list`                    | —                                                                                                                          |
+| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` on, in or below a dimension with members (management for `manage`)        | —                                                                                                                          |
 
 "Target subtree" is the target's child tables and the dimension tables it contains. An `over` lists every table whose
 containment chain holds its dimension, through the stamped chain column: `over: 'org'` lists tasks two levels down by
@@ -573,12 +573,16 @@ request the schema cannot express); an IAM that cannot be asked is 503.
 - `ctx.members` (`assign`, `revoke`, `list`) exists only on an endpoint whose action is
   its dimension's `members.manage`, and takes that endpoint's own `Ref`. One request
   carries one grant, so it makes one membership change.
-- On an endpoint (`on` or `in` the dimension) whose action is the dimension's
-  `members.list`, `ctx.members` is a read-only directory: `ctx.members.list()` answers
-  the members of `ctx.target` (`principalId`, `label`, `roles`, `disabled`), for assignee
-  pickers and membership checks. The application's access form already authorized the
-  caller for that action there, and IAM checks it again live; no delegation grant, no email,
-  no invitation. `label` is `null` unless the dimension declares `directory: 'labels'` in
+- On every other endpoint `on` or `in` a dimension that declares members, or one below it,
+  `ctx.members` is a read-only directory of the nearest such dimension, at the value the
+  `Ref`'s chain holds (`endpointDirectory` of `@fabrika/auth-core`): a deal endpoint reads
+  its org's. `ctx.members.get(principalId)` answers that member (`principalId`, `label`,
+  `disabled`) or `null`; IAM's `findMember` checks the endpoint's own action on the object's
+  chain, so an assignment validates the person it stores without a second action.
+  `ctx.members.list()` (with `roles`) exists only where the action is the directory's
+  `members.list`, and IAM checks that action live on the directory's value, so a caller who
+  holds it only below (on a company) is refused 403. No delegation grant, no email, no
+  invitation. `label` is `null` unless the dimension declares `directory: 'labels'` in
   the vocabulary (a user's label spells its address); that declaration is in the contract,
   and adding it widens for closer review.
 - `ctx.links.issue(ref, { mount, days })` exists on an endpoint whose `Ref` carries a link
@@ -886,9 +890,9 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   callers present a key. A `link` caller's key is bound to one object with
   `{ kind: 'link', link: { mount, chain } }`: the object first, then each value containing it.
 - `options.membership` is IAM's membership transport. Without it the kit answers a member directory
-  (`ctx.members.list()`) from its own callers: each caller's membership roles in the scope, labels only to a
+  (`ctx.members.list()` and `get`) from its own callers: each caller's membership roles in the scope, labels only to a
   `members.manage` holder or where the dimension declares `directory: 'labels'`, and `not_allowed` to a caller without
-  the dimension's `members.list` there. A contract that creates scopes, manages members or issues share links gets no
+  the dimension's `members.list` there (a list) or the endpoint's action on the chain (a lookup). A contract that creates scopes, manages members or issues share links gets no
   stand-in, so `boot` names the transport it lacks; pass an `IamMembershipRpc` for it.
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
@@ -1005,6 +1009,12 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   own-target case; the denial runs unseeded. A seed may not set a column that places the row in its scope, nor a text
   column, which holds the marker the leak cases look for. A seed of no `on` or `in` endpoint is an `endpoint-fixture`
   finding.
+- **Members.** A handler that validates a picked person with `ctx.members.get` refuses a sampled id, so the author
+  names the field in the same file: `export const members = { '<endpoint id>': ['<field>'] }`. The scaffold writes
+  `GENERATED_MEMBER` (`'fabrika:member'`, `@fabrika/app/contract`) there, and the kit replaces it, per case, with a new
+  caller holding a membership role of the directory's dimension at the value the case's object lies in. A case of an
+  endpoint whose action is the directory's `members.list` holds the action on the directory's value, where IAM checks a
+  list. A field of an endpoint with no directory, or that is no string field, is an `endpoint-fixture` finding.
 - **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
   `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
   which captures Bun's own functions before any application module loads, and a case that

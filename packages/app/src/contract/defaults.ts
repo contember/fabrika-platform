@@ -73,6 +73,12 @@ export const SHARE_KEY_GLOBAL = '__fabrikaShareKey'
 /** What every `c.spa` mount serves under its prefix: the browser's Operations DSN and the release, as JSON. */
 export const BROWSER_CONFIG_FILE = '__fabrika-config.json'
 
+/**
+ * The value a generated endpoint access case sends in an input field that names a member the handler looks up
+ * (`members` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with a real member of the directory.
+ */
+export const GENERATED_MEMBER = 'fabrika:member'
+
 export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */

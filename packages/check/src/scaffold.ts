@@ -3,7 +3,8 @@
 // one file per application, from the contract: they run the application's own `serve(…)` and handlers. The checker
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
-import type { ContractArtifact, EndpointRow, TablePolicyArtifact } from '@fabrika/auth-core'
+import { GENERATED_MEMBER } from '@fabrika/app/contract'
+import { type ContractArtifact, endpointDirectory, type EndpointRow, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { ContractSourceError, readContractSource, readTablesSource } from './contract'
 import { type EndpointFixtures, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
 import type { Finding } from './finding'
@@ -141,13 +142,21 @@ const isAccessTested = (row: EndpointRow): boolean => {
 const isLinkProcedure = (row: EndpointRow): boolean =>
 	(row.kind === 'query' || row.kind === 'mutation') && row.requirement?.kind === 'action' && row.callers.some((caller) => caller === 'link')
 
-/** The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither exists. */
+/**
+ * The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither
+ * exists. Each field its `members` names holds `GENERATED_MEMBER`, which the kit replaces with a real member.
+ */
 const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<string, Sample>> | undefined => {
 	const fixture = fixtures.inputs[row.id]
-	if (fixture !== undefined) return fixture
-	const input = row.input === null ? {} : sample(row.input)
-	return input !== undefined && isSampleObject(input) ? input : undefined
+	const input = fixture ?? (row.input === null ? {} : sample(row.input))
+	if (input === undefined || !isSampleObject(input)) return undefined
+	const members = fixtures.members[row.id] ?? []
+	return members.length === 0 ? input : { ...input, ...Object.fromEntries(members.map((field) => [field, GENERATED_MEMBER])) }
 }
+
+/** Whether `shape` admits a principal id: a string, optional or nullable. */
+const admitsString = (shape: SchemaShape | undefined): boolean =>
+	shape?.type === 'string' || ((shape?.type === 'optional' || shape?.type === 'nullable') && admitsString(shape.inner))
 
 /** The read action of the table that owns `dimension`, or `undefined` when no table owns it. */
 const ownerRead = (policies: Policies, dimension: string): string | undefined =>
@@ -350,6 +359,25 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 	for (const id of Object.keys(fixtures.inputs).sort()) {
 		if (!tested.some((row) => row.id === id)) {
 			findings.push(at(`${id} is no endpoint with an on, in or over access form`, 'a fixture of a tested endpoint, or none'))
+		}
+	}
+	for (const [id, fields] of Object.entries(fixtures.members).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+		const row = tested.find((candidate) => candidate.id === id && !isLinkProcedure(candidate))
+		const directory = row === undefined ? null : endpointDirectory(artifact, row)
+		if (row === undefined || directory === null) {
+			findings.push(
+				at(
+					`${id} is no tested endpoint below a dimension with members, whose handler could look one up`,
+					"export const members = { '<endpoint id>': ['<input field>'] }, for an endpoint on or in a dimension with members or below one",
+				),
+			)
+			continue
+		}
+		const input = row.input
+		for (const field of fields) {
+			if (input?.type !== 'object' || !admitsString(input.fields[field])) {
+				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a member`, 'a top-level string field of the input'))
+			}
 		}
 	}
 	const seeded = (row: EndpointRow): boolean =>

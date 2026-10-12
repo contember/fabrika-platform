@@ -11,16 +11,18 @@ import { ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, generatedTests, missingEn
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'access-fixture')
 
-const tree = (): Map<string, string> => {
+const MEMBERS_ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'members-fixture')
+
+const tree = (root = ROOT): Map<string, string> => {
 	const files = new Map<string, string>()
 	const walk = (dir: string): void => {
 		for (const name of readdirSync(dir)) {
 			const path = join(dir, name)
 			if (statSync(path).isDirectory()) walk(path)
-			else files.set(relative(ROOT, path), readFileSync(path, 'utf8'))
+			else files.set(relative(root, path), readFileSync(path, 'utf8'))
 		}
 	}
-	walk(ROOT)
+	walk(root)
 	return files
 }
 
@@ -82,6 +84,7 @@ describe('the endpoint access cases of a kit application', () => {
 		expect(read("export const seeds = { 'api.notes.restore': { trashed: true } }\nexport const fixtures = {}\n")).toEqual({
 			inputs: {},
 			seeds: { 'api.notes.restore': { trashed: true } },
+			members: {},
 		})
 		expect(() => read('export const seeds = {}\nexport const seeds = {}\n')).toThrow()
 		expect(() => read('export const setup = {}\n')).toThrow()
@@ -98,5 +101,40 @@ describe('the policy isolation cases of a column policy', () => {
 		const text = tests.get(`src/db/__tests__/${table}.policy-isolation.test.ts`)?.text ?? ''
 		expect(text).toContain('get leaves out secret, which has its own read action')
 		expect(text).not.toContain('leaves out kept')
+	})
+})
+
+describe('the members of the fixtures: input fields that name a member the handler looks up', () => {
+	const members = (text: string) => new Map([...tree(MEMBERS_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+
+	test("each case sends the kit's member in the field, whatever the sample was", async () => {
+		const text = await endpointTest(tree(MEMBERS_ROOT))
+		const input = "{ expectVersion: 1, id: '00000000-0000-4000-8000-000000000000', newOwner: 'fabrika:member' }"
+		expect(text).toContain(`expect(await kit.own('api.deals.assign', ${input})).toEqual({ status: 200 })`)
+		expect(text).toContain(`expect(await kit.denied('api.deals.assign', ${input})).toEqual({ status: 404 })`)
+		expect(text).toContain("kit.own('api.deals.candidate', { id: '00000000-0000-4000-8000-000000000000', principalId: 'x' })")
+		expect(missingEndpointFixtures(scaffoldInputs(tree(MEMBERS_ROOT)))).toEqual([])
+	})
+
+	test('a member field of an endpoint with no directory, of no endpoint, or that is no string field is a finding', () => {
+		const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(members(text))).map((finding) => finding.message)
+		expect(findings("export const members = { 'api.deals.assign': ['expectVersion'] }\n")).toEqual([
+			'api.deals.assign: expectVersion is no string field of its input, so it cannot name a member',
+		])
+		expect(findings("export const members = { 'api.deals.missing': ['newOwner'] }\n")).toEqual([
+			'api.deals.missing is no tested endpoint below a dimension with members, whose handler could look one up',
+		])
+		const unlisted = new Map([...tree(), [ENDPOINT_FIXTURES_FILE, "export const members = { 'api.notes.trash': ['id'] }\n"]])
+		expect(missingEndpointFixtures(scaffoldInputs(unlisted)).map((finding) => finding.message)).toEqual([
+			'api.notes.trash is no tested endpoint below a dimension with members, whose handler could look one up',
+		])
+	})
+
+	test('the members are lists of field names, declared once', () => {
+		const read = (text: string) => scaffoldInputs(members(text)).fixtures
+		expect(read("export const members = { 'api.deals.assign': ['newOwner'] }\n").members).toEqual({ 'api.deals.assign': ['newOwner'] })
+		expect(() => read("export const members = { 'api.deals.assign': 'newOwner' }\n")).toThrow()
+		expect(() => read("export const members = { 'api.deals.assign': [] }\n")).toThrow()
+		expect(() => read('export const members = {}\nexport const members = {}\n')).toThrow()
 	})
 })

@@ -396,6 +396,7 @@
       },
       "devDependencies": {
         "@fabrika/check": "workspace:*",
+        "@fabrika/db": "workspace:*",
         "@types/bun": "latest",
       },
     },

@@ -37,6 +37,7 @@ bun test src/__tests__/file-scan.test.ts        # scan: true and the scan job (n
 bun test src/__tests__/clamscan.test.ts         # the ClamAV scanner: stand-in binaries, and a real clamscan with FABRIKA_TEST_CLAMSCAN_BIN
 bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damaged, encrypted, nested, bombs
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
@@ -72,7 +73,7 @@ src/
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
-    directory.ts      the default membership transport: member directories from the kit's callers, writes refused
+    directory.ts      the default membership transport: member directories (list, find) from the kit's callers, writes refused
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
@@ -467,14 +468,16 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **The framework asks IAM; IAM decides** (`membership.ts`). Every request carries the
   verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
   proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.
-  `ctx.members` exists only where the action is the dimension's `members.manage`
-  (management) or `members.list` (a read-only directory, `list()` of `ctx.target`: ids and roles;
-  labels only where the dimension declares `directory: 'labels'`, never emails), both decided by `endpointMembers` of `@fabrika/auth-core`; and
+  `ctx.members` is management where the action is the dimension's `members.manage` (`endpointMembers`), and elsewhere
+  on, in or below a dimension with members the read-only directory of the nearest one (`endpointDirectory`, both of
+  `@fabrika/auth-core`): `get(principalId)` of the value the `Ref`'s chain holds everywhere (IAM's `findMember`
+  checks the endpoint's own action on the chain), `list()` only for its `members.list` (ids and roles; labels only
+  where the dimension declares `directory: 'labels'`, never emails); and
   `ctx.links` only where the `Ref`'s action is a link mount's `issuedBy` for its
   dimension: the types (`ContractContext`) and `facilitiesOf` in `boot.ts` decide the
   same, so change them together. A `Ref` passed to IAM must be this request's, for the
   endpoint's own dimension and action. A workload (a webhook) gets neither. A directory
-  does not need the transport to boot: without one only its `list()` call answers 503.
+  does not need the transport to boot: without one only its `list()` and `get()` calls answer 503.
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
   object moves. It admits only a key of its own mount.
