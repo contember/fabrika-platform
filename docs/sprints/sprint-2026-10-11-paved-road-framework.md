@@ -773,3 +773,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU11 — the fresh-agent trial's inputs** are `examples/crm/TRIAL.md`: five groups (companies & contacts, deals,
   tasks with the job, activities, orgs and people), a product owner's brief each, the starting copy (checked green for
   groups A and B: 112 and 109 tests) and how a run is judged. Not run here (the integrator's part 3).
+- **WU11 — `test:examples` runs each example in its own `bun test` process.** Under `bun test` (with or without
+  `--isolate`) a second `Bun.build` with an `onLoad` plugin in one process fails with `EISDIR reading file` on workspace
+  sources, whichever example builds second (Bun 1.3.14; two builds in a plain `bun` script pass). Each example's SPA
+  bundle test builds once, so one process per example sidesteps it.
