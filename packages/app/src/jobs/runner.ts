@@ -299,23 +299,10 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			}
 		},
 	})
-	// The jobs a kick of this process is running or asking for: a further kick only sets the shared flag.
-	const kicking = new Set<string>()
 	const kick = async (name: string): Promise<void> => {
 		const job = bound.get(name)
-		if (job === undefined || framework === null) {
-			return
-		}
-		const context = contextFor(framework.jobs, undefined)
-		if (kicking.has(name)) {
-			await markPending(job, context)
-			return
-		}
-		kicking.add(name)
-		try {
-			await kickOnce(job, context)
-		} finally {
-			kicking.delete(name)
+		if (job !== undefined && framework !== null) {
+			await kickOnce(job, contextFor(framework.jobs, undefined))
 		}
 	}
 	return { jobs, declared, kick }
@@ -326,11 +313,21 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
  * holds a connection requests share while a run writes. After a failed run the flag stays for the schedule.
  */
 async function kickOnce(job: BoundJob, context: RunnerContext): Promise<void> {
-	if ((await runJob(job, context, systemClock, 'try')).status !== 'skipped' || !(await markPending(job, context))) {
-		return
+	if ((await runJob(job, context, systemClock, 'try')).status === 'skipped') {
+		await handOver(job, context, systemClock)
 	}
-	// The run holding the lease may have finished before the flag was set: then this kick takes the lease itself.
-	await runJob(job, context, systemClock, 'try')
+}
+
+/**
+ * Leaves the flag to the run holding the lease, which takes it after it succeeded. That run may have finished before
+ * the flag was set, so the lease is tried once more; `null` when another run still holds it.
+ */
+async function handOver(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult | null> {
+	if (!(await markPending(job, context))) {
+		return null
+	}
+	const result = await runJob(job, context, clock, 'try')
+	return result.status === 'skipped' ? null : result
 }
 
 async function markPending(job: BoundJob, context: RunnerContext): Promise<boolean> {
@@ -415,11 +412,13 @@ async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock, ac
 	let result = await runOnce(job, context, clock, acquisition)
 	while (result.status === 'succeeded' && (await pendingTaken(job, context))) {
 		const next = await runOnce(job, context, clock, 'try')
-		// Another run took the lease after this one finished, so after the kick: it does the work.
-		if (next.status === 'skipped') {
-			break
+		if (next.status !== 'skipped') {
+			result = next
+			continue
 		}
-		result = next
+		// A newer run holds the lease and may have read before the kick's row: the flag goes back to it.
+		const handed = await handOver(job, context, clock)
+		return handed ?? result
 	}
 	return result
 }

@@ -797,9 +797,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   with `tryAcquire`, which never waits for a lock: it shares the request pool, and a run's attempt holds the lease
   row as its fence while it writes. Without the lease it sets `fabrika_job_kicks.pending` (`markPending`, a row no
   attempt locks) and tries once more. Every run clears the flag when it starts (it covers every kick before it) and,
-  after it succeeded, takes it and runs once more, cron runs included; a failed run leaves it for the schedule. A kick
-  in flight in the same process makes the next one only set the flag, never schedule a run of its own. Never let a kick
-  wait on the lease, and never drop the cron of a job a form kicks: it is the recovery path. `serveContract` drains
+  after it succeeded, takes it and runs once more, cron runs included; a failed run leaves it for the schedule. A run
+  that took the flag but finds a newer run holding the lease sets it again (`handOver`): that run may have read before
+  the kick's row. There is no process-local kick state; every kick asks the lease. Never let a kick wait on the lease, and never drop the cron of a job a form kicks: it is the recovery path. `serveContract` drains
   kicked runs on SIGTERM before it closes the database, and `kit.runJob` waits for them before it runs.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun

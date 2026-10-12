@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { compileContract } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
 import { testKit } from '../testing'
+import { delayedDatabase, type StatementHook } from './fixtures/form-kick/delayed-database'
 import { contract } from './fixtures/form-kick/fabrika.contract'
 import { migration } from './fixtures/form-kick/migration'
 import { signupApp } from './fixtures/form-kick/src/app'
@@ -126,13 +127,17 @@ interface Running {
 	submit(path: '/signup' | '/apply' | '/notify', body: unknown): Promise<Answer>
 	/** Resolves once every kick the submissions started has ended. */
 	settled(): Promise<void>
+	/** Resolves once every kick but the `running` ones a test holds has ended. */
+	kicksEnded(running: number): Promise<void>
 }
 
-/** An instance of the application over the shared schema, on a pool of `max` connections. */
-function start(max = 4): Running {
+/** An instance of the application over the shared schema, on a pool of `max` connections or one that `hook` delays. */
+function start(options: { readonly max?: number; readonly hook?: StatementHook } = {}): Running {
 	const world = new World()
 	const { implementation, variables } = signupApp(world)
-	const connection = Database.postgres({ url, schema, max })
+	const connection = options.hook === undefined
+		? Database.postgres({ url, schema, max: options.max ?? 4 })
+		: delayedDatabase(url, schema, options.hook)
 	opened.push(connection)
 	const exchanged: string[] = []
 	const tokens = workloadTokensFor(implementation)
@@ -149,8 +154,13 @@ function start(max = 4): Running {
 		challengeFetch: () => Promise.resolve(Response.json({ success: false, 'error-codes': ['invalid-input-response'] })),
 	})
 	const background = new Set<Promise<unknown>>()
+	let ended = 0
+	let started = 0
 	const exec: RequestExecutionContext = {
-		waitUntil: (promise) => void background.add(promise),
+		waitUntil: (promise) => {
+			started++
+			background.add(promise.finally(() => ended++))
+		},
 	}
 	const reports: OperationsReport[] = []
 	return {
@@ -163,6 +173,7 @@ function start(max = 4): Running {
 			const response = await app.fetch(request, exec)
 			return { status: response.status, headers: [...response.headers], body: JSON.parse(await response.text()) }
 		},
+		kicksEnded: (running) => until(() => started - ended <= running, 2_000),
 		async settled() {
 			while (background.size > 0) {
 				const pending = [...background]
@@ -280,6 +291,8 @@ describe.skipIf(!hasPostgres)('a form with then kicks its job', () => {
 		const answers = await Promise.all(emails.map((email) => running.submit('/signup', { email })))
 		expect(answers.every((answer) => answer.status === 200)).toBe(true)
 		await held.reached
+		// Every kick but the one whose run is held left the flag while that run held the lease.
+		await running.kicksEnded(1)
 		held.open()
 		await running.settled()
 		expect(running.world.runs.length).toBeLessThanOrEqual(2)
@@ -306,7 +319,7 @@ describe.skipIf(!hasPostgres)('a form with then kicks its job', () => {
 
 	test('kicks wait for no lock: while a run writes, they end at once and an unrelated form still answers promptly', async () => {
 		// Two connections: one is the scheduled run's open transaction, which holds the lease row as its fence.
-		const running = start(2)
+		const running = start({ max: 2 })
 		const held = gate()
 		running.world.holdTaken = held
 		const scheduled = quietly(() => running.app.jobs.run('welcome'))
@@ -352,6 +365,7 @@ describe.skipIf(!hasPostgres)('a form with then kicks its job', () => {
 		await running.submit('/signup', { email: 'h1@example.test' })
 		await held.reached
 		await running.submit('/signup', { email: 'h2@example.test' })
+		await running.kicksEnded(1)
 		held.open()
 		await quietly(() => running.settled())
 		// `retries: 0`: the run failed once, and nothing started another.
@@ -361,6 +375,56 @@ describe.skipIf(!hasPostgres)('a form with then kicks its job', () => {
 		expect(await running.app.jobs.run('welcome')).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(running.world.runs).toHaveLength(2)
 		expect([...running.world.welcomedEmails].sort()).toEqual(['h1@example.test', 'h2@example.test'])
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+	})
+
+	test('a run that took a kick after it finished hands it back to a newer run that already read its batch', async () => {
+		const finished = gate()
+		let held = false
+		const first = start({
+			hook: async (query) => {
+				if (!held && query.sql.startsWith('update fabrika_job_leases set holder = null, last_finished_at')) {
+					held = true
+					await finished.wait()
+				}
+			},
+		})
+		const second = start()
+		await first.submit('/signup', { email: 'i1@example.test' })
+		// The first run released its lease and has not yet read the flag.
+		await finished.reached
+		const read = gate()
+		second.world.holdTaken = read
+		const scheduled = quietly(() => second.app.jobs.run('welcome'))
+		await read.reached
+		await second.submit('/signup', { email: 'i2@example.test' })
+		await second.settled()
+		finished.open()
+		await first.settled()
+		read.open()
+		expect(await scheduled).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(await inbox()).toEqual([])
+		expect([...first.world.welcomedEmails, ...second.world.welcomedEmails].sort()).toEqual(['i1@example.test', 'i2@example.test'])
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+	})
+
+	test('a kick after a run’s last pending check, before that run ends, still runs the job', async () => {
+		const lastCheck = gate()
+		let checks = 0
+		const running = start({
+			hook: async (query) => {
+				if (query.sql.startsWith('update fabrika_job_kicks set pending = false') && ++checks === 2) {
+					await lastCheck.wait()
+				}
+			},
+		})
+		await running.submit('/signup', { email: 'j1@example.test' })
+		await lastCheck.reached
+		await running.submit('/signup', { email: 'j2@example.test' })
+		lastCheck.open()
+		await running.settled()
+		expect(await inbox()).toEqual([])
+		expect([...running.world.welcomedEmails].sort()).toEqual(['j1@example.test', 'j2@example.test'])
 		expect(await leaseOf()).toEqual({ holder: null, pending: false })
 	})
 
