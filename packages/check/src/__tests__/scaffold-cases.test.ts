@@ -112,7 +112,7 @@ describe('the members of the fixtures: input fields that name a member the handl
 		const input = "{ expectVersion: 1, id: '00000000-0000-4000-8000-000000000000', newOwner: 'fabrika:member' }"
 		expect(text).toContain(`expect(await kit.own('api.deals.assign', ${input})).toEqual({ status: 200 })`)
 		expect(text).toContain(`expect(await kit.denied('api.deals.assign', ${input})).toEqual({ status: 404 })`)
-		expect(text).toContain("kit.own('api.deals.candidate', { id: '00000000-0000-4000-8000-000000000000', principalId: 'x' })")
+		expect(text).toContain("kit.denied('api.deals.check', { companyId: 'x', principalId: 'fabrika:member' })")
 		expect(missingEndpointFixtures(scaffoldInputs(tree(MEMBERS_ROOT)))).toEqual([])
 	})
 

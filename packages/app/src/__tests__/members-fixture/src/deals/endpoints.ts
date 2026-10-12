@@ -1,6 +1,6 @@
 import { BadRequestError, fromRow } from '@fabrika/app'
 import { app } from '../app-kit'
-import { AssignDeal, ById, Candidate, Found, Owner, Saved, Team } from '../schemas'
+import { AssignDeal, ById, Candidate, CompanyCandidate, Found, Owner, Saved, Team } from '../schemas'
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
 	owner: r.query({ input: ById, output: Owner, access: { action: 'crm.read', on: 'deal', from: 'id' } })
@@ -15,6 +15,12 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			return ctx.db.target.update({ owner: owner.principalId, owner_label: owner.label }, { expectVersion: input.expectVersion })
 		}),
 	candidate: r.query({ input: Candidate, output: Found, access: { action: 'deals.write', on: 'deal', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			const member = await ctx.members.get(input.principalId)
+			return { member: member === null ? null : { principalId: member.principalId, label: member.label } }
+		}),
+	// The same lookup from a company: the org it lies in.
+	check: r.query({ input: CompanyCandidate, output: Found, access: { action: 'crm.read', in: 'company', from: 'companyId' } })
 		.handle(async ({ input, ctx }) => {
 			const member = await ctx.members.get(input.principalId)
 			return { member: member === null ? null : { principalId: member.principalId, label: member.label } }

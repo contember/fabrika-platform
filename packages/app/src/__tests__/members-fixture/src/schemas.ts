@@ -10,4 +10,5 @@ export const AssignDeal = z.strictObject({
 export const Owner = z.strictObject({ owner: z.nullable(z.string()), ownerLabel: z.nullable(z.string()) })
 export const Team = z.strictObject({ members: z.array(z.strictObject({ principalId: z.string(), label: z.nullable(z.string()) })) })
 export const Candidate = z.strictObject({ id: z.uuid(), principalId: z.string().min(1).max(200) })
+export const CompanyCandidate = z.strictObject({ companyId: z.string().min(1).max(200), principalId: z.string().min(1).max(200) })
 export const Found = z.strictObject({ member: z.nullable(z.strictObject({ principalId: z.string(), label: z.nullable(z.string()) })) })

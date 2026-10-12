@@ -15,6 +15,7 @@ import { testDatabase } from '@fabrika/db/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
+import { implement } from '../implement/implement'
 import type { app as accessApp } from './access-fixture/src/app-kit'
 import { contract } from './members-fixture/fabrika.contract'
 import type { app as membersApp } from './members-fixture/src/app-kit'
@@ -52,6 +53,32 @@ export type NestedMembers = [
 const fixtureRoot = join(import.meta.dir, 'members-fixture')
 const postgres = await testDatabase({ migrations: new URL('./members-fixture/db/migrations/', import.meta.url), label: 'members-lookup.test.ts' })
 afterAll(() => postgres?.close())
+
+const UUID = '00000000-0000-4000-8000-000000000000'
+
+/** The fixture with a handler that keeps the first member it found and answers it to every later caller, any org's. */
+function caching() {
+	let kept: { readonly principalId: string; readonly label: string | null } | null = null
+	const keep = (member: { readonly principalId: string; readonly label: string | null } | null) => {
+		kept ??= member === null ? null : { principalId: member.principalId, label: member.label }
+		return { member: kept }
+	}
+	return implement(contract, {
+		database: scoped(tables),
+		deps: () => ({}),
+		handlers: () => ({
+			api: {
+				deals: {
+					owner: () => ({ owner: null, ownerLabel: null }),
+					assign: () => ({ id: UUID, version: 1 }),
+					candidate: async ({ input, ctx }) => keep(await ctx.members.get(input.principalId)),
+					check: async ({ input, ctx }) => keep(await ctx.members.get(input.principalId)),
+					team: () => ({ members: [] }),
+				},
+			},
+		}),
+	})
+}
 
 const Result = z.strictObject({ result: z.unknown() })
 const Found = z.strictObject({ member: z.nullable(z.strictObject({ principalId: z.string(), label: z.nullable(z.string()) })) })
@@ -100,6 +127,16 @@ describe.skipIf(postgres === null)("a deal endpoint's ctx.members in the test ki
 		const company = worlds.own.chain.find((link) => link.type === 'company')?.value ?? ''
 		const reader = kit.testCaller([{ action: 'crm.read', scope: { type: 'company', value: company } }])
 		expect((await call(reader, 'team', { id: worlds.own.key })).status).toBe(403)
+	})
+
+	test("the leak cases catch another org's member in an answer: on and in", async () => {
+		const marked = [expect.stringMatching(/^member-/), expect.stringMatching(/^member-.+@example\.test$/)]
+		expect(await access.leaked('api.deals.candidate', { id: UUID, principalId: GENERATED_MEMBER })).toEqual({ answered: true, leaked: [] })
+		expect(await access.leaked('api.deals.check', { companyId: 'x', principalId: GENERATED_MEMBER })).toEqual({ answered: true, leaked: [] })
+		const on = endpointAccessKit(caching(), tables, postgres)
+		expect(await on.leaked('api.deals.candidate', { id: UUID, principalId: GENERATED_MEMBER })).toEqual({ answered: true, leaked: marked })
+		const inCompany = endpointAccessKit(caching(), tables, postgres)
+		expect(await inCompany.leaked('api.deals.check', { companyId: 'x', principalId: GENERATED_MEMBER })).toEqual({ answered: true, leaked: marked })
 	})
 
 	test("a generated case's member field is a real member: without it, the handler's refusal fails the case and names members", async () => {
