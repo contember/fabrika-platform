@@ -976,3 +976,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   to its first table and `fabrika builder init --profile zerops-app --no-daemon --no-open` or `renderAgentsFile` for the
   skill (`init` also creates `.fabrika/` and an empty `tests/`); `fabrika db test-scaffold` now says when it writes no
   test; `app-setup.md` marks the SPA's parts as added with the SPA.
+- **WU21 — private dogfood.** A fresh agent built a public intake application (a candidate registration module of one
+  of our projects) from locally packed packages and the skill alone. Runs through the wrapper, tsc/checker per endpoint
+  group: public 27/6, hr 6/4, consent 4/3, roles 8/3. About 10 more tsc probes ran outside the wrapper. No checker run
+  exited 0, because the tarball install's `package-replacement` refusals were always present. 123 tests pass: 86
+  generated and 37 authored. Not built: the audited export of every record, which is blocked on the access-form
+  question (125). Setup findings fixed by WU10b, which are already above: the tableless start, the first test, the
+  skill install, and the optional SPA. Filed → backlog 121–131.

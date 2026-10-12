@@ -57,4 +57,15 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [118](118-member-labels-are-nullable-under-a-labels-directory.md) — `ctx.members` labels are `string | null` even under `directory: 'labels'`.
 - [119](119-the-test-kit-cannot-make-a-disabled-member.md) — The kit's directory answers `disabled: false` for everyone.
 - [120](120-an-undeclared-ctx-sql-fails-as-a-typeerror.md) — An undeclared `ctx.sql` is a `TypeError` and `handler_failed`, not a refusal that names the declaration.
+- [121](121-the-skills-gaps-found-by-the-private-dogfood.md) — The skill's documentation gaps the private dogfood found, as a checklist.
+- [122](122-the-generated-tests-cannot-seed-a-foreign-key-outside-the-chain-or-name-a-child-row.md) — The seed marks a nullable text foreign key, and no fixture names a seeded child row.
+- [123](123-a-form-field-that-is-no-inbox-column-passes-tsc-and-the-checker.md) — A form field that no inbox column matches fails only at boot.
+- [124](124-an-unscoped-write-of-a-reference-or-inbox-table-fails-only-at-run-time.md) — `unscoped: 'write'` on a reference or inbox table type-checks and answers 500.
+- [125](125-application-wide-data-has-no-access-form-of-its-own.md) — **Most consequential.** No access form or writable table for application-wide data; single-tenant apps meet it first.
+- [126](126-a-global-grant-application-has-no-people-of-its-own.md) — Global roles give no member directory and no in-app role management.
+- [127](127-a-form-records-no-request-evidence.md) — A form cannot record a client address or user agent as consent evidence.
+- [128](128-a-public-page-cannot-read-a-public-configuration-value.md) — A public page has no per-environment public value, such as a challenge site key.
+- [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
+- [130](130-codegen-reports-an-empty-migration-bundle-as-a-connection-failure.md) — `fabrika db codegen` masks "bundle is empty" as a connection failure.
+- [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
