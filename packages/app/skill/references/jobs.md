@@ -6,6 +6,7 @@ Background work is a cron job: `app.cron(schedule, { actions, scope: 'app' })` w
 
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
+import { isOverdue } from './logic'
 
 /** Marks every open task past its due day, hourly; each is re-read under its lock, so a concurrent change is skipped. */
 export const markOverdue = app.cron('15 * * * *', {
@@ -32,7 +33,7 @@ export const markOverdue = app.cron('15 * * * *', {
 				const ref = await ctx.ref('tasks.write', 'task', task.id)
 				await ctx.transaction(async (tx) => {
 					const locked = await tx.db.on(ref).getForUpdate()
-					if (locked.status !== 'done' && !locked.overdue) {
+					if (isOverdue(locked, today)) {
 						await tx.db.on(ref).update({ overdue: true }, {
 							expectVersion: locked.version,
 						})
@@ -42,6 +43,38 @@ export const markOverdue = app.cron('15 * * * *', {
 			after = page.next ?? undefined
 		} while (after !== undefined)
 	})
+```
+
+The list's filter and the decision under the lock are one rule, a pure function of `logic.ts`. A task someone closed,
+postponed or cleared the due day of between the list and the lock is left alone:
+
+```ts src/overdue/logic.ts
+/** An open task not yet marked, whose due day (`YYYY-MM-DD`) is before `today`. */
+export const isOverdue = (
+	task: {
+		readonly status: 'open' | 'doing' | 'done'
+		readonly overdue: boolean
+		readonly due_on: string | null
+	},
+	today: string,
+): boolean =>
+	task.status !== 'done' && !task.overdue && task.due_on !== null
+	&& task.due_on < today
+```
+
+```ts src/overdue/__tests__/logic.test.ts
+import { expect, test } from 'bun:test'
+import { isOverdue } from '../logic'
+
+test('a task is overdue only while open, unmarked and due before today', () => {
+	const task = { status: 'open', overdue: false, due_on: '2026-10-01' } as const
+	expect(isOverdue(task, '2026-10-12')).toBe(true)
+	expect(isOverdue({ ...task, due_on: '2026-10-12' }, '2026-10-12')).toBe(false)
+	expect(isOverdue({ ...task, due_on: '2099-01-01' }, '2026-10-12')).toBe(false)
+	expect(isOverdue({ ...task, due_on: null }, '2026-10-12')).toBe(false)
+	expect(isOverdue({ ...task, status: 'done' }, '2026-10-12')).toBe(false)
+	expect(isOverdue({ ...task, overdue: true }, '2026-10-12')).toBe(false)
+})
 ```
 
 ```ts fabrika.contract.ts
@@ -68,7 +101,8 @@ export const contract = app.contract((c) => ({
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
 - An attempt that fails or outlives `timeout` (default 15 minutes) is retried up to `retries` times, so every write is
   idempotent. **Re-read each row under its lock before you write it:** `tx.db.on(ref).getForUpdate()` inside the
-  transaction, decide again on what it answers, and write with its `version`. The listed row is already old: someone
+  transaction, decide again on what it answers with the list's whole filter (`isOverdue`), and write with its
+  `version`. The listed row is already old: someone
   may have closed the task since, and writing with the listed version fails the whole attempt with a 409.
 - Paging over a filter the job's own writes change is safe: `after` is a keyset cursor on the key, so a row that
   leaves the filter (`overdue` is now true) moves no other row to an earlier page.
