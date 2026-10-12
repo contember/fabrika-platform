@@ -935,3 +935,28 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   statement's answer through a delaying dialect (`fixtures/form-kick/delayed-database.ts`). Kicks that straddle a run's
   end can add a run beyond two; at any moment there is still at most one run and one pending, so the 50-submission
   and failed-run witnesses now let the held run's other kicks end before they release it.
+- **WU10b — the recipe is its own reference file.** `references/public-intake.md`, not a section of
+  `webhooks-links-connectors.md`: an intake has its own vocabulary and tables, and every table needs a policy, so a
+  variant over the tasks application could not hold it. `skill-code.test.ts` compiles a `STANDALONE` reference over the
+  base's `package.json`, `tsconfig.json` and `src/app-kit.ts` and migrates it to `skill-app/public-intake/catalog.json`.
+  Materialized, both skill applications pass the whole loop: tsc, `fabrika-check` 0/0, the generated and authored tests
+  (tasks 87 with the files and jobs variants merged, intake 44), the SPA bundles (the portal's holds no server module).
+  The recipe follows the fixture's job; it differs where an application's checker differs: `crypto.randomUUID()`
+  (`Bun` is refused in a server module) and ENUM delivery states. WU15b's `then` is not on main: the recipe uses the
+  cron job and marks the spot (an HTML comment above "The job").
+- **WU10b — three framework bugs the recipe's loop found** (`fix(app)` commit): every policy test of an application
+  with a form failed (the probe contract lacked the inbox's form, which the compiler requires); the endpoint access
+  kit could not boot a form with a challenge (no secret; it now sets a placeholder and refuses tokens locally); a
+  `scan: true` collection's generated download case answered 409 (it now runs the scan job with a passing stand-in).
+  `testKit`'s `runJob` takes `FILE_SCAN_JOB`. Also found: `defineDeps(build)` runs at the generated tests' boot, which
+  sets no variable, so `build` must not require one (the skill says so).
+- **WU10b — the trial's gaps** are in the references: `over` names the nearest dimension of the rows' chain (the
+  skill's own `mine`, `counts` and the job moved from `org` to `project`), `ctx.within.values` and `'all'`
+  (`members.orgs`, a query without input, tested with a global grant), the generated cases' samples and the seed's
+  defaults, `aggregate`'s argument and `exactInteger`, the job's re-read under `getForUpdate`, the kit's origin, 403
+  for an undeclared path, the formatter and linter, an audited export (`exportProject`, an `in: 'project'` mutation
+  with a `project_exports` child row). Open, already in the backlog: labels typed nullable (118), no disabled member
+  in the kit (119), no fault injection in a test (117). Not on the road: the log row of an export across a top-level
+  dimension (every candidate), which has no table scope a capability writes; the recipe says to ask.
+- **WU10b — `fromPage`** (`@fabrika/app`): `fromPage(Schema, page)` is `{ items: page.items.map(fromRow), next }`. The
+  CRM's six list handlers use it: 400 → 386 hand-written server lines; 160 tests pass.
