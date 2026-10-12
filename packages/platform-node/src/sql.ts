@@ -4,6 +4,17 @@
 
 export { applicationDatabaseSchema } from './application-schema'
 export {
+	FILE_SCAN_COLUMNS,
+	FILE_STATUSES,
+	FILE_TABLE_PREFIX,
+	fileScanAlter,
+	fileScanAlterTable,
+	fileScanIndex,
+	fileStatusCheck,
+	fileTableScanReady,
+	legacyStatusCheckName,
+} from './file-table-ddl'
+export {
 	classifyMigration,
 	type ClassifyMigrationOptions,
 	classifyMigrations,

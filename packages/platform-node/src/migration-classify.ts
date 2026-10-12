@@ -3,7 +3,8 @@
 // does not recognise: an allowlist at every level, so a form a later Postgres adds is refused, not executed.
 // Runtime-neutral: Control classifies a commit's migrations in a Worker, the runner before it applies them.
 
-import { lexSql, type SqlToken, sqlTokens, topLevelStatements, upperWord } from './migration-sql'
+import { FILE_TABLE_PREFIX, fileScanAlterTable, legacyStatusCheckName } from './file-table-ddl'
+import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
 import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
 	afterName,
@@ -104,7 +105,6 @@ const LANGUAGES: ReadonlySet<string> = new Set(['sql', 'plpgsql'])
 /** `serial` creates a sequence the catalog check cannot tie to a declaration; an identity column can be. */
 const SERIAL_TYPES: ReadonlySet<string> = new Set(['serial', 'serial2', 'serial4', 'serial8', 'smallserial', 'bigserial'])
 const TABLE_CONSTRAINTS: ReadonlySet<string> = new Set(['CONSTRAINT', 'CHECK', 'UNIQUE', 'PRIMARY', 'FOREIGN', 'EXCLUDE', 'LIKE'])
-const FILE_TABLE_PREFIX = 'fabrika_files_'
 
 /** What an application migration may drop: its own tables, indexes and types, and its database code. */
 const DROPPABLE: ReadonlySet<string> = new Set([
@@ -874,34 +874,13 @@ function fileTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	return index?.startsWith(`${table}_`) === true ? new Set([table, index]) : new Set([table])
 }
 
-/** Every state a file row may hold, as `@fabrika/db`'s `FILE_STATUSES`; its `fileScanSql` test pins the two together. */
-const FILE_STATUS_LIST = "'pending', 'live', 'quarantined', 'rejected'"
-
-const tokenKey = (token: SqlToken): string =>
-	token.kind === 'word'
-		? `w:${token.text.toLowerCase()}`
-		: token.kind === 'punct'
-		? `p:${token.char}`
-		: token.kind === 'string'
-		? `s:${token.text ?? ''}`
-		: `${token.kind}:`
-
 /**
  * The names of `@fabrika/db`'s `fileScanSql` statement, which replaces the status check of a file table an earlier
- * `fileTableSql` created: that exact statement, and no other `ALTER` of a file table.
+ * `fileTableSql` created and adds the scan columns: that exact statement, and no other `ALTER` of a file table.
  */
 function fileScanNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
-	const table = nameText(tokens[2])
-	if (table?.startsWith(FILE_TABLE_PREFIX) !== true || tokens[2]?.kind !== 'word') return new Set()
-	const legacy = `${table.slice(0, 63 - '_status_check'.length)}_status_check`
-	const expected = sqlTokens(
-		`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${legacy}, ADD CONSTRAINT ${table}_status CHECK (status IN (${FILE_STATUS_LIST}))`,
-	)
-	const exact = expected.length === tokens.length && expected.every((token, index) => {
-		const actual = tokens[index]
-		return actual !== undefined && tokenKey(actual) === tokenKey(token)
-	})
-	return exact ? new Set([table, legacy, `${table}_status`]) : new Set()
+	const table = fileScanAlterTable(tokens)
+	return table === undefined ? new Set() : new Set([table, legacyStatusCheckName(table), `${table}_status`])
 }
 
 function classifyStatement(tokens: readonly SqlToken[], context: Context, out: Collected): void {
