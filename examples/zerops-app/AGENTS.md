@@ -148,7 +148,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   `version` answers `{ id }` and takes no version. `update` takes the columns it changes, at least one.
 - A precondition reads with `getForUpdate()` and throws `ConflictError`; the rule (`canClose`) is a pure function
   of `logic.ts`. For a business error throw `ConflictError` (409), `NotFoundError` (404) or `BadRequestError` (400) of
-  `@fabrika/app`. Its other `HttpError`s keep their status; any other throw is a 500.
+  `@fabrika/app`. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` answers that status
+  (the framework's other errors are such values); any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
 - Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
@@ -164,8 +165,10 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 | a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
 | a trigger, function or view    | its migration                   | —                                                  |
 
-Scope every raw statement with `${ctx.sql.scope(ctx.target, '<table>', '<alias>')}`: it binds the capability's whole
-predicate, chain included, as the handles apply it. A deviation is fine: declare it, and do not contort the code to
+Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
+of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
+job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
+handles apply it; a reference table needs none. A deviation is fine: declare it, and do not contort the code to
 avoid it. The approver sees every declaration marked
 "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only where
 they are declared. A query or an export declares only `'read'`.
@@ -759,15 +762,21 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-- Every `${…}` is a bound parameter, never SQL text. Do not put one inside quotes or a comment.
-- **Scope every statement with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.** `ctx.sql` has no scope
-  predicate of its own. The fragment is the capability's whole predicate on that table, as bound values: for a `Ref`
-  (`ctx.target` of `on` or `in`) the object's column and every link of its chain, so a project moved to another org
-  is out; for a `Within` (`ctx.within` of `over`) its values, each container grant on its own column, every row for a
-  global grant and none for an empty one. Write one per table the statement reads (`join projects p on … and
-  ${ctx.sql.scope(ctx.target, 'projects', 'p')}`). A table the capability does not reach is refused. Never scope by
-  hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in` endpoint with `sql`
-  leaks nothing of another scope.
+- Every `${…}` of a value is a bound parameter, never SQL text. The one exception is `${ctx.sql.scope(…)}`: it is SQL
+  (the predicate) around its own bound values, and it may have no value at all (`(true)`, `(false)`). Put no
+  interpolation inside quotes, a quoted name, a dollar body or a comment: the tag refuses it.
+- **Scope every scoped table the statement reads with `${ctx.sql.scope(capability, '<table>', '<alias>')}`.**
+  `ctx.sql` has no scope predicate of its own. The fragment is the capability's whole predicate on that table: for a
+  `Ref` the object's column and every link of its chain, so a project moved to another org is out; for a `Within` its
+  values, each container grant on its own column, every row for a global grant and none for an empty one. The
+  capability is the access form's: `ctx.target` for `on` and `in`, `ctx.within` for `over`; a job passes the `Ref` or
+  `Within` it minted to `tx.sql.scope`. A table the capability does not reach is refused. A reference table is shared
+  by every scope and needs no fragment.
+- **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
+  top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
+  The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a
+  clause. Never scope by hand with `ctx.target.value` alone: it drops the chain. The generated tests check that an `in`
+  endpoint with `sql` leaks nothing of another scope.
 - Rows are parsed like `fromRow` (snake_case to camelCase), then by the schema. Postgres sends `bigint` and `numeric`
   as text: cast a count (`count(*)::int`), and a sum to the type its output declares (`::int` for an integer sum that
   fits, `::float8` for a fractional one), or keep it a string. A sum over no rows is `null`: `coalesce(sum(…), 0)`.
@@ -791,7 +800,8 @@ An endpoint `on` or `in` a dimension with `members` gets `ctx.members`:
 
 - with the dimension's `members.list` action: the read-only directory `ctx.members.list()`, answering
   `{ principalId, label, roles, disabled }` per member, for an assignee picker or a membership check. `label` is
-  `null` unless the dimension opts in with `directory: 'labels'`, which widens like any other access change.
+  `null` unless the caller also holds `members.manage` there, or the dimension opts in with `directory: 'labels'`,
+  which widens like any other access change.
 - with its `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
 
@@ -891,19 +901,20 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-| Answer | Comes from                                                                                                                                                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | the input does not match its schema; `BadRequestError`                                                                                                                    |
-| 401    | no valid credential. In a test, the caller is missing                                                                                                                     |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                           |
-| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                   |
-| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                      |
-| 500    | a throw that is not an `HttpError` of `@fabrika/app`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
-| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                             |
+| Answer | Comes from                                                                                                                                                                                      |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                          |
+| 401    | no valid credential. In a test, the caller is missing                                                                                                                                           |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                                                 |
+| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                         |
+| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                            |
+| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
+| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                   |
 
 A connector call is not an HTTP answer: it resolves to an outcome (`references/webhooks-links-connectors.md`), and the
-handler decides what to answer. An `HttpError` of `@fabrika/app` other than the three business errors (such as
-`ForbiddenError`) keeps its own status.
+handler decides what to answer. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` (an
+`HttpError` of `@fabrika/app`, such as `ForbiddenError`, or a plain object of those fields) answers its own status
+with its message; throw the three business errors for the application's own refusals.
 
 A 500 answers a fixed message; the server log has one line that names what was refused. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.
@@ -1068,9 +1079,9 @@ export const contract = app.contract((c) => ({
   idempotent: re-read the state, and use `expectVersion`, as above.
 - A bulk write declares `sql: 'write'` on the job and runs `tx.sql` inside the transaction:
 
-  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where … returning id`)``
+  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
 
-  Then the version bump and the scope are yours to write.
+  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes, manage members or issue share links.

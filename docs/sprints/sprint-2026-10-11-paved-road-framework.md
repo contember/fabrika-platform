@@ -1432,3 +1432,12 @@ ADR-0022 or ADR-0050.
   transport. (4, 6–10) The skill states the connector CLI's Control credentials, the webhook's 30-day replay window
   and crash gap, connector outcomes as no HTTP answer, sums' types and nulls, the `HttpError` statuses, and the
   versioned and unversioned write answers.
+- **WU10 review round 2.** (1) A fragment is a frozen object without a prototype, registered in a module-private
+  `WeakMap` read through methods bound at load: replacing a static, forging an object or patching `WeakMap.prototype`
+  no longer passes one, and a fragment of another site (live or ended) is refused. (2) Every interpolation's place is
+  checked in the original text before any fragment is spliced, so `(true)`/`(false)` fragments with no value are
+  refused inside a literal, a quoted name, a dollar body and both comment forms. (3) Placement is enforced: a fragment
+  stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause with no top-level OR or BETWEEN; the
+  access fixture's ORed report is refused and leaks nothing, its parenthesized twin passes the leak case. (4–7) The
+  skill exempts reference tables, names the capability per access form and for jobs (`tx.sql.scope`), states the
+  structural error contract, the fragment as the one SQL interpolation, and labels for `members.manage` holders.

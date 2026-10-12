@@ -64,19 +64,20 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-| Answer | Comes from                                                                                                                                                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | the input does not match its schema; `BadRequestError`                                                                                                                    |
-| 401    | no valid credential. In a test, the caller is missing                                                                                                                     |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                           |
-| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                   |
-| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                      |
-| 500    | a throw that is not an `HttpError` of `@fabrika/app`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
-| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                             |
+| Answer | Comes from                                                                                                                                                                                      |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                          |
+| 401    | no valid credential. In a test, the caller is missing                                                                                                                                           |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around                                                                                                 |
+| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                         |
+| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                            |
+| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
+| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                   |
 
 A connector call is not an HTTP answer: it resolves to an outcome (`references/webhooks-links-connectors.md`), and the
-handler decides what to answer. An `HttpError` of `@fabrika/app` other than the three business errors (such as
-`ForbiddenError`) keeps its own status.
+handler decides what to answer. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` (an
+`HttpError` of `@fabrika/app`, such as `ForbiddenError`, or a plain object of those fields) answers its own status
+with its message; throw the three business errors for the application's own refusals.
 
 A 500 answers a fixed message; the server log has one line that names what was refused. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.

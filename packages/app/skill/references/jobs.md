@@ -65,9 +65,9 @@ export const contract = app.contract((c) => ({
   idempotent: re-read the state, and use `expectVersion`, as above.
 - A bulk write declares `sql: 'write'` on the job and runs `tx.sql` inside the transaction:
 
-  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where … returning id`)``
+  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
 
-  Then the version bump and the scope are yours to write.
+  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes, manage members or issue share links.

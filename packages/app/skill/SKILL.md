@@ -156,7 +156,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   `version` answers `{ id }` and takes no version. `update` takes the columns it changes, at least one.
 - A precondition reads with `getForUpdate()` and throws `ConflictError`; the rule (`canClose`) is a pure function
   of `logic.ts`. For a business error throw `ConflictError` (409), `NotFoundError` (404) or `BadRequestError` (400) of
-  `@fabrika/app`. Its other `HttpError`s keep their status; any other throw is a 500.
+  `@fabrika/app`. Any thrown value with a numeric `httpStatus` below 500, a `type` and a `message` answers that status
+  (the framework's other errors are such values); any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
 - Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
@@ -172,8 +173,10 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 | a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
 | a trigger, function or view    | its migration                   | —                                                  |
 
-Scope every raw statement with `${ctx.sql.scope(ctx.target, '<table>', '<alias>')}`: it binds the capability's whole
-predicate, chain included, as the handles apply it. A deviation is fine: declare it, and do not contort the code to
+Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
+of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
+job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
+handles apply it; a reference table needs none. A deviation is fine: declare it, and do not contort the code to
 avoid it. The approver sees every declaration marked
 "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only where
 they are declared. A query or an export declares only `'read'`.
