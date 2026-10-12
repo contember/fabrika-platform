@@ -1,12 +1,13 @@
 // The framework's side of `fabrika_job_leases` (`@fabrika/db/migrations`): the lease a job run takes, the generation
-// and deadline that fence every write of the attempt holding it, a kick's pending run, and the state of the job's last run. Only
+// and deadline that fence every write of the attempt holding it, and the state of the job's last run; and
+// `fabrika_job_kicks`, a kick's pending run. Only
 // `@fabrika/app`'s job runner reaches it, through `frameworkTablesOf`. Every time is the database's own clock: two
 // containers whose clocks disagree still agree on who holds a lease and when it expires.
 
 import type { LeaseFence } from './capability'
 import { runFixedStatement, type Session, sessionOf } from './database'
 import { DatabaseError, LeaseLostError, QueryRefusedError } from './errors'
-import { JOB_LEASES_TABLE } from './migrations'
+import { JOB_KICKS_TABLE, JOB_LEASES_TABLE } from './migrations'
 import type { DataLayerRuntime } from './store'
 
 export type JobOutcome = 'succeeded' | 'failed'
@@ -26,8 +27,6 @@ export interface JobLeaseState {
 	readonly lastSucceededAt: Date | null
 	readonly lastDurationMs: number | null
 	readonly lastMissedReportedAt: Date | null
-	/** A kick found the lease held: the run holding it runs the job once more after it finishes. */
-	readonly pending: boolean
 }
 
 /** A job overdue by twice its period, claimed for one report. */
@@ -52,18 +51,23 @@ export interface JobLeases {
 	 */
 	acquire(job: string, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null>
 	/**
+	 * `acquire` of a registered job that never waits for a lock: `null` at once while another run holds the lease or an
+	 * attempt's transaction holds its row. A kick takes the lease only this way, on a connection requests share.
+	 */
+	tryAcquire(job: string, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null>
+	/**
 	 * Hands a live lease to the next attempt under a new generation, so no write of the previous attempt commits from
 	 * now on. `null` when `fence` no longer holds it.
 	 */
 	renew(fence: LeaseFence, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null>
 	/** Frees the lease and records the run's outcome and duration; `false` when `fence` no longer held it. */
 	finish(fence: LeaseFence, outcome: JobOutcome): Promise<boolean>
+	/** Records that a kick arrived: the run that started before it runs the job once more. Never waits on the lease. */
+	markPending(job: string): Promise<void>
 	/**
-	 * Asks the run holding a live lease to run the job once more after it finishes. `false` when no run holds it (or
-	 * its holder's lease expired): the caller takes the lease itself instead.
+	 * Clears the flag `markPending` set; `true` for the one caller that cleared it. A run clears it when it starts (it
+	 * covers every kick before it) and again after it succeeded, when `true` means one more run.
 	 */
-	markPending(job: string): Promise<boolean>
-	/** Clears the flag `markPending` set; `true` for the one caller that cleared it, which then runs the job again. */
 	takePending(job: string): Promise<boolean>
 	/**
 	 * Claims one report of a job that has not succeeded within twice `periodMs`, at most once per period: only the
@@ -84,7 +88,7 @@ const QUERY_CANCELED = '57014'
 const IDLE_TIMEOUT = '25P03'
 
 const STATE_COLUMNS =
-	'generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at, last_finished_at, last_status, last_succeeded_at, last_duration_ms, last_missed_reported_at, pending'
+	'generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at, last_finished_at, last_status, last_succeeded_at, last_duration_ms, last_missed_reported_at'
 
 const SQL_NOW = 'select now() as now'
 
@@ -110,11 +114,17 @@ const SQL_FINISH = `update ${T} set holder = null, last_finished_at = now(), las
 	last_succeeded_at = case when $4 = 'succeeded' then now() else last_succeeded_at end
 	where job = $1 and generation = $2 and holder = $3 returning job`
 
-// One statement each, so a kick and a finishing run serialize on the row: a flag set before the holder takes it is
-// seen, and once the lease is free the kick finds no holder and takes the lease itself.
-const SQL_MARK_PENDING = `update ${T} set pending = true where job = $1 and holder is not null and expires_at > now() returning job`
+// A free lease whose row no transaction holds (`skip locked`): an attempt's fence holds it `for share` while it writes.
+const SQL_TRY_ACQUIRE = `with free as (select job from ${T} where job = $1 and holder is null for update skip locked)
+	update ${T} set generation = ${T}.generation + 1, holder = $2, expires_at = now() + $3::bigint ${MS},
+		attempt_deadline = now() + $4::bigint ${MS}, last_started_at = now()
+	from free where ${T}.job = free.job returning ${T}.generation`
 
-const SQL_TAKE_PENDING = `update ${T} set pending = false where job = $1 and pending returning job`
+const K = JOB_KICKS_TABLE
+
+const SQL_MARK_PENDING = `insert into ${K} (job, pending) values ($1, true) on conflict (job) do update set pending = true where ${K}.pending = false`
+
+const SQL_TAKE_PENDING = `update ${K} set pending = false where job = $1 and pending returning job`
 
 const SQL_CLAIM_OVERDUE = `update ${T} set last_missed_reported_at = now()
 	where job = $1 and coalesce(last_succeeded_at, first_seen_at) < now() - 2 * $2::bigint ${MS}
@@ -183,8 +193,8 @@ function requiredDate(row: Readonly<Record<string, unknown>>, name: string): Dat
 }
 
 function stateOf(row: Readonly<Record<string, unknown>>): JobLeaseState {
-	const { holder, last_status: status, last_duration_ms: duration, pending } = row
-	if ((holder !== null && typeof holder !== 'string') || (duration !== null && typeof duration !== 'number') || typeof pending !== 'boolean') {
+	const { holder, last_status: status, last_duration_ms: duration } = row
+	if ((holder !== null && typeof holder !== 'string') || (duration !== null && typeof duration !== 'number')) {
 		throw new QueryRefusedError('unexpected_row', `${T} came back in another shape than its migration declares`)
 	}
 	if (status !== null && status !== 'succeeded' && status !== 'failed') {
@@ -202,7 +212,6 @@ function stateOf(row: Readonly<Record<string, unknown>>): JobLeaseState {
 		lastSucceededAt: date(row, 'last_succeeded_at'),
 		lastDurationMs: duration,
 		lastMissedReportedAt: date(row, 'last_missed_reported_at'),
-		pending,
 	})
 }
 
@@ -325,8 +334,13 @@ export function jobLeases(runtime: () => DataLayerRuntime): JobLeases {
 			return (await rows(session(), SQL_FINISH, [...params(fence), outcome])).length > 0
 		},
 
-		async markPending(job: string): Promise<boolean> {
-			return (await rows(session(), SQL_MARK_PENDING, [job])).length > 0
+		async tryAcquire(job: string, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null> {
+			const [row] = await rows(session(), SQL_TRY_ACQUIRE, [job, holder, milliseconds(leaseMs, 'a lease'), milliseconds(attemptMs, 'an attempt')])
+			return fenceOf(job, holder, row)
+		},
+
+		async markPending(job: string): Promise<void> {
+			await rows(session(), SQL_MARK_PENDING, [job])
 		},
 
 		async takePending(job: string): Promise<boolean> {

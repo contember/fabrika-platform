@@ -49,7 +49,7 @@ beforeEach(async () => {
 	if (!hasPostgres) return
 	await admin((sql) =>
 		sql.unsafe(
-			`truncate ${schema}.signups, ${schema}.applications, ${schema}.notices; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges`,
+			`truncate ${schema}.signups, ${schema}.applications, ${schema}.notices; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks; delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges`,
 		)
 	)
 })
@@ -86,12 +86,18 @@ class World implements SignupWorld {
 	readonly welcomedEmails: string[] = []
 	holdStart: Gate | null = null
 	holdTaken: Gate | null = null
+	/** Fail the next run after its hold before it reads, as a handler error does. */
+	failNext = false
 
 	async started(run: { readonly principal: string; readonly runId: string }): Promise<void> {
 		this.runs.push(run)
 		const hold = this.holdStart
 		this.holdStart = null
 		await hold?.wait()
+		if (this.failNext) {
+			this.failNext = false
+			throw new Error('the run failed')
+		}
 	}
 
 	async taken(): Promise<void> {
@@ -122,10 +128,11 @@ interface Running {
 	settled(): Promise<void>
 }
 
-function start(): Running {
+/** An instance of the application over the shared schema, on a pool of `max` connections. */
+function start(max = 4): Running {
 	const world = new World()
 	const { implementation, variables } = signupApp(world)
-	const connection = Database.postgres({ url, schema, max: 4 })
+	const connection = Database.postgres({ url, schema, max })
 	opened.push(connection)
 	const exchanged: string[] = []
 	const tokens = workloadTokensFor(implementation)
@@ -173,6 +180,16 @@ function quietly<T>(work: () => Promise<T>): Promise<T> {
 	return work().finally(() => log.mockRestore())
 }
 
+/** `work` within `ms`, or the test fails: a kick that waited on a lock would hold it past that. */
+function inTime<T>(ms: number, work: Promise<T>): Promise<T> {
+	return Promise.race([
+		work,
+		Bun.sleep(ms).then((): never => {
+			throw new Error(`still waiting after ${ms} ms`)
+		}),
+	])
+}
+
 async function until(condition: () => boolean | Promise<boolean>, ms: number): Promise<void> {
 	const deadline = performance.now() + ms
 	while (!(await condition())) {
@@ -182,9 +199,15 @@ async function until(condition: () => boolean | Promise<boolean>, ms: number): P
 }
 
 async function leaseOf(): Promise<{ readonly holder: string | null; readonly pending: boolean } | undefined> {
-	const [row] = await admin((sql) => sql.unsafe(`select holder, pending from ${schema}.fabrika_job_leases where job = 'welcome'`))
+	const [row] = await admin((sql) =>
+		sql.unsafe(
+			`select holder, coalesce(k.pending, false) as pending from ${schema}.fabrika_job_leases l left join ${schema}.fabrika_job_kicks k using (job) where job = 'welcome'`,
+		)
+	)
 	return row
 }
+
+const runsOf = (...instances: readonly Running[]): number => instances.reduce((sum, instance) => sum + instance.world.runs.length, 0)
 
 /** The transactions still open on the inbox: a killed process's, until Postgres notices the connection is gone. */
 async function openTransactions(): Promise<number> {
@@ -196,10 +219,11 @@ async function openTransactions(): Promise<number> {
 
 /** The lines `stream` prints, up to and including `last`. */
 async function linesUntil(stream: ReadableStream<Uint8Array>, last: string): Promise<string[]> {
+	const reader = stream.getReader()
 	const decoder = new TextDecoder()
 	let text = ''
-	for await (const chunk of stream) {
-		text += decoder.decode(chunk, { stream: true })
+	for (let read = await reader.read(); !read.done; read = await reader.read()) {
+		text += decoder.decode(read.value, { stream: true })
 		const lines = text.split('\n').filter((line) => line !== '')
 		if (lines.includes(last)) return lines
 	}
@@ -277,6 +301,66 @@ describe.skipIf(!hasPostgres)('a form with then kicks its job', () => {
 		expect(await scheduled).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(running.world.runs).toHaveLength(2)
 		expect(running.world.welcomedEmails).toEqual(['cy@example.test'])
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+	})
+
+	test('kicks wait for no lock: while a run writes, they end at once and an unrelated form still answers promptly', async () => {
+		// Two connections: one is the scheduled run's open transaction, which holds the lease row as its fence.
+		const running = start(2)
+		const held = gate()
+		running.world.holdTaken = held
+		const scheduled = quietly(() => running.app.jobs.run('welcome'))
+		await held.reached
+		const emails = ['e1@example.test', 'e2@example.test', 'e3@example.test', 'e4@example.test', 'e5@example.test']
+		for (const email of emails) {
+			expect((await running.submit('/signup', { email })).body).toEqual(RECEIVED)
+		}
+		const begun = performance.now()
+		expect((await running.submit('/notify', { email: 'other@example.test' })).body).toEqual(RECEIVED)
+		expect(performance.now() - begun).toBeLessThan(250)
+		// Every kick ended while the run still holds its transaction open: each one left the shared flag.
+		await inTime(1_000, running.settled())
+		expect(await leaseOf()).toMatchObject({ holder: expect.any(String), pending: true })
+		held.open()
+		expect(await scheduled).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(running.world.runs).toHaveLength(2)
+		expect([...running.world.welcomedEmails].sort()).toEqual(emails)
+	})
+
+	test('two instances share one pending run: at most one running and one pending across them', async () => {
+		const first = start()
+		const second = start()
+		const held = gate()
+		first.world.holdStart = held
+		await first.submit('/signup', { email: 'g1@example.test' })
+		await held.reached
+		await first.submit('/signup', { email: 'g2@example.test' })
+		await second.submit('/signup', { email: 'g3@example.test' })
+		await second.settled()
+		held.open()
+		await first.settled()
+		expect(runsOf(first, second)).toBe(2)
+		expect([...first.world.welcomedEmails, ...second.world.welcomedEmails].sort()).toEqual(['g1@example.test', 'g2@example.test', 'g3@example.test'])
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+	})
+
+	test('after a failed run a kick that arrived during it waits for the schedule, which then takes the rows', async () => {
+		const running = start()
+		const held = gate()
+		running.world.holdStart = held
+		running.world.failNext = true
+		await running.submit('/signup', { email: 'h1@example.test' })
+		await held.reached
+		await running.submit('/signup', { email: 'h2@example.test' })
+		held.open()
+		await quietly(() => running.settled())
+		// `retries: 0`: the run failed once, and nothing started another.
+		expect(running.world.runs).toHaveLength(1)
+		expect(await leaseOf()).toEqual({ holder: null, pending: true })
+		expect(await inbox()).toEqual(['h1@example.test', 'h2@example.test'])
+		expect(await running.app.jobs.run('welcome')).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(running.world.runs).toHaveLength(2)
+		expect([...running.world.welcomedEmails].sort()).toEqual(['h1@example.test', 'h2@example.test'])
 		expect(await leaseOf()).toEqual({ holder: null, pending: false })
 	})
 

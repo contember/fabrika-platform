@@ -793,12 +793,14 @@ vocabulary (`packages/db/CLAUDE.md`).
   retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.
 - **Lease times are the database's**: the runner passes durations, never a timestamp, so a container whose clock is
   minutes off cannot take a live lease over. `JobClock` has only the waits and the jitter.
-- **Kicks coalesce on the lease: at most one run and one pending.** A kick runs the job when it takes the lease; when
-  another run holds it, it sets the lease's `pending` (`markPending`, only on a live holder) and ends, and every run
-  that succeeded takes the flag (`takePending`) and runs once more, cron runs included. Within one process a kick in
-  flight absorbs the next into one more kick. A failed run leaves the flag for the next run; the schedule is the
-  recovery path, so never drop the cron for a job a form kicks. `serveContract` drains kicked runs on SIGTERM before
-  it closes the database, and `kit.runJob` waits for them before it runs.
+- **Kicks coalesce on one shared flag: at most one run and one pending, across instances.** A kick takes the lease
+  with `tryAcquire`, which never waits for a lock: it shares the request pool, and a run's attempt holds the lease
+  row as its fence while it writes. Without the lease it sets `fabrika_job_kicks.pending` (`markPending`, a row no
+  attempt locks) and tries once more. Every run clears the flag when it starts (it covers every kick before it) and,
+  after it succeeded, takes it and runs once more, cron runs included; a failed run leaves it for the schedule. A kick
+  in flight in the same process makes the next one only set the flag, never schedule a run of its own. Never let a kick
+  wait on the lease, and never drop the cron of a job a form kicks: it is the recovery path. `serveContract` drains
+  kicked runs on SIGTERM before it closes the database, and `kit.runJob` waits for them before it runs.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
   `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own

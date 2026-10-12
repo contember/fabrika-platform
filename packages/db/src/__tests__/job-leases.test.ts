@@ -135,21 +135,43 @@ describe.skipIf(!hasPostgres)('the job lease on Postgres', () => {
 		expect(await leases.acquire('retrying', 'next-run', HOUR, HOUR)).toEqual({ job: 'retrying', holder: 'next-run', generation: second.generation + 1 })
 	})
 
-	test('a kick marks only a live held lease pending, and one caller takes the flag', async () => {
-		await leases.register('kicked')
-		expect(await leases.markPending('kicked')).toBe(false)
-		const run = await lease('kicked')
-		expect((await Promise.all([1, 2, 3].map(() => leases.markPending('kicked')))).every(Boolean)).toBe(true)
-		expect(await leases.state('kicked')).toMatchObject({ holder: run.holder, pending: true })
-		expect(await leases.finish(run, 'succeeded')).toBe(true)
-		// The flag outlives the run that held the lease: its holder takes it after it finished.
-		expect(await leases.markPending('kicked')).toBe(false)
+	test('a kick sets the pending flag whoever holds the lease, and one caller takes it', async () => {
+		expect(await leases.takePending('kicked')).toBe(false)
+		await Promise.all([1, 2, 3].map(() => leases.markPending('kicked')))
 		expect((await Promise.all([leases.takePending('kicked'), leases.takePending('kicked')])).sort()).toEqual([false, true])
-		expect(await leases.state('kicked')).toMatchObject({ holder: null, pending: false })
-		await lease('kicked')
-		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_job_leases set expires_at = now() - interval '1 second' where job = 'kicked'`))
-		// A crashed holder never finishes, so the kick reaps and takes the lease instead.
-		expect(await leases.markPending('kicked')).toBe(false)
+		const run = await lease('kicked')
+		await leases.markPending('kicked')
+		expect(await leases.finish(run, 'succeeded')).toBe(true)
+		expect(await leases.takePending('kicked')).toBe(true)
+	})
+
+	test('tryAcquire takes a free lease once, and never waits on a row an attempt holds', async () => {
+		await leases.register('kicked-now')
+		const taken = await Promise.all(['k1', 'k2', 'k3'].map((holder) => leases.tryAcquire('kicked-now', holder, HOUR, HOUR)))
+		expect(taken.filter((fence) => fence !== null)).toHaveLength(1)
+		const [fence] = taken.filter((candidate) => candidate !== null)
+		if (fence === undefined || fence === null) throw new Error('no lease')
+		expect(await leases.finish(fence, 'succeeded')).toBe(true)
+		// A transaction holds the free lease's row as an attempt's fence does; neither a kick nor its flag waits for it.
+		const holder = new SQL({ url, adapter: 'postgres', max: 1 })
+		const released = Promise.withResolvers<void>()
+		const locked = Promise.withResolvers<void>()
+		const transaction = holder.begin(async (tx) => {
+			await tx.unsafe(`select job from ${schema}.fabrika_job_leases where job = 'kicked-now' for share`)
+			locked.resolve()
+			await released.promise
+		})
+		try {
+			await locked.promise
+			expect(await inTime(1000, leases.tryAcquire('kicked-now', 'k4', HOUR, HOUR))).toBeNull()
+			await inTime(1000, leases.register('kicked-now'))
+			await inTime(1000, leases.markPending('kicked-now'))
+		} finally {
+			released.resolve()
+			await transaction
+			await holder.close()
+		}
+		expect(await leases.tryAcquire('kicked-now', 'k4', HOUR, HOUR)).toMatchObject({ holder: 'k4' })
 	})
 
 	test('an overdue job is claimed for one report per period, by one of many concurrent claimers', async () => {

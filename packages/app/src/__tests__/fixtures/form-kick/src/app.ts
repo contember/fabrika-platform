@@ -6,7 +6,7 @@ import { tables } from './db/tables'
 import { registerWorld, signupDeps, type SignupWorld, WORLD_VARIABLE } from './world'
 
 export interface SignupApp {
-	readonly implementation: ContractImplementation
+	readonly implementation: ContractImplementation<typeof contract>
 	/** The application variables a boot of `implementation` takes: the one that names its world. */
 	readonly variables: Readonly<Record<string, string>>
 }

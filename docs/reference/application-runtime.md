@@ -677,10 +677,12 @@ request the schema cannot express); an IAM that cannot be asked is 503.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (the build, the checker and the
   compiler refuse any other name). Once a submission's row committed, the form kicks that job: the
   answer is the same constant and does not wait. The serving process starts one run in the background
-  (`waitUntil` where the runtime has one) under the job's own key, never the request's; a run already
-  in flight in this process absorbs further kicks into one more run. A kick that finds the lease held
-  by another run sets `pending` on it, and that run runs the job once more after it succeeded, so at
-  most one run is active and one is pending whatever the number of submissions. A refused, honeypotted
+  (`waitUntil` where the runtime has one) under the job's own key, never the request's. A kick waits
+  for no lock, so it never holds a connection requests need while a run writes: when it cannot take
+  the lease at once it sets the shared flag `fabrika_job_kicks.pending`, and the run holding the lease
+  runs the job once more after it succeeded. Every run clears the flag when it starts, so at most one
+  run is active and one is pending whatever the number of submissions and instances; after a failed
+  run the flag waits for the schedule. A refused, honeypotted
   or challenge-failed submission kicks nothing. The schedule stays the recovery path: a kicked run
   that dies before its commit leaves its rows to the next scheduled run (`form-kick.test.ts`). On
   SIGTERM the server drains the runs in flight before it closes the database. A kick carries no
@@ -744,8 +746,8 @@ process first — and runs one job:
 1. The run takes the job's lease in `fabrika_job_leases` (a framework table of
    `fabrika db migrate`). While another run holds it, this run does not start. Every
    lease time is the database's clock, so containers whose clocks disagree still agree.
-   A run that succeeded takes the lease's `pending` flag a form's kick left and runs
-   once more.
+   A run clears the `fabrika_job_kicks.pending` flag a form's kick leaves when it starts,
+   and runs once more when the flag is set again by the time it succeeded.
 2. Each attempt holds one generation of the lease and a deadline (its `timeout`,
    default 15 minutes). Every insert, update and delete of the data layer checks the
    generation and the deadline inside its own transaction, before the write and again

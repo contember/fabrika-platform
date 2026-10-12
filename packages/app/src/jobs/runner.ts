@@ -1,8 +1,9 @@
 // The job runner (`fabrika job run <name>`): one run of one `c.cron` job. A run takes the job's lease or does not
 // start; each attempt holds one generation of it with a deadline the database enforces, so a write of an attempt
 // that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). A form's `then` kicks a run in the
-// background; a kick that finds the lease held leaves a pending flag, and the run holding it runs once more. Failures,
-// crashed runs and a job that stopped succeeding are reported to Operations, each under a fixed failure code.
+// background without waiting for any lock; a kick that finds the lease held leaves the shared pending flag, and the run
+// holding it runs once more after it succeeded. Failures, crashed runs and a job that stopped succeeding are reported
+// to Operations, each under a fixed failure code.
 
 import type { IamMembership } from '@fabrika/auth'
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
@@ -37,8 +38,6 @@ export const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000
 export const LEASE_GRACE_MS = 60_000
 /** How often the serving process checks every job for a crashed run and for a schedule that stopped. */
 export const JOB_CHECK_INTERVAL_MS = 60_000
-/** How often a kick tries again when the lease it found held was freed before it could leave the pending flag. */
-const KICK_TRIES = 3
 const BACKOFF_BASE_MS = 1_000
 const BACKOFF_MAX_MS = 5 * 60_000
 const DURATION = /^([1-9][0-9]*)([smh])$/
@@ -188,8 +187,8 @@ export interface BoundJobs {
 	readonly declared: readonly string[]
 	/**
 	 * Kicks the contract job `name`, as a form's `then` does after its row committed: a run under the job's own key
-	 * now, or one more run of the run holding the lease. Kicks in this process coalesce while one is in flight. It
-	 * settles when that work has ended and never rejects; the job's schedule stays the recovery path.
+	 * now, or the shared pending flag for the run holding the lease, which then runs once more after it succeeded. It
+	 * waits for no lock, settles when that work has ended and never rejects; the schedule stays the recovery path.
 	 */
 	readonly kick: (name: string) => Promise<void>
 }
@@ -277,7 +276,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			if (job === undefined || framework === null) {
 				throw new JobError(`no job '${name}' in the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})`)
 			}
-			return runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock).then((result) => {
+			return runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock, 'wait').then((result) => {
 				if (result.status === 'skipped') {
 					console.error(`fabrika: a previous run of job '${name}' still holds its lease; this run does not start`)
 				}
@@ -300,24 +299,21 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			}
 		},
 	})
-	// The jobs whose kick is in flight in this process; `true` once another kick arrived meanwhile.
-	const kicking = new Map<string, boolean>()
+	// The jobs a kick of this process is running or asking for: a further kick only sets the shared flag.
+	const kicking = new Set<string>()
 	const kick = async (name: string): Promise<void> => {
 		const job = bound.get(name)
 		if (job === undefined || framework === null) {
 			return
 		}
+		const context = contextFor(framework.jobs, undefined)
 		if (kicking.has(name)) {
-			kicking.set(name, true)
+			await markPending(job, context)
 			return
 		}
-		kicking.set(name, false)
+		kicking.add(name)
 		try {
-			// A kick that arrived during the last one gets a kick of its own, which starts after it.
-			do {
-				kicking.set(name, false)
-				await kickOnce(job, contextFor(framework.jobs, undefined), systemClock)
-			} while (kicking.get(name) === true)
+			await kickOnce(job, context)
 		} finally {
 			kicking.delete(name)
 		}
@@ -325,19 +321,26 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 	return { jobs, declared, kick }
 }
 
-/** One kick: a run while the lease is free, else the pending flag the run holding it takes once it finished. */
-async function kickOnce(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<void> {
+/**
+ * One kick: a run while the lease is free, else the shared pending flag. Neither waits for a lock, so a kick never
+ * holds a connection requests share while a run writes. After a failed run the flag stays for the schedule.
+ */
+async function kickOnce(job: BoundJob, context: RunnerContext): Promise<void> {
+	if ((await runJob(job, context, systemClock, 'try')).status !== 'skipped' || !(await markPending(job, context))) {
+		return
+	}
+	// The run holding the lease may have finished before the flag was set: then this kick takes the lease itself.
+	await runJob(job, context, systemClock, 'try')
+}
+
+async function markPending(job: BoundJob, context: RunnerContext): Promise<boolean> {
 	try {
-		for (let tries = 0; tries < KICK_TRIES; tries++) {
-			const result = await runJob(job, context, clock)
-			if (result.status !== 'skipped' || (await context.leases.markPending(job.name))) {
-				return
-			}
-		}
-		console.error(`fabrika: the kick of job '${job.name}' found its lease changing hands; its next scheduled run takes the work`)
+		await context.leases.markPending(job.name)
+		return true
 	} catch {
-		// A driver error may quote the database URL.
+		// A driver error may quote the database URL; the schedule picks the submission up.
 		console.error(`fabrika: the kick of job '${job.name}' failed: driver_failed`)
+		return false
 	}
 }
 
@@ -401,11 +404,17 @@ interface Progress {
 	attempts: number
 }
 
-/** A run of the job, then one more for each kick that found the lease held during it. */
-async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
-	let result = await runOnce(job, context, clock)
+/**
+ * How a run takes the lease: `wait` is `fabrika job run`'s, in a process of its own; `try` is a kick's and a follow-up
+ * run's, which never wait for a lock.
+ */
+type Acquisition = 'wait' | 'try'
+
+/** A run of the job, then one more while a kick arrived after the last one started and it succeeded. */
+async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition): Promise<JobRunResult> {
+	let result = await runOnce(job, context, clock, acquisition)
 	while (result.status === 'succeeded' && (await pendingTaken(job, context))) {
-		const next = await runOnce(job, context, clock)
+		const next = await runOnce(job, context, clock, 'try')
 		// Another run took the lease after this one finished, so after the kick: it does the work.
 		if (next.status === 'skipped') {
 			break
@@ -425,25 +434,38 @@ async function pendingTaken(job: BoundJob, context: RunnerContext): Promise<bool
 	}
 }
 
-async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
+async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock, acquisition: Acquisition): Promise<JobRunResult> {
 	const progress: Progress = { attempts: 0 }
 	try {
-		return await runLeased(job, context, clock, progress)
+		return await runLeased(job, context, clock, progress, acquisition)
 	} catch {
 		// Only the lease store throws here: the handler's errors stay inside its attempt. Its message may quote the URL.
 		return failed(job, progress.attempts, 'driver_failed', context.reporter)
 	}
 }
 
-async function runLeased(job: BoundJob, context: RunnerContext, clock: JobClock, progress: Progress): Promise<JobRunResult> {
+async function runLeased(
+	job: BoundJob,
+	context: RunnerContext,
+	clock: JobClock,
+	progress: Progress,
+	acquisition: Acquisition,
+): Promise<JobRunResult> {
 	const { leases } = context
 	await leases.register(job.name)
-	await surveil(job, context)
 	const leaseMs = job.timeoutMs + LEASE_GRACE_MS
-	let fence = await leases.acquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+	let fence: LeaseFence | null
+	if (acquisition === 'wait') {
+		await surveil(job, context)
+		fence = await leases.acquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+	} else {
+		fence = await leases.tryAcquire(job.name, attemptId(), job.timeoutMs, leaseMs)
+	}
 	if (fence === null) {
 		return { status: 'skipped' }
 	}
+	// This run covers every kick before it: their rows committed before it reads.
+	await pendingTaken(job, context)
 	const attempts = job.artifact.retries + 1
 	progress.attempts = 1
 	let code = await attemptOnce(job, fence, progress.attempts, clock, context)

@@ -231,6 +231,26 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "fabrika_job_kicks",
+			"column_name": "job",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_kicks",
+			"column_name": "pending",
+			"type_name": "bool",
+			"type_type": "b",
+			"type_category": "B",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
 			"table_name": "fabrika_job_leases",
 			"column_name": "job",
 			"type_name": "text",
@@ -348,16 +368,6 @@
 			"type_category": "D",
 			"nullable": true,
 			"generated": "no",
-			"enum_labels": []
-		},
-		{
-			"table_name": "fabrika_job_leases",
-			"column_name": "pending",
-			"type_name": "bool",
-			"type_type": "b",
-			"type_category": "B",
-			"nullable": false,
-			"generated": "default",
 			"enum_labels": []
 		},
 		{

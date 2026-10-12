@@ -8,6 +8,7 @@ export const FRAMEWORK_MIGRATION_BUNDLE = 'fabrika'
 export const WEBHOOK_BINDINGS_TABLE = 'fabrika_webhook_bindings'
 export const WEBHOOK_DELIVERIES_TABLE = 'fabrika_webhook_deliveries'
 export const JOB_LEASES_TABLE = 'fabrika_job_leases'
+export const JOB_KICKS_TABLE = 'fabrika_job_kicks'
 export const FORM_ADMISSIONS_TABLE = 'fabrika_form_admissions'
 export const FORM_CHALLENGES_TABLE = 'fabrika_form_challenges'
 
@@ -85,8 +86,12 @@ CREATE INDEX ${FORM_CHALLENGES_TABLE}_expires_at ON ${FORM_CHALLENGES_TABLE} (ex
 	}),
 	Object.freeze({
 		name: '0004_job_kicks.sql',
-		sql: `-- A kick that found the job's lease held: the run holding it runs the job once more after it finishes.
-ALTER TABLE ${JOB_LEASES_TABLE} ADD COLUMN pending BOOLEAN NOT NULL DEFAULT false;
+		sql: `-- Whether a kick arrived after the job's current run started: that run runs the job once more after it succeeded.
+-- Apart from the lease row, so a kick never waits on the fence a running attempt holds there.
+CREATE TABLE ${JOB_KICKS_TABLE} (
+	job TEXT PRIMARY KEY,
+	pending BOOLEAN NOT NULL
+);
 `,
 	}),
 ])
