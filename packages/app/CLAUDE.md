@@ -44,11 +44,13 @@ bun test src/__tests__/export-read-only.test.ts # an export handler cannot write
 ## Structure
 
 ```text
-skill/SKILL.md        the agent skill `fabrika-app`: the one text of the application rules
+skill/                the agent skill `fabrika-app`: the one text of the application rules
+  SKILL.md            the paved road, the declared steps off it, the loop; `version` = this package's
+  references/*.md     one topic each (setup, tables, endpoints, jobs, files, …); every code block is checked
 src/
   index.ts            public surface
   from-row.ts         fromRow: a row as an output object (snake → camel, Date → ISO, then the schema)
-  agent-skill.ts      @fabrika/app/agent-skill — reads skill/SKILL.md; renderAgentsFile (node:fs)
+  agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
@@ -153,11 +155,18 @@ src/
   `zod` is a peer dependency, so an application and the framework share one copy.
 - Never log credentials, secret values, or request headers.
 - No casts, `any`, `@ts-ignore`, or `@ts-expect-error`.
-- **`skill/SKILL.md` is the only copy of the agent rules.** The builder installs it, Control's MCP
-  tool `get_app_rules` answers its body, and an application's `AGENTS.md` is `renderAgentsFile`; each test compares
-  against `readAppAgentSkill()`. Describe what is built and say what is not; a change to a rule the
-  skill states (a command, a refusal, a provider gap) updates the skill in the same change, and regenerates the
-  template's `examples/zerops-app/AGENTS.md` (`agent-skill.test.ts` fails until it is the rendered file).
+- **`skill/` is the only copy of the agent rules.** The builder installs every file of it from the application's
+  pinned `@fabrika/app`, Control's MCP tool `get_app_rules` answers its body or one reference file by topic, and an
+  application's `AGENTS.md` is `renderAgentsFile`; each test compares against `readAppAgentSkill()`. Describe what is
+  built and say what is not; a change to a rule the skill states (a command, a refusal, an API, a provider gap)
+  updates the skill in the same change, and regenerates the template's `examples/zerops-app/AGENTS.md`
+  (`agent-skill.test.ts` fails until it is the rendered file). The frontmatter `version` is this package's; the
+  release rewrites it in the tarball.
+- **Every `ts`, `sql` and `json` block of the skill names its file** (`` ```ts src/tasks/endpoints.ts ``).
+  `skill-code.test.ts` compiles the blocks as one application against the workspace (the base files: `SKILL.md`,
+  `app-setup.md`, `table-and-migration.md`, `endpoint.md`, `tests.md`; each other reference file is a variant over
+  it), classifies the migrations, and on Postgres checks that they migrate to `src/__tests__/skill-app/catalog.json`,
+  from which the generated schema is rendered. Change a migration block, then regenerate that catalog.
 
 ## Contract framework
 

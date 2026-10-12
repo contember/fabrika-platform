@@ -974,16 +974,26 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 
 ## The agent skill
 
-`@fabrika/app`'s `skill/SKILL.md` (the skill `fabrika-app`) is the one text that tells a coding agent how to write a
-contract application: the contract first, tables and policies, migrations and codegen, the generated tests, what the
-checker refuses, and what is not built yet. Three places carry it, all read through `@fabrika/app/agent-skill`:
+`@fabrika/app`'s `skill/` (the skill `fabrika-app`) is the one text that tells a coding agent how to write an
+application. `SKILL.md` leads with the paved road in code, the declared steps off it, the loop (migrate, codegen,
+test-scaffold, typecheck, `fabrika-check`, the tests) and when to ask the human; `references/<topic>.md` holds one topic
+each: `app-setup`, `table-and-migration`, `endpoint`, `jobs`, `files`, `webhooks-links-connectors`, `tests` and
+`errors`. Its frontmatter `version` is the package's. Three places carry it, all read through
+`@fabrika/app/agent-skill`:
 
-- `fabrika builder init` installs the file verbatim as `.claude/skills/fabrika-app/` and `.agents/skills/fabrika-app/`;
-- Control's MCP server answers its body from the read-only tool `get_app_rules`, which its `instructions` name;
-- the template's `AGENTS.md` is `renderAgentsFile`: the body under a generated-file marker. The template is
-  `examples/zerops-app`, and `packages/app`'s `agent-skill.test.ts` fails when its `AGENTS.md` is not the rendered file.
+- `fabrika builder init` installs every file verbatim as `.claude/skills/fabrika-app/` and
+  `.agents/skills/fabrika-app/`, from the `@fabrika/app` the application installed (`installedAppAgentSkill`), else
+  from the builder's own copy;
+- Control's MCP server answers it from the read-only tool `get_app_rules`, which its `instructions` name: the body, or
+  one reference file by `topic`, headed by the version, with a warning when the workspace given as `workspaceId` pins
+  an `@fabrika/app` range the version is outside;
+- the template's `AGENTS.md` is `renderAgentsFile`: the body and every reference file under a generated-file marker.
+  The template is `examples/zerops-app`, and `packages/app`'s `agent-skill.test.ts` fails when its `AGENTS.md` is not
+  the rendered file.
 
-Change the rules in that file only, and keep it to what is built.
+Every code block names its file and is checked: `skill-code.test.ts` compiles the blocks as one application with the
+skill's own `tsconfig.json`, classifies its migrations as the runner does, and on Postgres migrates them. Change the
+rules in `skill/` only, and keep them to what is built.
 
 ## What the platform writes into an application
 

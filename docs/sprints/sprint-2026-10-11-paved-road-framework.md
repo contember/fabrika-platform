@@ -1387,3 +1387,36 @@ ADR-0022 or ADR-0050.
 - **WU14 — `{ public: true, member: true }` passes the types** (an object literal is structurally a `MemberAccess`);
   the build and the reader refuse it. The reader-forms fixture of `differential.test.ts` does not reach `public-spa`
   (shared file, left alone); `packages/check/src/__tests__/public-spa.test.ts` compares reader and runtime for it.
+- **WU10 — one skill, eight reference files.** `skill/SKILL.md` plus `references/{app-setup,table-and-migration,
+  endpoint,jobs,files,webhooks-links-connectors,tests,errors}.md`: `app-setup.md` (package, tsconfig, contract,
+  config, SPA) and `tests.md` (generated tests, seeds, `testKit`) are added to the planned six, because neither had a
+  home. `SKILL.md` is 229 lines, not ~120: dprint formats a code block at the markdown width (80), and its one block,
+  the tasks slice, is 113 of them. The always-loaded prose is about 110 lines.
+- **WU10 — the code blocks are one application.** A task tracker (org → project → task, comments, a report on
+  `sql: 'read'`, the member directory, an overdue job, attachments, a webhook, a share link, a connector) that covers the
+  probes' stumbling points: a column write action and its own endpoint, `getForUpdate` + `ConflictError` + a seed,
+  `over: 'org'` two levels down, dates as days, `fromRow`, `count(*)::int`, `(${v}::text is null or …)`. Every
+  `ts`/`sql`/`json` block names its file in the fence; `skill-code.test.ts` compiles them with the skill's own
+  tsconfig from `examples/zerops-app/.skill-app/` (so the template's packages resolve), classifies the migrations,
+  holds `package.json` to the template's dependencies and the file table to `fileTableSql`, and on Postgres migrates
+  them to `src/__tests__/skill-app/catalog.json`, from which the generated schema is rendered (equal to real
+  codegen). Materialized, the application passes the whole loop on main + WU13b: tsc clean, `fabrika-check` 0
+  refusals and 0 hints, 62 tests (generated included), the SPA build. `AWAITING_WU13B` tolerates the member
+  directory's two files until WU13b is on main.
+- **WU10 — what the trial app taught the skill.** An edit endpoint with only optional fields fails its generated
+  cases (the sample sends none, and an empty update is a 500), so the skill's edit takes its fields as required. A
+  webhook's generated `bind` needs a fixture. Share links, `creates` and member management still fail the generated
+  endpoint test (dogfood finding 6): the skill says so under "Not built yet" and asks first.
+- **WU10 — readers.** `@fabrika/app/agent-skill`: `AppAgentSkill` gains `version` and `references` (`{ path, topic,
+  text }`), plus `readAppAgentSkillAt(skillDir)` and `installedAppAgentSkill(appRoot)` (the nearest
+  `node_modules/@fabrika/app/skill`). The builder installs every file from the application's pinned package, else
+  its own (`InjectResult.appSkill: { from: 'application' | 'builder', version }`). `get_app_rules` takes
+  `{ topic?, workspaceId? }`, heads its answer `fabrika-app <version>`, and warns when the workspace's `package.json`
+  range does not admit it. `renderAgentsFile` renders the body and every reference. Outside the listed touch points:
+  `scripts/release.ts` (`stagedSkill`: the packed `SKILL.md` carries the released version, since the source version
+  is not bumped) and `docs/reference/mcp-authoring.md`.
+- **WU10 — dogfood findings 14–16:** `admin` is reserved (`table-and-migration.md`, and a type error since WU13b);
+  `fileTableSql` takes `{ column, type }` for its key and chain, with the command and its output (`files.md`, the
+  test holds the two equal); the seed's limits (text markers break a `CHECK`, use an `ENUM`; a required foreign key
+  outside the chain) in `tests.md`. The name rules are stated as defense in depth with the runtime role as the
+  boundary (WU12 landed), so the skill has no "until WU12".
