@@ -550,6 +550,10 @@ function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, fram
 		containers: context.containers.get(mount.dimension) ?? [],
 		capabilities: context.capabilities,
 		async caller() {
+			// An attempt that timed out or lost its lease asks IAM nothing: its replacement may already have acted.
+			if (frame.ended) {
+				throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it asks IAM for no link`)
+			}
 			const authority = await job.credential.authority()
 			if (!authority.ok) {
 				throw new ServerFault(

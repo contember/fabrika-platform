@@ -3,7 +3,7 @@
 // `ctx.links`. IAM decides each issuance (packages/iam's job-links.test.ts); here IAM is a recording stand-in.
 
 import { compileContract, ContractError, defineApp, schemaFromContract } from '@fabrika/app/contract'
-import { BootError, type ContractImplementation, serve } from '@fabrika/app/implement'
+import { BootError, CapabilityRefusedError, type ContractImplementation, serve } from '@fabrika/app/implement'
 import { parseAccessClaims } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
@@ -11,6 +11,7 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import { z } from 'zod/v4'
+import type { LinkIssuing } from '../implement/membership'
 import { bootApp, environment, frameworkEnvFor, grant, ISSUER, resultOf, send, token, workloadTokensFor } from './fixtures/implement/harness'
 import { RecordingMembership } from './fixtures/multi-tenant/iam'
 import { tables } from './kit-fixture/src/db/tables'
@@ -36,11 +37,16 @@ const shared = app.link('/s', {
 })
 
 /** What the issuing job saw, for the test to read. */
-const seen: { issued: { id: string; url: string } | null; links: boolean | null } = { issued: null, links: null }
+const seen: { issued: { id: string; url: string } | null; links: boolean | null; kept: LinkIssuing<string, string, string> | null } = {
+	issued: null,
+	links: null,
+	kept: null,
+}
 
 const invite = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], scope: 'app', issues: 'shared' }).handle(async ({ ctx }) => {
 	const issued = await ctx.links.issue(await ctx.ref('deals.share', 'deal', DEAL), { mount: 'shared', days: 3 })
 	seen.issued = { id: issued.id, url: issued.url }
+	seen.kept = ctx.links
 	await ctx.links.revoke(issued.id)
 })
 
@@ -162,6 +168,14 @@ describe.skipIf(!hasPostgres)("a job's ctx.links", () => {
 		const claims = parseAccessClaims(decodeJwt(issue.input.credential ?? ''))
 		expect({ ptype: claims?.ptype, workload: claims?.workload }).toEqual({ ptype: 'job', workload: 'invite' })
 		expect(revoke.input).toMatchObject({ id: 'link-1', credential: issue.input.credential, requestId: issue.input.requestId })
+	})
+
+	test('ctx.links kept past its attempt asks IAM nothing', async () => {
+		const iam = new RecordingMembership()
+		expect(await booted(iam).jobs.run('invite', { reporter: noReports })).toEqual({ status: 'succeeded', attempts: 1 })
+		const calls = iam.calls.length
+		await expect(seen.kept?.revoke('link-1') ?? Promise.resolve()).rejects.toBeInstanceOf(CapabilityRefusedError)
+		expect(iam.calls).toHaveLength(calls)
 	})
 
 	test('IAM refusing the issuance fails the attempt, and a job without issues has no ctx.links', async () => {
