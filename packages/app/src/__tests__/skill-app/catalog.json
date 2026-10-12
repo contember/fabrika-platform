@@ -1,0 +1,684 @@
+{
+	"columns": [
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "owner_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "project_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "status",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "object_key",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "size",
+			"type_name": "int8",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "content_type",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "sha256",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "original_name",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "created_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_files_attachments",
+			"column_name": "deleted_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "job",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "generation",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "holder",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "expires_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "attempt_deadline",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "first_seen_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "last_started_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "last_finished_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "last_status",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "last_succeeded_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "last_duration_ms",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "last_missed_reported_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_migrations",
+			"column_name": "bundle",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_migrations",
+			"column_name": "name",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_migrations",
+			"column_name": "checksum",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_migrations",
+			"column_name": "applied_at",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "webhook",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "scope_type",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "scope_value",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "account",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "secret",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_bindings",
+			"column_name": "created_at",
+			"type_name": "int8",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_deliveries",
+			"column_name": "binding_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_deliveries",
+			"column_name": "delivery_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "fabrika_webhook_deliveries",
+			"column_name": "received_at",
+			"type_name": "int8",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "projects",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "projects",
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "projects",
+			"column_name": "name",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "projects",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "projects",
+			"column_name": "version",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "task_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "project_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "body",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "task_comments",
+			"column_name": "created_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "project_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "org_id",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "title",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "status",
+			"type_name": "task_status",
+			"type_type": "e",
+			"type_category": "E",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": [
+				"open",
+				"doing",
+				"done"
+			]
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "assignee",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "due_on",
+			"type_name": "date",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "overdue",
+			"type_name": "bool",
+			"type_type": "b",
+			"type_category": "B",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "tasks",
+			"column_name": "version",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		}
+	],
+	"foreignKeys": [
+		{
+			"table_name": "fabrika_files_attachments",
+			"constraint_name": "fabrika_files_attachments_owner_id_project_id_org_id_fkey",
+			"columns": [
+				"owner_id",
+				"project_id",
+				"org_id"
+			],
+			"referenced_table": "tasks",
+			"referenced_columns": [
+				"id",
+				"project_id",
+				"org_id"
+			]
+		},
+		{
+			"table_name": "fabrika_webhook_deliveries",
+			"constraint_name": "fabrika_webhook_deliveries_binding_id_fkey",
+			"columns": [
+				"binding_id"
+			],
+			"referenced_table": "fabrika_webhook_bindings",
+			"referenced_columns": [
+				"id"
+			]
+		},
+		{
+			"table_name": "task_comments",
+			"constraint_name": "task_comments_task_id_project_id_org_id_fkey",
+			"columns": [
+				"task_id",
+				"project_id",
+				"org_id"
+			],
+			"referenced_table": "tasks",
+			"referenced_columns": [
+				"id",
+				"project_id",
+				"org_id"
+			]
+		},
+		{
+			"table_name": "tasks",
+			"constraint_name": "tasks_project_id_org_id_fkey",
+			"columns": [
+				"project_id",
+				"org_id"
+			],
+			"referenced_table": "projects",
+			"referenced_columns": [
+				"id",
+				"org_id"
+			]
+		}
+	]
+}

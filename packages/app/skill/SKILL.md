@@ -1,166 +1,229 @@
 ---
 name: fabrika-app
+version: 0.0.4
 description: >
-  Rules for writing and changing a Fabrika contract application: fabrika.contract.ts,
-  src/db/tables.ts, db/migrations/, the handlers in src/app.ts, files, jobs,
-  connectors, members, share links, webhooks and the generated tests. Use whenever
-  the repository has a fabrika.contract.ts, or the task adds an endpoint, a table,
-  a migration, a permission or another application's data.
+  How to write and change a Fabrika application: src/vocabulary.ts, db/migrations/, src/db/tables.ts, the
+  slices' endpoints.ts with their handlers, fabrika.contract.ts, jobs, files, webhooks, share links, connectors
+  and the generated tests. Use whenever the repository has a fabrika.contract.ts, or the task adds an endpoint,
+  a table, a migration, an action or a role.
 ---
 
 # Fabrika application rules
 
-An application declares who may call what in `fabrika.contract.ts` and implements it in `src/app.ts`. The proxy
-enforces the contract, the data layer (`@fabrika/db`) enforces the table policies, and the checker (`fabrika-check`)
-refuses the shortcuts around both. Keep all three intact.
+The contract is the whole surface of the application: who may call what. The proxy admits only the calls it allows,
+and the data layer scopes every row to the capability that the endpoint's access form minted. Write on the paved road
+below. When it does not reach far enough, declare the step off it. A declared step is allowed, and the approver sees it.
+
+## The files, in import order
+
+| File                       | Holds                                                                                    |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| `src/vocabulary.ts`        | `defineVocabulary({ app, dimensions, actions, roles })`: written once, typed everywhere  |
+| `db/migrations/*.sql`      | plain SQL, one new file per change (`bunx fabrika db new <slug>`)                        |
+| `src/db/tables.ts`         | `defineTables(vocabulary, columns)({ … })`: the scope and the actions of each table      |
+| `src/app-kit.ts`           | `export const app = defineApp(vocabulary, tables)`                                       |
+| `src/schemas.ts`           | the `zod/v4` inputs and outputs that the shell and the SPA share                         |
+| `src/<slice>/endpoints.ts` | `app.group(…)`, a `.handle(…)` beside each endpoint, and the slice's jobs and webhooks   |
+| `src/<slice>/logic.ts`     | business rules as pure functions: no `ctx`, no data access                               |
+| `src/<slice>/queries.ts`   | data access that the slice's handlers share, over a handle they pass in                  |
+| `fabrika.contract.ts`      | `app.contract((c) => ({ api: c.rpc('/api', { … }), … }))`: mounts the groups             |
+| `src/app.ts`               | `export default serve(contract, { database: scoped(tables) })` and nothing else          |
+| `web/`                     | the SPA: `createClient(contract, 'api')` of `@fabrika/app/client`, never a server module |
+
+## The paved road
+
+```ts src/tasks/endpoints.ts
+import { ConflictError, fromRow } from '@fabrika/app'
+import { app } from '../app-kit'
+import {
+	AssignTask,
+	ById,
+	EditTask,
+	ListTasks,
+	MyTasks,
+	NewTask,
+	Saved,
+	Task,
+	TaskPage,
+	Versioned,
+} from '../schemas'
+import { canClose } from './logic'
+
+export const tasks = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({
+		input: ListTasks,
+		output: TaskPage,
+		access: { action: 'tasks.read', in: 'project', from: 'projectId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const page = await ctx.db.target.tasks.list({
+				where: input.status === undefined ? [] : [['status', '=', input.status]],
+				orderBy: [['title', 'asc']],
+				after: input.after,
+			})
+			return {
+				items: page.items.map((row) => fromRow(Task, row)),
+				next: page.next,
+			}
+		}),
+	mine: r.query({
+		input: MyTasks,
+		output: TaskPage,
+		access: { action: 'tasks.read', over: 'org' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const page = await ctx.db.within.tasks.list({
+				where: [['assignee', '=', ctx.principal.id], ['status', '<>', 'done']],
+				orderBy: [['due_on', 'asc']],
+				after: input.after,
+			})
+			return {
+				items: page.items.map((row) => fromRow(Task, row)),
+				next: page.next,
+			}
+		}),
+	get: r.query({
+		input: ById,
+		output: Task,
+		access: { action: 'tasks.read', on: 'task', from: 'id' },
+	})
+		.handle(async ({ ctx }) => fromRow(Task, await ctx.db.target.get())),
+	create: r.mutation({
+		input: NewTask,
+		output: Saved,
+		access: { action: 'tasks.write', in: 'project', from: 'projectId' },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.target.tasks.insert({
+				title: input.title,
+				due_on: input.dueOn ?? null,
+			})
+		),
+	edit: r.mutation({
+		input: EditTask,
+		output: Saved,
+		access: { action: 'tasks.write', on: 'task', from: 'id' },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.target.update({ title: input.title, due_on: input.dueOn }, {
+				expectVersion: input.expectVersion,
+			})
+		),
+	assign: r.mutation({
+		input: AssignTask,
+		output: Saved,
+		access: { action: 'tasks.assign', on: 'task', from: 'id' },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.target.update({ assignee: input.assignee }, {
+				expectVersion: input.expectVersion,
+			})
+		),
+	start: r.mutation({
+		input: Versioned,
+		output: Saved,
+		access: { action: 'tasks.write', on: 'task', from: 'id' },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.target.update({ status: 'doing' }, {
+				expectVersion: input.expectVersion,
+			})
+		),
+	close: r.mutation({
+		input: Versioned,
+		output: Saved,
+		access: { action: 'tasks.write', on: 'task', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const task = await ctx.db.target.getForUpdate()
+			if (!canClose(task.status)) {
+				throw new ConflictError('only a task in progress closes')
+			}
+			return ctx.db.target.update({ status: 'done' }, {
+				expectVersion: input.expectVersion,
+			})
+		}),
+}))
+```
+
+- The access form gives the handler its data: `on` one object by id (`ctx.db.target` is its row; another scope's is
+  404), `in` a container (`ctx.db.target.<table>.list` and `.insert`), `over` lists across the caller's scopes
+  (`ctx.db.within.<table>`). `ctx.target.value` is the id; there is no `.id`.
+- A row reaches an output through `fromRow(Schema, row)` (snake_case to camelCase), or comes typed from
+  `ctx.sql(Schema)`. Never return a raw row for a camelCase output.
+- A mutation answers `Saved` (`{ id, version }`). `update` takes the columns it changes; `update` and `remove` take
+  `{ expectVersion }`, and a stale version is 409.
+- A precondition reads with `getForUpdate()` and throws `ConflictError`; the rule (`canClose`) is a pure function
+  of `logic.ts`. Throw only `ConflictError`, `NotFoundError` and `BadRequestError` of `@fabrika/app`; anything else
+  is a 500.
+- One action per endpoint. A column that another action writes gets its own write action and its own endpoint
+  (`assign` above). Never check a second action inside a handler: split the endpoint.
+- Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
+  the caller.
+
+## Off the road: declare it
+
+| What the handler needs         | Declare on the endpoint         | It gets                   |
+| ------------------------------ | ------------------------------- | ------------------------- |
+| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)    | `` ctx.sql(Row)`…` ``     |
+| rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>` |
+| another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`    |
+| a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`         |
+| a trigger, function or view    | its migration                   | —                         |
+
+A deviation is fine: declare it, and do not contort the code to avoid it. The approver sees every declaration marked
+"needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only where
+they are declared. A query or an export declares only `'read'`.
+
+## Rules
+
+- Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
+  and connector calls do not.
+- No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
+- Never log an error object, a request, headers or the environment.
+- Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
+  `fabrika/connect/`) or a committed migration. Regenerate the file; write a new migration.
 
 ## Ask the human first
 
-- When a request answers 401 or 403, or a generated test fails, do not change the contract, a table policy or a
-  role to make it pass. Tell the human which action or role the caller lacks.
-- Never loosen a policy to make a test pass.
-- Before you add an anonymous endpoint (`c.link`, `c.form`, `c.webhook`), a CSP origin, an export or an import, a
-  job or a job action, a role grant, or a table policy change, explain to the human in one sentence what it lets
-  someone do, and wait for a yes.
-- Never change a table's scope mode without asking. Data repairs go to the operator, not into a job.
-- When a tool or the platform refuses a file as protected, stop and ask the human. Do not move the change elsewhere.
+- A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
+  human which action or role the caller lacks.
+- Before you add a role, a grant, an action, a declared deviation, an anonymous endpoint (`c.form`, a webhook, a link),
+  an export or an import, a job, or before you drop or rename a column: say in one sentence what it lets someone do,
+  and wait for a yes.
+- A file refused as protected: stop and ask. Do not move the change elsewhere.
 
-## The contract first
+## The loop
 
-- Declare every endpoint in `fabrika.contract.ts`, then implement it. There are no other routes, middleware or
-  servers.
-- Keep the contract a literal: object and array literals, strings, numbers, top-level `const`s declared above their
-  use, and named imports of literal `const`s from relative modules. No spreads, functions or computed values.
-- Schemas: `z` from `zod/v4`. Use `z.strictObject`, never `z.object`. No `transform`, `refine`, `pipe`,
-  `preprocess`, `passthrough`, `lazy` or `custom`. Compose through factories (`z.nullable(Note)`, `z.array(Note)`),
-  never a method call on a schema const.
-- Actions are exact names. A role lists actions; there is no `*`.
-- Pick the access form by what the endpoint addresses:
+Run from the application's root after every change (setup: `references/app-setup.md`):
 
-| Access                                             | Use it for                          | The handler gets                                   |
-| -------------------------------------------------- | ----------------------------------- | -------------------------------------------------- |
-| `{ action, on: 'note', from: 'id' }`               | one object, addressed by id         | `ctx.target`; 404 when missing or not the caller's |
-| `{ action, over: 'workspace' }`                    | a list                              | `ctx.within`                                       |
-| `{ action, in: 'workspace', from: 'workspaceId' }` | creation inside a scope             | `ctx.target` of the scope; 403 when not held       |
-| `{ action, creates: 'organization' }`              | a new top-level scope, made by IAM  | `ctx.created`                                      |
-| `{ member: true }`                                 | any member, for no application data | nothing                                            |
+```bash
+bunx fabrika db new <slug>                                  # a new migration file
+export FABRIKA_APP_ID=tasks FABRIKA_APP_DATABASE_URL="$FABRIKA_TEST_POSTGRES_URL"
+bunx fabrika db migrate && bunx fabrika db codegen          # writes src/db/schema.generated.ts
+bunx fabrika db test-scaffold                               # writes the generated tests; commit them
+bunx tsc --noEmit
+bunx fabrika-check .                                        # refusals fail; hints print below them
+bun test --isolate                                          # needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
+```
 
-- Never use `member: true` for an endpoint that returns application data.
-- Never take a user, owner or tenant id from the input. The scope comes from the access form.
-- Mounts: `c.rpc(prefix, { callers: ['human'] }, procedures)` (or `['machine']`), `c.spa(prefix, { dir, access })`,
-  `c.health('/healthz')` (required on Zerops), `c.link`, `c.form`, `c.webhook`. Sections: `files`, `jobs`,
-  `exports`, `imports`, `csp`. No path under `/__fabrika`.
+`FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still change an
+uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's "allowed form" and
+use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
-## Tables and policies
+## References
 
-- The dimensions, actions and roles live once in `src/vocabulary.ts` (`defineVocabulary({ … })`); the contract is
-  `defineContract(vocabulary, (c) => ({ … }))`.
-- Every table has a policy in `src/db/tables.ts`: `defineTables(vocabulary, columns)({ … })`, with `columns` from
-  the generated `src/db/schema.generated.ts`.
-- A policy names its scope: a dimension table `{ dimension }`, a child table `{ child: '<parent table>' }`, or
-  `{ reference: '<why>' }`. The container comes from the vocabulary. The key defaults to `id`, the container column
-  to `<container>_id` (else `in: { column }`), and a child's column to `<parent dimension>_id`. That column is a
-  foreign key to the key of the container's (or parent's) table. A child carries its parent's scope columns and a
-  composite foreign key to `UNIQUE (<key>, <chain columns>)` of the parent.
-- `actions` maps `read`, `insert`, `update` and `delete` to contract actions. `insert` and `update` list the
-  writable columns. `version` names an INTEGER column, `createdBy` the creator column. A column that needs its own
-  read action goes in `columns: { name: { read } }`.
-- Call `scoped(tables)` once, in `src/db/database.ts`. Define stores with its `defineStore` / `defineChildStore` in
-  `src/db/stores/`. Every store function takes a `Ref` or a `Within`, never a bare id.
-- A mutation answers `{ id, version }`. Read the row with a read capability when you need it.
-
-## Migrations and codegen
-
-- `fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
-- Write plain SQL for the application's own schema. Never name `public`, an `app_…` or a `fabrika…` schema.
-- Write only `CREATE TABLE`, `ALTER TABLE` (columns, constraints, renames), `CREATE [UNIQUE] INDEX`,
-  `ALTER INDEX … RENAME TO`, `CREATE TYPE … AS ENUM`, `ALTER TYPE … ADD VALUE`/`RENAME VALUE`, `DROP`, `TRUNCATE`,
-  `COMMENT ON` and backfill `INSERT`/`UPDATE`/`DELETE`. No function, trigger, view, policy, domain, extension, `DO`,
-  `GRANT`, `SELECT`, `WITH`, `MERGE` or `COPY`, and no schema-qualified name; put that logic in a handler.
-- Defaults, `CHECK`s, generated columns and index expressions may use only reviewed built-ins: `now()`,
-  `gen_random_uuid()`, the text functions (`lower`, `upper`, `length`, the trims), `abs`/`round`/`trunc`/`floor`/
-  `ceil`, `date_trunc`/`date_part`/`extract`/`AT TIME ZONE`, `array_length`, `cardinality`, `to_tsvector`/`to_tsquery`,
-  comparison, arithmetic, `||`, `LIKE`, jsonb `->`/`->>`/`@>`/`<@`/`?|`/`?&`, `COALESCE`/`NULLIF`/`GREATEST`/`LEAST`.
-  Use `GENERATED ALWAYS AS IDENTITY`, never `serial`.
-- Never edit, rename or delete a committed migration. Add a new one. Change a schema by expand, switch, contract;
-  the checker does not refuse a destructive change yet, so ask before you drop or rename anything.
-- `fabrika db migrate` (with `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL`), then `fabrika db codegen`, which
-  writes `src/db/schema.generated.ts`. Commit it. The platform runs `fabrika db codegen --verify` at start.
-- Codegen types `int8` and `numeric` as strings and refuses JSON, `bytea`, arrays and domains.
-
-## Handlers
-
-- `export default implement(contract, { database, deps, handlers })` in `src/app.ts`. `handlers` is a function of
-  what `deps` returned. Never read `process.env`.
-- Return only what the output schema declares. Throw `BadRequestError`, `NotFoundError` or `ConflictError` of
-  `@fabrika/app` for a client error. Every other error is a 500 with a fixed message.
-- Never log an error object, a request, headers or the environment.
-
-## Files, jobs, connectors, members, links, forms and webhooks
-
-- **Files:** to attach files, declare a collection on the owner table, which must have a dimension scope:
-  `files: { photos: c.files({ owner: '<table>', read, write, delete, maxBytes, types }) }`. Create its table
-  `fabrika_files_<name>` in a migration, with the DDL that `fileTableSql(name, { table, key, chain })` of
-  `@fabrika/db` returns. Never return or build a storage URL; downloads go through the application. On Zerops,
-  declare one `object-storage` service in `fabrika.config.ts`; the platform writes `FABRIKA_APP_STORAGE_*` from it.
-- **Jobs:** background work is a job in the contract: `jobs: { purge: c.cron('0 3 * * *', { actions, scope: 'app' }) }`
-  and `handlers.jobs.purge`. Use `ctx.within(action, dimension)` and `ctx.ref(action, dimension, id)`. No
-  `setInterval`, self-scheduled timers or loops. A failed attempt is retried, so make each write idempotent. The
-  platform gives each job and webhook its own key; never read, set or copy `FABRIKA_JOB_*` or `FABRIKA_WEBHOOK_*`.
-- **Connectors:** to use another application's data, import its export. If the export does not exist, ask the
-  owner application's maintainer. Run `fabrika connect add <app>/<export>@<version> --consumer=<this app> --env=<env>`,
-  then add `imports` to the contract and `connect` to `implement`. `ctx.connect.<import>.<procedure>()` answers an
-  outcome; handle every outcome besides `ok`. Exports are read-only. Never import per-user data. The platform writes
-  each import's `FABRIKA_CONNECT_*`; never read, set or copy them. A deploy fails when the snapshot is not what the
-  owner serves (run `fabrika connect pull`); as an owner, change an export only by adding to it, or by a new version.
-- **Members:** a dimension with `members: { manage, list }` gives `ctx.members` to an endpoint whose action is that
-  `manage` action. A dimension with a `creator` role can be the target of `creates`.
-- **Share links:** `c.link(prefix, { spa, dimension, grants, issuedBy, maxDays, procedures })`. An endpoint whose
-  action is `issuedBy` gets `ctx.links.issue(ref, { mount, days })`. The share SPA reads the key with `shareKey()`
-  of `@fabrika/app/client`; never read `location.hash`.
-- **Forms:** `c.form(path, { input, appendTo })` appends one row to its inbox table. It has no handler.
-- **Webhooks:** `c.webhook(path, { scheme: 'github-sha256', boundTo, actions, input })`. A handler runs at least once
-  per delivery: a failed run runs again on GitHub's redelivery, after its writes committed. Make each write
-  idempotent, keyed on `ctx.delivery.key`.
-
-## Tests
-
-- After every change to the contract or `src/db/tables.ts`, run `fabrika db test-scaffold` and commit what it
-  writes: `src/db/__tests__/<table>.policy-isolation.test.ts` and `src/__tests__/endpoint-access.test.ts`.
-- When the scaffold cannot sample an endpoint's input, add a plain literal under the endpoint id in
-  `src/__tests__/endpoint-access.fixtures.ts`.
-- The platform runs `fabrika db test-isolation` at container start. The application is not ready until every
-  generated case passes.
-- Test your own endpoints with `testKit` of `@fabrika/app/testing`: `kit.testCaller(grants)` and
-  `createClient(contract, 'api', { fetch: kit.browser(caller) })`. Test the denied caller too. Import the kit only
-  from test files. A database test beside the generated endpoint test needs `bun test --isolate`.
-- Database tests need `FABRIKA_TEST_POSTGRES_URL`; without it they skip, and a skip proves nothing.
-
-## What the checker refuses
-
-`fabrika-check` prints each finding with its allowed form. Use that form; there is no suppression. It refuses: a
-contract or `src/db/tables.ts` that is not a literal; database drivers, S3 clients, `jose`, `node:http`/`net`/`tls`,
-`child_process`; `Bun.sql`, `Bun.serve`, `Bun.spawn`; raw SQL; `as` casts other than `as const`; `any`;
-`@ts-ignore`, `@ts-expect-error`, `biome-ignore`, `eslint-disable`; `Ref` or `Within` widened with `string`;
-prototype writes; writes to a member of a `@fabrika/*` or `zod` value; `import()` or `require()` of a computed
-specifier, `import.meta.resolve`, `node:module` and `process.getBuiltinModule`; `process.env` and `Bun.env`; `import.meta.env` other than `FABRIKA_PUBLIC_*`; `fetch` of a
-fixed absolute URL; a `px_` key in a string; client-supplied identity fields; logging errors, requests or headers;
-`innerHTML` and `dangerouslySetInnerHTML`; `eval` and `new Function`; misnamed migrations; `.skip`, `.only` and
-tests without an assertion; edited, missing or stale generated tests; `mock.module` of `bun:test` or `@fabrika/*`;
-missing endpoint fixtures; test kits and `boot` imported outside test files; replaced `@fabrika/*` or `zod` packages.
-
-## Never edit generated files
-
-`fabrika/entry.generated.ts`, `src/db/schema.generated.ts`, the generated tests, and the snapshots under
-`fabrika/connect/`. Regenerate them with their command. On Zerops, write only `build.base`, `build.os` and the SPA's
-`build.buildCommands` in `zerops.yaml`; the platform generates the rest, the crontab included.
+Read the one you need before you write that part. Together they are one application to copy from:
+`app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
+`endpoint.md` (access forms, handles, lists, `fromRow`, `ctx.sql`, members), `tests.md` (generated tests, seeds,
+`testKit`), `errors.md` (checker findings, type errors, runtime answers), `jobs.md`, `files.md` and
+`webhooks-links-connectors.md`, all under `references/`.
 
 ## Not built yet
 
-- The data layer runs on Bun with Postgres only, so on Cloudflare a contract application has no `@fabrika/db`:
-  files, forms, webhooks and jobs do not boot there. The Cloudflare build does not run `fabrika-check` yet; run it
-  yourself.
-- Not supported: a job scoped to a dimension, a file collection with `link: true`, a webhook bound to `app`, a store
-  for `reference` tables, reading a form's inbox, and a generated test for `move`.
-- An MCP workspace has no shell, so `fabrika db codegen` and `fabrika db test-scaffold` cannot run there, and a
-  change to the contract or the tables needs them. Tell the human; never write a generated file by hand.
+- The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
+- An application with share links, `creates` or member management fails its generated endpoint tests: the test kit
+  has no IAM stand-in yet. Ask the human before you add one.
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
+- An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
+  generated file by hand.
