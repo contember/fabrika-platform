@@ -1,7 +1,9 @@
 # references/app-setup.md — the repository of an application
 
 An application is the root of its own repository: Zerops reads `zerops.yaml` there. In the fabrika-platform
-repository an example is a workspace under `examples/<name>/`, laid out the same way.
+repository an example is a workspace under `examples/<name>/`, laid out the same way. This file shows an application
+with tables and an SPA; a new one starts without either (`references/start.md`), and each part below that belongs to
+the SPA is added with it.
 
 ## Packages and compiler
 
@@ -38,6 +40,8 @@ repository an example is a workspace under `examples/<name>/`, laid out the same
 - The name is not under `@fabrika/*` (that scope is the platform's), and every `@fabrika/*` version is a registry
   range, never `workspace:*`. The checker refuses both (`package-replacement`). Inside the fabrika-platform repository
   Bun still links the workspace copies.
+- `build:web` builds the SPA: add it, `build-web.ts`, `web/`, the contract's `site` mount and the `bun run build:web`
+  line of `zerops.yaml` when the application gets an SPA, and not before.
 - `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
   the DSN and release the framework serves at `<prefix>/__fabrika-config.json`.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
@@ -173,6 +177,7 @@ export default defineApp({
 
 ```yaml
 # zerops.yaml: write only build.base, build.os and the SPA's buildCommands; the platform generates the rest.
+# Without an SPA, the build holds only base: the platform installs the packages itself.
 zerops:
   - setup: tasksapi
     build:
@@ -186,7 +191,7 @@ The platform's build runs the tests, writes the entrypoint, runs `fabrika-check`
 runs `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server: the
 application is not ready until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
 
-## The SPA
+## The SPA (added when the application has one)
 
 ```ts web/main.ts
 import { createClient, RpcError } from '@fabrika/app/client'

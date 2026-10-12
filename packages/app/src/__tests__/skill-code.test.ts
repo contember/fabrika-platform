@@ -26,10 +26,14 @@ const appRoot = join(templateDir, '.skill-app')
 
 /** The files whose blocks are the one application; every other reference file is a variant of it, or standalone. */
 const BASE = ['SKILL.md', 'references/app-setup.md', 'references/table-and-migration.md', 'references/endpoint.md', 'references/tests.md']
-/** A reference file that is an application of its own, by the directory of `skill-app/` that holds its catalog. */
-const STANDALONE: Readonly<Record<string, string>> = { 'references/public-intake.md': 'public-intake' }
-/** The base's files a standalone application uses as they are. */
-const SHARED = ['package.json', 'tsconfig.json', 'src/app-kit.ts']
+/**
+ * A reference file that is an application of its own: the directory of `skill-app/` that holds its catalog (`null` for
+ * one without tables), and the base's files it uses as they are.
+ */
+const STANDALONE: Readonly<Record<string, { readonly catalog: string | null; readonly shared: readonly string[] }>> = {
+	'references/public-intake.md': { catalog: 'public-intake', shared: ['package.json', 'tsconfig.json', 'src/app-kit.ts'] },
+	'references/start.md': { catalog: null, shared: ['package.json', 'tsconfig.json'] },
+}
 
 interface Block {
 	readonly file: string
@@ -78,7 +82,9 @@ interface SkillApp {
 	readonly name: string
 	readonly sources: readonly string[]
 	readonly schema: string
-	readonly catalog: Catalog
+	/** `null` for an application without tables: no migration and no generated schema. */
+	readonly catalog: Catalog | null
+	readonly shared: readonly string[]
 	readonly vendored: ReadonlyMap<string, string>
 }
 
@@ -90,15 +96,17 @@ const apps: readonly SkillApp[] = [
 		sources: variants,
 		schema: 'app_tasks',
 		catalog: catalogOf(fixtureDir),
+		shared: [],
 		vendored: new Map([
 			['fabrika/connect/catalog.products.v1.ts', readFileSync(join(fixtureDir, 'fabrika', 'connect', 'catalog.products.v1.ts'), 'utf-8')],
 		]),
 	},
-	...Object.entries(STANDALONE).map(([path, directory]) => ({
+	...Object.entries(STANDALONE).map(([path, { catalog, shared }]) => ({
 		name: path,
 		sources: [path],
-		schema: `app_${directory.replaceAll('-', '_')}`,
-		catalog: catalogOf(join(fixtureDir, directory)),
+		schema: `app_${(catalog ?? 'tableless').replaceAll('-', '_')}`,
+		catalog: catalog === null ? null : catalogOf(join(fixtureDir, catalog)),
+		shared,
 		vendored: new Map<string, string>(),
 	})),
 ]
@@ -109,7 +117,9 @@ const migrationsOf = (app: SkillApp): Block[] =>
 
 /** The generated files of an application: what codegen and `fabrika connect` would write. */
 function generatedFiles(app: SkillApp): Map<string, string> {
-	return new Map([['src/db/schema.generated.ts', renderSchema(app.catalog.columns, app.catalog.foreignKeys)], ...app.vendored])
+	const generated = new Map(app.vendored)
+	if (app.catalog !== null) generated.set('src/db/schema.generated.ts', renderSchema(app.catalog.columns, app.catalog.foreignKeys))
+	return generated
 }
 
 function filesOf(sourcePaths: readonly string[]): Map<string, string> {
@@ -189,7 +199,7 @@ describe('the code blocks of the agent skill', () => {
 
 	for (const app of others) {
 		test(`${app.name} compiles clean as an application of its own`, () => {
-			const shared = [...base].filter(([path]) => SHARED.includes(path))
+			const shared = [...base].filter(([path]) => app.shared.includes(path))
 			expect(compile(app, new Map([...shared, ...filesOf(app.sources)]))).toEqual([])
 		}, 120_000)
 	}
@@ -202,7 +212,13 @@ describe('the code blocks of the agent skill', () => {
 		expect(shown.devDependencies).toEqual(template.devDependencies)
 	})
 
-	for (const app of apps) {
+	for (const app of apps.filter((app) => app.catalog === null)) {
+		test(`${app.name}: an application without tables shows no migration`, () => {
+			expect(migrationsOf(app).map((block) => block.path)).toEqual([])
+		})
+	}
+
+	for (const [app, expected] of apps.flatMap((app) => (app.catalog === null ? [] : [[app, app.catalog] as const]))) {
 		test(`${app.name}: the migrations are named as the checker requires and the runner refuses none of them`, () => {
 			const migrations = migrationsOf(app)
 			expect(migrations.length).toBeGreaterThan(0)
@@ -223,7 +239,7 @@ describe('the code blocks of the agent skill', () => {
 			try {
 				const classified = classifyMigrations(migrations.map((block) => ({ name: block.path ?? '', sql: block.code })), postgres.schema)
 				const catalog = await introspectCatalog(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '', postgres.schema, classified.objects)
-				expect(catalog).toEqual(app.catalog)
+				expect(catalog).toEqual(expected)
 			} finally {
 				await postgres.close()
 				rmSync(directory, { recursive: true })

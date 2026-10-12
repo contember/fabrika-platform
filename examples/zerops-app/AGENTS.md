@@ -228,8 +228,10 @@ Read the one you need before you write that part. Together they are one applicat
 `app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
 `endpoint.md` (access forms, which `over`, the caller's scopes, handles, lists, `fromRow`, `ctx.sql`, audited CSV
 downloads, members), `tests.md` (generated tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime
-answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. `public-intake.md` is an application of its own: a public page,
-a form, a job that issues links and e-mails them, a link holder's files, HR's review with its history.
+answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of
+their own: `start.md`, a new application before its first table (its first test, adding the first table, installing
+and updating this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a
+link holder's files, HR's review with its history.
 
 ## Not built yet
 
@@ -246,7 +248,9 @@ a form, a job that issues links and e-mails them, a link holder's files, HR's re
 # references/app-setup.md — the repository of an application
 
 An application is the root of its own repository: Zerops reads `zerops.yaml` there. In the fabrika-platform
-repository an example is a workspace under `examples/<name>/`, laid out the same way.
+repository an example is a workspace under `examples/<name>/`, laid out the same way. This file shows an application
+with tables and an SPA; a new one starts without either (`references/start.md`), and each part below that belongs to
+the SPA is added with it.
 
 ## Packages and compiler
 
@@ -283,6 +287,8 @@ repository an example is a workspace under `examples/<name>/`, laid out the same
 - The name is not under `@fabrika/*` (that scope is the platform's), and every `@fabrika/*` version is a registry
   range, never `workspace:*`. The checker refuses both (`package-replacement`). Inside the fabrika-platform repository
   Bun still links the workspace copies.
+- `build:web` builds the SPA: add it, `build-web.ts`, `web/`, the contract's `site` mount and the `bun run build:web`
+  line of `zerops.yaml` when the application gets an SPA, and not before.
 - `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
   the DSN and release the framework serves at `<prefix>/__fabrika-config.json`.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
@@ -418,6 +424,7 @@ export default defineApp({
 
 ```yaml
 # zerops.yaml: write only build.base, build.os and the SPA's buildCommands; the platform generates the rest.
+# Without an SPA, the build holds only base: the platform installs the packages itself.
 zerops:
   - setup: tasksapi
     build:
@@ -431,7 +438,7 @@ The platform's build runs the tests, writes the entrypoint, runs `fabrika-check`
 runs `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server: the
 application is not ready until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
 
-## The SPA
+## The SPA (added when the application has one)
 
 ```ts web/main.ts
 import { createClient, RpcError } from '@fabrika/app/client'
@@ -2069,6 +2076,187 @@ export const fixtures = {
   link.
 - A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
   submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
+
+---
+
+# references/start.md — a new application, before its first table
+
+A new application starts without tables: a vocabulary, a contract, one endpoint and its first test. It needs no
+database, no migration and no generated schema until it stores something. This file is an application of its own; its
+`package.json` and `tsconfig.json` are those of `app-setup.md`, without the `build:web` script until it has an SPA.
+
+## The files
+
+```ts src/vocabulary.ts
+import { defineVocabulary } from '@fabrika/app/contract'
+
+export const vocabulary = defineVocabulary({
+	app: 'tasks',
+	dimensions: {
+		org: { members: { manage: 'members.manage', list: 'tasks.read' } },
+	},
+	actions: {
+		'tasks.read': 'Read the tasks of an org',
+		'members.manage': 'Invite and remove members',
+	},
+	roles: {
+		owner: {
+			grants: ['tasks.read', 'members.manage'],
+			member: { scope: 'org', assignableBy: ['owner'] },
+		},
+	},
+})
+```
+
+```ts src/app-kit.ts
+import { defineApp } from '@fabrika/app/contract'
+import { vocabulary } from './vocabulary'
+
+export const app = defineApp(vocabulary)
+```
+
+```ts src/orgs/endpoints.ts
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const MyOrgs = z.strictObject({ all: z.boolean(), orgs: z.array(z.string()) })
+
+export const orgs = app.group({ callers: ['human'] }, (r) => ({
+	mine: r.query({
+		output: MyOrgs,
+		access: { action: 'tasks.read', over: 'org' },
+	})
+		.handle(({ ctx }) =>
+			ctx.within.values === 'all'
+				? { all: true, orgs: [] }
+				: { all: false, orgs: [...ctx.within.values].sort() }
+		),
+}))
+```
+
+```ts fabrika.contract.ts
+import { app } from './src/app-kit'
+import { orgs } from './src/orgs/endpoints'
+
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { orgs }),
+	health: c.health('/healthz'),
+}))
+```
+
+```ts src/app.ts
+import { serve } from '@fabrika/app/implement'
+import { contract } from '../fabrika.contract'
+
+export default serve(contract, { database: null })
+```
+
+- `defineApp(vocabulary)` declares no tables, so `serve` takes `database: null`, and only then. A handler has no
+  `ctx.db`, `ctx.sql` or `unscoped` (a type error that names `defineApp(vocabulary, tables)`); it answers from the
+  caller's grants (`ctx.within.values`, `ctx.principal`), the member directory, or a connector.
+- Forms, jobs and file collections keep their rows in tables, so an application gets them with its first table.
+
+```ts fabrika.config.ts
+import { compileContract, schemaFromContract } from '@fabrika/app/contract'
+import { defineApp, type ZeropsServiceSpec } from '@fabrika/provider-zerops'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { contract } from './fabrika.contract'
+
+const compiled = compileContract(contract, {})
+
+const services = (): ZeropsServiceSpec[] => [
+	{
+		hostname: 'tasksapi',
+		type: 'alpine/bun@1.3',
+		priority: 10,
+		enableSubdomainAccess: false,
+		minContainers: 1,
+		maxContainers: 2,
+	},
+]
+
+export default defineApp({
+	id: contract.vocabulary.app,
+	schema: schemaFromContract(compiled),
+	target: {
+		platform: 'zerops',
+		services,
+		contract: compiled,
+		proxy: { upstream: 'tasksapi:3000', ...contractProxyTable(compiled) },
+		deployService: 'tasksapi',
+		zeropsSetup: 'tasksapi',
+	},
+})
+```
+
+Without a PostgreSQL service the platform runs no `fabrika db migrate`, no codegen check and no generated test at
+start. `zerops.yaml` holds only `build.base` until the application has an SPA to build.
+
+## The first test
+
+`bunx fabrika db test-scaffold` writes nothing for this application and says so: the generated tests start with the
+first table (its policy test, then the endpoint access test over its rows). `bun test` fails on an application with no test file, and the platform's
+build runs it, so write the first test yourself:
+
+```ts src/__tests__/orgs.test.ts
+import { createClient } from '@fabrika/app/client'
+import { testKit } from '@fabrika/app/testing'
+import { describe, expect, test } from 'bun:test'
+import { contract } from '../../fabrika.contract'
+import app from '../app'
+
+const kit = testKit(app)
+
+describe('a new application', () => {
+	test('answers its health check', async () => {
+		expect((await kit.fetch('/healthz')).status).toBe(200)
+	})
+
+	test('lists the orgs a member works in, and refuses a caller of none', async () => {
+		const owner = kit.testCaller([
+			{ role: 'owner', scope: { type: 'org', value: 'acme' } },
+		])
+		const api = createClient(contract, 'api', { fetch: kit.browser(owner) })
+		expect(await api.orgs.mine()).toEqual({ all: false, orgs: ['acme'] })
+		const stranger = kit.browser(kit.testCaller([]))
+		const refused = await stranger('/api/orgs.mine', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}',
+		})
+		expect(refused.status).toBe(403)
+	})
+})
+```
+
+The loop of `SKILL.md` without its database lines: `bunx tsc --noEmit`, `bunx fabrika-check .`, `bun test --isolate`.
+
+## The first table
+
+When the application first stores something, in this order:
+
+1. Add the PostgreSQL service to `fabrika.config.ts` (`app-setup.md`). The platform then migrates at every start.
+2. `bunx fabrika db new <slug>` and the table's SQL (`table-and-migration.md`), then `bunx fabrika db migrate` and
+   `bunx fabrika db codegen`, which writes `src/db/schema.generated.ts`.
+3. `src/db/tables.ts` with the table's policy, over the generated `columns`.
+4. `defineApp(vocabulary, tables)` in `src/app-kit.ts`, `serve(contract, { database: scoped(tables) })` in
+   `src/app.ts`, and `compileContract(contract, tables)` in `fabrika.config.ts`.
+5. `bunx fabrika db test-scaffold`: it now writes the generated tests. Commit them.
+
+## The skill itself
+
+These rules ship in `@fabrika/app` (`node_modules/@fabrika/app/skill/`), at the version the application installed:
+read them there, or install them where an agent looks for skills.
+
+- `bunx fabrika builder init --profile zerops-app --no-daemon --no-open --agent=claude` (or `codex`, or `all`)
+  writes them under `.claude/skills/fabrika-app/` (`.agents/skills/fabrika-app/` for Codex) from the application's own
+  `@fabrika/app`, beside the builder's `fabrika` skill. It also creates the builder's `.fabrika/` and an empty
+  `tests/`. Run `bun install` first, or it installs the builder's copy and says so.
+- After you update `@fabrika/app`, run it again: it replaces the files it installed and keeps a file you edited.
+- An agent that reads `AGENTS.md` gets the same text, rendered by `renderAgentsFile` of `@fabrika/app/agent-skill`:
+  `bun -e "import { installedAppAgentSkill, renderAgentsFile } from '@fabrika/app/agent-skill'; const skill =
+  installedAppAgentSkill('.'); if (skill) await Bun.write('AGENTS.md', renderAgentsFile(skill))"`. Regenerate it
+  after each update; never edit it.
 
 ---
 

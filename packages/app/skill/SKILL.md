@@ -236,8 +236,10 @@ Read the one you need before you write that part. Together they are one applicat
 `app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
 `endpoint.md` (access forms, which `over`, the caller's scopes, handles, lists, `fromRow`, `ctx.sql`, audited CSV
 downloads, members), `tests.md` (generated tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime
-answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. `public-intake.md` is an application of its own: a public page,
-a form, a job that issues links and e-mails them, a link holder's files, HR's review with its history.
+answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of
+their own: `start.md`, a new application before its first table (its first test, adding the first table, installing
+and updating this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a
+link holder's files, HR's review with its history.
 
 ## Not built yet
 
