@@ -1,3 +1,4 @@
+import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
 export const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
@@ -30,3 +31,5 @@ export const DealRecord = z.strictObject({
 	created_by: z.string(),
 	version: z.int(),
 })
+export const DealExportRow = z.strictObject({ title: z.string(), stage: Stage, margin: z.nullable(z.number()) })
+export const DealExport = attachment({ format: 'csv', filename: 'deals.csv', row: DealExportRow, maxBytes: 1_000_000 })

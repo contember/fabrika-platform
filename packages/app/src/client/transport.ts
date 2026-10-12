@@ -78,32 +78,55 @@ function normalizeError(
 	return { type: 'error', message: `HTTP ${httpStatus}`, httpStatus }
 }
 
+/** Sends one request; a network failure, or an input `init` cannot serialize, is an `RpcError`. */
+async function send(doFetch: RpcFetch, url: string, init: () => RequestInit): Promise<Response> {
+	try {
+		return await doFetch(url, init())
+	} catch {
+		throw new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 })
+	}
+}
+
+/** The `{ error }` envelope as an `RpcError`, or a sign-in redirect that never settles. */
+function refused(raw: unknown, response: Response, bounce: BounceConfig | null): Promise<never> {
+	const normalized = normalizeError(raw, response.status)
+	if (bounce && normalized.type === 'auth' && normalized.loginUrl !== undefined && bounceToLogin(normalized.loginUrl, bounce)) {
+		// Navigation is in flight — never resolve, so the caller (a route loader) stays pending.
+		return new Promise<never>(() => {})
+	}
+	throw new RpcError(normalized)
+}
+
+async function envelope(response: Response): Promise<{ result?: unknown; error?: unknown }> {
+	try {
+		return await response.json()
+	} catch {
+		// Non-JSON response (proxy error, HTML error page, etc.) — surface the HTTP status.
+		throw new RpcError({ type: 'transport', message: `${response.status} ${response.statusText}`, httpStatus: response.status })
+	}
+}
+
 /**
  * Sends one request and answers the envelope's `result`; every failure is an `RpcError`. `init` builds the request
  * inside the guard, so an input that does not serialize rejects like a failed request instead of throwing.
  */
 export async function exchange(doFetch: RpcFetch, url: string, init: () => RequestInit, bounce: BounceConfig | null): Promise<unknown> {
-	let response: Response
-	try {
-		response = await doFetch(url, init())
-	} catch {
-		throw new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 })
-	}
-	let data: { result?: unknown; error?: unknown }
-	try {
-		data = await response.json()
-	} catch {
-		// Non-JSON response (proxy error, HTML error page, etc.) — surface the HTTP status.
-		throw new RpcError({ type: 'transport', message: `${response.status} ${response.statusText}`, httpStatus: response.status })
-	}
+	const response = await send(doFetch, url, init)
+	const data = await envelope(response)
 	if (data.error !== undefined) {
-		const normalized = normalizeError(data.error, response.status)
-		if (bounce && normalized.type === 'auth' && normalized.loginUrl !== undefined && bounceToLogin(normalized.loginUrl, bounce)) {
-			// Navigation is in flight — never resolve, so the caller (a route loader) stays pending.
-			return new Promise<never>(() => {})
-		}
-		throw new RpcError(normalized)
+		return await refused(data.error, response, bounce)
 	}
 	clearBounce(bounce)
 	return data.result
+}
+
+/** Sends one request whose success is a file and answers its bytes; a failure is read from its `{ error }` envelope. */
+export async function exchangeFile(doFetch: RpcFetch, url: string, init: () => RequestInit, bounce: BounceConfig | null): Promise<Blob> {
+	const response = await send(doFetch, url, init)
+	if (!response.ok) {
+		const data = await envelope(response)
+		return await refused(data.error ?? `HTTP ${response.status}`, response, bounce)
+	}
+	clearBounce(bounce)
+	return await response.blob()
 }

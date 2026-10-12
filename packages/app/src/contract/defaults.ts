@@ -48,6 +48,20 @@ export const FILE_LIMITS = {
 	listPageMax: 100,
 } as const
 
+/**
+ * The bounds of an `attachment()` output. `maxBytes` and `maxRows` are each attachment's own, at most these; a cell holds
+ * at most `maxCellLength` UTF-16 code units, the most a spreadsheet cell keeps.
+ */
+export const ATTACHMENT_LIMITS = {
+	maxBytes: 16 * 1024 * 1024,
+	maxRows: 100_000,
+	defaultMaxRows: 10_000,
+	maxCellLength: 32_767,
+} as const
+
+/** The one type an attachment answers with. */
+export const CSV_CONTENT_TYPE = 'text/csv; charset=utf-8'
+
 /** Export procedures are served here, one path per procedure, and each export's description at its own path. */
 export { CONNECT_PREFIX } from '@fabrika/auth-core'
 

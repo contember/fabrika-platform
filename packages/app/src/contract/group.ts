@@ -7,6 +7,7 @@ import type { Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db
 import type { z } from 'zod/v4'
 import type { Snake } from '../from-row'
 import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
+import type { AttachmentBrand } from './attachment'
 import type { CheckedAccess, Declared, EndpointContext, ExportContext, ImportOf, KitTypes, LinkContext, SqlMode } from './context'
 import type { ProcedureType } from './declaration'
 import type { InputOf, InputSchema, LinkAccess, MemberAccess, MutationAccess, NotLoose, Procedure, QueryAccess, Schema } from './define'
@@ -93,9 +94,11 @@ type RowShaped<V> = V extends readonly (infer Item)[] ? readonly RowShaped<Item>
 
 /**
  * What a kit handler `F` may return: the output, or — only when `F` returns one — a database row of it, which
- * `ExactReturn` refuses with the fix. Any other mistake keeps the compiler's own message about the output.
+ * `ExactReturn` refuses with the fix, as it refuses anything but rows from an attachment's handler. Any other mistake
+ * keeps the compiler's own message about the output.
  */
 export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [z.input<O>] ? z.input<O>
+	: [O] extends [AttachmentBrand] ? unknown
 	: [Returned<F>] extends [RowShaped<z.input<O>>] ? RowShaped<z.input<O>>
 	: z.input<O>
 
@@ -104,12 +107,13 @@ export type KitHandler<In, Ctx, R> = (args: { readonly input: In; readonly ctx: 
 
 /**
  * What `.handle` answers: the endpoint, or a message the group refuses at the endpoint's line — when the handler
- * returns a database row where the output is camelCase, or, at any depth, a field the output does not declare. A
- * field whose type is an error elsewhere in the handler is not reported again here.
+ * returns a database row where the output is camelCase, anything but rows for an attachment, or, at any depth, a
+ * field the output does not declare. A field whose type is an error elsewhere in the handler is not reported again here.
  */
 export type ExactReturn<F, O extends Schema, E> = [Returned<F>] extends [z.input<O>] ? [UndeclaredFields<F, O>] extends [never] ? E
 	: IsAny<UndeclaredFields<F, O>> extends true ? E
 	: Unavailable<`the handler returns ${ListOf<UndeclaredFields<F, O> & string>}, which the output does not declare: return only declared fields`>
+	: [O] extends [AttachmentBrand] ? Unavailable<'an attachment handler returns its rows: an array of its row schema, with nothing around it'>
 	: Unavailable<
 		`the handler returns a database row (${ListOf<
 			UndeclaredFields<F, O> & string

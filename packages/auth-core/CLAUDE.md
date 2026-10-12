@@ -110,10 +110,10 @@ bun test               # app-environment · canonical-path · contract-canonical
   whose order carries no meaning — `endpoints` by id, `reservedPrefixes`, role `grants` and `assignableBy`, RPC
   and endpoint `callers`, link `grants`, webhook and job `actions`, export `consumers`, import `procedures` and
   `usedBy`, a declared site's `connect`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
-  `inherit`, enum `values` — by code unit. Only two arrays are ordered, because the order changes what a schema
-  admits: tuple `items` and union `options`. `canonicalArtifactJson` also sorts object keys; it is the only
+  `inherit`, enum `values` — by code unit. Three arrays are ordered: tuple `items` and union `options`, because the
+  order changes what a schema admits, and an attachment's `columns`, because it is the file's column order. `canonicalArtifactJson` also sorts object keys; it is the only
   serialization a digest of an artifact may be taken over. A new array field is unordered unless it is added to
-  that list of two.
+  that list.
 - **The endpoint matcher selects; it does not decide.** `planEndpoint` refuses a non-canonical
   raw path, then selects the most specific endpoint of the request's method: per segment, left to
   right, a literal beats a parameter and a parameter beats a terminal `*`. Under a reserved prefix

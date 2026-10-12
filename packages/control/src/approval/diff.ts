@@ -3,6 +3,7 @@
 // access widens it.
 
 import {
+	type AttachmentShape,
 	canonicalizeArtifact,
 	canonicalJson,
 	type ColumnPolicyArtifact,
@@ -13,8 +14,10 @@ import {
 	endpointMembers,
 	type EndpointRow,
 	type FileCollectionArtifact,
+	isAttachmentShape,
 	JOB_SITE_PREFIX,
 	type NumberShape,
+	type OutputShape,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
@@ -322,7 +325,7 @@ export function snapshotDeviations(snapshot: AccessSnapshot): string[] {
 
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): void {
 	compareKeyed(changes, endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
-		added: (id, row) => `New endpoint \`${id}\` (${row.method} ${row.path}) ${audience(row)}`,
+		added: (id, row) => `New endpoint \`${id}\` (${row.method} ${row.path}) ${audience(row)}${answersFile(row)}`,
 		removed: () => [],
 		changed: endpointChanges,
 	})
@@ -355,7 +358,46 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): Access
 		...valueChange(`${name} requirement`, from.requirement, to.requirement),
 		...admissionChanges(name, from, to),
 		...schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input),
-		...schemaChanges({ endpoint: name, side: 'output', path: '' }, from.output, to.output),
+		...outputChanges(name, from.output, to.output),
+	]
+}
+
+/** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
+function answersFile(row: EndpointRow): string {
+	return row.output !== null && isAttachmentShape(row.output)
+		? `, answering the ${row.output.format.toUpperCase()} file \`${row.output.filename}\``
+		: ''
+}
+
+/**
+ * An output: two schemas compare as schemas; two attachments by their limits and columns; a change between a JSON
+ * answer and a file widens. A file's name and its column order grant nothing, so they narrow at most.
+ */
+function outputChanges(name: string, from: OutputShape | null, to: OutputShape | null): AccessChange[] {
+	if (from !== null && isAttachmentShape(from) && to !== null && isAttachmentShape(to)) {
+		return attachmentChanges(name, from, to)
+	}
+	if ((from === null || !isAttachmentShape(from)) && (to === null || !isAttachmentShape(to))) {
+		return schemaChanges({ endpoint: name, side: 'output', path: '' }, from, to)
+	}
+	return [widening(`${name} output changes from ${outputKind(from)} to ${outputKind(to)}`)]
+}
+
+function outputKind(shape: OutputShape | null): string {
+	if (shape === null) return 'none'
+	return isAttachmentShape(shape) ? `the ${shape.format.toUpperCase()} file \`${shape.filename}\`` : 'JSON'
+}
+
+function attachmentChanges(name: string, from: AttachmentShape, to: AttachmentShape): AccessChange[] {
+	const file = `${name} file`
+	const renamed = from.filename === to.filename ? [] : [removal(`${file} name changes from \`${from.filename}\` to \`${to.filename}\``)]
+	const columns = (shape: AttachmentShape) => Object.fromEntries(shape.columns.map((column) => [column.name, column.shape]))
+	return [
+		...valueChange(`${file} format`, from.format, to.format),
+		...renamed,
+		...limitChange(`${file} size limit`, from.maxBytes, to.maxBytes),
+		...limitChange(`${file} row limit`, from.maxRows, to.maxRows),
+		...fieldChanges({ endpoint: name, side: 'output', path: '' }, columns(from), columns(to)),
 	]
 }
 

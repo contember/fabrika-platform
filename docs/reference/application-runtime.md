@@ -308,7 +308,11 @@ Per request, in this order:
    (400);
 8. parse the body strictly (400), run the access form, remove the `from` field, call
    the handler, project the output through its schema (a union through its first
-   branch that accepts the value), answer `{ result }`.
+   branch that accepts the value), answer `{ result }`. An `attachment()` output answers
+   a file instead: the rows the handler returned, encoded as CSV (`text/csv; charset=utf-8`,
+   `Content-Disposition: attachment` with the declared name) before the invocation's
+   transaction commits; a file over its `maxBytes` or `maxRows` is a 500 with no file and
+   no commit.
 
 | Form                   | Hands the handler                         | Refuses with                                            |
 | ---------------------- | ----------------------------------------- | ------------------------------------------------------- |
@@ -400,8 +404,9 @@ names the same fix at runtime.
 **The transaction is the invocation's.** An endpoint request, a webhook delivery and a job's `ctx.transaction` each
 run every statement of their handles in one transaction, opened by the first statement; it sets
 `idle_in_transaction_session_timeout` (30 s), so a handler that waits on something else while it holds row locks
-loses them. It commits after the handler returned and its output passed validation; a throw, a refused output, a
-cancelled request or a statement the database refused rolls it back, and nothing the handler wrote is kept. A query
+loses them. It commits after the handler returned, its output passed validation and an attachment's file was
+encoded; a throw, a refused output, a file over its limit, a cancelled request or a statement the database refused
+rolls it back, and nothing the handler wrote is kept. A query
 and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.

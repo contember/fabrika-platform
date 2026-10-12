@@ -2,7 +2,7 @@
 // job is a staged-kit site. The shell declares each site's reach, which the approved artifact carries; the handlers that
 // reach data through `ctx.db` are the tree `app.ts` writes, so the handlers here are never served.
 
-import { defineApp } from '@fabrika/app/contract'
+import { attachment, defineApp } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { tables } from '../kit-fixture/src/db/tables'
 import { vocabulary } from '../kit-fixture/src/vocabulary'
@@ -14,6 +14,14 @@ export const Rename = z.strictObject({ id: z.uuid(), title: z.string(), expectVe
 export const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
 export const Ok = z.strictObject({ ok: z.boolean() })
 export const Push = z.strictObject({ ref: z.string() })
+export const ExportDeal = z.strictObject({ id: z.uuid(), expectVersion: z.int(), rows: z.int(), width: z.int() })
+/** An audited export: the handler writes its log entry (here the deal's title), then answers the rows. */
+export const DealExport = attachment({
+	format: 'csv',
+	filename: 'deal.csv',
+	row: z.strictObject({ line: z.string() }),
+	maxBytes: 1_024,
+})
 
 /** A site of this shell: `app.ts` serves its own tree in its place. */
 const servedByTheTree = (): never => {
@@ -32,6 +40,8 @@ const deals = kit.group({ callers: ['human'] }, (r) => ({
 		.handle(servedByTheTree),
 	keep: r.query({ input: ById, output: Ok, access: { action: 'crm.read', on: 'deal', from: 'id' } }).handle(servedByTheTree),
 	replay: r.query({ input: ById, output: Ok, access: { action: 'crm.read', on: 'deal', from: 'id' } }).handle(servedByTheTree),
+	exportDeal: r.mutation({ input: ExportDeal, output: DealExport, access: { action: 'deals.write', on: 'deal', from: 'id' } })
+		.handle(servedByTheTree),
 }))
 
 const github = kit.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'org', actions: ['crm.write'], input: Push }).handle(servedByTheTree)

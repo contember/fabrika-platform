@@ -152,6 +152,22 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		expect(await deal(id)).toEqual({ title: 'kept', stage: 'won', version: 2 })
 	})
 
+	test('an audited export commits its write only with its file: over maxBytes it answers no body and writes nothing', async () => {
+		const { app } = start()
+		const id = await seedDeal('won')
+		const log = await failed(async () =>
+			send(app, '/api/deals.exportDeal', { token: await writer(), body: { id, expectVersion: 1, rows: 3, width: 500 } })
+		)
+		expect(log).toContain('fabrika: api.deals.exportDeal: framework_fault: attachment_size')
+		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
+		const sent = await send(app, '/api/deals.exportDeal', { token: await writer(), body: { id, expectVersion: 1, rows: 2, width: 3 } })
+		expect(sent.status).toBe(200)
+		expect(sent.headers.get('Content-Type')).toBe('text/csv; charset=utf-8')
+		// The harness reads the body as text, which drops the byte order mark.
+		expect(sent.body).toBe('line\r\nxxx\r\nxxx\r\n')
+		expect(await deal(id)).toEqual({ title: 'exported', stage: 'won', version: 2 })
+	})
+
 	test('a query cannot write, not even through unscoped', async () => {
 		const { app } = start()
 		const id = await seedDeal()
@@ -166,7 +182,9 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 			handlers: () => ({
 				api: {
 					deals: {
-						...Object.fromEntries(['columns', 'margin', 'reopen', 'rename', 'keep', 'replay'].map((name) => [name, siteHandler(() => ({}), undefined)])),
+						...Object.fromEntries(
+							['columns', 'margin', 'reopen', 'rename', 'keep', 'replay', 'exportDeal'].map((name) => [name, siteHandler(() => ({}), undefined)]),
+						),
 						retitle: siteHandler(() => ({ ok: true }), declaration),
 					},
 				},

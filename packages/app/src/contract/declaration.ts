@@ -30,7 +30,7 @@ export type SurfaceSection = (typeof SURFACE_SECTIONS)[number]
  * records every other key of its options in `unknownOptions`, so an option can never replace what the builder set;
  * `buildArtifact` refuses a non-empty `unknownOptions`. A reader of source fills it the same way.
  */
-export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'form' | 'webhook' | 'files' | 'cron' | 'export'
+export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'form' | 'webhook' | 'files' | 'cron' | 'export' | 'attachment'
 
 export interface BuilderFields {
 	readonly options: readonly string[]
@@ -47,6 +47,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
 	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
+	attachment: { options: ['format', 'filename', 'row', 'maxBytes', 'maxRows'], owned: [] },
 }
 
 /** The keys of `options` that are not `builder`'s option fields. */
@@ -134,6 +135,22 @@ export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends Opt
 	readonly access: Access
 	/** What a procedure of the staged kit declares off the paved road; a `defineContract` procedure has none. */
 	readonly declared?: unknown
+	/**
+	 * Set by `describeContract` when the output is an `attachment()`: the procedure answers a file, and its described
+	 * `output` is the array of rows the handler returns.
+	 */
+	readonly attachment?: AttachmentDeclaration
+}
+
+/**
+ * The file an `attachment()` output declares beside its row schema, as written; `buildArtifact` checks each field and
+ * applies the default `maxRows`.
+ */
+export interface AttachmentDeclaration extends OptionsRecord {
+	readonly format: string
+	readonly filename: string
+	readonly maxBytes: number
+	readonly maxRows?: number
 }
 
 /** Procedures by name; a nested object groups them, and the path joins the names with `.`. */

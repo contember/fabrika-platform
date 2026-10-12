@@ -176,7 +176,10 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   refused); `defineApp` from `@fabrika/app/contract`, called once as `defineApp(vocabulary, tables, { imports }?)` in a
   const (the kit; `src/app-kit.ts`), whose `app.<builder>(…)` calls are `group`, `contract`, `cron`, `webhook`, `link`
   and `export`, in any module (`app` used as a value is refused); `defineContract` from `@fabrika/app/contract`, called once
-  as `defineContract(vocabulary, (c) => ({ … }))`; `defineVocabulary` from `@fabrika/app/contract`, called once with
+  as `defineContract(vocabulary, (c) => ({ … }))`; `attachment` from `@fabrika/app/contract`, called once as
+  `attachment({ format, filename, row, maxBytes, maxRows? })` where an output stands or in a const one names (the
+  reader builds it with the runtime's `attachmentOutput`, so a method on it is refused as on any non-schema);
+  `defineVocabulary` from `@fabrika/app/contract`, called once with
   one object literal (`src/vocabulary.ts`), which reads as its `app`, `dimensions`, `actions` and `roles`, as the runtime
   copies them; `defineTables` from `@fabrika/db/tables` (never `@fabrika/db`, whose root also loads the Bun-only data
   layer the SPA would bundle with the contract), only as `defineTables(vocabulary, columns)({ … })` (the first argument an object with the
@@ -230,7 +233,7 @@ nobody has type-checked. It refuses with the `contract` rule:
 
 ## Trusted by name
 
-The literal rule and the reader recognise `z`, `defineContract`, `defineVocabulary`, `defineApp` and `defineTables` by
+The literal rule and the reader recognise `z`, `defineContract`, `defineVocabulary`, `defineApp`, `attachment` and `defineTables` by
 the package they come from.
 `trust.ts` refuses, in the checker (`unchecked-import`) and in the reader (`ContractSourceError`), everything that
 can make such an import load something else:

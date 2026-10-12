@@ -28,6 +28,7 @@ import {
 	JOB_SITE_PREFIX,
 	type JobArtifact,
 	type MountArtifact,
+	type OutputShape,
 	type RoleArtifact,
 	type SchemaShape,
 	type ScopeBinding,
@@ -56,6 +57,7 @@ import {
 	type SpaAccessDeclaration,
 } from './declaration'
 import {
+	ATTACHMENT_LIMITS,
 	CHALLENGE_ORIGINS,
 	CONNECT_LIMITS,
 	CONNECT_PREFIX,
@@ -86,6 +88,8 @@ const CRON_FIELD = /^[0-9*/,-]+$/
 const TIMEOUT = /^[1-9][0-9]*[smh]$/
 const DIGEST = /^sha256:[0-9a-f]+$/
 const FRAMEWORK_PREFIX = '/__fabrika'
+/** A fixed name a header carries as it is: no path, no quoting, no extension but the format's. */
+const ATTACHMENT_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.csv$/
 /** The `boundTo` and job `scope` value for the whole application; no dimension may take the name. */
 const APP_SCOPE = 'app'
 const AUDIENCE = 'any consumer user'
@@ -562,7 +566,7 @@ class ArtifactBuilder {
 					requirement,
 					admission: JSON_ADMISSION,
 					input: procedure.input,
-					output: procedure.output,
+					output: this.#output(`procedure '${id}'`, procedure),
 				})
 			}
 		}
@@ -598,9 +602,52 @@ class ArtifactBuilder {
 				requirement,
 				admission: JSON_ADMISSION,
 				input: procedure.input,
-				output: procedure.output,
+				output: this.#output(where, procedure),
 			})
 		}
+	}
+
+	/**
+	 * A procedure's answer: its output schema, or for an `attachment()` the file it encodes from the rows. A column is a
+	 * scalar cell, the name is fixed and safe in a header, and each limit is within `ATTACHMENT_LIMITS`.
+	 */
+	#output(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>): OutputShape {
+		const attachment = procedure.attachment
+		if (attachment === undefined) {
+			return procedure.output
+		}
+		const at = `${where} attachment`
+		this.#options(at, 'attachment', attachment.unknownOptions)
+		if (attachment.format !== 'csv') {
+			this.#problem(at, `format '${attachment.format}' is not a file format the framework encodes (allowed: 'csv')`)
+		}
+		if (!ATTACHMENT_FILENAME.test(attachment.filename)) {
+			this.#problem(at, `filename '${attachment.filename}' is not a file name (allowed: ${ATTACHMENT_FILENAME.source})`)
+		}
+		const maxBytes = this.#attachmentLimit(at, 'maxBytes', attachment.maxBytes, ATTACHMENT_LIMITS.maxBytes)
+		const maxRows = this.#attachmentLimit(at, 'maxRows', attachment.maxRows ?? ATTACHMENT_LIMITS.defaultMaxRows, ATTACHMENT_LIMITS.maxRows)
+		const items = procedure.output.type === 'array' ? procedure.output.items : null
+		if (items?.type !== 'object') {
+			this.#problem(at, 'the row is not an object (allowed: row: z.strictObject({ … }))')
+			return procedure.output
+		}
+		const columns = Object.entries(items.fields).map(([name, shape]) => ({ name, shape }))
+		if (columns.length === 0) {
+			this.#problem(at, 'the row has no field, so the file would have no column')
+		}
+		for (const column of columns) {
+			if (!isCell(column.shape)) {
+				this.#problem(at, `column '${column.name}' is not a cell (allowed: a string, number, boolean, enum or literal, optional or nullable)`)
+			}
+		}
+		return { type: 'attachment', format: 'csv', filename: attachment.filename, maxBytes, maxRows, columns }
+	}
+
+	#attachmentLimit(where: string, field: string, value: number, ceiling: number): number {
+		if (!Number.isInteger(value) || value < 1 || value > ceiling) {
+			this.#problem(where, `${field} ${value} is not a whole number from 1 to ${ceiling}`)
+		}
+		return value
 	}
 
 	#procedureSchemas(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>): void {
@@ -902,6 +949,9 @@ class ArtifactBuilder {
 				if (!('action' in procedure.access)) {
 					// The consumer's key holds exactly the export's actions, so a `member` procedure would have none to hold.
 					this.#problem(`procedure '${id}'`, 'an export procedure names its action (allowed: { action, over })')
+				}
+				if (procedure.attachment !== undefined) {
+					this.#problem(`procedure '${id}'`, 'an export answers its consumers JSON; an attachment() is for an RPC or a link procedure')
 				}
 				this.#readAction(`procedure '${id}'`, procedure.access)
 				this.#procedure(source, id, joinPath(CONNECT_PREFIX, id), callers, procedure)
@@ -1284,7 +1334,7 @@ class ArtifactBuilder {
 
 	#options(where: string, builder: Builder, unknown: readonly string[] | undefined): void {
 		const fields = BUILDER_FIELDS[builder]
-		const call = builder === 'procedure' ? 'c.query and c.mutation' : `c.${builder}`
+		const call = builder === 'procedure' ? 'c.query and c.mutation' : builder === 'attachment' ? 'attachment()' : `c.${builder}`
 		for (const key of unknown ?? []) {
 			if (fields.owned.includes(key)) {
 				this.#problem(where, `'${key}' is set by ${call} itself and cannot be an option; remove it`)
@@ -1428,6 +1478,26 @@ function accessForm(access: AccessDeclaration): ResolvedAccess | null {
 			: null
 	}
 	return null
+}
+
+/** A value one CSV field holds: a scalar, possibly absent. */
+function isCell(shape: SchemaShape): boolean {
+	switch (shape.type) {
+		case 'string':
+		case 'number':
+		case 'boolean':
+		case 'null':
+		case 'literal':
+		case 'enum':
+			return true
+		case 'optional':
+		case 'nullable':
+			return isCell(shape.inner)
+		case 'union':
+			return shape.options.every(isCell)
+		default:
+			return false
+	}
 }
 
 /** A shape whose every admitted value is a string, so it can carry a scope value. */

@@ -102,6 +102,11 @@ export function ormApp(hooks: OrmHooks): ContractImplementation<typeof contract>
 					await call(hooks.kept.target, 'get')
 					return { ok: true }
 				}, undefined),
+				exportDeal: siteHandler(async ({ input, ctx }) => {
+					await call(ctx, 'db.target.update', { title: 'exported' }, { expectVersion: field(input, 'expectVersion') })
+					const line = 'x'.repeat(Number(field(input, 'width')))
+					return Array.from({ length: Number(field(input, 'rows')) }, () => ({ line }))
+				}, undefined),
 			},
 		},
 		github: siteHandler(async ({ input, ctx }) => {

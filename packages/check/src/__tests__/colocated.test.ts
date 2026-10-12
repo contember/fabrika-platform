@@ -100,6 +100,7 @@ try { serve(contract, { database: null }); console.log('served') } catch (error)
 			'api.companies.countries',
 			'api.companies.create',
 			'api.companies.deal',
+			'api.deals.exportDeals',
 			'api.deals.get',
 			'api.deals.list',
 			'api.deals.pipeline',

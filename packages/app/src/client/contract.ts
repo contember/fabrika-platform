@@ -1,12 +1,14 @@
 // The typed client of one contract mount: `api.notes.remove({ id })` POSTs the input to `/api/notes.remove`, the
 // path `compileContract` gives that procedure. Built from the contract value, so it can call only declared
-// procedures, and it checks each answer against the procedure's output schema before handing it out.
+// procedures, and it checks each answer against the procedure's output schema before handing it out. An attachment
+// procedure answers a file, which `download(api.<procedure>, input)` fetches and saves.
 
 import { z } from 'zod/v4'
+import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
 import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import { joinPath, LINK_API_SEGMENT } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
-import { type BounceConfig, type BounceOption, exchange, resolveBounce, RpcError, type RpcFetch } from './transport'
+import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
 
@@ -20,7 +22,9 @@ export type ProcedureCall<I, O extends Schema> = [I] extends [InputSchema] ? (in
 	: (input?: Record<never, never>) => Promise<z.output<O>>
 
 export type ClientTree<T> = {
-	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, unknown> ? ProcedureCall<I, O> : ClientTree<T[K]>
+	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, unknown>
+		? O extends AttachmentBrand ? AttachmentProcedure<I> : ProcedureCall<I, O>
+		: ClientTree<T[K]>
 }
 
 export type ContractClient<C, M> = SurfaceOf<C>[M & keyof SurfaceOf<C>] extends { readonly procedures: infer T } ? ClientTree<T> : never
@@ -53,18 +57,20 @@ interface CallTarget {
 	readonly output: Schema
 }
 
-function caller(target: CallTarget, options: ClientOptions, bounce: BounceConfig | null) {
-	return async (input?: unknown): Promise<unknown> => {
+/** The request of one procedure call: its input as JSON, with the key as a bearer or the page's session. */
+function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
+	return () => {
 		const headers = new Headers({ 'Content-Type': 'application/json' })
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
-		const result = await exchange(options.fetch ?? fetch, target.url, () => ({
-			method: 'POST',
-			credentials: options.key === undefined ? 'same-origin' : 'omit',
-			headers,
-			body: JSON.stringify(input ?? {}),
-		}), bounce)
+		return { method: 'POST', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, body: JSON.stringify(input ?? {}) }
+	}
+}
+
+function caller(target: CallTarget, options: ClientOptions, bounce: BounceConfig | null) {
+	return async (input?: unknown): Promise<unknown> => {
+		const result = await exchange(options.fetch ?? fetch, target.url, requestOf(options, input), bounce)
 		const parsed = z.safeParse(target.output, result)
 		if (!parsed.success) {
 			throw new RpcError({ type: 'invalid-response', message: `'${target.id}' answered a value its output schema refuses`, httpStatus: 200 })
@@ -92,6 +98,66 @@ function clientTree(tree: ProcedureTreeDeclaration<Schema, unknown>, at: TreeAt,
 	return Object.freeze(client)
 }
 
+declare const attachmentInput: unique symbol
+
+/**
+ * An attachment procedure of a client: not a function, because its answer is a file. `download(api.<procedure>,
+ * input)` fetches and saves it.
+ */
+export interface AttachmentProcedure<I> {
+	/** `<mount>.<path>` */
+	readonly id: string
+	/** The file name the contract declares. */
+	readonly filename: string
+	/** Carries the input schema for `download`; never present at runtime. */
+	readonly [attachmentInput]?: I
+}
+
+/** The request each attachment procedure sends, kept beside it so the value itself carries no key. */
+const downloads = new WeakMap<object, { readonly url: string; readonly options: ClientOptions; readonly bounce: BounceConfig | null }>()
+
+function attachmentProcedure(
+	target: CallTarget,
+	filename: string,
+	options: ClientOptions,
+	bounce: BounceConfig | null,
+): AttachmentProcedure<unknown> {
+	const procedure = Object.freeze({ id: target.id, filename })
+	downloads.set(procedure, { url: target.url, options, bounce })
+	return procedure
+}
+
+/** The input `download` takes: the procedure's, or none. */
+export type DownloadInput<I> = [I] extends [InputSchema] ? [input: z.input<I>] : [input?: Record<never, never>]
+
+/**
+ * Calls an attachment procedure and saves its file: in a browser the page offers it as a download under the declared
+ * name. Answers the file, also where there is no page to save it from (a script, a test). A refusal is an `RpcError`.
+ */
+export async function download<I>(procedure: AttachmentProcedure<I>, ...input: DownloadInput<I>): Promise<File> {
+	const request = downloads.get(procedure)
+	if (request === undefined) {
+		throw new Error(`'${procedure.id}' is not an attachment procedure of a client`)
+	}
+	const body = await exchangeFile(request.options.fetch ?? fetch, request.url, requestOf(request.options, input[0]), request.bounce)
+	const file = new File([body], procedure.filename, { type: body.type })
+	saveFile(file)
+	return file
+}
+
+function saveFile(file: File): void {
+	if (typeof document === 'undefined') {
+		return
+	}
+	const url = URL.createObjectURL(file)
+	const link = document.createElement('a')
+	link.href = url
+	link.download = file.name
+	// A detached link downloads in every current browser; the page's document stays untouched.
+	link.click()
+	setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
 /** A function for every procedure of `tree` and a group for every nested tree: every declared call exists. */
 function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unknown>): boolean {
 	if (typeof value !== 'object' || value === null) {
@@ -99,7 +165,10 @@ function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unkno
 	}
 	return Object.entries(tree).every(([name, node]) => {
 		const member: unknown = Reflect.get(value, name)
-		return isProcedure(node) ? typeof member === 'function' : coversTree(member, node)
+		if (!isProcedure(node)) {
+			return coversTree(member, node)
+		}
+		return attachmentOf(node.output) === null ? typeof member === 'function' : typeof member === 'object' && member !== null && downloads.has(member)
 	})
 }
 
@@ -136,7 +205,10 @@ export function createClient<const C extends AnyContract, const M extends Client
 	if (options.key !== undefined && page !== null && origin !== '' && new URL(origin, page).origin !== page) {
 		throw new Error(`a client with a key in a browser calls only ${page}; baseUrl '${origin}' is another origin`)
 	}
-	const client = clientTree(node.procedures, { mount, origin, base, path: '' }, (target) => caller(target, options, bounce))
+	const client = clientTree(node.procedures, { mount, origin, base, path: '' }, (target) => {
+		const mark = attachmentOf(target.output)
+		return mark === null ? caller(target, options, bounce) : attachmentProcedure(target, mark.declaration.filename, options, bounce)
+	})
 	// The tree was built from this mount's declaration; the check ties the value to the type the contract derives.
 	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures)
 	if (!covers(client)) {

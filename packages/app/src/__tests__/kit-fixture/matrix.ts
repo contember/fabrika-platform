@@ -2,7 +2,7 @@
 // exact handled endpoints and the contract the kit composes. Part of the package typecheck; `kit-types.test.ts`
 // compiles this directory again and expects no diagnostic.
 
-import type { createClient } from '@fabrika/app/client'
+import type { AttachmentProcedure, createClient, download } from '@fabrika/app/client'
 import type {
 	AnyContract,
 	App,
@@ -32,7 +32,7 @@ import type { app } from './src/app-kit'
 import type { DB } from './src/db/schema.generated'
 import type { tables } from './src/db/tables'
 import type { deals } from './src/deals/endpoints'
-import type { ById, Deal } from './src/schemas'
+import type { ById, Deal, OrgInput } from './src/schemas'
 
 type Equal<A, B> = (<X>() => X extends A ? 1 : 2) extends <X>() => X extends B ? 1 : 2 ? true : false
 type Expect<T extends true> = T
@@ -249,4 +249,8 @@ type Client = ReturnType<typeof createClient<typeof contract, 'api'>>
 export type ClientTypes = [
 	Expect<Equal<Parameters<Client['deals']['get']>[0], { id: string }>>,
 	Expect<Equal<Awaited<ReturnType<Client['deals']['reopen']>>, { id: string; version: number }>>,
+	// An attachment procedure is no function: `download` takes it with the procedure's input and answers the file.
+	Expect<Equal<Client['deals']['exportDeals'], AttachmentProcedure<typeof OrgInput>>>,
+	Expect<Equal<Parameters<typeof download<typeof OrgInput>>[1], { orgId: string }>>,
+	Expect<Equal<ReturnType<typeof download<typeof OrgInput>>, Promise<File>>>,
 ]

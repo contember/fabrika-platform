@@ -14,6 +14,7 @@ import {
 	type EndpointPlan,
 	type EndpointRow,
 	type ExportDescription,
+	isAttachmentShape,
 	type LinkTokenClaims,
 	parseEndpointHeader,
 	type PermissionEntry,
@@ -47,6 +48,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
+import { attachmentResponse } from './attachment'
 import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
@@ -378,8 +380,9 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * A staged-kit site runs in one transaction: its statements commit after the handler returned and the output passed
-	 * validation, and roll back on a throw, a refused output or a cancelled request.
+	 * A staged-kit site runs in one transaction: its statements commit after the handler returned, the output passed
+	 * validation and an attachment was encoded, and roll back on a throw, a refused output, a file over its limit or a
+	 * cancelled request. So an audited export keeps its log row only when its file goes out.
 	 */
 	async #procedure(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
@@ -410,8 +413,10 @@ export class ContractRuntime {
 			if (!output.success) {
 				throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
 			}
+			const file = served.row.output !== null && isAttachmentShape(served.row.output) ? served.row.output : null
+			const answer = file === null ? jsonResponse({ result: output.data }, 200) : attachmentResponse(served.row.id, file, output.data)
 			await invocation?.commit(request.signal)
-			return jsonResponse({ result: output.data }, 200)
+			return answer
 		} finally {
 			await invocation?.rollback()
 		}

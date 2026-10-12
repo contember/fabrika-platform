@@ -3,10 +3,12 @@
 
 import {
 	type ArrayShape,
+	type AttachmentShape,
 	BUILTIN_ROLE_KEYS,
 	type ContractArtifact,
 	type EndpointRow,
 	type NumberShape,
+	type OutputShape,
 	type RecordShape,
 	type SchemaShape,
 	type StringShape,
@@ -83,6 +85,18 @@ const recordShape: z.ZodType<RecordShape> = z.lazy(() =>
 	z.strictObject({ type: z.literal('record'), key: schemaShapeSchema, value: schemaShapeSchema })
 )
 
+const attachmentShape: z.ZodType<AttachmentShape> = z.strictObject({
+	type: z.literal('attachment'),
+	format: z.literal('csv'),
+	filename: name,
+	maxBytes: z.int().positive(),
+	maxRows: z.int().positive(),
+	columns: z.array(z.strictObject({ name: z.string(), shape: schemaShapeSchema })).min(1),
+})
+
+/** What a procedure answers: a schema shape, or an attachment's file. */
+export const outputShapeSchema: z.ZodType<OutputShape> = z.union([schemaShapeSchema, attachmentShape])
+
 const caller = z.union([z.enum(['human', 'machine', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
 const rpcCaller = z.enum(['human', 'machine'])
 
@@ -105,7 +119,7 @@ const rowBase = {
 	path: z.string().startsWith('/'),
 	admission: z.strictObject({ contentTypes: z.tuple([name], name), maxBytes: z.int().positive().nullable() }).nullable(),
 	input: schemaShapeSchema.nullable(),
-	output: schemaShapeSchema.nullable(),
+	output: outputShapeSchema.nullable(),
 }
 
 const endpointRow: z.ZodType<EndpointRow> = z.union([

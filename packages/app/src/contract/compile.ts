@@ -3,8 +3,10 @@
 
 import type { ContractArtifact, SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
 import { isTables, tablePolicies, type Tables } from '@fabrika/db/tables'
+import { attachmentOf } from './attachment'
 import { buildArtifact } from './build'
 import {
+	type AttachmentDeclaration,
 	type ContractDeclaration,
 	type ExportDeclaration,
 	isProcedure,
@@ -108,13 +110,23 @@ class SchemaReader {
 				described[name] = {
 					...node,
 					input: node.input === null ? null : this.schema(`${at} input`, node.input),
-					output: this.schema(`${at} output`, node.output),
+					...this.output(`${at} output`, node.output),
 				}
 			} else {
 				described[name] = this.tree(where, node, path)
 			}
 		}
 		return described
+	}
+
+	/** An `attachment()` output is described as the rows' array, its declaration carried beside it. */
+	output(where: string, schema: Schema): { readonly output: SchemaShape; readonly attachment?: AttachmentDeclaration } {
+		const mark = attachmentOf(schema)
+		if (mark === null) {
+			return { output: this.schema(where, schema) }
+		}
+		const row = this.schema(`${where} row`, mark.row)
+		return { output: { type: 'array', items: row, minItems: null, maxItems: null }, attachment: mark.declaration }
 	}
 
 	/** A failed schema leaves a placeholder; `describeContract` throws before anything reads it. */

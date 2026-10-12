@@ -6,14 +6,14 @@ import { isRelativeSpecifier } from '../layout'
 /**
  * What a call root builds. `surface` is the parameter of a `defineContract` callback (`c`, `l`); `app` is
  * `defineApp`, `kit` a const it returned, `shell` the parameter of `app.contract`'s callback and `endpoints` that of
- * a group's, a link's or an export's.
+ * a group's, a link's or an export's; `attachment` is the output `attachment({ … })`.
  */
-export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surface' | 'app' | 'kit' | 'shell' | 'endpoints'
+export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surface' | 'app' | 'kit' | 'shell' | 'endpoints' | 'attachment'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
-	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary', defineApp: 'app' },
+	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary', defineApp: 'app', attachment: 'attachment' },
 	'@fabrika/db/tables': { defineTables: 'tables' },
 }
 
@@ -316,6 +316,10 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 			return links.length === 1 && calls === 1
 				? undefined
 				: { node: root, message: 'defineVocabulary used other than as one call', allowed: 'defineVocabulary({ app, dimensions, actions, roles })' }
+		case 'attachment':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'attachment used other than as one call', allowed: "attachment({ format: 'csv', filename, row, maxBytes })" }
 		case 'tables':
 			return calls === links.length && (calls === 1 || calls === 2)
 				? undefined

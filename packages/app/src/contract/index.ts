@@ -2,6 +2,15 @@
 // groups), `defineContract`, `compileContract`, the artifact parser, and the IAM schema it compiles to. Browser-safe:
 // no server runtime, no Node or Bun API.
 export { contractArtifactSchema, parseContractArtifact, schemaShapeSchema } from './artifact-schema'
+export {
+	type Attachment,
+	attachment,
+	type AttachmentBrand,
+	type AttachmentMark,
+	attachmentOf,
+	type AttachmentOptions,
+	attachmentOutput,
+} from './attachment'
 export { buildArtifact } from './build'
 export { compileContract, describeContract } from './compile'
 export {

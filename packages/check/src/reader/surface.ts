@@ -6,6 +6,7 @@ import {
 	type AccessDeclaration,
 	type AnyContract,
 	type AnyMount,
+	attachmentOutput,
 	type Builder,
 	type CronJob,
 	type CspDeclaration,
@@ -32,6 +33,7 @@ import {
 	type Vocabulary,
 } from '@fabrika/app/contract'
 import type { CspSource, RpcCaller } from '@fabrika/auth-core'
+import { z } from 'zod/v4'
 import type { Located } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
 import type { ReaderProblems } from './problems'
@@ -139,6 +141,27 @@ class SurfaceReader {
 			throw new Refused(owner.at, `the contract's schemas expand to over ${CONTRACT_LIMITS.schemaNodes} nodes`, schemaLimits())
 		}
 		return read
+	}
+
+	/** A procedure's output: a schema, or `attachment({ … })`, built as `@fabrika/app`'s `attachment` builds it. */
+	#output(value: LiteralValue | undefined, owner: BuilderValue): Schema {
+		if (value?.kind !== 'attachment') {
+			return this.#schema(value, owner, 'output')
+		}
+		const [definition] = args(value, 'attachment', 1, 1)
+		const options = builderOptions(definition, value, 'attachment')
+		const row = this.#schema(options.get('row'), value, 'row')
+		if (!(row instanceof z.ZodObject)) {
+			throw new Refused(options.get('row')?.at ?? value.at, 'the row is not an object schema', 'row: z.strictObject({ … })')
+		}
+		const maxRows = optionalNumber(options.get('maxRows'), 'maxRows')
+		return attachmentOutput(row, {
+			format: text(options.get('format'), value, 'format'),
+			filename: text(options.get('filename'), value, 'filename'),
+			maxBytes: numeric(options.get('maxBytes'), value, 'maxBytes'),
+			...(maxRows === undefined ? {} : { maxRows }),
+			unknownOptions: optionKeys(options, 'attachment'),
+		})
 	}
 
 	#each<T>(entries: Entries, read: (name: string, value: LiteralValue) => T): Record<string, T> {
@@ -454,7 +477,7 @@ class SurfaceReader {
 			'~kind': 'procedure',
 			type,
 			input: input === undefined || input.kind === 'null' ? null : this.#schema(input, builder, 'input'),
-			output: this.#schema(options.get('output'), builder, 'output'),
+			output: this.#output(options.get('output'), builder),
 			access: access(options.get('access'), builder),
 			...(kit === 'endpoints'
 				? { declared: declared(options), unknownOptions: kitOptionKeys(options, 'procedure') }
@@ -582,7 +605,7 @@ function surfaceBuilder<const Name extends string>(
 }
 
 function args(
-	builder: BuilderValue | Extract<LiteralValue, { kind: 'contract' | 'kit-contract' }>,
+	builder: BuilderValue | Extract<LiteralValue, { kind: 'contract' | 'kit-contract' | 'attachment' }>,
 	call: string,
 	min: number,
 	max: number,
@@ -598,7 +621,7 @@ function args(
 }
 
 /** A builder's options object; its keys are not checked here, `optionKeys` records the unknown ones. */
-function builderOptions(value: LiteralValue | undefined, at: BuilderValue, call: string): Entries {
+function builderOptions(value: LiteralValue | undefined, at: Owner, call: string): Entries {
 	if (value?.kind !== 'object') {
 		throw new Refused(value?.at ?? at.at, `${call} takes an options object`, `${call}(…, { … })`)
 	}

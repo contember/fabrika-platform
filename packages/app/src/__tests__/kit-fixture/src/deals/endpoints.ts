@@ -1,6 +1,6 @@
 import { ConflictError } from '@fabrika/app'
 import { app } from '../app-kit'
-import { ById, Deal, DealPage, OrgInput, Pipeline, PipelineRow, Product, ProductName, ReopenDeal, Saved, Share, Shared } from '../schemas'
+import { ById, Deal, DealExport, DealPage, OrgInput, Pipeline, PipelineRow, Product, ProductName, ReopenDeal, Saved, Share, Shared } from '../schemas'
 import { canReopen } from './logic'
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
@@ -26,6 +26,13 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			rows: await ctx.sql(PipelineRow)`select stage, count(*) as deals from deals where org_id = ${ctx.target.value} group by stage`,
 		})),
+	exportDeals: r.query({ input: OrgInput, output: DealExport, access: { action: 'crm.read', over: 'org' } })
+		.handle(async ({ ctx }) => {
+			const page = await ctx.db.within.deals.list({ limit: 100 })
+			return page.items.map((deal) => {
+				return { title: deal.title, stage: deal.stage, margin: null }
+			})
+		}),
 	share: r.mutation({ input: Share, output: Shared, access: { action: 'deals.share', on: 'deal', from: 'id' }, issues: 'shared' })
 		.handle(async ({ input, ctx }) => ({ url: (await ctx.links.issue(ctx.target, { mount: 'shared', days: input.days })).url })),
 	product: r.query({ input: Product, output: ProductName, access: { member: true }, connect: ['catalog'] })

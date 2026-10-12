@@ -22,6 +22,9 @@ export const SERVER_FAULTS = {
 	file_key_taken: "a new file's object key already held an object this upload did not write",
 	challenge_unavailable: "a form's challenge provider could not be reached in time or did not answer as it documents",
 	challenge_misconfigured: "a form's challenge provider refused the application's secret",
+	attachment_rows: 'the handler returned more rows than its attachment declares (maxRows)',
+	attachment_cell: 'a cell of the attachment is longer than one cell may hold',
+	attachment_size: 'the encoded attachment is larger than it declares (maxBytes); no body was sent',
 } as const
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS

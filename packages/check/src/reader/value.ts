@@ -54,6 +54,8 @@ export type LiteralValue =
 	| AppValue
 	/** `app.contract((c) => ({ … }))`, with the kit it was called on. */
 	| { readonly kind: 'kit-contract'; readonly app: AppValue; readonly args: readonly LiteralValue[]; readonly at: Located }
+	/** `attachment({ … })`, with its argument read; `surface.ts` builds the output schema the evaluated module holds. */
+	| { readonly kind: 'attachment'; readonly args: readonly LiteralValue[]; readonly at: Located }
 	/** A builder callback: its parameter is only ever a kit, so its body is read once, as a value. */
 	| { readonly kind: 'callback'; readonly result: LiteralValue; readonly at: Located }
 
@@ -322,6 +324,8 @@ export class ValueReader {
 			case 'tables':
 				this.#problems.add(located, 'defineTables in the contract graph', 'table policies only in src/db/tables.ts')
 				return null
+			case 'attachment':
+				return this.#attachmentCall(located, links, scope)
 			default:
 				if (this.#isConstName(located.module, rootName) && links[0]?.kind === 'member') {
 					return this.#schemaMethods(located, root, links, scope)
@@ -450,6 +454,16 @@ export class ValueReader {
 			}
 		}
 		return { kind: 'object', entries, at: vocabulary.at }
+	}
+
+	#attachmentCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		if (call?.kind !== 'call' || links.length !== 1) {
+			this.#problems.add(located, 'attachment used other than as one call', "attachment({ format: 'csv', filename, row, maxBytes })")
+			return null
+		}
+		const args = this.#arguments(located.module, call.node, scope, () => null)
+		return args === null ? null : { kind: 'attachment', args, at: located }
 	}
 
 	#contractCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
@@ -620,4 +634,11 @@ const compile = (pattern: string, flags: string): RegExp | undefined => {
 /** The name of a value kind, for a problem that names what was expected. */
 export const describeKind = (
 	value: LiteralValue,
-): string => (value.kind === 'builder' ? `${kitName(value.kit)}.${value.name}(…)` : value.kind === 'kit-contract' ? 'app.contract(…)' : value.kind)
+): string =>
+	value.kind === 'builder'
+		? `${kitName(value.kit)}.${value.name}(…)`
+		: value.kind === 'kit-contract'
+		? 'app.contract(…)'
+		: value.kind === 'attachment'
+		? 'attachment(…)'
+		: value.kind

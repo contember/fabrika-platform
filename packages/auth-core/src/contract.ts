@@ -90,7 +90,7 @@ interface EndpointRowBase {
 	/** The request body the endpoint admits; `null` admits none. */
 	readonly admission: BodyAdmission | null
 	readonly input: SchemaShape | null
-	readonly output: SchemaShape | null
+	readonly output: OutputShape | null
 }
 
 export interface CredentialedEndpoint extends EndpointRowBase {
@@ -154,6 +154,33 @@ export type SchemaShape =
 	| { readonly type: 'optional'; readonly inner: SchemaShape }
 	| { readonly type: 'nullable'; readonly inner: SchemaShape }
 	| { readonly type: 'union'; readonly options: readonly SchemaShape[] }
+
+/** What a procedure answers: a JSON value of a schema, or a file of rows (`attachment()` of `@fabrika/app/contract`). */
+export type OutputShape = SchemaShape | AttachmentShape
+
+/**
+ * A procedure whose handler returns rows and whose answer is a file the framework encodes from them. The columns are
+ * the row schema's fields in their declared order, which is the file's column order; each is a scalar cell.
+ */
+export interface AttachmentShape {
+	readonly type: 'attachment'
+	readonly format: 'csv'
+	/** The `Content-Disposition` file name: a fixed name the contract declares, never one a request sends. */
+	readonly filename: string
+	/** The encoded file's limit, in bytes: an encoding over it fails the invocation and sends no body. */
+	readonly maxBytes: number
+	readonly maxRows: number
+	readonly columns: readonly AttachmentColumn[]
+}
+
+export interface AttachmentColumn {
+	readonly name: string
+	readonly shape: SchemaShape
+}
+
+export function isAttachmentShape(shape: OutputShape): shape is AttachmentShape {
+	return shape.type === 'attachment'
+}
 
 export interface StringShape {
 	readonly type: 'string'

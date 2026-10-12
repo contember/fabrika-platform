@@ -3,6 +3,7 @@
 
 import type { ArrayShape, NumberShape, SchemaShape, StringShape } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
+import { attachmentOf } from './attachment'
 import type { Problems } from './problems'
 
 const SUBSET = 'allowed: the supported z subset of packages/check/CLAUDE.md'
@@ -17,6 +18,10 @@ function isStringFormat(format: string): format is StringFormat {
 
 /** A schema's shape, or `null` after recording why it has none. */
 export function describeSchema(schema: z.core.$ZodType, where: string, problems: Problems): SchemaShape | null {
+	if (attachmentOf(schema) !== null) {
+		problems.add(where, "an attachment() is a procedure's whole output, never part of a schema or an input (allowed: output: attachment({ … }))")
+		return null
+	}
 	if (schema instanceof z.core.$ZodString || schema instanceof z.core.$ZodStringFormat) {
 		return describeString(schema, where, problems)
 	}

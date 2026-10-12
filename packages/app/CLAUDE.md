@@ -67,10 +67,10 @@ src/
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
-    contract.ts       createClient: the typed client of a contract mount
+    contract.ts       createClient: the typed client of a contract mount; download, the call of an attachment procedure
     share.ts          shareKey: the key the share SPA's bootstrap kept
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
-    transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope
+    transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope or a file
   testing/            @fabrika/app/testing — no test-runner dependency
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
@@ -86,6 +86,7 @@ src/
     group.ts          the endpoint builders of a group, a link and an export; .handle; ExactReturn
     context.ts        what a kit handler receives: ctx by access form and declaration (types only)
     define.ts         defineContract, the c.* kit and every type an agent meets
+    attachment.ts     attachment(): an output that answers a file of rows (the rows' array schema, marked)
     declaration.ts    the contract as plain data, generic over its schema type
     schema-shape.ts   a zod 4 schema of the subset → SchemaShape
     compile.ts        compileContract / describeContract
@@ -117,6 +118,7 @@ src/
     environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
     connect.ts        Connector, wireImports, connectContext (ctx.connect per request), connectVariables
     bounded.ts        readBoundedBytes: a body under a byte budget and a deadline
+    attachment.ts     encodeCsv and the response of an attachment output: RFC 4180, formula escape, size bounds
   files/              c.files: served by boot, never imported by an application
     collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep
     scan.ts           the scan pass of scan: true collections and the FileScanner contract (FILE_SCAN_JOB)
@@ -441,6 +443,19 @@ vocabulary (`packages/db/CLAUDE.md`).
   Never expand a container grant into values: a scope moved out after the check would
   stay reachable. A `Within` over `MAX_WITHIN_VALUES` values in total is refused at mint
   (`CapabilityLimitError`: 403 to the caller, one log line).
+- **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
+  is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
+  a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's
+  `output` as an `AttachmentShape` (format, fixed file name, limits within `ATTACHMENT_LIMITS`, scalar columns in
+  order), refused nested in a schema, as an input and on an export. `dispatch` encodes after the output passed and
+  **before** the invocation commits, so an audited export (a mutation that writes its log row) keeps the row only
+  with its file. Every text cell that starts with `=`, `+`, `-`, `@`, a tab, CR or LF, also after leading whitespace,
+  or their full-width forms, gets a leading `'` before RFC 4180 quoting; a number keeps its sign. Rows over
+  `maxRows`, a cell over `maxCellLength` and the first line past `maxBytes` (UTF-8, counted line by line) are
+  `ServerFault`s (`attachment_rows`, `attachment_cell`, `attachment_size`): a 500, no file, a rollback. The answer
+  takes the header policy like any procedure (the proxy applies it there too); `Content-Type` and the
+  `Content-Disposition` of `files/treatment.ts`'s `contentDisposition` stay. The client's attachment procedure is
+  not a function: `download(api.<procedure>, input)` posts, saves the file in a browser and answers it as a `File`.
 - **Output is projected, then validated:** `project` walks the output's zod schema
   and keeps the fields it declares; a union takes the first branch, in order, whose
   schema accepts the value reduced to it. The strict output schema then validates

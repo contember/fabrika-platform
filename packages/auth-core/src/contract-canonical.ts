@@ -8,6 +8,7 @@ import type {
 	CspSource,
 	EndpointRow,
 	MountArtifact,
+	OutputShape,
 	RoleArtifact,
 	SchemaShape,
 	TablePolicyArtifact,
@@ -93,7 +94,7 @@ function canonicalizeEndpoint(row: EndpointRow): EndpointRow {
 	const shared = {
 		admission: row.admission === null ? null : canonicalAdmission(row.admission),
 		input: row.input === null ? null : canonicalShape(row.input),
-		output: row.output === null ? null : canonicalShape(row.output),
+		output: row.output === null ? null : canonicalOutput(row.output),
 	}
 	if (row.requirement === null) {
 		return { ...row, ...shared }
@@ -104,6 +105,14 @@ function canonicalizeEndpoint(row: EndpointRow): EndpointRow {
 /** A body admission with its content types sorted. */
 export function canonicalAdmission(admission: BodyAdmission): BodyAdmission {
 	return { contentTypes: sortedTuple(admission.contentTypes), maxBytes: admission.maxBytes }
+}
+
+/** An output shape: an attachment keeps its column order, which is the file's; each column's shape is canonical. */
+export function canonicalOutput(shape: OutputShape): OutputShape {
+	if (shape.type !== 'attachment') {
+		return canonicalShape(shape)
+	}
+	return { ...shape, columns: shape.columns.map((column) => ({ name: column.name, shape: canonicalShape(column.shape) })) }
 }
 
 /** A schema shape with its enum values sorted; tuple items and union options keep their order. */
