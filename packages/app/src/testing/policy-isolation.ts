@@ -7,11 +7,11 @@
 
 import { scoped, type Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase } from '@fabrika/db/testing'
+import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase, withoutInboxes } from '@fabrika/db/testing'
 import { z } from 'zod/v4'
 import { createClient } from '../client/contract'
 import { RpcError } from '../client/transport'
-import { type AnyContract, defineContract, type Kit, type Vocabulary } from '../contract/define'
+import { type AnyContract, defineContract, type Vocabulary } from '../contract/define'
 import { implement } from '../implement/implement'
 import type { TestGrant } from './caller'
 import { testKit } from './kit'
@@ -113,29 +113,9 @@ function wrote(run: () => Promise<unknown>): Promise<IsolationOutcome> {
 	}, (status) => ({ status }))
 }
 
-/** A form's table and the form that appends to it. */
-interface Inbox {
-	readonly table: string
-	readonly form: string
-}
-
-const NoFields = z.strictObject({})
-
-/** The forms of the application's inbox tables, which the probe declares too: an inbox table without its form is refused. */
-function inboxForms(c: Pick<Kit<string, string, string>, 'form'>, inboxes: readonly Inbox[]) {
-	return Object.fromEntries(inboxes.map(({ table, form }) => [form, c.form(`/probe-inbox/${form}`, { input: NoFields, appendTo: table })]))
-}
-
-function dimensionProbe(
-	vocabulary: Vocabulary<string, string, string>,
-	dimension: string,
-	list: string,
-	actions: ProbeActions,
-	inboxes: readonly Inbox[],
-) {
+function dimensionProbe(vocabulary: Vocabulary<string, string, string>, dimension: string, list: string, actions: ProbeActions) {
 	const { read } = actions
 	return defineContract(vocabulary, (c) => ({
-		...inboxForms(c, inboxes),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			get: c.query({ input: ById, output: Columns, access: { action: read, on: dimension, from: 'id' } }),
 			list: c.query({ output: Keys, access: { action: read, over: list } }),
@@ -149,16 +129,9 @@ function dimensionProbe(
 	}))
 }
 
-function childProbe(
-	vocabulary: Vocabulary<string, string, string>,
-	parent: string,
-	list: string,
-	actions: ProbeActions,
-	inboxes: readonly Inbox[],
-) {
+function childProbe(vocabulary: Vocabulary<string, string, string>, parent: string, list: string, actions: ProbeActions) {
 	const { read } = actions
 	return defineContract(vocabulary, (c) => ({
-		...inboxForms(c, inboxes),
 		probe: c.rpc('/probe', { callers: ['human'] }, {
 			get: c.query({ input: ChildByKey, output: Columns, access: { action: read, on: parent, from: 'parent' } }),
 			list: c.query({ output: Keys, access: { action: read, over: list } }),
@@ -184,9 +157,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 	table: string,
 	postgres: TestDatabase,
 ): PolicyIsolationKit {
-	const policies = tablePolicies(tables)
-	const policy = policies[table]
-	const inboxes = Object.entries(policies).flatMap(([name, { scope }]) => (scope.mode === 'inbox' ? [{ table: name, form: scope.form }] : []))
+	const policy = tablePolicies(tables)[table]
 	if (policy === undefined) {
 		throw new Error(`${table} is not a table of src/db/tables.ts`)
 	}
@@ -195,7 +166,8 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 		throw new Error(`${table} is a ${scope.mode} table; no store reaches it, so it has no isolation tests`)
 	}
 	const actions: ProbeActions = policy.actions
-	const layer = scoped(tables)
+	// The probe serves no form, so it compiles against the policies without the forms' inboxes.
+	const layer = scoped(withoutInboxes(tables))
 	const probe = tableProbe(layer, table)
 	const expectVersion = policy.version === null ? undefined : 1
 	const pending = new Map<string, Readonly<Record<string, SampleValue>>>()
@@ -238,7 +210,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 	if (scope.mode === 'dimension') {
 		const dimension = scope.dimension
 		const list = scope.container?.dimension ?? dimension
-		const probeContract = dimensionProbe(contract.vocabulary, dimension, list, actions, inboxes)
+		const probeContract = dimensionProbe(contract.vocabulary, dimension, list, actions)
 		const kit = testKit(
 			implement(probeContract, {
 				database: layer,
@@ -339,7 +311,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 	}
 	const parent = parentPolicy.scope.dimension
 	const list = parentPolicy.scope.container?.dimension ?? parent
-	const probeContract = childProbe(contract.vocabulary, parent, list, actions, inboxes)
+	const probeContract = childProbe(contract.vocabulary, parent, list, actions)
 	const kit = testKit(
 		implement(probeContract, {
 			database: layer,

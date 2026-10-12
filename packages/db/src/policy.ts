@@ -214,6 +214,15 @@ export function tableModels<DB, P>(tables: Tables<DB, P>): TableModels {
 	return readModels(tables)
 }
 
+/**
+ * The same policies without the forms' inbox tables: what a contract that serves no form compiles against. A form's
+ * inbox is reached by its form only, so no other table's policy names one.
+ */
+export function withoutInboxes<DB, P>(tables: Tables<DB, P>): Tables<DB, P> {
+	const models = readModels(tables)
+	return new Tables(Object.freeze(Object.fromEntries(Object.entries(models).filter(([, model]) => model.scope.mode !== 'inbox'))))
+}
+
 /** Whether `value` is what `defineTables` returned, rather than another form of the same policies. */
 export function isTables<DB, P, Other extends object>(value: Tables<DB, P> | Other): value is Tables<DB, P> {
 	return hasModels(value)

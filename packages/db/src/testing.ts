@@ -18,6 +18,7 @@ import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
 import type { TableProbe } from './store'
 
+export { withoutInboxes } from './policy'
 export { ChildTable, defineChildStore, defineStore, DimensionTable, type TableProbe } from './store'
 
 const MODULE = '@fabrika/db/testing'

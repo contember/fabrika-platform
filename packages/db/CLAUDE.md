@@ -41,7 +41,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `form-admissions.ts`   | `fabrika_form_admissions` and `fabrika_form_challenges`: a form's per-minute buckets and accepted challenge tokens, one statement each.                        |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                          |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).                             |
-| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`, the framework's `defineStore`.                                   |
+| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`, `withoutInboxes`, the framework's `defineStore`.                 |
 | `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                                        |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
