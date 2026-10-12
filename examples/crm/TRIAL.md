@@ -9,13 +9,13 @@ test-scaffold` is the skill's loop, not an edit.
 
 ## The groups
 
-| Group | Brief                | Removed from the copy                     | Reference implementation                             |
-| ----- | -------------------- | ----------------------------------------- | ---------------------------------------------------- |
-| A     | Companies & contacts | `src/companies/`, `src/contacts/`         | 10 endpoints                                         |
-| B     | Deals                | `src/deals/`, the two `api.deals.*` seeds | 9 endpoints (one declares `sql: 'read'`), `logic.ts` |
-| C     | Tasks                | `src/tasks/`, the `overdue` job           | 3 endpoints and one cron job                         |
-| D     | Activities           | `src/activities/`                         | 4 endpoints on two child tables                      |
-| E     | Orgs and people      | `src/orgs/`                               | 2 endpoints, one reads the org's member directory    |
+| Group | Brief                | Removed from the copy                    | Reference implementation                             |
+| ----- | -------------------- | ---------------------------------------- | ---------------------------------------------------- |
+| A     | Companies & contacts | `src/companies/`, `src/contacts/`        | 10 endpoints                                         |
+| B     | Deals                | `src/deals/`                             | 9 endpoints (one declares `sql: 'read'`), `logic.ts` |
+| C     | Tasks                | `src/tasks/`, the `overdue` job          | 3 endpoints and one cron job                         |
+| D     | Activities           | `src/activities/`                        | 4 endpoints on two child tables                      |
+| E     | Orgs and people      | `src/orgs/endpoints.ts` (not `logic.ts`) | 2 endpoints, one reads the org's member directory    |
 
 ## The starting copy
 
@@ -24,25 +24,28 @@ For the group under trial, from the root of a fabrika-platform checkout that sti
 1. Copy `examples/crm` to `examples/crm-trial-<group>/` (lowercase, such as `crm-trial-c`) and set its
    `package.json` `name` to `fabrika-example-crm-trial-<group>`. Bun refuses two workspaces of one name, so the copy
    must not keep `fabrika-example-crm`.
-2. In the copy, delete the directories the table names, with their `__tests__/`.
+2. In the copy, delete what the table names, with its `__tests__/`. Group E keeps `src/orgs/logic.ts`: the deals and
+   tasks slices pick a person with its `picked`.
 3. In `fabrika.contract.ts`, delete the group's imports and its keys in `c.rpc('/api', { … })`. For group C also delete
-   the `jobs: { overdue }` section, and make the file's first comment name "the attachments of a deal and the SPA". Leave the
+   the `jobs: { overdue }` section. Leave the
    `attachments` collection, the SPA mount and the health check.
 4. Delete `src/__tests__/endpoint-access.test.ts` (the agent regenerates it with `fabrika db test-scaffold`) and the
    authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` for A
    and B. Keep them for the judge.
-5. For group B, set `src/__tests__/endpoint-access.fixtures.ts` to `export const seeds = {}`.
+5. In `src/__tests__/endpoint-access.fixtures.ts`, delete every `seeds` and `members` entry of a removed endpoint, and
+   keep the others (the checker refuses an entry of an endpoint that does not exist): for B the two `api.deals.*` seeds
+   and `members['api.deals.assign']`, for C `members['api.tasks.create']`. A, D and E change nothing there.
 6. Delete the SPA, which calls every group by name and is not part of the trial: `web/`, `build-web.ts`, the
    `build:web` script of `package.json`, the `- bun run build:web` line of `zerops.yaml`, and `"web/**/*"` from the
    `include` of `tsconfig.json`. Delete this file too.
 7. Run `bun install` at the checkout's root, then in the copy `bunx fabrika db test-scaffold`. The copy starts green:
    `bunx tsc --noEmit`, `bunx fabrika-check .` (0 refusals, 0 hints) and `bun test --isolate` with
-   `FABRIKA_TEST_POSTGRES_URL` set. Checked for group C beside `examples/crm`: `bun install` passes and 136 tests pass.
+   `FABRIKA_TEST_POSTGRES_URL` set. Checked on WU22 beside `examples/crm` for C (139 tests pass) and E (143).
 
 Everything else is the agent's starting point and stays unchanged: the rest of `package.json`, `tsconfig.json` and
 `zerops.yaml`, `fabrika.config.ts`, `src/vocabulary.ts`, `db/migrations/20261012120000_crm.sql`,
 `src/db/schema.generated.ts`, `src/db/tables.ts`, `src/db/__tests__/*.policy-isolation.test.ts`, `src/app-kit.ts`,
-`src/app.ts`, `src/schemas.ts` and the other groups' slices. No group needs a new migration, table policy, action or
+`src/app.ts`, `src/schemas.ts`, `src/orgs/logic.ts` and the other groups' slices. No group needs a new migration, table policy, action or
 role. An agent that adds one must ask first (the skill's "Ask the human first"); count it as a deviation from the
 brief.
 
