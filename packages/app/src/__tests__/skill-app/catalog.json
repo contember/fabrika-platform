@@ -351,6 +351,16 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "fabrika_job_leases",
+			"column_name": "pending",
+			"type_name": "bool",
+			"type_type": "b",
+			"type_category": "B",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
 			"table_name": "fabrika_migrations",
 			"column_name": "bundle",
 			"type_name": "text",
