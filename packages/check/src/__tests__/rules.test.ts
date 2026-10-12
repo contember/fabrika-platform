@@ -148,7 +148,11 @@ const cases: readonly RuleCase[] = [
 			].join('\n'),
 		},
 		expected: ['src/server.ts:1:1', 'src/server.ts:2:1', 'src/server.ts:3:22', 'src/server.ts:4:21', 'src/server.ts:5:1'],
-		good: { 'src/files.ts': "import { file } from 'bun'\n\nexport const read = () => Bun.file('notes.txt').text()\nexport { file }\n" },
+		good: {
+			// Outside src/ a build script still reaches Bun's other members; a server module only tests for a global.
+			'scripts/files.ts': "import { file } from 'bun'\n\nexport const read = () => Bun.file('notes.txt').text()\nexport { file }\n",
+			'src/runtime.ts': "export const inBrowser = typeof window !== 'undefined'\n",
+		},
 	},
 	{
 		rule: 'raw-sql',

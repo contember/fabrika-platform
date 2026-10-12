@@ -25,7 +25,12 @@ export interface SourceContext {
 	readonly isGeneratedEntry: boolean
 	/** The names the module binds to an imported `sql` (`rawSqlBindings`): a parameter of that name is not one of them. */
 	readonly rawSql: ReadonlySet<string>
+	/** A module under `src/` that is not a test: it reaches no global object and no `Bun` at all. */
+	readonly isServerModule: boolean
 }
+
+/** The global objects and `Bun`: a server module reaches the platform through the framework only. */
+const SERVER_REFUSED_GLOBALS = new Set(['globalThis', 'global', 'self', 'window', 'Bun'])
 
 /**
  * The local names a module binds to a value named `sql` it loads: `import { sql as q } from 'kysely'` and
@@ -312,17 +317,10 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 			ALLOWED_LOAD,
 		)
 	}
-	const isMemberObject = parent?.type === 'MemberExpression' && parent['object'] === node
-	if (pathIs(path, 'Bun') && (memberPath(node)?.length ?? 0) > 1 && !isMemberObject) {
-		context.report(
-			node,
-			'forbidden-global',
-			`${memberPath(node)?.join('.') ?? 'Bun'} used as a value hides which global is reached`,
-			'Bun.<member> written out',
-		)
-	}
 	const bunMember = path?.length === 2 && path[0] === 'Bun' ? FORBIDDEN_BUN_MEMBERS.get(path[1] ?? '') : undefined
-	if (bunMember !== undefined) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
+	// In a server module the root itself is refused (`checkIdentifier`), once.
+	const rootRefused = context.isServerModule && SERVER_REFUSED_GLOBALS.has(memberPath(node)?.[0] ?? '')
+	if (bunMember !== undefined && !rootRefused) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
 	if (pathIs(path, 'eval') && (memberPath(node)?.length ?? 0) > 1) context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
 	if (!context.isGeneratedEntry && (pathIs(path, 'process', 'env') || pathIs(path, 'Bun', 'env'))) {
 		context.report(node, 'env-read', `${path?.join('.')} is read outside the generated entrypoint`, ALLOWED_ENV)
@@ -394,38 +392,16 @@ const checkIdentifier = (node: AstNode, parent: AstNode | undefined, context: So
 	const name = stringField(node, 'name')
 	const isMemberObject = parent?.type === 'MemberExpression' && parent['object'] === node
 	if (name === 'eval') context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
+	const isTypeofCheck = parent?.type === 'UnaryExpression' && parent['operator'] === 'typeof'
+	if (context.isServerModule && name !== undefined && SERVER_REFUSED_GLOBALS.has(name) && !isTypeofCheck) {
+		context.report(node, 'forbidden-global', `${name} is not used in a server module`, 'what the framework hands the handler through ctx or deps')
+		return
+	}
 	if (name === 'Bun' && !isMemberObject) {
 		context.report(node, 'forbidden-global', 'Bun used as a value hides which global is reached', 'Bun.<member> written out')
 	}
-	const isTypeofCheck = parent?.type === 'UnaryExpression' && parent['operator'] === 'typeof'
 	if (name === 'process' && !isMemberObject && !context.isGeneratedEntry && !isTypeofCheck) {
 		context.report(node, 'env-read', 'process used as a value hides a read of process.env', ALLOWED_ENV)
-	}
-}
-
-/**
- * `const { Bun } = globalThis`, `const { Bun: { sql } } = globalThis` and `const g = globalThis`: a global object
- * taken apart or bound to a name hides which global a later read reaches.
- */
-const checkGlobalObjectBinding = (pattern: AstNode | undefined, value: AstNode | undefined, context: SourceContext): void => {
-	const global = value === undefined ? undefined : identifierName(unwrap(value))
-	if (pattern === undefined || global === undefined || !GLOBAL_OBJECTS.has(global)) return
-	if (identifierName(pattern) !== undefined) {
-		context.report(pattern, 'forbidden-global', `${global} bound to a name hides which global is reached`, 'Bun.<member> written out')
-		return
-	}
-	if (pattern.type !== 'ObjectPattern') return
-	for (const property of children(pattern, 'properties')) {
-		if (property === null) continue
-		const key = property.type === 'Property' ? staticKey(property, 'key') : undefined
-		if (key === undefined || key === 'Bun') {
-			context.report(
-				property,
-				'forbidden-global',
-				`${key ?? 'a computed member'} destructured from ${global} hides which global is reached`,
-				'Bun.<member> written out',
-			)
-		}
 	}
 }
 
@@ -480,11 +456,8 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 		case 'Identifier':
 			return checkIdentifier(node, parent, context)
 		case 'VariableDeclarator':
-			checkGlobalObjectBinding(child(node, 'id'), child(node, 'init'), context)
 			return checkDestructuredEnv(node, context)
 		case 'AssignmentExpression':
-			if (child(node, 'left')?.type === 'ObjectPattern') checkGlobalObjectBinding(child(node, 'left'), child(node, 'right'), context)
-			return checkPrototypeWrite(node, context)
 		case 'UpdateExpression':
 		case 'UnaryExpression':
 			return checkPrototypeWrite(node, context)

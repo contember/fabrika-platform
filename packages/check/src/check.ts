@@ -10,6 +10,7 @@ import {
 	isCheckedFile,
 	isIgnoredSegment,
 	isJsonFile,
+	isServerModule,
 	isSourceFile,
 	isTestFile,
 	TABLES_FILE,
@@ -77,7 +78,7 @@ const checkSourceModule = async (
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
-	const context = { report, isGeneratedEntry, rawSql: rawSqlBindings(module.program) }
+	const context = { report, isGeneratedEntry, rawSql: rawSqlBindings(module.program), isServerModule: isServerModule(module.file) }
 	const trusted = trustedBindings(module.file, module.program, mappings)
 	const place = structurePlace(module.file, isGeneratedEntry)
 	walk(module.program, (node, ancestors) => {

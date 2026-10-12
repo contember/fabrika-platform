@@ -29,6 +29,8 @@ export const SLICE_ENDPOINTS_FILE = 'endpoints.ts'
 export const SLICE_LOGIC_FILE = 'logic.ts'
 export const SLICE_QUERIES_FILE = 'queries.ts'
 export const SPA_DIR = 'web/'
+/** The server half of an application: its modules run in the application's process. */
+export const SERVER_DIR = 'src/'
 
 const SOURCE_EXTENSION = /\.(?:[mc]?[jt]s|[jt]sx)$/
 const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[mc]?[jt]sx?$/
@@ -39,6 +41,9 @@ export const isIgnoredSegment = (segment: string): boolean => segment === 'node_
 export const isSourceFile = (path: string): boolean => SOURCE_EXTENSION.test(path)
 
 export const isTestFile = (path: string): boolean => TEST_FILE.test(path)
+
+/** A module that runs in the application's server process: under `src/`, not a test. */
+export const isServerModule = (path: string): boolean => path.startsWith(SERVER_DIR) && !isTestFile(path)
 
 export const isJsonFile = (path: string): boolean => path.endsWith('.json')
 
