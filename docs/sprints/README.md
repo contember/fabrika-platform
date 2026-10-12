@@ -20,4 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 - [MCP application authoring](sprint-2026-10-07-mcp-authoring.md) — employees author apps from Claude/ChatGPT through MCP in Control: Git workspaces, stage deploys, pull requests; Zerops first. Decisions in ADR-0049.
-- [The paved-road application framework](sprint-2026-10-11-paved-road-framework.md) — a declarative shell with colocated handlers, a mini-ORM scoped by the endpoint's capability, raw SQL as a legitimate tool, and deviations from the road shown in the approval.
+- [The paved-road application framework](sprint-2026-10-11-paved-road-framework.md) — a declarative shell with colocated handlers, a mini-ORM scoped by the endpoint's capability, raw SQL as a legitimate tool, and deviations from the road shown in the approval. Its [first part](../archive/sprint-2026-10-11-paved-road-core.md) is archived.

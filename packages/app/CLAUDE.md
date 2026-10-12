@@ -241,7 +241,7 @@ src/
 
 ## The staged kit
 
-The paved-road sprint (`docs/sprints/sprint-2026-10-11-paved-road-framework.md`) builds it unit by unit; its
+The paved-road sprint (`docs/archive/sprint-2026-10-11-paved-road-core.md`) built it unit by unit; its
 signatures are fixed, and each builder whose runtime a later unit adds throws `<builder> is not implemented (WU<n>)`
 (`notImplemented` in `contract/problems.ts`). `defineVocabulary`, `defineTables(vocabulary, columns)`, `defineApp`
 with its builders, `serve` and `defineDeps` run; the tables derive each key, container and child chain from the
