@@ -651,8 +651,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		} else if (mount.kind === 'form') {
 			const row = rows.get(name)
 			const admission = formAdmission(name, artifact, options, problems)
+			const approved = artifact.mounts[name]
+			const then = approved?.kind === 'form' ? (approved.then ?? null) : null
 			if (row !== undefined && admission !== null) {
-				endpoints.set(name, { kind: 'form', row, form: name, input: mount.input, admission })
+				endpoints.set(name, { kind: 'form', row, form: name, input: mount.input, admission, then })
 			}
 		} else if (mount.kind === 'webhook') {
 			declared.add(name)
@@ -774,6 +776,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		capabilities: issuer.authority,
 		data,
 		failures: new FailureReports(reporterFor('fabrika.requests')),
+		kick: jobs.kick,
 		browserConfig: Object.freeze({
 			dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
 			release: options.environment.framework['FABRIKA_RELEASE']?.trim() || null,

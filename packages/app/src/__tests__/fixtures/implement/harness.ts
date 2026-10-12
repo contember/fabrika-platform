@@ -256,14 +256,14 @@ export function bootApp(app: ContractImplementation, options: Partial<BootOption
 		...options,
 	})
 	return {
-		fetch: (request) => {
+		fetch: (request, exec) => {
 			const header = endpointHeaderFor(app, request.method, rawRequestTarget(request.url).pathname)
 			if (header === null || request.headers.has(ENDPOINT_HEADER)) {
-				return runtime.fetch(request)
+				return runtime.fetch(request, exec)
 			}
 			const headers = new Headers(request.headers)
 			headers.set(ENDPOINT_HEADER, header)
-			return runtime.fetch(new Request(request, { headers }))
+			return runtime.fetch(new Request(request, { headers }), exec)
 		},
 		jobs: runtime.jobs,
 	}

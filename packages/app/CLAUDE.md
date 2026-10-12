@@ -40,6 +40,7 @@ bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share li
 bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honeypot and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
+bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
@@ -128,7 +129,7 @@ src/
     treatment.ts      FileDownload and the file treatment of ADR-0022
   jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob)
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
-    runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports; the framework's own jobs
+    runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a form's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
     report.ts         the Operations reporter: job runs and request failures as error events to its ingest
 ```
@@ -532,6 +533,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   `@fabrika/db`'s `FormAdmissions` (`FORM_LIMITS` holds the defaults), never a counter in the process. The client is
   `clientBucket`: `X-Fabrika-Client-Ip` only, an IPv6 address by its /64, kept as a digest; never read another
   forwarding header. Admission is not authorization.
+- **A form's `then` kicks its job only after the row committed, and the answer never depends on it** (`#form`): the
+  kick (`BoundJobs.kick`) goes to the request's `waitUntil` or runs detached, never rejects, and starts nothing for a
+  refused, honeypotted or challenge-failed submission. The kicked run is the job's own (its key, its lease, its
+  retries), never the request's. Never await the kick, and never give it a payload: the job reads its inbox.
 - **A form's challenge is verified before its row and recorded after it passed** (`challenge.ts`). The provider
   list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`, which `buildArtifact` adds to
   `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the body (`CHALLENGE_LIMITS`),
@@ -788,6 +793,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.
 - **Lease times are the database's**: the runner passes durations, never a timestamp, so a container whose clock is
   minutes off cannot take a live lease over. `JobClock` has only the waits and the jitter.
+- **Kicks coalesce on the lease: at most one run and one pending.** A kick runs the job when it takes the lease; when
+  another run holds it, it sets the lease's `pending` (`markPending`, only on a live holder) and ends, and every run
+  that succeeded takes the flag (`takePending`) and runs once more, cron runs included. Within one process a kick in
+  flight absorbs the next into one more kick. A failed run leaves the flag for the next run; the schedule is the
+  recovery path, so never drop the cron for a job a form kicks. `serveContract` drains kicked runs on SIGTERM before
+  it closes the database, and `kit.runJob` waits for them before it runs.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
   `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own

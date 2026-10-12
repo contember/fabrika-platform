@@ -306,7 +306,11 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 		workloadTokens,
 		requireProxySecret: true,
 	})
-	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
+	// The work a request leaves running (a failure's report, a job a form kicked) is drained before the database closes.
+	const handler = createBunHandler({ fetch: (request, _env: undefined, exec) => served.fetch(request, exec) }, undefined, {
+		onBackgroundError: () => console.error('fabrika: a background task of a request failed'),
+	})
+	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => handler.fetch(request) })
 	// The crontab may never fire; the serving process notices a job that stopped succeeding without being invoked.
 	const check = () => void served.jobs.check()
 	const checks = served.jobs.names.length === 0 ? undefined : setInterval(check, JOB_CHECK_INTERVAL_MS)
@@ -316,6 +320,7 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const stop = async (): Promise<void> => {
 		clearInterval(checks)
 		await server.stop(false)
+		await handler.drain()
 		await database?.close()
 	}
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))

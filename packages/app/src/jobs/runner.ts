@@ -1,7 +1,8 @@
 // The job runner (`fabrika job run <name>`): one run of one `c.cron` job. A run takes the job's lease or does not
 // start; each attempt holds one generation of it with a deadline the database enforces, so a write of an attempt
-// that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). Failures, crashed runs and a job
-// that stopped succeeding are reported to Operations, each under a fixed failure code.
+// that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). A form's `then` kicks a run in the
+// background; a kick that finds the lease held leaves a pending flag, and the run holding it runs once more. Failures,
+// crashed runs and a job that stopped succeeding are reported to Operations, each under a fixed failure code.
 
 import type { IamMembership } from '@fabrika/auth'
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
@@ -36,6 +37,8 @@ export const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000
 export const LEASE_GRACE_MS = 60_000
 /** How often the serving process checks every job for a crashed run and for a schedule that stopped. */
 export const JOB_CHECK_INTERVAL_MS = 60_000
+/** How often a kick tries again when the lease it found held was freed before it could leave the pending flag. */
+const KICK_TRIES = 3
 const BACKOFF_BASE_MS = 1_000
 const BACKOFF_MAX_MS = 5 * 60_000
 const DURATION = /^([1-9][0-9]*)([smh])$/
@@ -183,6 +186,12 @@ export interface BoundJobs {
 	readonly jobs: ContractJobs
 	/** The handler ids the jobs took (`jobs.<name>`), so `boot` finds no undeclared handler among them. */
 	readonly declared: readonly string[]
+	/**
+	 * Kicks the contract job `name`, as a form's `then` does after its row committed: a run under the job's own key
+	 * now, or one more run of the run holding the lease. Kicks in this process coalesce while one is in flight. It
+	 * settles when that work has ended and never rejects; the job's schedule stays the recovery path.
+	 */
+	readonly kick: (name: string) => Promise<void>
 }
 
 function ownChild(node: unknown, key: string): unknown {
@@ -268,7 +277,12 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			if (job === undefined || framework === null) {
 				throw new JobError(`no job '${name}' in the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})`)
 			}
-			return runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock)
+			return runJob(job, contextFor(framework.jobs, options.reporter), options.clock ?? systemClock).then((result) => {
+				if (result.status === 'skipped') {
+					console.error(`fabrika: a previous run of job '${name}' still holds its lease; this run does not start`)
+				}
+				return result
+			})
 		},
 		async check(options: Pick<JobRunOptions, 'reporter'> = {}): Promise<void> {
 			if (framework === null) {
@@ -286,7 +300,45 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			}
 		},
 	})
-	return { jobs, declared }
+	// The jobs whose kick is in flight in this process; `true` once another kick arrived meanwhile.
+	const kicking = new Map<string, boolean>()
+	const kick = async (name: string): Promise<void> => {
+		const job = bound.get(name)
+		if (job === undefined || framework === null) {
+			return
+		}
+		if (kicking.has(name)) {
+			kicking.set(name, true)
+			return
+		}
+		kicking.set(name, false)
+		try {
+			// A kick that arrived during the last one gets a kick of its own, which starts after it.
+			do {
+				kicking.set(name, false)
+				await kickOnce(job, contextFor(framework.jobs, undefined), systemClock)
+			} while (kicking.get(name) === true)
+		} finally {
+			kicking.delete(name)
+		}
+	}
+	return { jobs, declared, kick }
+}
+
+/** One kick: a run while the lease is free, else the pending flag the run holding it takes once it finished. */
+async function kickOnce(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<void> {
+	try {
+		for (let tries = 0; tries < KICK_TRIES; tries++) {
+			const result = await runJob(job, context, clock)
+			if (result.status !== 'skipped' || (await context.leases.markPending(job.name))) {
+				return
+			}
+		}
+		console.error(`fabrika: the kick of job '${job.name}' found its lease changing hands; its next scheduled run takes the work`)
+	} catch {
+		// A driver error may quote the database URL.
+		console.error(`fabrika: the kick of job '${job.name}' failed: driver_failed`)
+	}
 }
 
 /**
@@ -349,7 +401,31 @@ interface Progress {
 	attempts: number
 }
 
+/** A run of the job, then one more for each kick that found the lease held during it. */
 async function runJob(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
+	let result = await runOnce(job, context, clock)
+	while (result.status === 'succeeded' && (await pendingTaken(job, context))) {
+		const next = await runOnce(job, context, clock)
+		// Another run took the lease after this one finished, so after the kick: it does the work.
+		if (next.status === 'skipped') {
+			break
+		}
+		result = next
+	}
+	return result
+}
+
+async function pendingTaken(job: BoundJob, context: RunnerContext): Promise<boolean> {
+	try {
+		return await context.leases.takePending(job.name)
+	} catch {
+		// A driver error may quote the database URL; the flag stays for the next run.
+		console.error(`fabrika: the pending run of job '${job.name}' could not be read: driver_failed`)
+		return false
+	}
+}
+
+async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock): Promise<JobRunResult> {
 	const progress: Progress = { attempts: 0 }
 	try {
 		return await runLeased(job, context, clock, progress)
@@ -366,7 +442,6 @@ async function runLeased(job: BoundJob, context: RunnerContext, clock: JobClock,
 	const leaseMs = job.timeoutMs + LEASE_GRACE_MS
 	let fence = await leases.acquire(job.name, attemptId(), job.timeoutMs, leaseMs)
 	if (fence === null) {
-		console.error(`fabrika: a previous run of job '${job.name}' still holds its lease; this run does not start`)
 		return { status: 'skipped' }
 	}
 	const attempts = job.artifact.retries + 1

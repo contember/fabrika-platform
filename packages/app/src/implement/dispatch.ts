@@ -128,7 +128,15 @@ export type ServedEndpoint =
 	}
 	/** The shell of a link mount's share SPA: anonymous, and served with the fragment bootstrap. */
 	| { readonly kind: 'link-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
-	| { readonly kind: 'form'; readonly row: EndpointRow; readonly form: string; readonly input: Schema; readonly admission: FormAdmission }
+	| {
+		readonly kind: 'form'
+		readonly row: EndpointRow
+		readonly form: string
+		readonly input: Schema
+		readonly admission: FormAdmission
+		/** The job each accepted submission kicks once its row committed; `null` without `then`. */
+		readonly then: string | null
+	}
 	| {
 		readonly kind: 'webhook'
 		readonly row: EndpointRow
@@ -182,6 +190,8 @@ export interface RuntimeParts {
 	readonly data: DataAccess | null
 	/** Where a 5xx goes: the server log, and Operations when the application has a DSN. */
 	readonly failures: FailureReports
+	/** Kicks a contract job under its own key, in the background (`BoundJobs.kick`); it never rejects. */
+	readonly kick: (job: string) => Promise<void>
 	/** What every SPA mount answers at `<prefix>/__fabrika-config.json`, and nothing else of the environment. */
 	readonly browserConfig: BrowserConfig
 }
@@ -282,7 +292,7 @@ export class ContractRuntime {
 				case 'file':
 					return await this.#file(served, request, plan.params)
 				case 'form':
-					return await this.#form(served, request)
+					return await this.#form(served, request, exec)
 				case 'webhook':
 					return await this.#webhook(served, request, plan.params)
 				case 'description':
@@ -644,9 +654,10 @@ export class ContractRuntime {
 	 * A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. In order: the
 	 * client's request bucket (before the body is read), the input, the honeypot (a filled one is answered as accepted
 	 * and writes nothing), the challenge, then the form's bucket of accepted submissions with the row, in one
-	 * transaction, so nothing refused or failed can empty it.
+	 * transaction, so nothing refused or failed can empty it. Only after that commit does `then` kick its job, which the
+	 * answer neither waits for nor depends on.
 	 */
-	async #form(served: Extract<ServedEndpoint, { kind: 'form' }>, request: Request): Promise<Response> {
+	async #form(served: Extract<ServedEndpoint, { kind: 'form' }>, request: Request, exec: RequestExecutionContext | undefined): Promise<Response> {
 		admitContentType(served.row, request)
 		const { admission } = served
 		const admissions = this.#framework().forms
@@ -664,6 +675,11 @@ export class ContractRuntime {
 		// One transaction: a row that fails to insert gives its place in the form's bucket back.
 		if (!(await this.#framework().appendToInbox(served.form, submission.row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }))) {
 			throw formRateLimited(served.row)
+		}
+		if (served.then !== null) {
+			// Without an execution context the kick runs detached; it never rejects.
+			const kicked = this.#parts.kick(served.then)
+			exec?.waitUntil(kicked)
 		}
 		return jsonResponse({ result: { received: true } }, 200)
 	}

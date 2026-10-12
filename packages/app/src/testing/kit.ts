@@ -29,6 +29,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract } from '../contract/define'
+import type { RequestExecutionContext } from '../fetch'
 import type { FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
 import type { ChallengeFetch } from '../implement/challenge'
@@ -94,7 +95,8 @@ export interface TestKit<C extends AnyContract> {
 	readonly iam: IamGateway
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
-	 * its key, its writes fenced. Needs the application's data layer on Postgres.
+	 * its key, its writes fenced. It first waits for the runs a form's `then` kicked, so it never races them. Needs the
+	 * application's data layer on Postgres.
 	 */
 	runJob(name: JobName<C>, options?: JobRunOptions): Promise<JobRunResult>
 }
@@ -305,6 +307,16 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 
 	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: options.membership ?? null })
 
+	// What requests leave running: a job a form's `then` kicked, or a failure's report.
+	const background = new Set<Promise<void>>()
+	const exec: RequestExecutionContext = {
+		waitUntil(promise) {
+			const tracked = promise.then(() => undefined, () => undefined)
+			background.add(tracked)
+			void tracked.then(() => background.delete(tracked))
+		},
+	}
+
 	const kitFetch: RpcFetch = async (input, init) => {
 		const request = toRequest(origin, input, init)
 		if (new URL(request.url).origin !== origin) {
@@ -324,7 +336,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		for (const [header, value] of outcome.asserted) {
 			headers.set(header, value)
 		}
-		return application.fetch(new Request(request, { headers }))
+		return application.fetch(new Request(request, { headers }), exec)
 	}
 
 	function browser(caller?: TestCaller): RpcFetch {
@@ -350,7 +362,12 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		}
 	}
 
-	const runJob = (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => application.jobs.run(name, runOptions)
+	const runJob = async (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => {
+		while (background.size > 0) {
+			await Promise.all(background)
+		}
+		return application.jobs.run(name, runOptions)
+	}
 
 	return Object.freeze({ origin, appId, artifact, testCaller, fetch: kitFetch, browser, iam, runJob })
 }

@@ -11,6 +11,8 @@ import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
 import { contract as catalogContract } from '../../../app/src/__tests__/fixtures/connect-catalog/fabrika.contract'
 import { contract as shopContract } from '../../../app/src/__tests__/fixtures/connect-shop/fabrika.contract'
+import { contract as formKickContract } from '../../../app/src/__tests__/fixtures/form-kick/fabrika.contract'
+import { tables as formKickTables } from '../../../app/src/__tests__/fixtures/form-kick/src/db/tables'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { contract as intakeContract } from '../../../app/src/__tests__/fixtures/intake/fabrika.contract'
@@ -163,6 +165,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app visitor-intake (a job that issues links, link-holder files, forms and a public SPA, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'visitor-intake'),
 		evaluated: () => compileContract(visitorIntakeContract, visitorIntakeTables),
+	},
+	{
+		name: '@fabrika/app form-kick (forms whose then kicks a job, read from source)',
+		root: join(APP_TESTS, 'fixtures', 'form-kick'),
+		evaluated: () => compileContract(formKickContract, formKickTables),
 	},
 	{
 		name: '@fabrika/app connect/shop, whose import reads its digest from the vendored snapshot',
