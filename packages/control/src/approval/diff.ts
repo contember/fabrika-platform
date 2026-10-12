@@ -574,6 +574,12 @@ function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollect
 	const linkChange = from.link === to.link
 		? []
 		: [to.link ? widening(`${files} becomes reachable through share links`) : removal(`${files} is no longer reachable through share links`)]
+	// Without scanning, an upload is served the moment it is written.
+	const scanChange = (from.scan === true) === (to.scan === true)
+		? []
+		: [
+			to.scan === true ? removal(`${files} scans every upload for malware before serving it`) : widening(`${files} stops scanning uploads for malware`),
+		]
 	return [
 		...valueChange(`${files} owner`, from.owner, to.owner),
 		...valueChange(`${files} read action`, from.read, to.read),
@@ -583,6 +589,7 @@ function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollect
 		...limitChange(`${files} limit per owner`, from.maxPerOwner, to.maxPerOwner),
 		...setChanges(files, from.types, to.types, 'accepts', 'no longer accepts'),
 		...linkChange,
+		...scanChange,
 	]
 }
 

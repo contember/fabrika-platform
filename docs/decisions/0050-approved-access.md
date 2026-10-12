@@ -154,6 +154,7 @@ covers:
 - containment, roles and their actions, membership rules;
 - table and column policies, with the actions each column is read and written with;
 - anonymous kinds (a new public SPA, or an SPA that becomes public, widens), link mounts and link-reachable file collections;
+- a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
 - CSP extensions;
 - each site's declared reach;
