@@ -93,18 +93,19 @@ export function workloadTokensFor(
 	app: ContractImplementation,
 	actions?: (workload: Workload) => readonly string[],
 	issuer = ISSUER,
+	appId = APP_ID,
 ): WorkloadTokenSource {
 	const byKey = new Map(workloadsOf(app).map((workload) => [workloadKey(workload.kind, workload.name), workload]))
 	return {
 		async exchange({ app: audience, key }) {
-			const workload = audience === APP_ID ? byKey.get(key) : undefined
+			const workload = audience === appId ? byKey.get(key) : undefined
 			if (workload === undefined) {
 				return { ok: false, reason: 'invalid_key' }
 			}
 			const now = Math.floor(Date.now() / 1000)
 			const claims = buildAccessClaims({
 				iss: issuer,
-				app: APP_ID,
+				app: appId,
 				subject: `${workload.kind}-${workload.name}`,
 				type: workload.kind,
 				workload: workload.name,

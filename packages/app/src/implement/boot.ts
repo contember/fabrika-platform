@@ -680,6 +680,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	for (const [id, served] of files?.endpoints(rows, problems) ?? []) {
 		endpoints.set(id, served)
 	}
+	const membership = options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId)
 	const jobs = bindJobs({
 		artifact,
 		handlers,
@@ -698,6 +699,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 				run: (reporter, signal) => files.scanPass(options.scanner ?? null, reporter, signal),
 			}]
 			: [],
+		membership,
+		capabilities: issuer.authority,
+		containers,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -764,7 +768,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		ownedDimensions: owned,
 		containers,
 		assets: options.assets ?? null,
-		membership: options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId),
+		membership,
 		framework,
 		mint: issuer.mint,
 		capabilities: issuer.authority,

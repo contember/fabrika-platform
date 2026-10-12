@@ -309,8 +309,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   only as a type argument, would let the type promise a section the runtime does not build (`colocated-mistakes/05`–`07`). A kit import no endpoint connects is refused by `buildArtifact`, as before.
 - **`buildArtifact` parses `declared`** (the static reader copies it unchecked): `sql` and each `unscoped` mode `read`
   or `write`, `read` only on a query and an export; `unscoped` names tables of `src/db/tables.ts` and never a
-  `fabrika_*` one; `connect` and `issues` only on an RPC endpoint, `connect` naming the kit's imports, `issues` a
-  link mount whose `issuedBy` on its dimension is the endpoint's own access. The artifact's `declared` section holds
+  `fabrika_*` one; `connect` only on an RPC endpoint, naming the kit's imports; `issues` on an RPC endpoint, a link
+  mount whose `issuedBy` on its dimension is the endpoint's own access, and on a cron job, a link mount whose
+  `issuedBy` and every grant are among the job's actions (`schemaFromContract` hands it to IAM as the job's `issues`).
+  The artifact's `declared` section holds
   each site that declares anything, by endpoint id or `job:<name>`. It is present for every contract with a kit site,
   empty included, and absent for a `defineContract` one: `boot` reads from it alone which reach rule applies.
 - **A kit contract's reach is the approved artifact's, whatever the leaf.** `boot` runs every endpoint of a contract
@@ -500,7 +502,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `ctx.links` only where the `Ref`'s action is a link mount's `issuedBy` for its
   dimension: the types (`ContractContext`) and `facilitiesOf` in `boot.ts` decide the
   same, so change them together. A `Ref` passed to IAM must be this request's, for the
-  endpoint's own dimension and action. A workload (a webhook) gets neither. A directory
+  endpoint's own dimension and action. A webhook gets neither; a job gets `ctx.links` only as Jobs says. A directory
   does not need the transport to boot: without one only its `list()` and `get()` calls answer 503.
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
@@ -790,7 +792,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   unknown dimension and an ended attempt. A refused key fails the attempt `unauthorized`, an unreachable IAM
   `iam_unavailable`; no handler runs. The token is cached until `TOKEN_REFRESH_SKEW_SECONDS` before it expires. The
   grants' principal is `job:<name>`. There is no in-process mint and no unscoped handle; keep no second path. A job
-  cannot create scopes, manage members or issue links: its `ctx` has no such method.
+  creates no scope and manages no member. **It issues links only for the mount the approved artifact says it
+  `issues`** (`jobLinks` in `runner.ts`, by the artifact whatever the leaf; `boot` refuses one without a membership
+  transport): `ctx.links.issue` takes a `Ref` of this attempt for the mount's `issuedBy` on its dimension and asks
+  IAM with the job's current token (`WorkloadAuthority.token`) under the attempt's id; `ctx.links.revoke` ends a link
+  the job issued. IAM checks the same declaration again, so a job never holds more than it declares.
 - **A webhook's refs come from its key the same way** (`FABRIKA_WEBHOOK_<NAME>_KEY`, one per webhook declaration,
   not per binding: a binding is runtime data no snapshot names). `boot` refuses a job or webhook without its key or
   without a token exchange (`BootOptions.workloadTokens`); the test kit and the harness stand in for both.

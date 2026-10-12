@@ -4,7 +4,7 @@
 // The framework writes no grant and mints no credential.
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
-import type { InvitationItem, MemberItem, MembershipFailure, Scope } from '@fabrika/auth-core'
+import type { InvitationItem, IssueLinkResult, MemberItem, MembershipFailure, Scope } from '@fabrika/auth-core'
 import type { CapabilityAuthority, RefGrant } from '@fabrika/db/capability'
 import { joinPath } from '../contract/defaults'
 import { ConflictError, ForbiddenError, HttpError, NotFoundError, UnauthorizedError } from '../errors'
@@ -75,9 +75,14 @@ export interface IssuedLink {
 	readonly expiresAt: number
 }
 
-/** `ctx.links` of an endpoint whose `Ref` carries a link mount's issuing action. */
+/** `ctx.links` of a site that declares the link mount it issues. */
 export interface LinkIssuing<D extends string, A extends string, M extends string> {
 	issue(ref: Ref<D, A>, options: { readonly mount: M; readonly days: number }): Promise<IssuedLink>
+	/**
+	 * Ends the link `id` (`IssuedLink.id`) at IAM: its issuer or a holder of `members.manage` on its chain may; a job only
+	 * a link it issued. Repeating it answers the same. A token minted from it still works until it expires, at most 300 s.
+	 */
+	revoke(id: string): Promise<void>
 }
 
 /** One request's authority at IAM: the caller's token, the proxy's request id and the delegation grant it obtained. */
@@ -246,6 +251,22 @@ export interface IssuableLink {
 	readonly prefix: string
 }
 
+/** The object of `grant` and every value containing it, outward: what IAM binds a link to. */
+function chainOf(grant: RefGrant, containers: readonly string[]): Scope[] {
+	const chain: Scope[] = [scopeOf(grant)]
+	for (const container of containers) {
+		const value = grant.chain.get(container)
+		if (value !== undefined) {
+			chain.push({ type: container, value })
+		}
+	}
+	return chain
+}
+
+function issuedLink(issued: IssueLinkResult & { readonly ok: true }, prefix: string): IssuedLink {
+	return Object.freeze({ id: issued.id, url: `${joinPath(prefix, '')}#${issued.key}`, expiresAt: issued.expiresAt })
+}
+
 /**
  * `ctx.links`: IAM issues an anonymous key bound to the object's whole containment chain, read from the `Ref`, so a
  * link whose object moves stops working. `containers` is the object's dimension's containers, nearest first.
@@ -265,15 +286,62 @@ export function linkIssuing(
 					`'${options.mount}' is not a link mount this endpoint issues (allowed: ${mounts.map((m) => m.name).join(', ')})`,
 				)
 			}
-			const chain: Scope[] = [scopeOf(grant)]
-			for (const container of containers) {
-				const value = grant.chain.get(container)
-				if (value !== undefined) {
-					chain.push({ type: container, value })
-				}
-			}
+			const chain = chainOf(grant, containers)
 			const issued = await ask(() => request.iam.issueLink(request.caller, mount.name, chain, options.days), 'issue a share link')
-			return Object.freeze({ id: issued.id, url: `${joinPath(mount.prefix, '')}#${issued.key}`, expiresAt: issued.expiresAt })
+			return issuedLink(issued, mount.prefix)
+		},
+		async revoke(id: string): Promise<void> {
+			await ask(() => request.iam.revokeLink(request.caller, id), 'revoke a share link')
+		},
+	})
+}
+
+/** The link mount a cron job declares it `issues`, as the artifact states it. */
+export interface JobLinkMount {
+	readonly name: string
+	readonly prefix: string
+	readonly dimension: string
+	readonly issuedBy: string
+}
+
+/** A job's authority at IAM: its link mount, and the token IAM signs from its key now. */
+export interface JobLinkRequest {
+	readonly iam: IamMembership
+	readonly job: string
+	readonly mount: JobLinkMount
+	/** The mount dimension's containers, nearest first. */
+	readonly containers: readonly string[]
+	/** The job's current token and this attempt's id; it throws a 503 when IAM signs none. */
+	caller(): Promise<MembershipRequestCaller>
+	readonly capabilities: CapabilityAuthority
+}
+
+/**
+ * `ctx.links` of a job that declares `issues`. IAM admits the job's token on `issueLink` and `revokeLink` only while the
+ * approved schema says the job issues this mount, so a job holds no more than its declaration; it revokes only its own.
+ */
+export function jobLinkIssuing(request: JobLinkRequest): LinkIssuing<string, string, string> {
+	const { mount } = request
+	return Object.freeze({
+		async issue(ref: unknown, options: { readonly mount: string; readonly days: number }): Promise<IssuedLink> {
+			if (options.mount !== mount.name) {
+				throw new ServerFault('link_mount', `'${options.mount}' is not the link mount job '${request.job}' issues (issues: '${mount.name}')`)
+			}
+			const grant = request.capabilities.resolve(ref)
+			if (grant.kind !== 'ref' || grant.dimension !== mount.dimension || grant.action !== mount.issuedBy) {
+				throw new CapabilityRefusedError(
+					'wrong_target',
+					`a link of '${mount.name}' is issued for ctx.ref('${mount.issuedBy}', '${mount.dimension}', id) of this attempt`,
+				)
+			}
+			const chain = chainOf(grant, request.containers)
+			const caller = await request.caller()
+			const issued = await ask(() => request.iam.issueLink(caller, mount.name, chain, options.days), 'issue a share link')
+			return issuedLink(issued, mount.prefix)
+		},
+		async revoke(id: string): Promise<void> {
+			const caller = await request.caller()
+			await ask(() => request.iam.revokeLink(caller, id), 'revoke a share link')
 		},
 	})
 }

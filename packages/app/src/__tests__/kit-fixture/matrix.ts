@@ -216,6 +216,7 @@ export type OffRoadFields = [
 type Widened = ScopeTarget<K['index'], 'deal', 'crm.read' | 'deals.write', 'query', 'on'>
 
 type JobCtx = JobKitContext<K, 'crm.read' | 'deals.write', Declared<'write', never, never, never>>
+type IssuingJobCtx = JobKitContext<K, 'crm.read' | 'deals.share', Declared<never, never, never, 'shared'>>
 type HookCtx = WebhookKitContext<K, 'org', 'crm.write', None>
 
 /** Jobs read outside their fenced transaction and write inside it; a webhook delivery is one transaction. */
@@ -225,6 +226,9 @@ type CrmTable = 'orgs' | 'companies' | 'deals' | 'deal_activities' | 'countries'
 export type Sites = [
 	Expect<Equal<Flat<Returned<Widened['get']>>, DealRow>>,
 	Expect<Equal<JobCtx['sql'], Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'>>>,
+	// A job's ctx.links exists only for the mount it declares it issues.
+	Expect<Equal<IssuingJobCtx['links'], LinkIssuing<'org' | 'company' | 'deal', 'crm.read' | 'deals.share', 'shared'>>>,
+	Expect<Equal<JobCtx['links'], Unavailable<"declare issues: '<link mount>' on this job to issue its share links">>>,
 	Expect<Equal<Parameters<Parameters<JobCtx['transaction']>[0]>[0]['sql'], SqlTag<CrmTable>>>,
 	Expect<Equal<HookCtx['refs'], { readonly 'crm.write': Ref<'org', 'crm.write'> }>>,
 ]

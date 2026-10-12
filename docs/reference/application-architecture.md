@@ -225,7 +225,7 @@ An import is judged by the file or package Bun loads for it:
   | `sql: 'read' \| 'write'`                   | `ctx.sql`; a query or export takes only `'read'` |
   | `unscoped: { <table>: 'read' \| 'write' }` | `ctx.db.unscoped.<table>`, in that mode          |
   | `connect: ['<connector>']`                 | `ctx.connect.<connector>`                        |
-  | `issues: '<mount>'`                        | `ctx.links.issue`                                |
+  | `issues: '<mount>'`                        | `ctx.links.issue` and `revoke`; also on a job    |
 
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.

@@ -65,10 +65,10 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 	}
 	: never
 
-export type CronOptions<Acts, Sc, S, U, Tables extends string> =
+export type CronOptions<Acts, Sc, S, U, Is, Tables extends string> =
 	& Owned<'kind' | 'schedule'>
 	& { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number }
-	& DeclaredFields<S, U, never, never, Tables>
+	& DeclaredFields<S, U, never, Is, Tables>
 
 /** A cron job of the kit, handled. */
 export interface KitCronJob<Acts extends string, Sc extends string, D> extends CronJob<Acts, Sc> {
@@ -76,7 +76,7 @@ export interface KitCronJob<Acts extends string, Sc extends string, D> extends C
 }
 
 /** A cron job before `.handle`: the contract's `jobs` refuses it. */
-export interface CronBuilder<K extends KitTypes, Acts extends string, Sc extends string, D extends Declared<SqlMode, unknown, never, never>> {
+export interface CronBuilder<K extends KitTypes, Acts extends string, Sc extends string, D extends Declared<SqlMode, unknown, never, string>> {
 	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
 }
 
@@ -178,7 +178,8 @@ export interface App<K extends KitTypes> {
 		const Sc extends K['dimension'] | 'app',
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
-	>(schedule: string, options: CronOptions<Acts, Sc, S, U, K['tables']>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, never>>
+		const Is extends string = never,
+	>(schedule: string, options: CronOptions<Acts, Sc, S, U, Is, K['tables']>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is>>
 	/** A GitHub webhook bound per value of `boundTo`; the contract mounts it by name. */
 	webhook<
 		const B extends K['dimension'],

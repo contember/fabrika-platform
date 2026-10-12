@@ -217,8 +217,15 @@ metadata from the application's schema: containment, the creator role, the membe
   `directory: 'labels'` in the vocabulary; that opt-in is in the approved artifact and widens with closer review
   ([ADR-0050](0050-approved-access.md) §3). Emails and open invitations stay with `members.manage`. A lookup tells a
   caller whether one id it names is a member: it cannot enumerate.
-- **Share links** (`ctx.links.issue`) exist on an endpoint that declares `issues: '<mount>'` and whose `Ref` carries
-  that mount's `issuedBy` for its dimension. IAM binds the key to the object's whole chain.
+- **Share links** (`ctx.links.issue`, `ctx.links.revoke`) exist on an endpoint that declares `issues: '<mount>'` and
+  whose `Ref` carries that mount's `issuedBy` for its dimension, and on a cron job that declares `issues: '<mount>'`
+  and whose actions hold the mount's `issuedBy` and every grant. IAM binds the key to the object's whole chain. A
+  job issues for an object it located with `ctx.ref(<issuedBy>, <dimension>, id)` and presents its own token; IAM
+  admits it only for the mount the approved schema records with the job, and lets it revoke only links it issued.
+  The job is app-wide for that mount: the link is bound to one object, the job is not. This is how an anonymous
+  visitor gets a credential: a form appends a row and answers a constant, and the job creates the record and issues
+  the link. Single use stays application state (a `verified_at` set once under `getForUpdate`); IAM's revocation is
+  the stop, effective within the token lifetime of 300 s.
 
 `endpointMembers` (`@fabrika/auth-core`) decides which members facility an endpoint has, for the types, `boot` and
 Control alike. An invitation by email is accepted on IAM's own page by the principal that owns the invited mailbox,
@@ -251,7 +258,7 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   | `sql: 'read' \| 'write'`                   | endpoint, job, webhook | `ctx.sql` (`tx.sql` in a job), in that mode                  |
   | `unscoped: { <table>: 'read' \| 'write' }` | endpoint, job, webhook | `ctx.db.unscoped.<table>`: no scope predicate, still guarded |
   | `connect: ['<import>']`                    | endpoint               | `ctx.connect.<import>`                                       |
-  | `issues: '<mount>'`                        | endpoint               | `ctx.links.issue`                                            |
+  | `issues: '<mount>'`                        | endpoint, job          | `ctx.links.issue` and `revoke`                               |
 
   The runtime builds each handle only for the declaring site and enforces its mode. It takes the declaration from
   the approved artifact (`ContractArtifact.declared`), not from the handler module, and refuses to boot a site whose

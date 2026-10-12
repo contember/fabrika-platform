@@ -57,7 +57,8 @@ export function issuerWorkloadTokens(
 
 /** What the workload may do now, or why it may do nothing. */
 export type WorkloadAuthority =
-	| { readonly ok: true; readonly perms: readonly PermissionEntry[] }
+	/** `token` is the bearer IAM signed: what a job that issues links presents to IAM. */
+	| { readonly ok: true; readonly perms: readonly PermissionEntry[]; readonly token: string }
 	/** IAM refused the key, or signed a token that is not this workload's: a decided negative. */
 	| { readonly ok: false; readonly reason: 'refused' }
 	/** IAM or its keys could not be reached. */
@@ -76,7 +77,7 @@ export interface WorkloadCredentialOptions {
 /** One workload's key, exchanged for a token when none is cached or the cached one is about to expire. */
 export class WorkloadCredential {
 	readonly #options: WorkloadCredentialOptions
-	#cached: { readonly perms: readonly PermissionEntry[]; readonly exp: number } | null = null
+	#cached: { readonly perms: readonly PermissionEntry[]; readonly token: string; readonly exp: number } | null = null
 	#pending: Promise<WorkloadAuthority> | null = null
 
 	constructor(options: WorkloadCredentialOptions) {
@@ -86,7 +87,7 @@ export class WorkloadCredential {
 	authority(): Promise<WorkloadAuthority> {
 		const cached = this.#cached
 		if (cached !== null && cached.exp - Math.floor(Date.now() / 1000) > TOKEN_REFRESH_SKEW_SECONDS) {
-			return Promise.resolve({ ok: true, perms: cached.perms })
+			return Promise.resolve({ ok: true, perms: cached.perms, token: cached.token })
 		}
 		this.#pending ??= this.#exchange().finally(() => {
 			this.#pending = null
@@ -118,8 +119,8 @@ export class WorkloadCredential {
 			return { ok: false, reason: 'refused' }
 		}
 		const perms = Object.freeze(claims.perms.map((entry) => Object.freeze({ ...entry })))
-		this.#cached = { perms, exp: claims.exp }
-		return { ok: true, perms }
+		this.#cached = { perms, token: minted.token, exp: claims.exp }
+		return { ok: true, perms, token: minted.token }
 	}
 }
 

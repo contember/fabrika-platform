@@ -3,12 +3,25 @@
 // that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). Failures, crashed runs and a job
 // that stopped succeeding are reported to Operations, each under a fixed failure code.
 
+import type { IamMembership } from '@fabrika/auth'
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
+import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
+import { ServerFault } from '../implement/faults'
 import type { ContractDatabase } from '../implement/implement'
-import { approvedDeclaration, boundTo, isSiteHandler, jobHandles, jobSql, siteData, type SiteDeclaration } from '../implement/invocation'
+import {
+	approvedDeclaration,
+	approvedReach,
+	boundTo,
+	isSiteHandler,
+	jobHandles,
+	jobSql,
+	siteData,
+	type SiteDeclaration,
+} from '../implement/invocation'
+import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
 import type { WorkloadCredential } from '../implement/workload'
 import type { OperationsReporter } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
@@ -117,6 +130,8 @@ interface BoundJob {
 	readonly credential: WorkloadCredential
 	/** A staged-kit job's declaration: it reads through `ctx.db` and writes only in `ctx.transaction`. */
 	readonly site: SiteDeclaration | null
+	/** The link mount the approved artifact says the job `issues`: its `ctx.links`. */
+	readonly links: JobLinkMount | null
 }
 
 interface RunnerContext {
@@ -127,6 +142,9 @@ interface RunnerContext {
 	readonly reporter: OperationsReporter
 	readonly mint: CapabilityMint
 	readonly data: DataAccess | null
+	readonly membership: IamMembership | null
+	readonly capabilities: CapabilityAuthority
+	readonly containers: ReadonlyMap<string, readonly string[]>
 }
 
 export interface JobBindingInput {
@@ -147,6 +165,12 @@ export interface JobBindingInput {
 	readonly data: DataAccess | null
 	/** The framework's own jobs this contract needs: the scan of its `scan: true` file collections. */
 	readonly frameworkJobs?: readonly FrameworkJob[]
+	/** IAM's membership operations, which a job that `issues` links asks; `null` when the adapter supplies none. */
+	readonly membership: IamMembership | null
+	/** The runtime's authority, which a `Ref` passed to IAM must resolve with. */
+	readonly capabilities: CapabilityAuthority
+	/** Each dimension's containers, nearest first: a link's chain. */
+	readonly containers: ReadonlyMap<string, readonly string[]>
 }
 
 interface BoundFrameworkJob {
@@ -201,12 +225,13 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		const handler = isSiteHandler(node) ? node.handler : node
 		const site = isSiteHandler(node) ? approvedDeclaration(where, `${JOB_SITE_PREFIX}${name}`, node.declared, 'job', input.artifact, problems) : null
 		const credential = input.credentials.get(`job:${name}`)
+		const links = jobLinks(where, `${JOB_SITE_PREFIX}${name}`, site, input, problems)
 		if (typeof handler !== 'function') {
 			problems.push(`${where} has no handler; add it to handlers.jobs`)
 		} else if (site !== null && input.data === null) {
 			problems.push(`${where} reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 		} else if (schedule !== null && timeoutMs !== null && credential !== undefined) {
-			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential, site })
+			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential, site, links })
 		}
 	}
 	const frameworkJobs = new Map<string, BoundFrameworkJob>()
@@ -228,6 +253,9 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		reporter: chosen ?? input.reporter,
 		mint: input.mint,
 		data: input.data,
+		membership: input.membership,
+		capabilities: input.capabilities,
+		containers: input.containers,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -259,6 +287,30 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		},
 	})
 	return { jobs, declared }
+}
+
+/**
+ * The link mount a job issues, by the approved artifact's declaration of its site whatever its leaf; a job that issues
+ * without an IAM membership transport does not boot.
+ */
+function jobLinks(where: string, site: string, declaration: SiteDeclaration | null, input: JobBindingInput, problems: string[]): JobLinkMount | null {
+	const reach = declaration ?? (input.artifact.declared === undefined ? null : approvedReach(site, input.artifact))
+	const name = reach?.issues ?? null
+	if (name === null) {
+		return null
+	}
+	const mount = Object.hasOwn(input.artifact.mounts, name) ? input.artifact.mounts[name] : undefined
+	if (mount?.kind !== 'link') {
+		problems.push(`${where} issues '${name}', which is not a link mount of the contract`)
+		return null
+	}
+	if (input.membership === null) {
+		problems.push(
+			`${where} issues links of '${name}', and the runtime adapter supplies no IAM membership transport (the IAM binding on Cloudflare; FABRIKA_IAM_RPC_URL and FABRIKA_IAM_RPC_KEY on Bun)`,
+		)
+		return null
+	}
+	return { name, prefix: mount.prefix, dimension: mount.dimension, issuedBy: mount.issuedBy }
 }
 
 const attemptId = (): string => Bun.randomUUIDv7()
@@ -469,6 +521,7 @@ function jobContext(
 		attempt,
 		signal,
 		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, job.site, principal.id)),
+		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
 			return context.mint.within(frame, dimension, action, principal.id, 'all')
@@ -484,6 +537,28 @@ function jobContext(
 				throw new NotFoundError('Not found')
 			}
 			return context.mint.ref(frame, dimension, action, principal.id, id, chain)
+		},
+	})
+}
+
+/** `ctx.links` of a job that issues: IAM is asked with the job's current token, under the attempt's id. */
+function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, frame: RequestFrame, context: RunnerContext): object {
+	return jobLinkIssuing({
+		iam,
+		job: job.name,
+		mount,
+		containers: context.containers.get(mount.dimension) ?? [],
+		capabilities: context.capabilities,
+		async caller() {
+			const authority = await job.credential.authority()
+			if (!authority.ok) {
+				throw new ServerFault(
+					authority.reason === 'unavailable' ? 'iam_unavailable' : 'workload_unauthorized',
+					`IAM signs no token for the key of job '${job.name}'`,
+					503,
+				)
+			}
+			return { credential: authority.token, requestId: frame.id }
 		},
 	})
 }

@@ -592,9 +592,18 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   invitation. `label` is `null` unless the dimension declares `directory: 'labels'` in
   the vocabulary (a user's label spells its address); that declaration is in the contract,
   and adding it widens for closer review.
-- `ctx.links.issue(ref, { mount, days })` exists on an endpoint whose `Ref` carries a link
-  mount's `issuedBy` for its dimension. IAM binds the key to the object's whole chain;
-  the answer is `<prefix>/#<key>`.
+- `ctx.links.issue(ref, { mount, days })` and `ctx.links.revoke(id)` exist on an endpoint
+  that declares `issues: '<mount>'` and whose `Ref` carries the mount's `issuedBy` for its
+  dimension. IAM binds the key to the object's whole chain; the answer is
+  `{ id, url: '<prefix>/#<key>', expiresAt }`. The issuer, or a holder of `members.manage`
+  on the chain, revokes it; a token minted from it still works until it expires (300 s).
+- A cron job that declares `issues: '<mount>'`, with the mount's `issuedBy` and every grant
+  among its actions, gets the same `ctx.links`. It issues for
+  `await ctx.ref('<issuedBy>', '<dimension>', id)` and asks IAM with its own token; IAM
+  admits a job only for the mount the approved schema records with it, and the job revokes
+  only links it issued. The job is app-wide for that mount: the link is bound to one object,
+  the job is not. A webhook issues nothing. The `url` is a path: the job prepends the
+  application's public origin from its own configuration before it e-mails the link.
 - A link mount serves its share SPA at `GET <prefix>/*` with
   `<script src="<prefix>/__fabrika-share.js">` inserted as the document's first script.
   That bootstrap takes the key out of the fragment, removes the fragment with

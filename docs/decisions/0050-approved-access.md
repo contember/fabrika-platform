@@ -195,7 +195,8 @@ whole table or a whole column stays a removal.
 **Steps off the paved road widen with closer review.** A site is keyed by its identity — the endpoint id, or the
 job — and each effect of its declaration is compared on its own, so a handler body that moves with the same
 declaration is unchanged. A new `sql` mode, a new `unscoped` table, `read` → `write` in either, a new connector and
-a new link mount to issue each widen; a removal and `write` → `read` narrow. Database code is keyed by file, kind and
+a new link mount to issue (an endpoint's, or a job's `issues`, keyed by the job) each widen; a removal and `write` →
+`read` narrow. Database code is keyed by file, kind and
 object: new code widens, code in a file whose text changed widens again (the diff cannot tell what changed in it),
 and removed code narrows. A contract that leaves the staged kit, whose sites' reach is then no longer declared,
 widens. A dimension that opts its member directory into labels (`directory: 'labels'`), so every `members.list`

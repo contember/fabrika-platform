@@ -16,6 +16,7 @@ import type {
 	MembershipFailure,
 	RequestDelegationInput,
 	RequestDelegationResult,
+	RevokeLinkInput,
 	RevokeLinkResult,
 	RevokeMemberInput,
 	RevokeMemberResult,
@@ -28,6 +29,7 @@ export type MembershipCall =
 	| { readonly method: 'listMembers'; readonly input: ListMembersInput }
 	| { readonly method: 'findMember'; readonly input: FindMemberInput }
 	| { readonly method: 'issueLink'; readonly input: IssueLinkInput }
+	| { readonly method: 'revokeLink'; readonly input: RevokeLinkInput }
 
 export class RecordingMembership implements IamMembershipRpc {
 	readonly calls: MembershipCall[] = []
@@ -86,7 +88,8 @@ export class RecordingMembership implements IamMembershipRpc {
 		return this.#answer({ ok: true, key: 'px_sharedkey123', id: 'link-1', expiresAt: 2 })
 	}
 
-	revokeLink(): Promise<RevokeLinkResult> {
-		return Promise.resolve({ ok: true })
+	async revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
+		this.calls.push({ method: 'revokeLink', input })
+		return this.#answer({ ok: true })
 	}
 }

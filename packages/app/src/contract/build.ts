@@ -897,7 +897,7 @@ class ArtifactBuilder {
 				continue
 			}
 			const scope = this.#job(where, job)
-			this.#declare(where, `${JOB_SITE_PREFIX}${name}`, job.declared, { kind: 'job', readOnly: false })
+			this.#declare(where, `${JOB_SITE_PREFIX}${name}`, job.declared, { kind: 'job', readOnly: false, actions: job.actions })
 			if (scope !== null) {
 				jobs[name] = {
 					schedule: job.schedule,
@@ -1168,11 +1168,17 @@ class ArtifactBuilder {
 			sql: this.#sqlMode(where, value['sql'], place.readOnly),
 			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
 			connect: place.kind === 'rpc' ? this.#connect(where, site, value['connect']) : [],
-			issues: place.kind === 'rpc' ? this.#issues(where, value['issues'], place.access) : null,
+			issues: place.kind === 'rpc'
+				? this.#issues(where, value['issues'], place.access)
+				: place.kind === 'job'
+				? this.#jobIssues(where, value['issues'], place.actions)
+				: null,
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
-			this.#rpcOnly(where, 'issues', value['issues'])
+		}
+		if (place.kind !== 'rpc' && place.kind !== 'job' && value['issues'] !== undefined) {
+			this.#problem(where, 'declares issues, which only an endpoint of an RPC mount or a cron job declares')
 		}
 		if (reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null) {
 			this.#declared[site] = reach
@@ -1239,10 +1245,10 @@ class ArtifactBuilder {
 		return names
 	}
 
-	/** `issues` names a link mount whose links this endpoint's own capability can issue: its action on its dimension. */
-	#issues(where: string, value: unknown, access: AccessDeclaration): string | null {
+	/** The link mount `issues` names, or null after a problem; `undefined` when the site declares none. */
+	#issuedMount(where: string, value: unknown): { readonly name: string; readonly mount: LinkMountDeclaration<SchemaShape> | null } | null | undefined {
 		if (value === undefined) {
-			return null
+			return undefined
 		}
 		if (typeof value !== 'string') {
 			this.#problem(where, "issues is not a link mount's name (allowed: issues: '<link mount>')")
@@ -1251,20 +1257,50 @@ class ArtifactBuilder {
 		const mount = Object.hasOwn(this.#contract.mounts, value) ? this.#contract.mounts[value] : undefined
 		if (mount?.kind !== 'link') {
 			this.#problem(where, `issues '${value}', which is not a link mount of the contract`)
-			return value
+			return { name: value, mount: null }
+		}
+		return { name: value, mount }
+	}
+
+	/**
+	 * A job issues the links of a mount when its actions hold the mount's `issuedBy` and every grant: IAM checks the same
+	 * against the job's declaration, app-wide, so the job issues for any object of the mount's dimension.
+	 */
+	#jobIssues(where: string, value: unknown, actions: readonly string[]): string | null {
+		const issued = this.#issuedMount(where, value)
+		if (issued === undefined || issued === null) {
+			return null
+		}
+		const { name, mount } = issued
+		const missing = mount === null ? [] : [mount.issuedBy, ...mount.grants].filter((action) => !actions.includes(action))
+		if (missing.length > 0) {
+			this.#problem(where, `issues '${name}', whose links need ${missing.map((action) => `'${action}'`).join(', ')} among the job's actions`)
+		}
+		return name
+	}
+
+	/** `issues` names a link mount whose links this endpoint's own capability can issue: its action on its dimension. */
+	#issues(where: string, value: unknown, access: AccessDeclaration): string | null {
+		const issued = this.#issuedMount(where, value)
+		if (issued === undefined || issued === null) {
+			return null
+		}
+		const { name, mount } = issued
+		if (mount === null) {
+			return name
 		}
 		const target = 'on' in access ? access.on : 'in' in access ? access.in : null
 		if (target !== mount.dimension || !('action' in access) || access.action !== mount.issuedBy) {
 			this.#problem(
 				where,
-				`issues '${value}', whose links a '${mount.issuedBy}' capability on a '${mount.dimension}' issues (allowed: access: { action: '${mount.issuedBy}', on: '${mount.dimension}', from })`,
+				`issues '${name}', whose links a '${mount.issuedBy}' capability on a '${mount.dimension}' issues (allowed: access: { action: '${mount.issuedBy}', on: '${mount.dimension}', from })`,
 			)
 		}
-		return value
+		return name
 	}
 
-	/** `connect` and `issues` reach on behalf of a person, so only an RPC endpoint declares them. */
-	#rpcOnly(where: string, field: 'connect' | 'issues', value: unknown): void {
+	/** `connect` calls another application on behalf of a person, so only an RPC endpoint declares it. */
+	#rpcOnly(where: string, field: 'connect', value: unknown): void {
 		if (value !== undefined) {
 			this.#problem(where, `declares ${field}, which only an endpoint of an RPC mount declares`)
 		}
@@ -1448,7 +1484,8 @@ class ArtifactBuilder {
 /** Where a declaration stands: what kind of site, whether it runs read-only, and an RPC endpoint's access form. */
 type DeclaringSite =
 	| { readonly kind: 'rpc'; readonly readOnly: boolean; readonly access: AccessDeclaration }
-	| { readonly kind: 'link' | 'export' | 'webhook' | 'job'; readonly readOnly: boolean }
+	| { readonly kind: 'job'; readonly readOnly: boolean; readonly actions: readonly string[] }
+	| { readonly kind: 'link' | 'export' | 'webhook'; readonly readOnly: boolean }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
 

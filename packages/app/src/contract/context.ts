@@ -323,15 +323,24 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 	& UnscopedData<Ix, U, Kind>
 
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
-export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
+export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string>> =
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
 	& SqlContext<Of<D, 'sql'>, K['tables']>
 
+/**
+ * `ctx.links` of a cron job that declares the link mount it issues (`issues: '<mount>'`): a link for an object the job
+ * located with `ctx.ref(<the mount's issuedBy>, <its dimension>, id)`, and the revocation of a link it issued.
+ */
+type JobLinksContext<Dim extends string, A extends string, Is extends string> = [Is] extends [never]
+	? { readonly links: Unavailable<"declare issues: '<link mount>' on this job to issue its share links"> }
+	: { readonly links: LinkIssuing<Dim, A, Is> }
+
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
-export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
+export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string>> =
 	& JobContext<A, K['dimension']>
 	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
+	& JobLinksContext<K['dimension'], A, Of<D, 'issues'>>
 	& { transaction<R>(work: (tx: JobTransaction<K, A, D>) => Promise<R>): Promise<R> }
 
 /** What a webhook delivery's handler receives: one transaction per delivery, idempotent by `ctx.delivery.key`. */

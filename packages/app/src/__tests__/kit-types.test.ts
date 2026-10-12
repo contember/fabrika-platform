@@ -41,6 +41,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'28-raw-row-for-a-camel-case-output.ts': 'where the output is camelCase: map it with fromRow(Schema, row) from @fabrika/app',
 	'29-members-without-the-list-action.ts': "listing the members of org needs the action 'crm.read'; get(principalId) checks one",
 	'30-attachment-handler-returns-no-rows.ts': 'an attachment handler returns its rows: an array of its row schema, with nothing around it',
+	'31-job-links-without-issues.ts': "declare issues: '<link mount>' on this job to issue its share links",
 }
 
 /**

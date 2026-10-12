@@ -13,6 +13,7 @@ import {
 	directoryLookups,
 	endpointDelegation,
 	type EndpointRow,
+	JOB_SITE_PREFIX,
 	type LinkMountArtifact,
 	type RoleArtifact,
 	type RoleDef,
@@ -42,11 +43,14 @@ export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 }
 
 /**
- * Every job and webhook with its exact actions, and every consumer of an export with the actions of the export rows it
- * may call: what each workload key carries (ADR-0022 "Principal kinds").
+ * Every job and webhook with its exact actions, a job with the link mount it declares it `issues`, and every consumer of
+ * an export with the actions of the export rows it may call: what each workload key carries (ADR-0022 "Principal kinds").
  */
 function workloadsOf(artifact: ContractArtifact): AppWorkloadDef[] {
-	const jobs = Object.entries(artifact.jobs).map(([name, job]): AppWorkloadDef => ({ kind: 'job', name, actions: [...job.actions].sort(byCodeUnit) }))
+	const jobs = Object.entries(artifact.jobs).map(([name, job]): AppWorkloadDef => {
+		const issues = artifact.declared?.[`${JOB_SITE_PREFIX}${name}`]?.issues ?? null
+		return { kind: 'job', name, actions: [...job.actions].sort(byCodeUnit), ...(issues === null ? {} : { issues }) }
+	})
 	const webhooks = Object.entries(artifact.mounts).flatMap(([name, mount]): AppWorkloadDef[] =>
 		mount.kind === 'webhook' ? [{ kind: 'webhook', name, actions: [...mount.actions].sort(byCodeUnit) }] : []
 	)
