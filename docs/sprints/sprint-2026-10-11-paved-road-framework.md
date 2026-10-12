@@ -966,3 +966,6 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   job re-checks its whole filter under the lock (`isOverdue` in `logic.ts`, with its test); the CRM's needs none, its
   `due_on` is not writable. (3) The policy probe's stand-in forms collided with an inbox form named `probe`; the probe
   now binds `withoutInboxes(tables)` (`@fabrika/db/testing`) and declares no form.
+- **WU10b — on WU15b.** Rebased onto `af32c77f`: both catalogs hold `fabrika_job_kicks` (the base's from main, the
+  intake's regenerated). The recipe's forms name `then: 'intake'`, the marked spot and the one-minute latency are gone,
+  and the schedule is stated as the recovery path. Materialized again on the kick: tsc, `fabrika-check` 0/0, 44 tests.
