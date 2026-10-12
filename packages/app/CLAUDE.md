@@ -69,6 +69,7 @@ src/
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
+    directory.ts      the default membership transport: member directories from the kit's callers, writes refused
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes

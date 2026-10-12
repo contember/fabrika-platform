@@ -36,6 +36,7 @@ import type { ApplicationEnvironment, ContractImplementation } from '../implemen
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import { resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
+import { kitDirectory, type TestMembership, writesThroughIam } from './directory'
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
@@ -182,6 +183,15 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 			}
 		},
 	}
+	const byKey = new Map<string, TestCaller>()
+	const bySession = new Map<string, TestCaller>()
+	const byToken = new Map<string, TestCaller>()
+	const memberships = new Map<TestCaller, readonly TestMembership[]>()
+	// A member directory reads the kit's own callers; a contract that writes through IAM needs `options.membership`.
+	const membership = options.membership ?? (writesThroughIam(artifact) ? undefined : kitDirectory(artifact, {
+		byCredential: (credential) => byToken.get(credential) ?? byKey.get(credential),
+		all: () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })),
+	}))
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -198,13 +208,11 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		assets: options.assets ?? defaultAssets,
 		database: options.database,
 		files: options.files,
-		membership: options.membership,
+		membership,
 		connectBindings,
 		workloadTokens,
 	})
 
-	const byKey = new Map<string, TestCaller>()
-	const bySession = new Map<string, TestCaller>()
 	let issued = 0
 
 	function testCaller(grants: readonly TestGrant<C>[], callerOptions: TestCallerOptions = {}): TestCaller {
@@ -231,6 +239,10 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,
 		})
+		memberships.set(
+			caller,
+			grants.flatMap((grant) => ('role' in grant && grant.scope !== undefined ? [{ role: grant.role, scope: grant.scope }] : [])),
+		)
 		if (caller.key !== null) {
 			byKey.set(caller.key, caller)
 		} else {
@@ -256,7 +268,9 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		})
 		const { privateKey } = await signing
 		const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
-		return token.length > MAX_ACCESS_TOKEN_BYTES ? null : { token, expiresAt: claims.exp }
+		if (token.length > MAX_ACCESS_TOKEN_BYTES) return null
+		byToken.set(token, caller)
+		return { token, expiresAt: claims.exp }
 	}
 
 	const iam: IamGateway = {

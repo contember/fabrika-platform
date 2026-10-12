@@ -834,6 +834,11 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   A human signs in with a session (`cookie`) or a `px_` key; `machine` and `link`
   callers present a key. A `link` caller's key is bound to one object with
   `{ kind: 'link', link: { mount, chain } }`: the object first, then each value containing it.
+- `options.membership` is IAM's membership transport. Without it the kit answers a member directory
+  (`ctx.members.list()`) from its own callers: each caller's membership roles in the scope, labels only to a
+  `members.manage` holder or where the dimension declares `directory: 'labels'`, and `not_allowed` to a caller without
+  the dimension's `members.list` there. A contract that creates scopes, manages members or issues share links gets no
+  stand-in, so `boot` names the transport it lacks; pass an `IamMembershipRpc` for it.
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
   (`{ status: 'succeeded', attempts }`).
