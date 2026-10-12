@@ -543,17 +543,21 @@ function jobContext(
 
 /** `ctx.links` of a job that issues: IAM is asked with the job's current token, under the attempt's id. */
 function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, frame: RequestFrame, context: RunnerContext): object {
+	// An attempt that timed out or lost its lease asks IAM nothing: its replacement may already have acted.
+	const assertLive = (): void => {
+		if (frame.ended) {
+			throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it asks IAM for no link`)
+		}
+	}
 	return jobLinkIssuing({
 		iam,
 		job: job.name,
 		mount,
 		containers: context.containers.get(mount.dimension) ?? [],
 		capabilities: context.capabilities,
+		assertLive,
 		async caller() {
-			// An attempt that timed out or lost its lease asks IAM nothing: its replacement may already have acted.
-			if (frame.ended) {
-				throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it asks IAM for no link`)
-			}
+			assertLive()
 			const authority = await job.credential.authority()
 			if (!authority.ok) {
 				throw new ServerFault(

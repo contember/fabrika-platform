@@ -94,6 +94,7 @@ export function workloadTokensFor(
 	actions?: (workload: Workload) => readonly string[],
 	issuer = ISSUER,
 	appId = APP_ID,
+	lifetimeSeconds = 300,
 ): WorkloadTokenSource {
 	const byKey = new Map(workloadsOf(app).map((workload) => [workloadKey(workload.kind, workload.name), workload]))
 	return {
@@ -112,7 +113,7 @@ export function workloadTokensFor(
 				label: `${workload.kind}:${workload.name}`,
 				permissions: (actions?.(workload) ?? workload.actions).map((action) => grant(action)),
 				issuedAt: now - 10,
-				expiresAt: now + 300,
+				expiresAt: now + lifetimeSeconds,
 			})
 			const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
 			return { ok: true, token, expiresAt: claims.exp }

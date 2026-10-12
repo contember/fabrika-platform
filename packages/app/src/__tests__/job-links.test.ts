@@ -3,7 +3,14 @@
 // `ctx.links`. IAM decides each issuance (packages/iam's job-links.test.ts); here IAM is a recording stand-in.
 
 import { compileContract, ContractError, defineApp, schemaFromContract } from '@fabrika/app/contract'
-import { BootError, CapabilityRefusedError, type ContractImplementation, serve } from '@fabrika/app/implement'
+import {
+	BootError,
+	CapabilityRefusedError,
+	type ContractImplementation,
+	type JobClock,
+	serve,
+	type WorkloadTokenSource,
+} from '@fabrika/app/implement'
 import { parseAccessClaims } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
@@ -138,19 +145,61 @@ function implementation(): ContractImplementation {
 	return serve(contract, { database: scoped(tables) })
 }
 
-function booted(iam: RecordingMembership | undefined) {
+function booted(iam: RecordingMembership | undefined, tokens?: (served: ContractImplementation) => WorkloadTokenSource) {
 	const served = implementation()
 	const connection = Database.postgres({ url, schema, max: 2 })
 	connections.push(connection)
 	return bootApp(served, {
 		environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: 'crm@prod' }),
-		workloadTokens: workloadTokensFor(served, undefined, ISSUER, 'crm@prod'),
+		workloadTokens: tokens?.(served) ?? workloadTokensFor(served, undefined, ISSUER, 'crm@prod'),
 		database: connection,
 		...(iam === undefined ? {} : { membership: iam }),
 	})
 }
 
 const noReports = { report: () => Promise.resolve() }
+
+/**
+ * Tokens that expire inside the refresh skew, so every authority lookup exchanges the key; the exchange numbered `held`
+ * waits until the test releases it.
+ */
+function heldExchange(held: number) {
+	const reached = Promise.withResolvers<void>()
+	const released = Promise.withResolvers<void>()
+	let exchanges = 0
+	const source = (served: ContractImplementation): WorkloadTokenSource => {
+		const tokens = workloadTokensFor(served, undefined, ISSUER, 'crm@prod', 20)
+		return {
+			async exchange(input) {
+				exchanges++
+				if (exchanges === held) {
+					reached.resolve()
+					await released.promise
+				}
+				return tokens.exchange(input)
+			},
+		}
+	}
+	return { source, reached: reached.promise, release: () => released.resolve() }
+}
+
+/** Instant backoff; the attempt's deadline passes only when the test calls `pass`. */
+function deadlineClock(): { readonly clock: JobClock; pass(): void } {
+	const deadlines: (() => void)[] = []
+	const clock: JobClock = {
+		wait: (ms, signal) =>
+			new Promise<void>((resolve) => {
+				if (ms < 60_000 || signal.aborted) {
+					resolve()
+					return
+				}
+				deadlines.push(resolve)
+				signal.addEventListener('abort', () => resolve(), { once: true })
+			}),
+		random: () => 0,
+	}
+	return { clock, pass: () => deadlines.splice(0).forEach((resolve) => resolve()) }
+}
 
 describe.skipIf(!hasPostgres)("a job's ctx.links", () => {
 	test("issues for the job's Ref with its own token and the whole chain, and revokes what it issued", async () => {
@@ -176,6 +225,28 @@ describe.skipIf(!hasPostgres)("a job's ctx.links", () => {
 		const calls = iam.calls.length
 		await expect(seen.kept?.revoke('link-1') ?? Promise.resolve()).rejects.toBeInstanceOf(CapabilityRefusedError)
 		expect(iam.calls).toHaveLength(calls)
+	})
+
+	test.each<{ readonly operation: string; readonly held: number; readonly before: RecordingMembership['calls'][number]['method'][] }>([
+		{ operation: 'issueLink', held: 2, before: [] },
+		{ operation: 'revokeLink', held: 3, before: ['issueLink'] },
+	])('an attempt that times out while ctx.links looks up its token sends IAM no $operation', async ({ held, before }) => {
+		const iam = new RecordingMembership()
+		const lookup = heldExchange(held)
+		const deadline = deadlineClock()
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const app = booted(iam, lookup.source)
+			const run = app.jobs.run('invite', { reporter: noReports, clock: deadline.clock })
+			await lookup.reached
+			deadline.pass()
+			expect(await run).toMatchObject({ status: 'failed', code: 'timeout' })
+			lookup.release()
+			await Bun.sleep(50)
+		} finally {
+			log.mockRestore()
+		}
+		expect(iam.calls.map((call) => call.method)).toEqual(before)
 	})
 
 	test('IAM refusing the issuance fails the attempt, and a job without issues has no ctx.links', async () => {

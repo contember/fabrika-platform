@@ -313,6 +313,8 @@ export interface JobLinkRequest {
 	readonly containers: readonly string[]
 	/** The job's current token and this attempt's id; it throws a 503 when IAM signs none. */
 	caller(): Promise<MembershipRequestCaller>
+	/** Throws once the attempt has ended. It runs synchronously right before each IAM operation, after every await. */
+	assertLive(): void
 	readonly capabilities: CapabilityAuthority
 }
 
@@ -336,11 +338,13 @@ export function jobLinkIssuing(request: JobLinkRequest): LinkIssuing<string, str
 			}
 			const chain = chainOf(grant, request.containers)
 			const caller = await request.caller()
+			request.assertLive()
 			const issued = await ask(() => request.iam.issueLink(caller, mount.name, chain, options.days), 'issue a share link')
 			return issuedLink(issued, mount.prefix)
 		},
 		async revoke(id: string): Promise<void> {
 			const caller = await request.caller()
+			request.assertLive()
 			await ask(() => request.iam.revokeLink(caller, id), 'revoke a share link')
 		},
 	})

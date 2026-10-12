@@ -802,6 +802,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   IAM with the job's current token (`WorkloadAuthority.token`) under the attempt's id; `ctx.links.revoke` ends a link
   the job issued. IAM checks the same declaration again, so a job never holds more than it declares. `ctx.links` of an
   attempt that ended asks IAM nothing (`CapabilityRefusedError` `ended`): a replacement attempt may already have acted.
+  The check runs again synchronously right before each IAM call, because the token lookup it awaits can outlast the attempt.
 - **A webhook's refs come from its key the same way** (`FABRIKA_WEBHOOK_<NAME>_KEY`, one per webhook declaration,
   not per binding: a binding is runtime data no snapshot names). `boot` refuses a job or webhook without its key or
   without a token exchange (`BootOptions.workloadTokens`); the test kit and the harness stand in for both.
