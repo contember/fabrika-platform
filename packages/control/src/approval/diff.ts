@@ -8,6 +8,7 @@ import {
 	type ColumnPolicyArtifact,
 	type ContractArtifact,
 	type DeclaredReach,
+	type DimensionArtifact,
 	type EndpointRow,
 	type FileCollectionArtifact,
 	JOB_SITE_PREFIX,
@@ -83,8 +84,11 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	compareKeyed(changes, record(baseline.dimensions), record(candidate.dimensions), {
 		added: (name) => `New dimension \`${name}\``,
 		removed: (name) => `Dimension \`${name}\` is removed`,
-		changed: (name, from, to) => valueChange(`Dimension \`${name}\``, from, to),
+		changed: dimensionChanges,
 	})
+	for (const [name, dimension] of Object.entries(candidate.dimensions)) {
+		if (!Object.hasOwn(baseline.dimensions, name)) changes.add(...directoryChange(name, undefined, dimension.directory))
+	}
 	compareKeyed(changes, record(baseline.actions), record(candidate.actions), {
 		added: (name) => `New action \`${name}\``,
 		removed: (name) => `Action \`${name}\` is removed`,
@@ -658,6 +662,20 @@ function setChanges(subject: string, before: readonly string[], after: readonly 
 		removed: (value) => removal(`${subject} ${loses} \`${value}\``),
 	})
 	return changes.list
+}
+
+function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): AccessChange[] {
+	const { directory: before, ...fromRest } = from
+	const { directory: after, ...toRest } = to
+	return [...valueChange(`Dimension \`${name}\``, fromRest, toRest), ...directoryChange(name, before, after)]
+}
+
+/** A directory that shows labels lets every `members.list` holder read each member's label, which spells an address. */
+function directoryChange(name: string, before: 'labels' | undefined, after: 'labels' | undefined): AccessChange[] {
+	if (before === after) return []
+	return after === 'labels'
+		? [closerWidening(`Holders of the members.list action of \`${name}\` see each member's label, which spells a user's email address`)]
+		: [removal(`Holders of the members.list action of \`${name}\` no longer see member labels`)]
 }
 
 /** Any change of a value the diff does not order widens. */

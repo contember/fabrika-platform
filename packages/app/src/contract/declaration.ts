@@ -96,6 +96,8 @@ export interface DimensionDeclaration {
 	readonly in?: string
 	readonly creator?: string
 	readonly members?: { readonly manage: string; readonly list: string }
+	/** `'labels'` only; `buildArtifact` refuses another value. */
+	readonly directory?: string
 }
 
 export interface RoleDeclaration {

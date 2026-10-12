@@ -165,15 +165,17 @@ class SurfaceReader {
 	}
 
 	#dimension(name: string, value: LiteralValue): DimensionDef<string, string, string> {
-		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members'])
+		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory'])
 		const members = fields.get('members')
 		const memberFields = members === undefined ? undefined : strictFields(members, `dimension '${name}' members`, ['manage', 'list'], [])
+		const directory = fields.get('directory')
 		return {
 			in: optionalText(fields.get('in'), 'in'),
 			creator: optionalText(fields.get('creator'), 'creator'),
 			members: memberFields === undefined
 				? undefined
 				: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') },
+			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
 		}
 	}
 
@@ -728,6 +730,15 @@ function text(value: LiteralValue | undefined, owner: Owner, field: string): str
 		)
 	}
 	return value.value
+}
+
+/** A dimension's `directory`, which only `'labels'` is. */
+function directoryOf(value: LiteralValue, owner: Owner): 'labels' {
+	const directory = text(value, owner, 'directory')
+	if (directory !== 'labels') {
+		throw new Refused(value.at, `directory is '${directory}'`, "directory: 'labels'")
+	}
+	return directory
 }
 
 function optionalText(value: LiteralValue | undefined, field: string): string | undefined {

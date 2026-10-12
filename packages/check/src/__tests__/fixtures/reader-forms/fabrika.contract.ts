@@ -13,7 +13,7 @@ const nightly = `0 2 * * *`
 export const contract = defineContract({
 	app: 'tasks',
 	dimensions: {
-		project: { creator: 'maintainer', members: { manage: 'tasks.admin', list: READ } },
+		project: { creator: 'maintainer', members: { manage: 'tasks.admin', list: READ }, directory: 'labels' },
 		task: { in: 'project' },
 	},
 	actions,

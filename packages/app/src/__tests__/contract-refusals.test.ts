@@ -303,6 +303,21 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
+	test("a directory other than 'labels', or one on a dimension that declares no members", () => {
+		const problems = build({
+			...base,
+			dimensions: {
+				...base.dimensions,
+				note: { in: 'workspace', directory: 'labels' },
+				workspace: { ...base.dimensions['workspace'], directory: 'names' },
+			},
+		})
+		expect(problems).toEqual([
+			"dimension 'workspace': its directory is 'names' (allowed: 'labels')",
+			"dimension 'note': declares a directory and no members: { manage, list } whose list it labels",
+		])
+	})
+
 	test("a role named after one of IAM's own roles", () => {
 		const problems = build({ ...base, roles: { ...base.roles, admin: { grants: ['notes.read'] } } })
 		expect(problems).toEqual(["role 'admin': is a role IAM defines itself for every application (reserved: admin); choose another name"])

@@ -179,6 +179,7 @@ describe('the static reader and the evaluated contract agree', () => {
 		expect(Object.keys(artifact.jobs).sort()).toEqual(['cleanup', 'digest'])
 		expect(Object.keys(artifact.exports)).toEqual(['tasks'])
 		expect(Object.keys(artifact.imports)).toEqual(['billing'])
+		expect(artifact.dimensions['project']?.directory).toBe('labels')
 	})
 })
 

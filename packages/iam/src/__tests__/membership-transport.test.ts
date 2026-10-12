@@ -323,7 +323,7 @@ describe('membershipKeys.issue', () => {
 		const listed = await client.listMembers({ ...(await caller(editor)), scope })
 		if (!listed.ok) throw new Error(`expected a list: ${listed.reason}`)
 		expect(listed.members.map((member) => [member.principalId, member.label, member.email]).sort()).toEqual(
-			[[owner.id, 'owner@example.test', null], [editor.id, 'editor@example.test', null]].sort(),
+			[[owner.id, null, null], [editor.id, null, null]].sort(),
 		)
 		expect(listed.invitations).toEqual([])
 		expect(await client.listMembers({ ...(await caller(stranger)), scope })).toEqual({ ok: false, reason: 'not_allowed' })

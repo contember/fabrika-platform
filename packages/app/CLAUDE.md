@@ -439,8 +439,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
   proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.
   `ctx.members` exists only where the action is the dimension's `members.manage`
-  (management) or `members.list` (a read-only directory, `list()` of `ctx.target`: ids, labels,
-  roles, no emails), both decided by `endpointMembers` of `@fabrika/auth-core`; and
+  (management) or `members.list` (a read-only directory, `list()` of `ctx.target`: ids and roles;
+  labels only where the dimension declares `directory: 'labels'`, never emails), both decided by `endpointMembers` of `@fabrika/auth-core`; and
   `ctx.links` only where the `Ref`'s action is a link mount's `issuedBy` for its
   dimension: the types (`ContractContext`) and `facilitiesOf` in `boot.ts` decide the
   same, so change them together. A `Ref` passed to IAM must be this request's, for the

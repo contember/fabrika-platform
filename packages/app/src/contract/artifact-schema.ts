@@ -172,6 +172,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		in: nullableName,
 		creator: nullableName,
 		members: z.strictObject({ manage: action, list: action }).nullable(),
+		directory: z.literal('labels').optional(),
 	})),
 	actions: z.record(action, z.string()),
 	roles: z.record(

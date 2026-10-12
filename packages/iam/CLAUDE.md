@@ -227,8 +227,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   schema parser refuses it, and scope creation also applies `contractGrantProblem` to the creator role.
   Repeating an assign or a revoke answers the same result — an active grant is kept, an expired one is
   renewed in the same statement (backlog 82's 409 stays for
-  the admin grant API). `listMembers` needs `members.list` there and shows ids, labels and roles (an
-  application's member directory); emails and open invitations only to `members.manage`.
+  the admin grant API). `listMembers` needs `members.list` there and shows ids and roles (an
+  application's member directory); labels only to `members.manage`, or to `members.list` too where the dimension
+  declares `directory: 'labels'` (`app_scopes.members_directory`) — a user's label spells its address; emails and
+  open invitations only to `members.manage`.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE

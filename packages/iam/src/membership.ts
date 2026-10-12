@@ -490,7 +490,7 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 		if (member === undefined) {
 			members.set(row.principal_id, {
 				principalId: row.principal_id,
-				label: row.label,
+				label: manager || dimension.members_directory === 'labels' ? row.label : null,
 				email: manager ? row.email : null,
 				roles: [row.role_key],
 				disabled: row.disabled_at !== null,

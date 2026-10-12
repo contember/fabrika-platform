@@ -65,6 +65,11 @@ export interface DimensionDef<A extends string, D extends string, R extends stri
 	readonly creator?: R
 	/** The action that manages the dimension's members, and the one that lists them. */
 	readonly members?: { readonly manage: A; readonly list: A }
+	/**
+	 * `'labels'`: `ctx.members.list()` of a `members.list` endpoint also answers each member's label, for a people
+	 * picker. A user's label spells its address, so this widens what members see of each other: a reviewed declaration.
+	 */
+	readonly directory?: 'labels'
 }
 
 export interface RoleDef<A extends string, D extends string, R extends string> {

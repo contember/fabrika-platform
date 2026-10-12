@@ -223,10 +223,17 @@ class ArtifactBuilder {
 				this.#knownAction(`${where} members.manage`, dimension.members.manage)
 				this.#knownAction(`${where} members.list`, dimension.members.list)
 			}
+			if (dimension.directory !== undefined && dimension.directory !== 'labels') {
+				this.#problem(where, `its directory is '${String(dimension.directory)}' (allowed: 'labels')`)
+			}
+			if (dimension.directory !== undefined && dimension.members === undefined) {
+				this.#problem(where, 'declares a directory and no members: { manage, list } whose list it labels')
+			}
 			dimensions[name] = {
 				in: dimension.in ?? null,
 				creator: dimension.creator ?? null,
 				members: dimension.members === undefined ? null : { manage: dimension.members.manage, list: dimension.members.list },
+				...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
 			}
 		}
 		for (const name of Object.keys(declared)) {

@@ -521,8 +521,11 @@ request the schema cannot express); an IAM that cannot be asked is 503.
 - On an endpoint (`on` or `in` the dimension) whose action is the dimension's
   `members.list`, `ctx.members` is a read-only directory: `ctx.members.list()` answers
   the members of `ctx.target` (`principalId`, `label`, `roles`, `disabled`), for assignee
-  pickers and membership checks. The proxy already admitted the caller for that action
-  there, and IAM checks it again live; no delegation grant, no email, no invitation.
+  pickers and membership checks. The application's access form already authorized the
+  caller for that action there, and IAM checks it again live; no delegation grant, no email,
+  no invitation. `label` is `null` unless the dimension declares `directory: 'labels'` in
+  the vocabulary (a user's label spells its address); that declaration is in the contract,
+  and adding it widens for closer review.
 - `ctx.links.issue(ref, { mount, days })` exists on an endpoint whose `Ref` carries a link
   mount's `issuedBy` for its dimension. IAM binds the key to the object's whole chain;
   the answer is `<prefix>/#<key>`.

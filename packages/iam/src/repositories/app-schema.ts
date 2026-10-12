@@ -31,6 +31,8 @@ export interface AppScopeRow {
 	creator_role: string | null
 	members_manage: string | null
 	members_list: string | null
+	/** `labels`: `listMembers` shows labels to a `members.list` holder too. */
+	members_directory: 'labels' | null
 }
 
 /** A share-link mount (the `app_link_mounts` table). `grants` is a JSON array of exact actions. */
@@ -225,6 +227,7 @@ export class AppSchemaRepository {
 			parentScope?: string | null
 			creatorRole?: string | null
 			members?: { manage: string; list: string } | null
+			directory?: 'labels' | null
 		}[]
 		actions: { action: string; description?: string | null }[]
 		roles: {
@@ -269,14 +272,15 @@ export class AppSchemaRepository {
 		for (const scope of input.scopes) {
 			statements.push(
 				this.db
-					.prepare(`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list)
-						VALUES (?, ?, ?, ?, ?, ?, ?)
+					.prepare(`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list, members_directory)
+						VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 						ON CONFLICT (app, scope_type) DO UPDATE SET
 							label = excluded.label,
 							parent_scope = excluded.parent_scope,
 							creator_role = excluded.creator_role,
 							members_manage = excluded.members_manage,
-							members_list = excluded.members_list`)
+							members_list = excluded.members_list,
+							members_directory = excluded.members_directory`)
 					.bind(
 						app,
 						scope.scopeType,
@@ -285,6 +289,7 @@ export class AppSchemaRepository {
 						scope.creatorRole ?? null,
 						scope.members?.manage ?? null,
 						scope.members?.list ?? null,
+						scope.directory ?? null,
 					),
 			)
 		}

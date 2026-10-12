@@ -71,6 +71,7 @@ function scopeDef(type: string, dimension: DimensionArtifact): AppScopeDef {
 		...(dimension.in === null ? {} : { in: dimension.in }),
 		...(dimension.creator === null ? {} : { creator: dimension.creator }),
 		...(dimension.members === null ? {} : { members: { manage: dimension.members.manage, list: dimension.members.list } }),
+		...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
 	}
 }
 

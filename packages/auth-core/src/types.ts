@@ -82,6 +82,11 @@ export interface AppScopeDef {
 	creator?: string
 	/** The action that manages the members of a value, and the one that lists them. */
 	members?: { manage: string; list: string }
+	/**
+	 * `labels`: a holder of `members.list` also sees each member's label (a user's spelling of its address). Absent, the
+	 * labels stay with `members.manage`.
+	 */
+	directory?: 'labels'
 }
 
 /**

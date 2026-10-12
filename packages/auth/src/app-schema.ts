@@ -13,6 +13,7 @@ const scopeSchema = z.object({
 	in: z.string().min(1).optional(),
 	creator: z.string().min(1).optional(),
 	members: z.object({ manage: z.string().min(1), list: z.string().min(1) }).optional(),
+	directory: z.literal('labels').optional(),
 })
 const actionSchema = z.object({ action: z.string().min(1), description: z.string().min(1).optional() })
 const roleSchema = z.object({

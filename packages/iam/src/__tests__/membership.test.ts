@@ -1,4 +1,12 @@
-import { buildAccessClaims, BUILTIN_ROLE_KEYS, type MembershipCaller, parseAccessClaims, type Scope } from '@fabrika/auth-core'
+import {
+	type AppSchema,
+	type AppScopeDef,
+	buildAccessClaims,
+	BUILTIN_ROLE_KEYS,
+	type MembershipCaller,
+	parseAccessClaims,
+	type Scope,
+} from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
@@ -471,7 +479,7 @@ describe('members.revoke', () => {
 })
 
 describe('members.list', () => {
-	test('the list action shows members and their labels without emails; members.manage adds emails and invitations', async () => {
+	test('the list action shows members without labels or emails; members.manage adds them and the invitations', async () => {
 		const email = new CapturingEmail()
 		const f = await fixture(email)
 		const owner = await f.person('owner')
@@ -483,9 +491,7 @@ describe('members.list', () => {
 		const asEditor = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope })
 		if (!asEditor.ok) throw new Error('expected a list')
 		expect(asEditor.members.map((member) => [member.principalId, member.roles, member.label, member.email])).toEqual(
-			[[owner.id, ['owner'], 'owner@example.test', null], [editor.id, ['editor'], 'editor@example.test', null]].sort((a, b) =>
-				String(a[0]).localeCompare(String(b[0]))
-			),
+			[[owner.id, ['owner'], null, null], [editor.id, ['editor'], null, null]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
 		)
 		expect(asEditor.invitations).toEqual([])
 
@@ -496,6 +502,30 @@ describe('members.list', () => {
 			email: 'editor@example.test',
 		})
 		expect(asOwner.invitations.map((invitation) => invitation.email)).toEqual(['invitee@example.test'])
+	})
+
+	test("a dimension that declares directory: 'labels' shows labels to the list action, still no email or invitation", async () => {
+		const f = await fixture()
+		const labelled: AppSchema = {
+			...NOTES_SCHEMA,
+			scopes: NOTES_SCHEMA.scopes.map((scope): AppScopeDef => (scope.type === 'workspace' ? { ...scope, directory: 'labels' } : scope)),
+		}
+		expect((await f.putSchema(labelled)).status).toBe(200)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const editor = await f.person('editor')
+		await assign(f, owner, scope, 'editor', { principalId: editor.id })
+
+		const asEditor = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope })
+		if (!asEditor.ok) throw new Error('expected a list')
+		expect(asEditor.members.map((member) => [member.principalId, member.label, member.email]).sort()).toEqual(
+			[[owner.id, 'owner@example.test', null], [editor.id, 'editor@example.test', null]].sort(),
+		)
+		expect(asEditor.invitations).toEqual([])
+		// A reconcile without the declaration takes the labels back.
+		expect((await f.putSchema(NOTES_SCHEMA)).status).toBe(200)
+		const again = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope })
+		expect(again.ok ? again.members.map((member) => member.label) : null).toEqual([null, null])
 	})
 
 	test('a caller without the list action there sees nothing', async () => {

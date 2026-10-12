@@ -198,6 +198,8 @@ export interface DimensionArtifact {
 	/** The role `creates` grants the caller in a new value of this dimension. */
 	readonly creator: string | null
 	readonly members: { readonly manage: string; readonly list: string } | null
+	/** `labels`: the member directory shows labels to `members.list` holders. Absent unless declared, so digests stay. */
+	readonly directory?: 'labels'
 }
 
 export interface RoleArtifact {
