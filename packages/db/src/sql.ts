@@ -22,6 +22,7 @@ import { z } from 'zod/v4'
 import { hasOwn, isArray, ownDescriptor, ownKeys, parseList } from './builtins'
 import { runApplicationStatement, type Session, type SqlParameter } from './database'
 import { QueryRefusedError, SqlRowError } from './errors'
+import { isPlainIdentifier } from './identifier'
 import { dayText } from './temporal'
 
 /** What a site declares: `'read'` runs queries only, `'write'` also `INSERT`, `UPDATE` and `DELETE`. */
@@ -30,8 +31,50 @@ export type SqlMode = 'read' | 'write'
 /** A value an interpolation binds: a scalar, a `Date` (bound as ISO text), or a list of strings or numbers (an array). */
 export type SqlValue = string | number | boolean | bigint | Date | null | readonly (string | number)[]
 
-/** `ctx.sql(Row)`: the tag for rows of `Row`. */
-export type SqlTag = <S extends z.core.$ZodType>(row: S) => (text: TemplateStringsArray, ...values: readonly SqlValue[]) => Promise<z.output<S>[]>
+/** One test of a capability's scope on a table: the column holds the value, or one of the list. */
+export interface ScopeTest {
+	readonly column: string
+	readonly value: string | readonly string[]
+}
+
+/** A capability's predicate on one table: every row (`'all'`), or an OR of AND groups; no group matches nothing. */
+export type ScopeTerms = 'all' | readonly (readonly ScopeTest[])[]
+
+/** The scope of `capability` on `table`, as the data layer predicates its handles; throws when it does not reach it. */
+export type ScopeOf = (capability: unknown, table: string) => ScopeTerms
+
+/**
+ * `ctx.sql.scope(capability, table, alias?)`: the capability's whole predicate on one table, as SQL with bound values.
+ * Only the tag builds one, for its own site, and an interpolation of it is the one that is not a single parameter.
+ */
+class Scope {
+	readonly #site: SqlSite
+	readonly #parts: readonly string[]
+	readonly #values: readonly SqlValue[]
+
+	constructor(site: SqlSite, parts: readonly string[], values: readonly SqlValue[]) {
+		this.#site = site
+		this.#parts = Object.freeze([...parts])
+		this.#values = Object.freeze([...values])
+	}
+
+	/** The fragment's static parts and values, when `value` is a scope this tag's site built. */
+	static of(value: unknown, site: SqlSite): { readonly parts: readonly string[]; readonly values: readonly SqlValue[] } | undefined {
+		if (typeof value !== 'object' || value === null || !(#site in value)) return undefined
+		if (value.#site !== site) {
+			refuse('a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
+		}
+		return { parts: value.#parts, values: value.#values }
+	}
+}
+
+export type SqlScope = Scope
+
+/** `ctx.sql(Row)`: the tag for rows of `Row`, and `scope` for the capability's predicate inside its text. */
+export interface SqlTag {
+	<S extends z.core.$ZodType>(row: S): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<S>[]>
+	scope(capability: unknown, table: string, alias?: string): SqlScope
+}
 
 /** The site a tag is made for: its mode, its binding to the invocation, and the session its statements run in. */
 export interface SqlSite {
@@ -294,6 +337,50 @@ function rowIssue(
 	return `ctx.sql: row ${index + 1} does not match the row schema${where}: ${kind}`
 }
 
+/** The predicate `terms` make over `alias`'s columns: static parts around one bound value per test. */
+function scopeFragment(site: SqlSite, terms: ScopeTerms, alias: string): Scope {
+	if (terms === 'all') return new Scope(site, ['(true)'], [])
+	if (terms.length === 0) return new Scope(site, ['(false)'], [])
+	const parts: string[] = []
+	const values: SqlValue[] = []
+	let text = '('
+	terms.forEach((group, groupIndex) => {
+		text += `${groupIndex === 0 ? '' : ' or '}(`
+		group.forEach((test, testIndex) => {
+			text += `${testIndex === 0 ? '' : ' and '}${alias}.${test.column} = ${typeof test.value === 'string' ? '' : 'any('}`
+			parts.push(text)
+			values.push(test.value)
+			text = typeof test.value === 'string' ? '' : ')'
+		})
+		text += ')'
+	})
+	parts.push(`${text})`)
+	return new Scope(site, parts, values)
+}
+
+/** The template with every scope spliced in as text around its own values, and the values a parameter each. */
+function expandScopes(site: SqlSite, parts: readonly string[], values: readonly unknown[]): { parts: string[]; values: unknown[] } {
+	const expanded: string[] = [parts[0] ?? '']
+	const bound: unknown[] = []
+	for (let index = 0; index < values.length; index++) {
+		const value = values[index]
+		const after = parts[index + 1] ?? ''
+		const fragment = Scope.of(value, site)
+		if (fragment === undefined) {
+			bound.push(value)
+			expanded.push(after)
+			continue
+		}
+		expanded[expanded.length - 1] += fragment.parts[0] ?? ''
+		for (let position = 0; position < fragment.values.length; position++) {
+			bound.push(fragment.values[position])
+			expanded.push(fragment.parts[position + 1] ?? '')
+		}
+		expanded[expanded.length - 1] += after
+	}
+	return { parts: expanded, values: bound }
+}
+
 /**
  * `work`, failing the site's transaction when it throws: a handler that catches a refused statement, value or row must
  * not commit what it wrote around it.
@@ -311,18 +398,19 @@ async function failing<T>(site: SqlSite, work: () => Promise<T>): Promise<T> {
  * `ctx.sql` of one site. Every call first checks that the work running now is the site's invocation, then classifies
  * the text, then binds the values; only then does it reach the session, so a refused statement sends nothing.
  */
-export function sqlTag(site: SqlSite, schema: string | undefined): SqlTag {
-	return <S extends z.core.$ZodType>(row: S) => {
+export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: ScopeOf): SqlTag {
+	const tag = <S extends z.core.$ZodType>(row: S) => {
 		site.check()
 		if (!(row instanceof z.core.$ZodType)) {
 			site.fail()
 			refuse('ctx.sql(Row) takes the zod schema of one row')
 		}
-		return async (text: TemplateStringsArray, ...values: readonly SqlValue[]): Promise<z.output<S>[]> => {
+		return async (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]): Promise<z.output<S>[]> => {
 			site.check()
 			return failing(site, async () => {
-				const statement = classifySql(templateParts(text), site.mode, schema ?? '')
-				const parameters = values.map((value, index) => parameterOf(value, index + 1))
+				const expanded = expandScopes(site, templateParts(text), values)
+				const statement = classifySql(expanded.parts, site.mode, schema ?? '')
+				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1))
 				const session = await site.session()
 				if (session.readOnly && site.mode === 'write') {
 					refuse('this invocation is read-only')
@@ -332,4 +420,18 @@ export function sqlTag(site: SqlSite, schema: string | undefined): SqlTag {
 			})
 		}
 	}
+	const scope = (capability: unknown, table: string, alias?: string): SqlScope => {
+		site.check()
+		try {
+			const name = alias ?? table
+			if (!isPlainIdentifier(table) || !isPlainIdentifier(name)) {
+				refuse('ctx.sql.scope(capability, table, alias?) takes a table name and an alias of lowercase letters, digits and _')
+			}
+			return scopeFragment(site, scopeOf(capability, table), name)
+		} catch (error) {
+			site.fail()
+			throw error
+		}
+	}
+	return Object.freeze(Object.assign(tag, { scope }))
 }

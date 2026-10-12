@@ -159,6 +159,13 @@ describe.skipIf(accessPostgres === null)('the endpoint access kit over a kit app
 		expect(leaky.leaked.length).toBeGreaterThan(0)
 	})
 
+	test('a report written with ctx.sql.scope answers its own scope only, in an outer scope and in a contained one', async () => {
+		const kit = accessKit()
+		expect(await kit.leaked('api.notes.scopedTitles', { organizationId: 'x' })).toEqual({ answered: true, leaked: [] })
+		expect(await kit.leaked('api.notes.workspaceTitles', { workspaceId: 'x' })).toEqual({ answered: true, leaked: [] })
+		expect(await kit.denied('api.notes.workspaceTitles', { workspaceId: 'x' })).toEqual({ status: 403 })
+	})
+
 	test('a handler that leaks only in the state a seed sets aside is caught by the unseeded probe', async () => {
 		const kit = accessKit()
 		const leaky = await kit.leaked('api.notes.peek', { id: VERSIONED.id })

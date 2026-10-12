@@ -4,7 +4,7 @@
 
 import { ConflictError } from '@fabrika/app'
 import { app } from '../app-kit'
-import { ById, InOrganization, Note, Notes, OrganizationId, Organizations, Saved, Title, Titles, Versioned } from '../schemas'
+import { ById, InOrganization, InWorkspace, Note, Notes, OrganizationId, Organizations, Saved, Title, Titles, Versioned } from '../schemas'
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
 	get: r.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })
@@ -28,6 +28,25 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 			titles: (await ctx.sql(Note)`select id, title, trashed from notes where organization_id = ${ctx.target.value} order by title`).map((note) =>
 				note.title
 			),
+		})),
+	scopedTitles: r.query({
+		input: InOrganization,
+		output: Titles,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => ({
+			titles: (await ctx.sql(Note)`select n.id, n.title, n.trashed from notes n where ${ctx.sql.scope(ctx.target, 'notes', 'n')} order by n.title`)
+				.map((note) => note.title),
+		})),
+	workspaceTitles: r.query({
+		input: InWorkspace,
+		output: Titles,
+		access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => ({
+			titles: (await ctx.sql(Title)`select title from notes where ${ctx.sql.scope(ctx.target, 'notes')} order by title`).map((row) => row.title),
 		})),
 	everyTitle: r.query({
 		input: InOrganization,

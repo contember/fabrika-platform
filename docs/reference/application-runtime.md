@@ -407,6 +407,10 @@ created scope, a membership change, a share link), object storage and a connecto
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.
 
 - **`` ctx.sql(Row)`…` ``** exists only on a site that declares `sql` (a job: `tx.sql`, inside `ctx.transaction`).
+  `ctx.sql` has no scope predicate of its own: `${ctx.sql.scope(capability, table, alias?)}` interpolates the
+  capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
+  a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty — with each
+  value a bound parameter. A table the capability does not reach is refused, and a fragment of another site is refused.
   Every `${…}` is a bound parameter: the tag reads the template's static text with a `$n` placeholder for each value,
   so a value never becomes SQL, and a value inside a literal, a quoted name or a comment is refused. Before anything
   is sent the text is refused for more than one statement; any statement but `SELECT`, `WITH`, `VALUES` and `TABLE`,

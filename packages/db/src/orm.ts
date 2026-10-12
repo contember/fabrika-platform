@@ -34,6 +34,7 @@ import {
 	removeRow,
 	type Runner,
 	runtimeOf,
+	scopeTerms,
 	selectOne,
 	selfLinks,
 	type TableContext,
@@ -107,7 +108,13 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 		direct: () => parts.newSession(parts.runtime()),
 		transaction: <T>(work: (session: Session) => Promise<T>) => parts.fenced(parts.runtime(), work),
 		handles: (site: DataSite) => handlesOf(parts, site),
-		sql: (site: SqlSite) => sqlTag(site, parts.runtime().database.schema),
+		sql: (site: SqlSite) =>
+			sqlTag(site, parts.runtime().database.schema, (capability, table) => {
+				if (!hasOwn(parts.models, table)) {
+					throw new QueryRefusedError(`ctx.sql.scope: ${table} is not a table of src/db/tables.ts`)
+				}
+				return scopeTerms(parts.contextOf(table), capability)
+			}),
 	})
 }
 

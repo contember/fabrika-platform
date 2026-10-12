@@ -51,7 +51,12 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 			return Promise.reject(new Error('the statement reached the session'))
 		},
 	}
-	return { sql: sqlTag(site, SCHEMA), sent: () => sent }
+	return {
+		sql: sqlTag(site, SCHEMA, () => {
+			throw new QueryRefusedError('no table reaches this tag')
+		}),
+		sent: () => sent,
+	}
 }
 
 /** The template object the engine hands a tag. */
@@ -417,5 +422,64 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 		)
 		await expect(work.sql(Nested)`select jsonb_build_object('private-key', 'x') as data`).rejects.not.toThrow('private-key')
 		await work.transaction.rollback()
+	})
+})
+
+describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicate, as bound values", () => {
+	const Id = z.object({ id: z.string() })
+	const ids = async (scopeOf: (sql: SqlTag) => ReturnType<SqlTag['scope']>): Promise<string[]> => {
+		const work = invocation('read', true)
+		try {
+			const rows = await work.sql(Id)`select n.id from notes n where ${scopeOf(work.sql)} and n.title = 'scoped' order by n.id`
+			return rows.map((row) => row.id)
+		} finally {
+			await work.transaction.rollback()
+		}
+	}
+
+	beforeAll(async () => {
+		const writer = invocation('write')
+		await writer.sql(z.object({}))`insert into notes (id, workspace_id, organization_id, title, created_by, version)
+			values ('scope-1', 'w1', 'o1', 'scoped', 'u', 1), ('scope-2', 'w2', 'o1', 'scoped', 'u', 1), ('scope-3', 'w3', 'o2', 'scoped', 'u', 1)`
+		await writer.transaction.commit()
+	})
+
+	test("a Ref matches its object's column and every link of its chain, so a moved container is out", async () => {
+		const w1 = alice.ref('workspace', 'notes.read', 'w1', { organization: 'o1' })
+		expect(await ids((sql) => sql.scope(w1, 'notes', 'n'))).toEqual(['scope-1'])
+		const stale = alice.ref('workspace', 'notes.read', 'w1', { organization: 'o2' })
+		expect(await ids((sql) => sql.scope(stale, 'notes', 'n'))).toEqual([])
+		const note = alice.ref('note', 'notes.write', 'scope-2', { workspace: 'w2', organization: 'o1' })
+		expect(await ids((sql) => sql.scope(note, 'notes', 'n'))).toEqual(['scope-2'])
+		const organization = alice.ref('organization', 'notes.read', 'o1')
+		expect(await ids((sql) => sql.scope(organization, 'notes', 'n'))).toEqual(['scope-1', 'scope-2'])
+	})
+
+	test("a Within matches its values, each container grant on its own column, every row for 'all' and none when empty", async () => {
+		const mixed = alice.within('workspace', 'notes.read', ['w2'], [{ dimension: 'organization', values: ['o2'] }])
+		expect(await ids((sql) => sql.scope(mixed, 'notes', 'n'))).toEqual(['scope-2', 'scope-3'])
+		expect(await ids((sql) => sql.scope(alice.within('organization', 'notes.read', 'all'), 'notes', 'n'))).toEqual(['scope-1', 'scope-2', 'scope-3'])
+		expect(await ids((sql) => sql.scope(alice.within('workspace', 'notes.read', []), 'notes', 'n'))).toEqual([])
+	})
+
+	test('the values are parameters: a value that would be SQL matches nothing', async () => {
+		const hostile = alice.ref('workspace', 'notes.read', "w1' or true --", { organization: 'o1' })
+		expect(await ids((sql) => sql.scope(hostile, 'notes', 'n'))).toEqual([])
+	})
+
+	test('a table the capability does not reach, an unknown table, a bad alias and a foreign scope are refused', async () => {
+		const work = invocation('read', true)
+		const note = alice.ref('note', 'notes.read', 'scope-1', { workspace: 'w1', organization: 'o1' })
+		expect(() => work.sql.scope(note, 'workspaces')).toThrow('a Ref of note does not reach workspaces')
+		expect(() => work.sql.scope(alice.within('workspace', 'notes.read', ['w1']), 'secrets')).toThrow('a Within of workspace does not reach secrets')
+		expect(() => work.sql.scope(note, 'invoices')).toThrow('invoices is not a table of src/db/tables.ts')
+		expect(() => work.sql.scope(note, 'notes', 'n; drop')).toThrow('an alias of lowercase letters')
+		await work.transaction.rollback()
+		const other = invocation('read', true)
+		const foreign = other.sql.scope(note, 'notes', 'n')
+		const mine = invocation('read', true)
+		await expect(mine.sql(Id)`select n.id from notes n where ${foreign}`).rejects.toThrow('a ctx.sql.scope(…) of another invocation or site is refused')
+		await other.transaction.rollback()
+		await mine.transaction.rollback()
 	})
 })

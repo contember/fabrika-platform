@@ -82,6 +82,7 @@ import {
 	type VersionArguments,
 } from './policy'
 import { frameworkSideOf, type Locator, register } from './registry'
+import type { ScopeTerms, ScopeTest } from './sql'
 import { type TablePolicies, tablePolicies } from './tables'
 import { answerDays, dayInput, timestampInput } from './temporal'
 
@@ -310,6 +311,57 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 		throw new CapabilityError(`a Within of ${grant.dimension} does not reach ${table}: its containment chain does not hold ${grant.dimension}`)
 	}
 	return withinPredicate(context.model, column, grant)
+}
+
+/**
+ * `ctx.sql.scope`'s predicate: what the handles of `capability` match in the table, as column tests. A `Ref` matches
+ * its object's column and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values,
+ * each container grant on its own column, or every row for `all`). A capability whose dimension the table does not
+ * carry is refused, as the handles refuse it.
+ */
+export function scopeTerms(context: TableContext, capability: unknown): ScopeTerms {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const model = context.model
+	if (grant.kind === 'ref') {
+		const links = model.scope.mode === 'dimension' ? selfLinks(model) : model.chain
+		let start = -1
+		for (let index = 0; index < links.length && start === -1; index++) {
+			if (links[index]?.dimension === grant.dimension) start = index
+		}
+		if (start === -1) {
+			throw new CapabilityError(`a Ref of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
+		}
+		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
+	}
+	const column = reachColumn(model, grant.dimension)
+	if (column === undefined) {
+		throw new CapabilityError(`a Within of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
+	}
+	if (grant.values === 'all') {
+		return 'all'
+	}
+	const above = linksAbove(model, grant.dimension)
+	const groups: ScopeTest[][] = []
+	let count = grant.values.length
+	if (grant.values.length > 0) {
+		groups.push([{ column, value: grant.values }])
+	}
+	for (const container of grant.containers) {
+		const link = above.find((candidate) => candidate.dimension === container.dimension)
+		if (link === undefined) {
+			throw new CapabilityError(
+				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
+			)
+		}
+		count += container.values.length
+		if (container.values.length > 0) {
+			groups.push([{ column: link.column, value: container.values }])
+		}
+	}
+	if (count > MAX_WITHIN_VALUES) {
+		throw new CapabilityError(`a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
+	}
+	return groups
 }
 
 /**

@@ -251,6 +251,12 @@ and the target `Ref`, so no handler can call it.
   schema (see `docs/reference/application-runtime.md`), and run by `runApplicationStatement` through the session's
   private execute, so a statement the database refuses fails the invocation. Any refusal of the tag after its binding check (a statement, a value, a row) fails the site's transaction too (`SqlSite.fail`: `InvocationTransaction.fail` or `Session.fail`), so a handler that catches it still commits nothing; a nested `Session.transaction` with a failed statement throws instead of committing. A row error names the schema's top-level field and the issue's code and expected type, never the issue's message, a deeper path or a value. `QueryRefusedError` messages are logged by `@fabrika/app`, so they never carry a bound value. Do not add another method that takes
   SQL, a builder or an unguarded node.
+- **`ctx.sql.scope(capability, table, alias?)` is the one interpolation that is not a single parameter.** It renders
+  `scopeTerms` (`store.ts`): a `Ref`'s object column and every link of its chain (`linkValues`), a `Within`'s values
+  and container grants as `ctx.db.within` matches them, `(true)` for `all`, `(false)` when empty; a table the
+  capability does not reach is refused as the handles refuse it. The fragment is a private class of `sql.ts` bound to
+  its site: the tag splices its text around its own `$n` values before `classifySql` reads the whole statement, and
+  refuses one of another site. Never let an application build one, nor let any other object splice text.
 - **`Database` is frozen, the class and its prototype.** Application modules load after `database.ts`, and a
   replaced `Database.postgres` would receive the database URL; `@fabrika/app/bun` also takes the factory before it
   imports the application. Never add a writable static. `hardening.test.ts` is the witness; `@fabrika/check`'s

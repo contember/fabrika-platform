@@ -95,11 +95,27 @@ export type SqlValue = string | number | boolean | bigint | Date | null | readon
  * `ctx.sql(Row)\`select …\``: one statement, every interpolation a bound parameter, run in the invocation's
  * transaction; each row is parsed (snake_case → camelCase, `Date` → ISO text, then `Row`).
  */
-export type SqlTag = <Row extends Schema>(row: Row) => (text: TemplateStringsArray, ...values: readonly SqlValue[]) => Promise<z.output<Row>[]>
+export interface SqlTag<T extends string = string> {
+	<Row extends Schema>(row: Row): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<Row>[]>
+	/**
+	 * The capability's whole predicate on `table` (`alias` its name in the statement, the table's by default): the
+	 * object's key and every link of its chain for a `Ref`, what `ctx.db.within` matches for a `Within`. Interpolated
+	 * as `where ${ctx.sql.scope(ctx.target, 'tasks', 't')}`, its values are bound parameters; a table the capability
+	 * does not reach is refused.
+	 */
+	scope(capability: Ref<string, string> | Within<string, string>, table: T, alias?: string): SqlScope
+}
 
-type SqlContext<S> = {
+declare const sqlScope: unique symbol
+
+/** What `ctx.sql.scope(…)` builds: only the framework makes one, and only its own tag takes it. */
+export interface SqlScope {
+	readonly [sqlScope]: true
+}
+
+type SqlContext<S, T extends string> = {
 	readonly sql: [S] extends [never] ? Unavailable<"ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site">
-		: SqlTag
+		: SqlTag<T>
 }
 
 type UnscopedData<Ix extends AnyDbIndex, U, K extends DataKind> = {
@@ -256,7 +272,7 @@ export type EndpointContext<
 	& MembersContext<K, Acc>
 	& LinksContext<Acc, Of<D, 'issues'>>
 	& ConnectContext<K, Of<D, 'connect'>>
-	& SqlContext<Of<D, 'sql'>>
+	& SqlContext<Of<D, 'sql'>, K['tables']>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
 
 /** A link procedure acts on the one object its key is bound to. */
@@ -269,7 +285,7 @@ export type LinkContext<
 > =
 	& RequestContext<PrincipalOf<'link'>>
 	& { readonly target: Ref<LD, A> }
-	& SqlContext<Of<D, 'sql'>>
+	& SqlContext<Of<D, 'sql'>, K['tables']>
 	& {
 		readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>>>
 	}
@@ -278,7 +294,7 @@ export type LinkContext<
 export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', unknown, never, never>> =
 	& RequestContext<ServicePrincipal | AppPrincipal>
 	& CapabilityContext<Acc>
-	& SqlContext<Of<D, 'sql'>>
+	& SqlContext<Of<D, 'sql'>, K['tables']>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>>> }
 
 /**
@@ -299,7 +315,7 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
 export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
-	& SqlContext<Of<D, 'sql'>>
+	& SqlContext<Of<D, 'sql'>, K['tables']>
 
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
 export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
@@ -312,7 +328,7 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& RequestContext<WebhookPrincipal>
 	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
-	& SqlContext<Of<D, 'sql'>>
+	& SqlContext<Of<D, 'sql'>, K['tables']>
 	& { readonly db: SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>> }
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never
