@@ -927,3 +927,11 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   makes the next one only set it; two instances give two runs. (3) A local follow-up restarted right after a failed
   run; now a failed run leaves the flag for the schedule (`retries: 0`, one run, `pending` kept, the next scheduled run
   takes both rows).
+- **WU15b review round 2.** Both races fixed, not documented as a delay. (1) A run that took the flag after it finished
+  and then found a newer run holding the lease dropped it, though that run may have read its batch before the kick's
+  row: it now sets the flag again and tries the lease once more (`handOver`), as a kick does. (2) A same-process kick
+  absorbed by a run past its last pending check was left without a runner: the process-local kick state is gone, and
+  every kick asks the lease (`tryAcquire`, flag, `tryAcquire`), a few non-blocking statements each. Regressions hold a
+  statement's answer through a delaying dialect (`fixtures/form-kick/delayed-database.ts`). Kicks that straddle a run's
+  end can add a run beyond two; at any moment there is still at most one run and one pending, so the 50-submission
+  and failed-run witnesses now let the held run's other kicks end before they release it.
