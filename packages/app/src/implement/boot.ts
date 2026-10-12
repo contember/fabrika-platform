@@ -38,13 +38,16 @@ import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, 
 import { exportBase } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
+import type { RequestExecutionContext } from '../fetch'
 import { fileCollections } from '../files/collections'
+import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import { type ConnectFetch, wireImports } from './connect'
 import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type ServedSite, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
+import { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
@@ -88,10 +91,13 @@ export interface BootOptions {
 	 * with a job or a webhook does not boot.
 	 */
 	readonly workloadTokens?: WorkloadTokenSource
+	/** What posts a report to Operations' ingest; `fetch` by default. */
+	readonly operationsFetch?: (request: Request) => Promise<Response>
 }
 
 export interface ContractApp {
-	fetch(request: Request): Promise<Response>
+	/** `exec` keeps a failure's report to Operations alive past the response (a Worker's `waitUntil`). */
+	fetch(request: Request, exec?: RequestExecutionContext): Promise<Response>
 	/** The contract's `c.cron` jobs; `fabrika job run <name>` runs one. */
 	readonly jobs: ContractJobs
 }
@@ -500,6 +506,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
+	const operations = operationsSettings(options.environment.framework, problems)
+	const reporterFor = (source: ReportSource): OperationsReporter | null =>
+		operations === null
+			? null
+			: operationsReporter({ ...operations, source, ...(options.operationsFetch === undefined ? {} : { fetch: options.operationsFetch }) })
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	// A file collection's dimension is located through its own table and its owner's.
 	for (const name of Object.keys(artifact.files)) {
@@ -618,7 +629,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		database,
 		framework,
 		ownedDimensions: owned,
-		variables: options.environment.framework,
+		reporter: reporterFor('fabrika.jobs') ?? logReporter,
 		credentials: workloads,
 		mint: issuer.mint,
 		data: bound?.data ?? null,
@@ -694,6 +705,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		mint: issuer.mint,
 		capabilities: issuer.authority,
 		data,
+		failures: new FailureReports(reporterFor('fabrika.requests')),
+		browserConfig: Object.freeze({
+			dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
+			release: options.environment.framework['FABRIKA_RELEASE']?.trim() || null,
+		}),
 	})
-	return Object.freeze({ fetch: (request: Request) => runtime.fetch(request), jobs: jobs.jobs })
+	return Object.freeze({ fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec), jobs: jobs.jobs })
 }

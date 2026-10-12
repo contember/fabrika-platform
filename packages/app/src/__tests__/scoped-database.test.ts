@@ -236,7 +236,7 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 		)
 		const log = await refusedCapability(async () => send(wrapped, '/api/notes.get', { token: await editorOf(W1), body: { id: foreign } }))
 		expect(received).toEqual([])
-		expect(log).toContain('CapabilityError')
+		expect(log).toContain('handler_failed')
 	})
 })
 

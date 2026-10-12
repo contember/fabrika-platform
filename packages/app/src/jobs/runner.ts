@@ -10,7 +10,7 @@ import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, ru
 import type { ContractDatabase } from '../implement/implement'
 import { approvedDeclaration, boundTo, isSiteHandler, jobHandles, jobSql, siteData, type SiteDeclaration } from '../implement/invocation'
 import type { WorkloadCredential } from '../implement/workload'
-import { type JobReporter, logReporter, operationsReporter, operationsTarget } from './report'
+import type { OperationsReporter } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
 import type { JobContext, JobPrincipal } from './types'
 
@@ -59,8 +59,8 @@ export interface JobClock {
 
 export interface JobRunOptions {
 	readonly clock?: JobClock
-	/** Where failures and missed runs go; by default Operations, through `FABRIKA_OPERATIONS_DSN`. */
-	readonly reporter?: JobReporter
+	/** Where failures and missed runs go; by default the one `boot` built from `FABRIKA_OPERATIONS_DSN`. */
+	readonly reporter?: OperationsReporter
 }
 
 /** The contract's jobs, bound to their handlers by `boot`. */
@@ -111,7 +111,7 @@ interface RunnerContext {
 	readonly database: ContractDatabase | null
 	readonly ownedDimensions: ReadonlySet<string>
 	readonly leases: JobLeases
-	readonly reporter: JobReporter
+	readonly reporter: OperationsReporter
 	readonly mint: CapabilityMint
 	readonly data: DataAccess | null
 }
@@ -124,8 +124,8 @@ export interface JobBindingInput {
 	/** The framework side of `@fabrika/db`, bound by `boot`; `null` when the application has no such layer. */
 	readonly framework: FrameworkTables | null
 	readonly ownedDimensions: ReadonlySet<string>
-	/** The framework's variables: the Operations DSN, release and environment the reports carry. */
-	readonly variables: Readonly<Record<string, string>>
+	/** Where failures and missed runs go: Operations, or the server log without a DSN. */
+	readonly reporter: OperationsReporter
 	/** `job:<name>` → the job's key; `boot` refuses a job without one. */
 	readonly credentials: ReadonlyMap<string, WorkloadCredential>
 	/** The runtime's capability mint, which `boot` alone holds. */
@@ -151,19 +151,6 @@ function durationMs(timeout: string | null): number | null {
 	const match = DURATION.exec(timeout)
 	const unit = match?.[2] === undefined ? undefined : UNIT_MS[match[2]]
 	return match?.[1] === undefined || unit === undefined ? null : Number.parseInt(match[1], 10) * unit
-}
-
-function reporterOf(variables: Readonly<Record<string, string>>, problems: string[]): JobReporter {
-	const dsn = variables['FABRIKA_OPERATIONS_DSN']
-	if (dsn === undefined || dsn.trim() === '') {
-		return logReporter
-	}
-	const target = operationsTarget(dsn)
-	if (target === null) {
-		problems.push('FABRIKA_OPERATIONS_DSN is not an ingest DSN (https://<key>@<host>/<project>), so a failed job would reach no one')
-		return logReporter
-	}
-	return operationsReporter({ target, release: variables['FABRIKA_RELEASE'] ?? null, environment: variables['FABRIKA_ENVIRONMENT'] ?? null })
 }
 
 /** Binds every declared job to its handler, or adds why it cannot run to `problems`. */
@@ -201,15 +188,14 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential, site })
 		}
 	}
-	const reporter = entries.length === 0 ? logReporter : reporterOf(input.variables, problems)
 	const names = Object.freeze(entries.map(([name]) => name))
 	const framework = input.framework
-	const contextFor = (leases: JobLeases, chosen: JobReporter | undefined): RunnerContext => ({
+	const contextFor = (leases: JobLeases, chosen: OperationsReporter | undefined): RunnerContext => ({
 		artifact: input.artifact,
 		database: input.database,
 		ownedDimensions: input.ownedDimensions,
 		leases,
-		reporter: chosen ?? reporter,
+		reporter: chosen ?? input.reporter,
 		mint: input.mint,
 		data: input.data,
 	})
@@ -323,7 +309,7 @@ async function runLeased(job: BoundJob, context: RunnerContext, clock: JobClock,
 	return failed(job, progress.attempts, code, context.reporter)
 }
 
-async function failed(job: BoundJob, attempts: number, code: JobFailureCode, reporter: JobReporter): Promise<JobRunResult> {
+async function failed(job: BoundJob, attempts: number, code: JobFailureCode, reporter: OperationsReporter): Promise<JobRunResult> {
 	const message = `job '${job.name}' failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${code}`
 	console.error(`fabrika: ${message}`)
 	await reporter.report({ fingerprint: ['fabrika-job-failed', job.name], type: 'JobFailed', message, tags: { job: job.name, code } })

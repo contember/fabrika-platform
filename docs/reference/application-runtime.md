@@ -1040,12 +1040,18 @@ runtime values:
   environment.
 - `FABRIKA_RELEASE` is the current deploy-scoped release name.
 
-Applications may pass these two values to a browser, but must not expose other
-runtime configuration. A contract application cannot do it yet: neither its handlers nor its
-SPA mount see the two values (backlog 102). The local stack's SDK witness, a stand-in behind a
-minimal contract (`packages/local-stack/src/operations-witness/`), demonstrates the boundary
-at `/operations-sdk` and initializes `@sentry/browser` **10.69.0** from a JSON config response
-containing only `dsn` and `release`.
+Every SPA mount of a contract application (`c.spa`, member or public) serves
+`<prefix>/__fabrika-config.json` with exactly these two values, `{ "dsn": …, "release": … }`
+(`null` when unset), and nothing else of the environment; a member SPA's answer needs a
+member's session like every file of its mount. The Zerops example's SPA
+(`examples/zerops-app/web/operations.ts`) initializes `@sentry/browser` **10.69.0** from it
+with only the global error handlers, and `tests/browser/operations-sdk-ingest.test.ts`
+proves the round trip against it on the local stack.
+
+A request that answers 5xx is one error event too (`RequestFailed`, logger
+`fabrika.requests`): the endpoint id, the proxy's request id, a fixed failure code and the
+release, at most `MAX_FAILURE_REPORTS_PER_MINUTE` (30) per process and minute. It never
+carries the input, a header, row data, or the error's name or message.
 
 The tested compatibility profile is deliberately narrow. Fabrika accepts the
 SDK's envelope authentication query and an `event` item for a captured browser

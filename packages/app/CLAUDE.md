@@ -102,6 +102,7 @@ src/
     anonymous.ts      the bounded body read, the form rate limit, the share bootstrap, GitHub's signature
     webhook.ts        the generated binding endpoints and a delivery's principal
     faults.ts         ServerFault: a framework failure whose message only the log sees
+    failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     principal.ts      caller kinds and principals from a verified token
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
@@ -116,7 +117,7 @@ src/
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
     runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports
     schedule.ts       five-field cron in UTC: the due minutes and the period
-    report.ts         failures and missed runs as error events to Operations' ingest
+    report.ts         the Operations reporter: job runs and request failures as error events to its ingest
 ```
 
 ## Invariants
@@ -216,7 +217,8 @@ src/
   the one into the other, so both paths share `@fabrika/db`'s one policy parse.
 - Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; an SPA serves
   `GET <prefix>/*`, anonymous (kind `public-spa`, no token) with `access: { public: true }`,
-  which takes no other key; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
+  which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release }` (the
+  browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset) and nothing else of the environment; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook
@@ -435,10 +437,17 @@ vocabulary (`packages/db/CLAUDE.md`).
   (4xx) keeps its message and issues; `@fabrika/db`'s `NotFoundError` and
   `ConflictError` are read by `name` (404, 409). Every 5xx and every refused
   capability answers the fixed `Internal error` (or `Service unavailable` for 503)
-  with no metadata, because a message may quote a connection string. The server log
-  gets one line: a framework-authored message (`ServerFault`, `CapabilityRefusedError`, the data layer's
-  `QueryRefusedError`, which names what was refused and never a bound value) or only the error's name, never the
-  error object.
+  with no metadata, because a message may quote a connection string.
+- **A 5xx is reported as a fixed code** (`implement/failures.ts`): `framework_fault`, `unavailable`,
+  `capability_refused`, `query_refused`, `handler_status` (a thrown 5xx status) or `handler_failed`, chosen by
+  `instanceof` against the framework's own classes, never by `name`. The server log gets one line,
+  `fabrika: <endpoint>: <code>`, plus the text of a framework refusal (`ServerFault`, `CapabilityRefusedError`,
+  `QueryRefusedError`), which names declarations and never a value; any other error contributes nothing, its name
+  included. With an Operations DSN it is also one `RequestFailed` event (logger `fabrika.requests`): fingerprint
+  `fabrika-request-failed`/endpoint/code, tags endpoint, code, status and the proxy's request id when it is a bounded
+  token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the error's name or message, the
+  input, a header or a row: an application or a driver writes those. The delivery is not awaited; the Worker adapter
+  hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).
 - **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`,
   a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
@@ -703,8 +712,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   without a token exchange (`BootOptions.workloadTokens`); the test kit and the harness stand in for both.
 - **`boot` refuses** a job scoped to a dimension (per-binding jobs are not built), a job without a bound
   `scoped(tables)` (the lease and the fence live in the application's schema), a schedule `schedule.ts` cannot read,
-  a missing handler, a `handlers.jobs` entry the contract does not declare, and an Operations DSN that is not an
-  ingest DSN.
+  a missing handler and a `handlers.jobs` entry the contract does not declare. An Operations DSN that is not an
+  ingest DSN stops every boot, jobs or not: no failure would reach anyone.
 - **A failure is a fixed code**: `timeout`, `lease_lost`, `handler_failed`, `driver_failed`, `crashed` in the run's
   result, its log lines and its report, and `boot_failed` in the CLI. The code is chosen by `instanceof` against the
   framework's own classes (`LeaseLostError` of `@fabrika/db/framework`), never by `name`. An application error's

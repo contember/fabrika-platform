@@ -58,6 +58,9 @@ export const WEBHOOK_ACCOUNT_PATTERN = '^(?:installation|repository):[1-9][0-9]{
 export const LINK_BOOTSTRAP_FILE = '__fabrika-share.js'
 export const SHARE_KEY_GLOBAL = '__fabrikaShareKey'
 
+/** What every `c.spa` mount serves under its prefix: the browser's Operations DSN and the release, as JSON. */
+export const BROWSER_CONFIG_FILE = '__fabrika-config.json'
+
 export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */

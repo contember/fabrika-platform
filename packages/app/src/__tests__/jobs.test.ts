@@ -3,7 +3,7 @@
 // Postgres half cleanly when FABRIKA_TEST_POSTGRES_URL is unset (see scoped-database.test.ts).
 
 import { runContractJob, serveContract } from '@fabrika/app/bun'
-import { BootError, type ContractApp, type JobClock, type JobReport } from '@fabrika/app/implement'
+import { BootError, type ContractApp, type JobClock, type OperationsReport } from '@fabrika/app/implement'
 import { applicationSchema, Database, type Within } from '@fabrika/db'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
@@ -91,8 +91,8 @@ function testClock() {
 }
 
 function recorder() {
-	const reports: JobReport[] = []
-	return { reports, reporter: { report: (report: JobReport) => Promise.resolve(void reports.push(report)) } }
+	const reports: OperationsReport[] = []
+	return { reports, reporter: { report: (report: OperationsReport) => Promise.resolve(void reports.push(report)) } }
 }
 
 const passing: JobHooks = { beforeDelete: () => Promise.resolve(), flaky: () => Promise.resolve() }
@@ -113,7 +113,7 @@ async function logged<T>(work: () => Promise<T>): Promise<{ readonly result: T; 
 	}
 }
 
-const kinds = (reports: readonly JobReport[]) => reports.map((report) => [report.type, report.tags['code'] ?? null])
+const kinds = (reports: readonly OperationsReport[]) => reports.map((report) => [report.type, report.tags['code'] ?? null])
 
 describe('boot binds every job or does not start', () => {
 	const connection = Database.postgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
@@ -183,11 +183,11 @@ describe('boot binds every job or does not start', () => {
 		expect(() => jobs.run('missing')).toThrow("no job 'missing' in the contract (jobs: purge, sweep, flaky)")
 	})
 
-	test('an Operations DSN that is not an ingest DSN stops the boot of a contract with jobs', () => {
+	test('an Operations DSN that is not an ingest DSN stops the boot', () => {
 		const app = jobsApp(passing)
 		const framework = { ...frameworkEnvFor(app), FABRIKA_OPERATIONS_DSN: 'https://operations.example' }
 		expect(problemsOf(() => bootApp(app, { database: connection, environment: environment(framework) }))).toEqual([
-			'FABRIKA_OPERATIONS_DSN is not an ingest DSN (https://<key>@<host>/<project>), so a failed job would reach no one',
+			'FABRIKA_OPERATIONS_DSN is not an ingest DSN (https://<key>@<host>/<project>), so a failure would reach no one',
 		])
 	})
 })

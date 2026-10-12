@@ -1,7 +1,7 @@
 // @fabrika/app/implement — serving a contract: `serve` binds the handlers its endpoints carry, `boot` (called only by
 // the generated entrypoint, through a runtime adapter) serves it. Imports `node:async_hooks`, so it is not browser-safe.
 // `implement` (a mirrored handler tree) is the framework's own test entry, `./implement`, and no application's.
-export type { JobReport, JobReporter } from '../jobs/report'
+export type { OperationsReport, OperationsReporter } from '../jobs/report'
 export { type ContractJobs, type JobClock, JobError, type JobFailureCode, type JobRunOptions, type JobRunResult } from '../jobs/runner'
 export type { JobContext, JobHandler, JobHandlersOf, JobPrincipal } from '../jobs/types'
 export { FORM_RATE_LIMIT, LINK_BOOTSTRAP_SCRIPT } from './anonymous'

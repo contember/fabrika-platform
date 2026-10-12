@@ -25,12 +25,12 @@ import {
 	scopedValues,
 } from '@fabrika/auth-core'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
-import { type DataAccess, type FrameworkTables, QueryRefusedError } from '@fabrika/db/framework'
+import type { DataAccess, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
-import { WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
+import { BROWSER_CONFIG_FILE, joinPath, WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import {
 	BadRequestError,
@@ -42,6 +42,7 @@ import {
 	toErrorResponse,
 	UnauthorizedError,
 } from '../errors'
+import type { RequestExecutionContext } from '../fetch'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import {
 	bootstrapPath,
@@ -52,8 +53,9 @@ import {
 	verifyGithubSignature,
 	withBootstrap,
 } from './anonymous'
-import { CapabilityLimitError, type CapabilityMint, CapabilityRefusedError, RequestFrame, runInRequest } from './capability'
+import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
 import { connectContext, type ImportWire } from './connect'
+import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
@@ -162,6 +164,16 @@ export interface RuntimeParts {
 	readonly capabilities: CapabilityAuthority
 	/** The mini-ORM of the bound `scoped(tables)` layer; `boot` refuses a site without one. */
 	readonly data: DataAccess | null
+	/** Where a 5xx goes: the server log, and Operations when the application has a DSN. */
+	readonly failures: FailureReports
+	/** What every SPA mount answers at `<prefix>/__fabrika-config.json`, and nothing else of the environment. */
+	readonly browserConfig: BrowserConfig
+}
+
+/** The browser-safe Operations settings: the ingest DSN (a public key) and the release, or `null` without them. */
+export interface BrowserConfig {
+	readonly dsn: string | null
+	readonly release: string | null
 }
 
 interface Caller {
@@ -206,17 +218,20 @@ export class ContractRuntime {
 		this.#parts = parts
 	}
 
-	/** Every answer of a download endpoint, a denial included, carries the file treatment; every other one the policy. */
-	async fetch(request: Request): Promise<Response> {
+	/**
+	 * Every answer of a download endpoint, a denial included, carries the file treatment; every other one the policy.
+	 * `exec` keeps a failure's report alive past the response, where the runtime would otherwise end it.
+	 */
+	async fetch(request: Request, exec?: RequestExecutionContext): Promise<Response> {
 		const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
-		const answer = await this.#answer(request, plan)
+		const answer = await this.#answer(request, plan, exec)
 		if (answer instanceof FileDownload) {
 			return fileResponse(answer)
 		}
 		return plan.outcome === 'endpoint' && plan.endpoint.kind === 'download' ? withFileTreatment(answer) : withHeaderPolicy(answer, this.#parts.policy)
 	}
 
-	async #answer(request: Request, plan: EndpointPlan): Promise<Response | FileDownload> {
+	async #answer(request: Request, plan: EndpointPlan, exec: RequestExecutionContext | undefined): Promise<Response | FileDownload> {
 		let where = 'request'
 		try {
 			const served = plan.outcome === 'endpoint' ? this.#parts.endpoints.get(plan.endpoint.id) : undefined
@@ -237,10 +252,10 @@ export class ContractRuntime {
 					return jsonResponse({ status: 'ok' }, 200)
 				case 'spa': {
 					await this.#authorize(served.row, request)
-					return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
+					return await this.#spaFile(served, request)
 				}
 				case 'public-spa':
-					return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
+					return await this.#spaFile(served, request)
 				case 'link-spa':
 					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
 						return bootstrapResponse()
@@ -260,8 +275,22 @@ export class ContractRuntime {
 					return jsonResponse({ result: served.description }, 200)
 			}
 		} catch (error) {
-			return errorResponse(error, where)
+			const response = errorResponse(error, where)
+			if (response.status >= 500) {
+				const failure = { endpoint: where, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
+				const delivery = this.#parts.failures.record(failure)
+				exec?.waitUntil(delivery)
+			}
+			return response
 		}
+	}
+
+	/** An SPA mount's files, and at `<prefix>/__fabrika-config.json` the browser's Operations settings. */
+	async #spaFile(served: { readonly prefix: string; readonly dir: string }, request: Request): Promise<Response> {
+		if (rawRequestTarget(request.url).pathname === joinPath(served.prefix, BROWSER_CONFIG_FILE)) {
+			return jsonResponse(this.#parts.browserConfig, 200)
+		}
+		return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
 	}
 
 	/**
@@ -802,27 +831,16 @@ function serverError(status: number): Response {
 }
 
 /**
- * A short line for the server log, never the error object: a framework-authored message (a data-layer refusal's names
- * what was refused, never a value), or only the name of anything else, whose message the application or a driver wrote.
- */
-function logFailure(where: string, error: unknown): void {
-	const detail = error instanceof ServerFault || error instanceof CapabilityRefusedError || error instanceof CapabilityLimitError
-			|| error instanceof QueryRefusedError
-		? error.message
-		: `${error instanceof Error ? error.name : typeof error} thrown`
-	console.error(`fabrika: ${where}: ${detail}`)
-}
-
-/**
  * One envelope, `{ error: { type, message, issues? } }`. A client error keeps its own message and issues; every
- * 5xx and every refused capability answers a fixed message, and its detail goes to the server log only.
+ * 5xx and every refused capability answers a fixed message; what made a 5xx reaches only `FailureReports`, as a code.
  */
 export function errorResponse(error: unknown, where: string): Response {
 	if (isStructuralError(error) && error.httpStatus < 500) {
 		return toErrorResponse(error)
 	}
 	if (error instanceof CapabilityLimitError) {
-		logFailure(where, error)
+		// The framework's own text: the limit and the action, never a scope value.
+		console.error(`fabrika: ${where}: ${error.message}`)
 		return toErrorResponse(new ForbiddenError(`The caller holds the action in more scope values than one list may carry (${MAX_WITHIN_VALUES})`))
 	}
 	const name = error instanceof Error ? error.name : ''
@@ -833,7 +851,6 @@ export function errorResponse(error: unknown, where: string): Response {
 	if (name === 'ConflictError') {
 		return toErrorResponse(new HttpError(409, 'conflict', 'The object changed since it was read'))
 	}
-	logFailure(where, error)
 	if (error instanceof ServerFault) {
 		return serverError(error.status)
 	}

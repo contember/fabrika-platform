@@ -2,7 +2,7 @@
 // Operations' ingest.
 
 import { describe, expect, spyOn, test } from 'bun:test'
-import { jobEnvelope, operationsReporter, operationsTarget } from '../jobs/report'
+import { operationsReporter, operationsTarget, reportEnvelope } from '../jobs/report'
 import { parseCron, periodAt, previousDue } from '../jobs/schedule'
 
 const utc = (text: string): Date => new Date(`${text}Z`)
@@ -78,10 +78,9 @@ describe('job reports to Operations', () => {
 	})
 
 	test('a report is one error event with the fingerprint, the tags, the release and the environment', () => {
-		const text = jobEnvelope(
+		const text = reportEnvelope(
 			{ fingerprint: ['fabrika-job-failed', 'purge'], type: 'JobFailed', message: "job 'purge' failed", tags: { job: 'purge' } },
-			'v1',
-			'prod',
+			{ release: 'v1', environment: 'prod', source: 'fabrika.jobs' },
 			new Date('2026-10-09T03:00:00Z'),
 		)
 		const [header, item, payload, rest] = text.split('\n')
@@ -112,6 +111,7 @@ describe('job reports to Operations', () => {
 			target,
 			release: null,
 			environment: null,
+			source: 'fabrika.jobs',
 			fetch: (request) => Promise.resolve(void sent.push(request)).then(() => new Response(null, { status: 202 })),
 		}).report(report)
 		expect(sent.map((request) => [request.url, request.headers.get('x-sentry-auth'), request.headers.get('content-type')])).toEqual([
@@ -123,8 +123,15 @@ describe('job reports to Operations', () => {
 		])
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			await operationsReporter({ target, release: null, environment: null, fetch: () => Promise.reject(new Error(`refused ${dsn}`)) }).report(report)
-			expect(log.mock.calls.map((call) => String(call[0]))).toEqual(['fabrika: job report to Operations could not be delivered'])
+			await operationsReporter({
+				target,
+				release: null,
+				environment: null,
+				source: 'fabrika.jobs',
+				fetch: () => Promise.reject(new Error(`refused ${dsn}`)),
+			})
+				.report(report)
+			expect(log.mock.calls.map((call) => String(call[0]))).toEqual(['fabrika: a report to Operations could not be delivered'])
 		} finally {
 			log.mockRestore()
 		}

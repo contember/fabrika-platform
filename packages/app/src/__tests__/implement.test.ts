@@ -450,7 +450,7 @@ describe('union projection', () => {
 			expect(sent.status).toBe(500)
 			expect(sent.body).toEqual(INTERNAL)
 		})
-		expect(logged).toEqual(["fabrika: api.short: 'api.short' returned a value no branch of its output union accepts"])
+		expect(logged).toEqual(["fabrika: api.short: framework_fault: 'api.short' returned a value no branch of its output union accepts"])
 	})
 })
 
@@ -563,7 +563,7 @@ describe('the response header policy', () => {
 
 	test('the Operations ingest origin joins connect-src', async () => {
 		const reporting = bootApp(notesApp(seed()), {
-			environment: environment({ ...frameworkEnvFor(notesApp(seed())), FABRIKA_OPERATIONS_DSN: 'https://key@ops.test/42' }),
+			environment: environment({ ...frameworkEnvFor(notesApp(seed())), FABRIKA_OPERATIONS_DSN: 'https://0123456789abcdef0123456789abcdef@ops.test/42' }),
 		})
 		const sent = await send(reporting, '/healthz')
 		expect(sent.headers.get('Content-Security-Policy')).toContain("connect-src 'self' https://ops.test;")

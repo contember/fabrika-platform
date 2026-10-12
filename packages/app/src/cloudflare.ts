@@ -168,7 +168,7 @@ export function createContractWorker(load: ImplementationLoader): {
 		})
 	}
 	return {
-		async fetch(request, env) {
+		async fetch(request, env, exec) {
 			let contractApp = booted.get(env)
 			if (contractApp === undefined) {
 				contractApp = bootFor(env)
@@ -176,7 +176,7 @@ export function createContractWorker(load: ImplementationLoader): {
 				// A failed boot is not cached: the next request boots again and fails with the same problems.
 				contractApp.catch(() => booted.delete(env))
 			}
-			return (await contractApp).fetch(request)
+			return (await contractApp).fetch(request, exec)
 		},
 	}
 }
