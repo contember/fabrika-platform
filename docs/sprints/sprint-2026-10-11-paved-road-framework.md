@@ -1465,3 +1465,7 @@ ADR-0022 or ADR-0050.
   that write fails; an oversized or cross-origin password form is a logged refusal; an admin's 404/405 REST request is
   recorded (`/admin/*` or its template). The write-path sweep found OAuth consent and grant revocation unaudited; they
   now record `iam.oauth.grant.create` / `iam.oauth.grant.revoke` in their own batch.
+- **WU18 — the Bun SQL hang, diagnosed.** Under concurrency a Postgres `batch` (`sql.begin`) holds a pooled connection
+  idle in its transaction while pool queries queue behind it, so a burst larger than the pool hangs; the round-1 note
+  blamed the migration connection. `AuditWriter.run` now sends a single audited statement (always the case on Postgres)
+  without a transaction, which is atomic alone. Batches elsewhere keep the hazard; it predates this unit.

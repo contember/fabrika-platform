@@ -196,6 +196,11 @@ export class AuditWriter {
 	/** Run one audited group as its own batch and answer the rows its last change returned. */
 	async run<T>(changes: readonly SqlChange[], event: AuditEventInput | undefined): Promise<T[]> {
 		const change = this.changed(changes, event)
+		const [only, ...more] = change.statements
+		// One statement is atomic alone, and a Postgres transaction would hold a pooled connection for nothing.
+		if (only !== undefined && more.length === 0) {
+			return change.rows([await only.all<T>()])
+		}
 		return change.rows(await this.db.batch<T>(change.statements))
 	}
 }
