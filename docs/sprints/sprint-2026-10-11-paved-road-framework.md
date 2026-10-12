@@ -796,3 +796,15 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   deal it is `Unavailable<"the dimension deal declares no members">`. Framework finding: the paved road has no member
   lookup beside a write capability on a nested scope. WU22 adds it; WU11 then validates the picked principal through it
   and takes the label from the directory.
+- **WU11 — owner and assignee validated (on WU22).** `deals.assign` takes `newOwner` and `tasks.create` an `assignee`
+  id (the caller when null); `picked` (`src/orgs/logic.ts`) refuses with 400 a principal `ctx.members.get` does not
+  find in the deal's org, an unknown id and a disabled member, and the stored label is the directory's (the id when it
+  has none), never the input's. Tests: an outsider, an unknown id and a forged label field for both (`crm.test.ts`,
+  `deals.test.ts`); the generated cases send a real member through `members` in `endpoint-access.fixtures.ts`. From
+  the trial: the overdue job re-reads each task under `getForUpdate` in its transaction and skips one a concurrent
+  change closed or marked (opus-c's pattern; the reference failed the attempt with 409). `TRIAL.md` states the run cap
+  as 3 tsc and checker runs per group in total, with the failing runs reported beside it.
+- **WU11 — counts after review** (same classes as above): 400 hand-written server lines in 15 files (`src/orgs/logic.ts`
+  added), 117 migration lines, 469 authored test and fixture lines, 160 tests on Postgres (133 generated). The 400 needed cutting
+  the file headers that restated the code; the margin is gone, so the next endpoint on this CRM passes the bar only
+  with a `fromPage`-style helper (the 7 list handlers repeat one page mapping).
