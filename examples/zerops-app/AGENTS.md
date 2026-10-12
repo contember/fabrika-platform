@@ -812,11 +812,13 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
 
 - Every such endpoint: `ctx.members.get(principalId)` answers `{ principalId, label, disabled }` when that principal
   is a member of the value the object lies in, and `null` otherwise (another org's member, an unknown id). IAM checks
-  the endpoint's own action on the object, so `tasks.assign` validates the person it assigns without a second action.
-  Use it for every picked person: store `member.principalId` and `member.label`, never a label from the input.
+  the endpoint's own action on the org itself, so `tasks.assign` validates the person it assigns without a second
+  action; a caller who holds the action only on a project is refused (403). Use it for every picked person: store
+  `member.principalId` and `member.label`, never a label from the input.
+- The approver sees each endpoint that reads a directory ("looks up one member of `org`"): a new one widens.
 - With the directory's `members.list` action (`tasks.read` here) also `ctx.members.list()`, answering
   `{ principalId, label, roles, disabled }` per member, for an assignee picker. IAM checks that action on the org
-  itself: a caller who holds it only on a project is refused (403).
+  itself too.
 - `label` is `null` unless the caller also holds `members.manage` there, or the dimension opts in with
   `directory: 'labels'`, which widens like any other access change: then every endpoint below it reads labels too.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
