@@ -8,6 +8,7 @@
 // The pin is checked BEFORE anything leaves this machine: `assertPinnedTag` refuses a branch or a SHA
 // (ADR-0025) without a network call, so `--to=main` fails on the spot rather than after a clone.
 
+import { readFlag } from './cli-options'
 import { assertPinnedTag, defaultCheckoutDir } from './sidecar'
 
 /** Where the sidecar repository this command edits is found. */
@@ -42,16 +43,6 @@ export const UPGRADE_DRY_RUN_FLAG = '--dry-run'
  * way to name a local directory shaped like a repository.
  */
 const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/
-
-const readFlag = (argv: readonly string[], name: string): string | undefined => {
-	const prefix = `${name}=`
-	const matches = argv.filter((arg) => arg.startsWith(prefix))
-	if (matches.length > 1) {
-		throw new Error(`${name} was given more than once`)
-	}
-	const value = matches[0]?.slice(prefix.length)
-	return value === undefined || value.trim() === '' ? undefined : value.trim()
-}
 
 const assertKnownArguments = (argv: readonly string[]): void => {
 	for (const arg of argv) {

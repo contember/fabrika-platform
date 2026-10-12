@@ -23,40 +23,26 @@
 import {
 	action as consoleAction,
 	configureEnvironment,
-	confirm as promptConfirm,
 	type EnvironmentConfig,
 	ghRepoExists,
 	info as consoleInfo,
 	ok as consoleOk,
 	scaffoldSidecarRepository,
-	secretOrEnv,
-	select as promptSelect,
 	type SidecarScaffoldInput,
 	type SidecarScaffoldResult,
 	step as consoleStep,
-	text as promptText,
 	triggerPlatformWorkflow,
 	url,
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
 import { createZeropsApi, type ZeropsApi, type ZeropsService } from '../index'
+import { type Confirmations, confirmations } from './confirmations'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
 import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
+import type { InitInput } from './init-options'
 import type { InitLog } from './log'
 import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
-import { assertPinnedTag, defaultCheckoutDir, defaultSidecarRepo, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
-
-/** The name every bypass in this platform is gated on, and therefore the one name an installation cannot take. */
-const LOCAL_ENVIRONMENT = 'local'
-
-/** Everything `runInit` asks the operator. Injected so the flow can be exercised without a TTY. */
-export interface InitPrompts {
-	text(question: string, fallback?: string): Promise<string>
-	confirm(question: string, defaultYes?: boolean): Promise<boolean>
-	select<T>(question: string, options: { label: string; value: T }[]): Promise<T>
-	/** A hidden prompt, or the named environment variable when it is already set. NEVER echoed. */
-	secret(variable: string, question: string): Promise<string>
-}
+import { defaultCheckoutDir, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
 
 /** Everything `runInit` does outside the operator's own disk. Every one of them is confirmed first. */
 export interface InitEffects {
@@ -72,78 +58,13 @@ export interface InitEffects {
 
 export interface InitCollaborators {
 	readonly log: InitLog
-	readonly prompts: InitPrompts
+	readonly prompts: Confirmations
 	readonly effects: InitEffects
-}
-
-/** `<installation>` plus the one optional flag, so the repository can be named without a prompt. */
-export interface InitArguments {
-	readonly installation: string
-	readonly repo?: string
-}
-
-export const parseInitArgs = (argv: readonly string[]): InitArguments => {
-	let installation: string | undefined
-	let repo: string | undefined
-	for (const arg of argv) {
-		if (arg.startsWith('--repo=')) {
-			repo = arg.slice('--repo='.length).trim()
-			continue
-		}
-		if (arg.startsWith('-')) {
-			throw new Error(`unexpected argument \`${arg}\`. Usage: fabrika platform init --provider=zerops <installation> [--repo=<owner>/<name>]`)
-		}
-		if (installation !== undefined) {
-			throw new Error(`unexpected argument \`${arg}\`: name ONE installation`)
-		}
-		installation = arg.trim()
-	}
-	if (installation === undefined || installation === '') {
-		throw new Error('Zerops installation init requires an installation name, for example `fabrika platform init --provider=zerops test`')
-	}
-	if (repo !== undefined && !/^[^/\s]+\/[^/\s]+$/.test(repo)) {
-		throw new Error(`\`${repo}\` is not a <owner>/<name> repository`)
-	}
-	return { installation, ...(repo === undefined || repo === '' ? {} : { repo }) }
-}
-
-/**
- * The installation's environment name, refused when it claims to be local.
- *
- * The same refusal the services enforce at boot: `local` is the value `localDevLogin`, the ephemeral
- * signing key and the credential-less caller path are all gated on, and a deployed installation is
- * never a loopback address. Refusing it here means the operator finds out at the prompt rather than in
- * a failed readiness check.
- */
-export const checkedEnvironmentName = (declared: string): string => {
-	const trimmed = declared.trim()
-	if (trimmed === '') {
-		throw new Error('an installation environment name is required — it is written to every service as ENVIRONMENT')
-	}
-	if (trimmed === LOCAL_ENVIRONMENT) {
-		throw new Error(
-			`\`${LOCAL_ENVIRONMENT}\` is refused: it is the name every development bypass is gated on, and a deployed `
-				+ 'installation is not a loopback address. Name it after the installation instead',
-		)
-	}
-	return trimmed
 }
 
 /** Where this installation answers, as far as `init` needs to know it. */
 interface Placement {
 	readonly hosts?: { readonly iam: string; readonly control: string; readonly operations: string }
-}
-
-/** Everything collected before anything leaves this disk. */
-interface Collected {
-	readonly repo: string
-	readonly fabrikaRef: string
-	readonly projectId: string
-	readonly environmentName: string
-	readonly placement: Placement
-	readonly apiBaseUrl?: string
-	readonly accessToken: string
-	readonly provisioningKey: string
 }
 
 export interface InspectPlatformInput {
@@ -157,75 +78,6 @@ export interface PlatformInspection {
 	readonly controlEnv: ReadonlyMap<string, string>
 	readonly proxyEnv: ReadonlyMap<string, string>
 	readonly proxyPublished: boolean
-}
-
-const requiredAnswer = async (prompts: InitPrompts, question: string, fallback?: string): Promise<string> => {
-	const answer = (await prompts.text(question, fallback)).trim()
-	if (answer === '') {
-		throw new Error(`${question} is required`)
-	}
-	return answer
-}
-
-const bareHost = (value: string, label: string): string => {
-	const host = value.trim()
-	if (host === '' || host.includes('/') || host.includes(':')) {
-		throw new Error(`\`${value}\` is not a bare hostname — ${label} carries no scheme and no port`)
-	}
-	return host
-}
-
-const collect = async (args: InitArguments, { log, prompts }: InitCollaborators): Promise<Collected> => {
-	log.step('The installation this repository will deploy')
-	log.info('Nothing leaves this machine until every question below is answered.')
-	const repo = args.repo ?? await requiredAnswer(prompts, 'Sidecar repository (<owner>/<name>)', defaultSidecarRepo(args.installation))
-	// Refused HERE, before the credential prompts and long before anything is created: a branch pin is a
-	// question for the operator, not a failure in their CI.
-	const fabrikaRef = assertPinnedTag(await requiredAnswer(prompts, 'fabrika-platform tag to pin (a published tag, never a branch)'))
-	const projectId = await requiredAnswer(prompts, 'Zerops project id (the project holding iam, operations, proxy and control)')
-	const environmentName = checkedEnvironmentName(await requiredAnswer(prompts, 'Installation environment name', args.installation))
-
-	const custom = await prompts.select('Where does this installation answer?', [
-		{ label: 'Zerops subdomains — derived from the proxy, and the deploy publishes them', value: false },
-		{ label: 'Custom domains — bound to the project balancer out of band', value: true },
-	])
-	const placement: Placement = custom
-		? {
-			hosts: {
-				iam: bareHost(await requiredAnswer(prompts, 'IAM hostname'), 'a platform host'),
-				control: bareHost(await requiredAnswer(prompts, 'Console hostname'), 'a platform host'),
-				operations: bareHost(await requiredAnswer(prompts, 'Operations ingest hostname'), 'a platform host'),
-			},
-		}
-		: {}
-
-	const apiBaseUrl = (await prompts.text('Zerops region API base (blank = the default region)', '')).trim()
-
-	log.step('Credentials')
-	log.info('Both already belong to the installation. Neither is generated here, printed, or written to disk;')
-	log.info('each is sent to GitHub over `gh` stdin and reaches the deploy as an Environment secret.')
-	const accessToken = await prompts.secret(
-		'FABRIKA_ZEROPS_ACCESS_TOKEN',
-		"Zerops access token (an INTEGRATION token scoped to this installation's projects, never a personal one)",
-	)
-	const provisioningKey = await prompts.secret(
-		'FABRIKA_IAM_PROVISIONING_KEY',
-		"IAM provisioning key (the px_ admin key this installation's IAM already holds)",
-	)
-	if (accessToken.trim() === '' || provisioningKey.trim() === '') {
-		throw new Error('both credentials are required: the deploy authenticates to Zerops and to IAM with them')
-	}
-
-	return {
-		repo,
-		fabrikaRef,
-		projectId,
-		environmentName,
-		placement,
-		accessToken: accessToken.trim(),
-		provisioningKey: provisioningKey.trim(),
-		...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
-	}
 }
 
 const oneService = (services: readonly ZeropsService[], name: string): ZeropsService | undefined => {
@@ -318,47 +170,60 @@ export const sourceConnectionSettingsUrl = (placement: Placement, platform: Plat
 }
 
 /** The Environment the generated workflow reads. Secret VALUES appear here and nowhere else. */
-const environmentConfig = (installation: string, collected: Collected): EnvironmentConfig => ({
-	repo: collected.repo,
+const environmentConfig = (installation: string, input: InitInput): EnvironmentConfig => ({
+	repo: input.repo,
 	environment: installation,
 	secrets: {
-		FABRIKA_ZEROPS_ACCESS_TOKEN: collected.accessToken,
-		FABRIKA_IAM_PROVISIONING_KEY: collected.provisioningKey,
+		FABRIKA_ZEROPS_ACCESS_TOKEN: input.accessToken,
+		FABRIKA_IAM_PROVISIONING_KEY: input.provisioningKey,
 	},
 	vars: {
-		FABRIKA_ZEROPS_PROJECT_ID: collected.projectId,
-		FABRIKA_PLATFORM_ENVIRONMENT: collected.environmentName,
+		FABRIKA_ZEROPS_PROJECT_ID: input.projectId,
+		FABRIKA_PLATFORM_ENVIRONMENT: input.environmentName,
 		// Stated rather than defaulted, so the Environment describes the whole deploy.
 		FABRIKA_PLATFORM_SCHEME: 'https',
-		...(collected.placement.hosts === undefined ? {} : {
-			FABRIKA_PLATFORM_IAM_HOST: collected.placement.hosts.iam,
-			FABRIKA_PLATFORM_CONSOLE_HOST: collected.placement.hosts.control,
-			FABRIKA_PLATFORM_OPERATIONS_HOST: collected.placement.hosts.operations,
+		...(input.hosts === undefined ? {} : {
+			FABRIKA_PLATFORM_IAM_HOST: input.hosts.iam,
+			FABRIKA_PLATFORM_CONSOLE_HOST: input.hosts.control,
+			FABRIKA_PLATFORM_OPERATIONS_HOST: input.hosts.operations,
 		}),
-		...(collected.apiBaseUrl === undefined ? {} : { FABRIKA_ZEROPS_API_URL: collected.apiBaseUrl }),
+		...(input.apiBaseUrl === undefined ? {} : { FABRIKA_ZEROPS_API_URL: input.apiBaseUrl }),
 	},
 })
 
+/** The command that repeats this run, with every value but the two credentials, which stay in the environment. */
+const rerunCommand = (input: InitInput): string =>
+	[
+		`fabrika platform init --provider=zerops ${input.installation}`,
+		`--repo=${input.repo}`,
+		`--tag=${input.fabrikaRef}`,
+		`--project-id=${input.projectId}`,
+		`--env=${input.environmentName}`,
+		...(input.hosts === undefined
+			? []
+			: [`--iam-host=${input.hosts.iam}`, `--console-host=${input.hosts.control}`, `--operations-host=${input.hosts.operations}`]),
+	].join(' ')
+
 /** Read the project back, so a wrong token or a mistyped id fails here rather than in someone's CI. */
-const verifyProject = async (collected: Collected, { log, prompts, effects }: InitCollaborators): Promise<void> => {
+const verifyProject = async (input: InitInput, { log, prompts, effects }: InitCollaborators): Promise<void> => {
 	log.step('Check the token against the project')
-	if (!(await prompts.confirm(`Read Zerops project ${collected.projectId} to check the access token and the id?`, true))) {
+	if (!(await prompts.confirm(`Read Zerops project ${input.projectId} to check the access token and the id?`, true))) {
 		log.info('Skipped. A wrong token or project id will surface in the first pipeline run instead.')
 		return
 	}
 	// A caught error is never re-thrown as itself: it may quote a request URL or a platform payload, and
 	// this is the one step holding both credentials. A short sentence naming the two causes is enough.
 	const name = await effects.describeProject({
-		projectId: collected.projectId,
-		accessToken: collected.accessToken,
-		...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+		projectId: input.projectId,
+		accessToken: input.accessToken,
+		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
 	}).catch(() => {
 		throw new Error(
-			`Zerops project ${collected.projectId} could not be read: the access token does not grant it, or the id is wrong. `
+			`Zerops project ${input.projectId} could not be read: the access token does not grant it, or the id is wrong. `
 				+ 'Nothing has been created — check both and run init again',
 		)
 	})
-	log.ok(`Zerops project ${name} (${collected.projectId}) is readable with this token.`)
+	log.ok(`Zerops project ${name} (${input.projectId}) is readable with this token.`)
 }
 
 /**
@@ -366,16 +231,16 @@ const verifyProject = async (collected: Collected, { log, prompts, effects }: In
  *
  * Declining is not fatal: init then prints no origin rather than one it would have to guess.
  */
-const readPlatform = async (collected: Collected, { log, prompts, effects }: InitCollaborators): Promise<PlatformInspection | undefined> => {
+const readPlatform = async (input: InitInput, { log, prompts, effects }: InitCollaborators): Promise<PlatformInspection | undefined> => {
 	log.step('Read the installation')
-	if (!(await prompts.confirm(`Read \`control\` and \`proxy\` in Zerops project ${collected.projectId} for the console and IAM origins?`, true))) {
+	if (!(await prompts.confirm(`Read \`control\` and \`proxy\` in Zerops project ${input.projectId} for the console and IAM origins?`, true))) {
 		log.info('Skipped. No console or IAM origin will be printed.')
 		return undefined
 	}
 	return effects.inspectPlatform({
-		projectId: collected.projectId,
-		accessToken: collected.accessToken,
-		...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+		projectId: input.projectId,
+		accessToken: input.accessToken,
+		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
 	}).catch(() => {
 		throw new Error('the `control` and `proxy` services could not be read; no credential value is shown. Inspect them in Zerops, then run init again')
 	})
@@ -388,52 +253,54 @@ const readPlatform = async (collected: Collected, { log, prompts, effects }: Ini
  * outward step: an Environment cannot be written to a repository that does not exist, and a workflow
  * cannot be triggered without one.
  */
-const scaffold = async (
-	installation: string,
-	collected: Collected,
-	{ log, prompts, effects }: InitCollaborators,
-): Promise<string | undefined> => {
+const scaffold = async (input: InitInput, { log, prompts, effects }: InitCollaborators): Promise<string | undefined> => {
 	log.step('Scaffold the sidecar repository')
-	const exists = await effects.repositoryExists(collected.repo)
+	const exists = await effects.repositoryExists(input.repo)
 	const question = exists
-		? `Refresh the pipeline on ${collected.repo} and push?`
-		: `Create ${collected.repo} (private) on GitHub and push the pipeline?`
+		? `Refresh the pipeline on ${input.repo} and push?`
+		: `Create ${input.repo} (private) on GitHub and push the pipeline?`
 	if (!(await prompts.confirm(question, true))) {
 		log.action('OPERATOR ACTION — nothing was created; run init again when ready', [
-			`fabrika platform init --provider=zerops ${installation} --repo=${collected.repo}`,
+			rerunCommand(input),
 		])
 		return undefined
 	}
-	const dir = defaultCheckoutDir(installation)
+	const dir = defaultCheckoutDir(input.installation)
 	const result = await effects.scaffold({
-		repo: collected.repo,
+		repo: input.repo,
 		dir,
 		files: [...SIDECAR_FILES],
 		materialize: (target) =>
 			materializeSidecarScaffold(target, {
-				installation,
-				repo: collected.repo,
-				fabrikaRef: collected.fabrikaRef,
+				installation: input.installation,
+				repo: input.repo,
+				fabrikaRef: input.fabrikaRef,
 			}),
 	})
 	const pinned = await readPinnedTag(result.dir)
-	log.ok(`${collected.repo} ${result.created ? 'created' : 'refreshed'} — pinned fabrika tag ${pinned}`)
-	if (pinned !== collected.fabrikaRef) {
-		log.warn(`the existing pin ${pinned} was kept; ${collected.fabrikaRef} was not written, because fabrika.ref is operator-owned`)
+	log.ok(`${input.repo} ${result.created ? 'created' : 'refreshed'} — pinned fabrika tag ${pinned}`)
+	if (pinned !== input.fabrikaRef) {
+		log.warn(`the existing pin ${pinned} was kept; ${input.fabrikaRef} was not written, because fabrika.ref is operator-owned`)
 	}
 	return result.dir
 }
 
 /** Run the whole thing for `<installation>`. */
-export const runInit = async (args: InitArguments, collaborators: InitCollaborators): Promise<void> => {
+export const runInit = async (input: InitInput, collaborators: InitCollaborators): Promise<void> => {
 	const { log, prompts, effects } = collaborators
-	log.info(`fabrika platform init — the ${args.installation} Zerops installation's sidecar repository`)
+	log.info(`fabrika platform init — the ${input.installation} Zerops installation's sidecar repository`)
 	log.info('This UPDATES an installation that already exists. It does not create one.')
 
-	const collected = await collect(args, collaborators)
-	await verifyProject(collected, collaborators)
-	const platform = await readPlatform(collected, collaborators)
-	const settingsUrl = platform === undefined ? undefined : sourceConnectionSettingsUrl(collected.placement, platform)
+	log.step('The installation this repository will deploy')
+	log.info(`repository ${input.repo}, pinned to ${input.fabrikaRef}; Zerops project ${input.projectId}, environment \`${input.environmentName}\``)
+	log.info(
+		input.hosts === undefined
+			? "hosts: derived from the proxy's Zerops subdomains"
+			: `hosts: iam ${input.hosts.iam}, console ${input.hosts.control}, operations ${input.hosts.operations}`,
+	)
+	await verifyProject(input, collaborators)
+	const platform = await readPlatform(input, collaborators)
+	const settingsUrl = platform === undefined ? undefined : sourceConnectionSettingsUrl(input, platform)
 	log.info('Public repositories deploy without a GitHub App. Connect private GitHub source in Control.')
 	log.action(
 		'OPERATOR ACTION — connect GitHub source in Control',
@@ -442,51 +309,51 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 			: [url(settingsUrl)],
 	)
 
-	const dir = await scaffold(args.installation, collected, collaborators)
+	const dir = await scaffold(input, collaborators)
 	if (dir === undefined) {
 		return
 	}
 
-	log.step(`Configure the ${args.installation} GitHub Environment`)
-	const config = environmentConfig(args.installation, collected)
-	log.info(`${Object.keys(config.secrets).length} secret(s) and ${Object.keys(config.vars).length} variable(s) on ${collected.repo}.`)
-	if (!(await prompts.confirm(`Write them to the ${args.installation} Environment now (secret VALUES go to GitHub over \`gh\` stdin)?`, true))) {
+	log.step(`Configure the ${input.installation} GitHub Environment`)
+	const config = environmentConfig(input.installation, input)
+	log.info(`${Object.keys(config.secrets).length} secret(s) and ${Object.keys(config.vars).length} variable(s) on ${input.repo}.`)
+	if (!(await prompts.confirm(`Write them to the ${input.installation} Environment now (secret VALUES go to GitHub over \`gh\` stdin)?`, true))) {
 		log.action('OPERATOR ACTION — the pipeline cannot run until the Environment holds these', [
-			`fabrika platform init --provider=zerops ${args.installation} --repo=${collected.repo}`,
+			rerunCommand(input),
 		])
 		return
 	}
 	await effects.configureEnvironment(config)
-	log.ok(`Environment ${args.installation} written: ${Object.keys(config.secrets).join(', ')} and ${Object.keys(config.vars).join(', ')}.`)
+	log.ok(`Environment ${input.installation} written: ${Object.keys(config.secrets).join(', ')} and ${Object.keys(config.vars).join(', ')}.`)
 
 	log.step('Trigger the deploy')
 	log.info("The pipeline runs the whole ordered sequence in the operator's CI; this machine deploys nothing.")
-	if (!(await prompts.confirm(`Run the platform workflow on ${collected.repo} now?`, true))) {
+	if (!(await prompts.confirm(`Run the platform workflow on ${input.repo} now?`, true))) {
 		log.action('OPERATOR ACTION — run it when ready', [
-			`gh workflow run platform.yml --repo ${collected.repo}`,
-			`or: ${url(`https://github.com/${collected.repo}/actions`)} → platform → Run workflow`,
+			`gh workflow run platform.yml --repo ${input.repo}`,
+			`or: ${url(`https://github.com/${input.repo}/actions`)} → platform → Run workflow`,
 		])
 	} else {
-		await effects.triggerWorkflow(collected.repo)
+		await effects.triggerWorkflow(input.repo)
 		log.ok('Platform workflow triggered.')
-		log.info(`Watch: ${url(`https://github.com/${collected.repo}/actions`)}   (or: gh run watch --repo ${collected.repo})`)
+		log.info(`Watch: ${url(`https://github.com/${input.repo}/actions`)}   (or: gh run watch --repo ${input.repo})`)
 	}
 
 	log.step('Done')
-	log.ok(`Sidecar repository: ${collected.repo} (local checkout: ${dir})`)
+	log.ok(`Sidecar repository: ${input.repo} (local checkout: ${dir})`)
 	log.info('Roll this installation forward by bumping fabrika.ref to a newer published tag and pushing.')
 	log.info("Who may administer the installation is IAM's to say: this repository holds no admission list to close later.")
 	// The origin comes off the live control service, never from what was typed here: an operator who
 	// pastes a guessed hostname into FABRIKA_IAM_RPC_URL gets "Unable to connect" and no explanation.
-	const iamOrigin = platform === undefined ? undefined : platformIamOrigin(collected.placement, platform)
+	const iamOrigin = platform === undefined ? undefined : platformIamOrigin(input, platform)
 	log.action(
 		MACHINE_KEY_NEXT_STEP_TITLE,
-		machineKeyNextStepLines({ sidecarEnvironment: args.installation, ...(iamOrigin === undefined ? {} : { iamOrigin }) }),
+		machineKeyNextStepLines({ sidecarEnvironment: input.installation, ...(iamOrigin === undefined ? {} : { iamOrigin }) }),
 	)
 }
 
 /** The real collaborators: a TTY, `gh`, git, and one read of the Zerops API. */
-export const consoleInitCollaborators = (): InitCollaborators => ({
+export const consoleInitCollaborators = (input: InitInput): InitCollaborators => ({
 	log: {
 		step: (title) => consoleStep(title),
 		info: (message) => consoleInfo(message),
@@ -494,12 +361,13 @@ export const consoleInitCollaborators = (): InitCollaborators => ({
 		ok: (message) => consoleOk(message),
 		action: (title, lines) => consoleAction(title, [...lines]),
 	},
-	prompts: {
-		text: (question, fallback) => promptText(question, fallback),
-		confirm: (question, defaultYes) => promptConfirm(question, defaultYes),
-		select: (question, options) => promptSelect(question, options),
-		secret: (variable, question) => secretOrEnv(variable, question),
-	},
+	// First, before anything is contacted: a run nobody can confirm does not start.
+	prompts: confirmations(
+		input.unattended,
+		process.stdin,
+		(line) => consoleInfo(line),
+		'creates or pushes the sidecar repository, writes its GitHub Environment secrets and triggers the platform workflow',
+	),
 	effects: {
 		repositoryExists: (repo) => ghRepoExists(repo),
 		scaffold: (input) => scaffoldSidecarRepository(input),

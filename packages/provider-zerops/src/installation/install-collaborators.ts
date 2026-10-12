@@ -1,13 +1,12 @@
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { Sleeper, ZeropsApi } from '../index'
+import type { Confirmations } from './confirmations'
 import type { PlatformSourcePreparer } from './installation-source'
 import type { InitLog } from './log'
 import type { PlatformUploadFetch } from './platform-upload'
 
 /** The one question this command asks. Injected so the flow can be exercised without a TTY. */
-export interface InstallPrompts {
-	confirm(question: string, defaultYes?: boolean): Promise<boolean>
-}
+export type InstallPrompts = Confirmations
 
 /** Everything `runInstall` reaches the outside world through. */
 export interface InstallCollaborators {

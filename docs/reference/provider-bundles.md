@@ -421,7 +421,7 @@ checkpointed lifecycle.
 fabrika platform init --provider=cloudflare <account>
 fabrika platform plan --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform deploy --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
-fabrika platform init --provider=zerops <installation> [--repo=<owner>/<name>]
+fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=<id> [--repo=<owner>/<name>] [--yes]
 fabrika platform plan --provider=zerops
 fabrika platform install --provider=zerops --client-id=<id> --env=<name> [--project-id=<id> | --create-project [--project-name=<name>]]
 fabrika platform deploy --provider=zerops [options]

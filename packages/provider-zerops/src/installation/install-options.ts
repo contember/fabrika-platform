@@ -8,6 +8,10 @@
 // operator's disk — but nothing here prompts: a missing required value is an error naming both the flag
 // and the variable that would supply it, so a mistyped install fails before it contacts anything.
 
+import { readEnv, readFlag, required, setting } from './cli-options'
+import { UNATTENDED_FLAG } from './confirmations'
+
+export { UNATTENDED_FLAG } from './confirmations'
 import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 
@@ -52,49 +56,11 @@ export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-plat
 
 const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--source-dir', '--tier'] as const
 
-/**
- * The one way this command runs with nobody watching it.
- *
- * Every confirmation defaults to yes, so a pipe carrying blank lines answers all six of them with
- * nobody reading what they agree to — which is why saying yes unattended is a FLAG and never an
- * inference: it makes the choice explicit, and it puts it in the shell history of whoever ran it.
- */
-export const UNATTENDED_FLAG = '--yes'
-
 /** `--create-project`: bring the project up too, instead of naming one the operator made. */
 export const CREATE_PROJECT_FLAG = '--create-project'
 
 /** The two flags that carry no value. Written with one, they are `unexpected argument` like any other. */
 const BOOLEAN_FLAGS = [UNATTENDED_FLAG, CREATE_PROJECT_FLAG] as const
-
-const readFlag = (argv: readonly string[], name: string): string | undefined => {
-	const prefix = `${name}=`
-	const matches = argv.filter((arg) => arg.startsWith(prefix))
-	if (matches.length > 1) {
-		throw new Error(`${name} was given more than once`)
-	}
-	const value = matches[0]?.slice(prefix.length)
-	return value === undefined || value.trim() === '' ? undefined : value.trim()
-}
-
-const readEnv = (env: Record<string, string | undefined>, name: string): string | undefined => {
-	const value = env[name]
-	return value === undefined || value.trim() === '' ? undefined : value.trim()
-}
-
-const setting = (
-	argv: readonly string[],
-	env: Record<string, string | undefined>,
-	flag: string,
-	variable: string,
-): string | undefined => readFlag(argv, flag) ?? readEnv(env, variable)
-
-const required = (value: string | undefined, flag: string, variable: string): string => {
-	if (value === undefined) {
-		throw new Error(`${flag}=<value> or ${variable} is required`)
-	}
-	return value
-}
 
 const assertKnownArguments = (argv: readonly string[]): void => {
 	for (const arg of argv) {

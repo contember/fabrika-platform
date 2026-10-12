@@ -109,15 +109,20 @@ The sidecar is a repository the operator owns. Its GitHub pipeline calls `fabrik
 its `fabrika.ref` pins the fabrika tag the pipeline runs.
 
 ```bash
-fabrika platform init --provider=zerops <installation>
+export FABRIKA_IAM_PROVISIONING_KEY=<the key from step 1>
+export FABRIKA_ZEROPS_ACCESS_TOKEN=<the integration token from the control service's environment>
+fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=<id>
 ```
 
 `<installation>` names the GitHub Environment, the default repository
 `contember/fabrika-zerops-<installation>`, and the local checkout directory. Pass
 `--repo=<owner>/<name>` for a different repository.
 
-`init` asks for the tag to pin, the Zerops project id, the environment name, and where the installation
-answers (Zerops subdomains, or three custom hosts). It then asks for two secrets and generates neither:
+`init` prompts for nothing. Every value is a flag or the environment variable beside it, flag first:
+`--tag` (`FABRIKA_PLATFORM_TAG`, the published tag to pin), `--project-id` (`FABRIKA_ZEROPS_PROJECT_ID`),
+`--env` (`FABRIKA_PLATFORM_ENVIRONMENT`, default `<installation>`), and, for custom domains, all three of
+`--iam-host`, `--console-host` and `--operations-host`. A missing value is an error naming both. The two
+secrets are environment only, and `init` generates neither:
 
 | Secret                         | Where it comes from                                                                                                                            |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -125,7 +130,9 @@ answers (Zerops subdomains, or three custom hosts). It then asks for two secrets
 | `FABRIKA_ZEROPS_ACCESS_TOKEN`  | The integration token `install` minted. Read it from the `control` service's environment in the Zerops GUI. Never use the personal token here. |
 
 Both are sent to GitHub over `gh` stdin. `init` confirms before each outward step: reading the project,
-creating or pushing the repository, writing the Environment, and triggering the first run. Declining stops there and prints the command to run instead. A re-run is safe.
+creating or pushing the repository, writing the Environment, and triggering the first run. A stdin that
+is not a terminal is refused unless `--yes` is passed. Declining stops there and prints the command
+that repeats the run. A re-run is safe.
 
 **Check.** The `platform` workflow run in the sidecar repository ends green. Its first run changes
 little, because step 1 already deployed the same code.
@@ -276,7 +283,7 @@ provisioning key, the Operations sync key and the control vault KEK
 INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on this
 project only), so the installation never holds the personal token the operator authenticated with.
 Exactly one value is printed: the provisioning key, once, at the end, because it lives
-nowhere else and `platform init` asks for it.
+nowhere else, and `platform init` reads it from `FABRIKA_IAM_PROVISIONING_KEY`.
 
 Fresh install always leaves GitHub source anonymous: it writes no App private key or webhook secret.
 Public repositories therefore deploy without another setup step.
