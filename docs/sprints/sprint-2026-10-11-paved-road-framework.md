@@ -882,3 +882,11 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU15 — link-holder files on WU17.** After the rebase onto WU17 the link holder's list (`<mount>.files.<name>.list`,
   `{ after?, limit? }`, no owner) joins upload and download; quarantine and the held-file quota apply through the shared
   upload and download paths. No scanning link collection is tested here: WU17's suites own the scan.
+- **WU15 review round 1.** (1) `createLinkCredential` inserts only while the schema still declares what `issueLink`
+  checked (`CheckedLinkDeclaration`: the mount's dimension, grants, `issuedBy`, `maxDays`, the chain's containment, an
+  issuing job's actions and `issues`), behind the mount row lock every reconcile takes; a reconcile in between makes the
+  issuance `not_allowed` (SQLite tests reconcile right before the write; a Postgres test holds a narrowing reconcile
+  open). (2) The intake recipe acts only while its attempt is live (`ctx.signal.throwIfAborted()` before each effect,
+  the e-mail takes the signal), and `ctx.links` of an ended attempt asks IAM nothing. (3) Each delivery reserves one
+  e-mail of the daily budget before any effect, so failures after the e-mail are counted. The reference states the three
+  invariants for WU10b.
