@@ -250,6 +250,7 @@ Raw SQL is legitimate for a join, a report, an `OR` or `IS NULL` filter, or a bu
 `ctx.sql` exists only there.
 
 ```ts src/reports/endpoints.ts
+import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { OrgInput, TaskStatus } from '../schemas'
@@ -266,6 +267,18 @@ const WorkloadRow = z.strictObject({
 })
 const WorkloadReport = z.strictObject({ rows: z.array(WorkloadRow) })
 const Counts = z.strictObject({ open: z.int(), doing: z.int(), done: z.int() })
+const TaskExportRow = z.strictObject({
+	title: z.string(),
+	status: TaskStatus,
+	assignee: z.nullable(z.string()),
+	dueOn: z.nullable(z.string()),
+})
+const TaskExport = attachment({
+	format: 'csv',
+	filename: 'tasks.csv',
+	row: TaskExportRow,
+	maxBytes: 5_000_000,
+})
 
 export const reports = app.group({ callers: ['human'] }, (r) => ({
 	workload: r.query({
@@ -293,6 +306,20 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 		access: { action: 'tasks.read', over: 'org' },
 	})
 		.handle(({ ctx }) => statusCounts(ctx.db.within)),
+	exportTasks: r.query({
+		input: OrgInput,
+		output: TaskExport,
+		access: { action: 'tasks.read', over: 'org' },
+		sql: 'read',
+	})
+		.handle(({ ctx }) =>
+			ctx.sql(TaskExportRow)`
+				select t.title, t.status, t.assignee, t.due_on::text as due_on
+				from tasks t
+				where ${ctx.sql.scope(ctx.within, 'tasks', 't')}
+				order by t.title
+				limit 10000`
+		),
 }))
 ```
 
@@ -320,6 +347,25 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `fabrika_*` or `pg_*` name, and calls outside the reviewed built-ins. A function your migrations declare is refused
   too: call it from a view. These name rules are defense in depth; the runtime role (DML only) is the boundary.
 - A query runs in a read-only transaction; a mutation's `ctx.sql` runs in the same transaction as its handles.
+
+## A file download: `attachment`
+
+`output: attachment({ format: 'csv', filename, row, maxBytes, maxRows? })` (`@fabrika/app/contract`) makes the endpoint
+answer a file: the handler returns the rows (an array of `row`), and the framework writes the CSV. `exportTasks` above
+is one.
+
+- `row` is a `z.strictObject` of scalar fields (string, number, boolean, enum, literal; nullable or optional); its
+  field names are the header line, in their order. `filename` is fixed (`[A-Za-z0-9._-]`, ending in `.csv`).
+- The framework writes RFC 4180 CSV in UTF-8 with a byte order mark, and puts `'` before every text cell a spreadsheet
+  would run as a formula (one that starts with `=`, `+`, `-`, `@`, a tab or a line break, also after spaces). Never
+  write CSV by hand.
+- `maxBytes` (at most 16 MiB) and `maxRows` (10 000 unless declared, at most 100 000) bound the file; a cell holds at
+  most 32 767 characters. Past a limit the call fails with a 500 and sends no file. Bound the rows in the query too.
+- **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows. The file is
+  encoded before the transaction commits, so a file over its limit keeps no log row.
+- The SPA calls `download(api.reports.exportTasks, { orgId })` from `@fabrika/app/client`: it saves the file and
+  answers it as a `File`. `api.reports.exportTasks` is not a function. A refusal is an `RpcError`.
+- An export (`app.export`) answers JSON only; an `attachment()` is for an RPC or a link procedure.
 
 ## Rows outside the capability: `unscoped`
 

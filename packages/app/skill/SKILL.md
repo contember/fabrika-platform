@@ -230,8 +230,8 @@ use it; fix hints too. `references/errors.md` explains the findings and the type
 
 Read the one you need before you write that part. Together they are one application to copy from:
 `app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
-`endpoint.md` (access forms, handles, lists, `fromRow`, `ctx.sql`, members), `tests.md` (generated tests, seeds,
-`testKit`), `errors.md` (checker findings, type errors, runtime answers), `jobs.md`, `files.md` and
+`endpoint.md` (access forms, handles, lists, `fromRow`, `ctx.sql`, CSV downloads, members), `tests.md` (generated
+tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime answers), `jobs.md`, `files.md` and
 `webhooks-links-connectors.md`, all under `references/`.
 
 ## Not built yet
