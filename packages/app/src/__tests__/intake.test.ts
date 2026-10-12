@@ -4,7 +4,7 @@
 // run with exactly one live, e-mailed link. IAM is an in-memory ledger of links here (its own rules are IAM's tests,
 // and `packages/iam`'s visitor-link test runs this fixture against the real IAM through the proxy).
 
-import type { ContractApp } from '@fabrika/app/implement'
+import type { ContractApp, JobClock } from '@fabrika/app/implement'
 import type {
 	IamMembershipRpc,
 	IssueLinkInput,
@@ -114,28 +114,69 @@ function refused(): Promise<MembershipFailure> {
 	return Promise.resolve({ ok: false, reason: 'not_allowed' })
 }
 
-/** The e-mail provider and the fault a test arms between two effects of a delivery. */
+/** A point a test holds an attempt at, and the signal that the attempt got there. */
+interface Gate {
+	readonly reached: Promise<void>
+	open(): void
+	wait(): Promise<void>
+}
+
+function gate(): Gate {
+	const reached = Promise.withResolvers<void>()
+	const opened = Promise.withResolvers<void>()
+	return {
+		reached: reached.promise,
+		open: () => opened.resolve(),
+		wait: async () => {
+			reached.resolve()
+			await opened.promise
+		},
+	}
+}
+
+/**
+ * The e-mail provider and the faults a test arms: a stop or a pause after an effect of a delivery, a refused message,
+ * and a message held in flight, which the provider abandons once the attempt's signal aborts.
+ */
 class World implements IntakeWorld {
 	readonly origin = ORIGIN
 	readonly mails: { readonly to: string; readonly url: string }[] = []
 	stopAfter: DeliveryStep | null = null
+	pauseAfter: { readonly step: DeliveryStep; readonly gate: Gate } | null = null
+	holdSend: Gate | null = null
 	failSend = false
+	abandoned = 0
 
-	send(message: { readonly to: string; readonly url: string }): Promise<void> {
+	async send(message: { readonly to: string; readonly url: string }, signal: AbortSignal): Promise<void> {
 		if (this.failSend) {
 			this.failSend = false
-			return Promise.reject(new Error('the provider refused the message'))
+			throw new Error('the provider refused the message')
 		}
+		const hold = this.holdSend
+		if (hold !== null) {
+			this.holdSend = null
+			const aborted = new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+			await Promise.race([hold.wait(), aborted])
+			// The request was in flight: the provider abandons it on the abort, as a fetch with the signal would.
+			if (signal.aborted) {
+				this.abandoned++
+				throw new Error('the message was abandoned')
+			}
+		}
+		// A message the job hands over is sent, whatever its signal says: the job checks before it sends.
 		this.mails.push(message)
-		return Promise.resolve()
 	}
 
-	after(step: DeliveryStep): Promise<void> {
+	async after(step: DeliveryStep): Promise<void> {
 		if (this.stopAfter === step) {
 			this.stopAfter = null
-			return Promise.reject(new Error(`stopped after ${step}`))
+			throw new Error(`stopped after ${step}`)
 		}
-		return Promise.resolve()
+		const pause = this.pauseAfter
+		if (pause?.step === step) {
+			this.pauseAfter = null
+			await pause.gate.wait()
+		}
 	}
 
 	/** The key of the last e-mail to `to`, read from its link's fragment. */
@@ -151,7 +192,7 @@ interface Running {
 	readonly app: ContractApp
 	readonly iam: LinkLedger
 	readonly world: World
-	run(): Promise<unknown>
+	run(clock?: JobClock): Promise<unknown>
 }
 
 function start(): Running {
@@ -168,7 +209,7 @@ function start(): Running {
 		files: new MemoryFileObjects(),
 	})
 	const reporter = { report: () => Promise.resolve() }
-	return { app, iam, world, run: () => quietly(() => app.jobs.run('intake', { reporter })) }
+	return { app, iam, world, run: (clock) => quietly(() => app.jobs.run('intake', { reporter, ...(clock === undefined ? {} : { clock }) })) }
 }
 
 function quietly<T>(work: () => Promise<T>): Promise<T> {
@@ -299,6 +340,86 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		await deliveredOnce(running, 'again@example.test')
 		expect(running.iam.links.map((link) => link.revoked)).toEqual([true, false])
+	})
+})
+
+/** Real time, instant backoff; an attempt's deadline (a minute or more) passes only when the test calls `timeOut`. */
+function testClock(): { readonly clock: JobClock; timeOut(): void } {
+	const deadlines: (() => void)[] = []
+	const clock: JobClock = {
+		wait: (ms, signal) =>
+			new Promise<void>((resolve) => {
+				if (ms < 60_000 || signal.aborted) {
+					resolve()
+					return
+				}
+				deadlines.push(resolve)
+				signal.addEventListener('abort', () => resolve(), { once: true })
+			}),
+		random: () => 0,
+	}
+	return { clock, timeOut: () => deadlines.splice(0).forEach((pass) => pass()) }
+}
+
+describe.skipIf(!hasPostgres)('an attempt replaced after its deadline', () => {
+	test('that resumes after its replacement delivered sends nothing, and the latest e-mail carries the live link', async () => {
+		const running = start()
+		await submit(running.app, '/register', { email: 'late@example.test', name: 'L' })
+		const pause = gate()
+		running.world.pauseAfter = { step: 'recorded', gate: pause }
+		const { clock, timeOut } = testClock()
+		const stale = running.run(clock)
+		await pause.reached
+		timeOut()
+		expect(await stale).toMatchObject({ status: 'failed', code: 'timeout' })
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		pause.open()
+		await Bun.sleep(50)
+		expect(running.world.mails).toHaveLength(1)
+		await deliveredOnce(running, 'late@example.test')
+	})
+
+	test('whose e-mail is in flight abandons it before its replacement starts', async () => {
+		const running = start()
+		await submit(running.app, '/register', { email: 'flight@example.test', name: 'F' })
+		const hold = gate()
+		running.world.holdSend = hold
+		const { clock, timeOut } = testClock()
+		const stale = running.run(clock)
+		await hold.reached
+		timeOut()
+		expect(await stale).toMatchObject({ status: 'failed', code: 'timeout' })
+		expect(running.world.abandoned).toBe(1)
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		hold.open()
+		await Bun.sleep(50)
+		expect(running.world.mails).toHaveLength(1)
+		await deliveredOnce(running, 'flight@example.test')
+	})
+})
+
+describe.skipIf(!hasPostgres)('the daily budget', () => {
+	test('counts every e-mail a delivery may have sent, and an exhausted one waits for the next window', async () => {
+		const running = start()
+		await submit(running.app, '/register', { email: 'often@example.test', name: 'O' })
+		for (let run = 0; run < SENDS_PER_DAY; run++) {
+			running.world.stopAfter = 'mailed'
+			expect(await running.run()).toMatchObject({ status: 'failed' })
+		}
+		expect(running.world.mails).toHaveLength(SENDS_PER_DAY)
+		expect(await candidate('often@example.test')).toMatchObject({ link_state: 'issued', sends: SENDS_PER_DAY })
+		// The budget is spent: the run sends nothing and leaves the delivery as it was.
+		running.world.stopAfter = 'mailed'
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		running.world.stopAfter = null
+		expect(running.world.mails).toHaveLength(SENDS_PER_DAY)
+		expect(await candidate('often@example.test')).toMatchObject({ link_state: 'issued', sends: SENDS_PER_DAY })
+
+		await admin((sql) => sql.unsafe(`update ${schema}.candidates set window_started_at = now() - interval '2 days' where email = 'often@example.test'`))
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(running.world.mails).toHaveLength(SENDS_PER_DAY + 1)
+		expect((await candidate('often@example.test')).sends).toBe(1)
+		await deliveredOnce(running, 'often@example.test')
 	})
 })
 

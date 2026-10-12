@@ -616,22 +616,32 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   application's public origin from its own configuration before it e-mails the link.
 - **The public intake recipe** (a form, a cron job, a link mount). A form appends a row and
   answers a constant; the job drains the inbox into records in one transaction, then
-  delivers each record's link. IAM and the e-mail do not roll back with a transaction, so
-  the job records each step in the record's row before the next effect, in this order:
-  revoke a superseded link → record it; issue → record the link id (`issued`); e-mail →
-  record `sent`. A run that stops between two effects is finished by the next run: a
-  recorded link in state `issued` may have been e-mailed, so the next run revokes it and
-  issues a new one. A link issued but not recorded was never e-mailed; its key existed only
-  in the job, and it expires with its `days`. Never store a link's key. The e-mail is
-  at-least-once (a stop after it sends a second e-mail whose link supersedes the first). A
-  resend (a second form, `{ email }`) marks an unverified record due within a
-  per-recipient budget kept in the row; the job revokes the sent link before it issues the
-  next. Verification is application state: a link mutation sets `verified_at` once under
-  `getForUpdate`, and every later call answers the same; the link itself is not single use,
-  and IAM's revocation is the stop, which a warm proxy cache honours for at most 270 s
-  (the token's 300 s less the 30 s refresh skew). `packages/app`'s `intake.test.ts` holds
-  each stop, and `packages/iam`'s `visitor-link.test.ts` the recipe against the real IAM
-  through the proxy.
+  delivers each record's link. IAM and the e-mail do not roll back with a transaction, so a
+  delivery keeps three invariants:
+  1. **It charges the budget first.** One transaction reserves an e-mail of the recipient's
+     daily budget (a counter and a window in the row) before any effect, so a delivery that
+     fails after its e-mail left still counts; without one left, the row waits for the next
+     window as it is.
+  2. **It records each step before the next effect**: revoke a superseded link → record it;
+     issue → record the link id (`issued`); e-mail → record `sent`. The next run finishes a
+     stopped delivery: a link in state `issued` may have been e-mailed, so it is revoked and
+     replaced; a link issued but not recorded was never e-mailed (its key existed only in the
+     job) and expires with its `days`. Never store a link's key. The e-mail is
+     at-least-once.
+  3. **An effect starts only while the attempt is live**: `ctx.signal.throwIfAborted()`
+     before each revoke, issue and e-mail, and the e-mail transport takes `ctx.signal`. The
+     runner aborts the signal before a replacement attempt starts, and `ctx.links` of an
+     ended attempt asks IAM nothing, so no effect of a stale attempt follows its
+     replacement's.
+
+  A resend (a second form, `{ email }`) marks an unverified record due while its budget has
+  an e-mail left; the job revokes the sent link before it issues the next. Verification is
+  application state: a link mutation sets `verified_at` once under `getForUpdate`, and every
+  later call answers the same; the link itself is not single use, and IAM's revocation is
+  the stop, which a warm proxy cache honours for at most 270 s (the token's 300 s less the
+  30 s refresh skew). `packages/app`'s `intake.test.ts` holds each stop, the replaced
+  attempts and the budget, and `packages/iam`'s `visitor-link.test.ts` the recipe against
+  the real IAM through the proxy.
 - A link mount serves its share SPA at `GET <prefix>/*` with
   `<script src="<prefix>/__fabrika-share.js">` inserted as the document's first script.
   That bootstrap takes the key out of the fragment, removes the fragment with

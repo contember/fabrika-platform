@@ -9,8 +9,8 @@ export type DeliveryStep = 'revoked' | 'issued' | 'recorded' | 'mailed'
 
 export interface IntakeWorld {
 	readonly origin: string
-	/** Sends one e-mail; it throws when the provider refuses. */
-	send(message: { readonly to: string; readonly url: string }): Promise<void>
+	/** Sends one e-mail; it throws when the provider refuses, and abandons the request once `signal` aborts. */
+	send(message: { readonly to: string; readonly url: string }, signal: AbortSignal): Promise<void>
 	/** Runs after each effect of a delivery: a test throws here to stop the run between two effects. */
 	after(step: DeliveryStep, candidate: string): Promise<void>
 }
