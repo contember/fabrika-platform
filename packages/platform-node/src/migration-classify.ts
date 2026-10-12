@@ -3,7 +3,7 @@
 // does not recognise: an allowlist at every level, so a form a later Postgres adds is refused, not executed.
 // Runtime-neutral: Control classifies a commit's migrations in a Worker, the runner before it applies them.
 
-import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
+import { lexSql, type SqlToken, sqlTokens, topLevelStatements, upperWord } from './migration-sql'
 import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
 	afterName,
@@ -854,14 +854,16 @@ function classifyComment(tokens: readonly SqlToken[], context: Context): void {
 
 /**
  * The framework names a statement may use: a file collection's table (`fabrika_files_<name>`, `fileTableSql`) is
- * created by the application's own migration, with its indexes. Every other framework name is refused.
+ * created by the application's own migration, with its status check and its indexes, and `fileScanSql` replaces an
+ * earlier status check. Every other framework name is refused.
  */
 function fileTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	const [first, second] = [upperWord(tokens[0]), upperWord(tokens[1])]
+	if (first === 'ALTER' && second === 'TABLE') return fileScanNames(tokens)
 	if (first !== 'CREATE') return new Set()
 	if (second === 'TABLE') {
 		const table = nameText(tokens[skipWords(tokens, 2, 'IF', 'NOT', 'EXISTS')])
-		return table?.startsWith(FILE_TABLE_PREFIX) === true ? new Set([table]) : new Set()
+		return table?.startsWith(FILE_TABLE_PREFIX) === true ? new Set([table, `${table}_status`]) : new Set()
 	}
 	if (second !== 'INDEX' && !(second === 'UNIQUE' && upperWord(tokens[2]) === 'INDEX')) return new Set()
 	const on = wordAtDepthZero(tokens, 'ON')
@@ -870,6 +872,36 @@ function fileTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	if (table?.startsWith(FILE_TABLE_PREFIX) !== true) return new Set()
 	const index = nameText(tokens[on - 1])
 	return index?.startsWith(`${table}_`) === true ? new Set([table, index]) : new Set([table])
+}
+
+/** Every state a file row may hold, as `@fabrika/db`'s `FILE_STATUSES`; its `fileScanSql` test pins the two together. */
+const FILE_STATUS_LIST = "'pending', 'live', 'quarantined', 'rejected'"
+
+const tokenKey = (token: SqlToken): string =>
+	token.kind === 'word'
+		? `w:${token.text.toLowerCase()}`
+		: token.kind === 'punct'
+		? `p:${token.char}`
+		: token.kind === 'string'
+		? `s:${token.text ?? ''}`
+		: `${token.kind}:`
+
+/**
+ * The names of `@fabrika/db`'s `fileScanSql` statement, which replaces the status check of a file table an earlier
+ * `fileTableSql` created: that exact statement, and no other `ALTER` of a file table.
+ */
+function fileScanNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
+	const table = nameText(tokens[2])
+	if (table?.startsWith(FILE_TABLE_PREFIX) !== true || tokens[2]?.kind !== 'word') return new Set()
+	const legacy = `${table.slice(0, 63 - '_status_check'.length)}_status_check`
+	const expected = sqlTokens(
+		`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${legacy}, ADD CONSTRAINT ${table}_status CHECK (status IN (${FILE_STATUS_LIST}))`,
+	)
+	const exact = expected.length === tokens.length && expected.every((token, index) => {
+		const actual = tokens[index]
+		return actual !== undefined && tokenKey(actual) === tokenKey(token)
+	})
+	return exact ? new Set([table, legacy, `${table}_status`]) : new Set()
 }
 
 function classifyStatement(tokens: readonly SqlToken[], context: Context, out: Collected): void {

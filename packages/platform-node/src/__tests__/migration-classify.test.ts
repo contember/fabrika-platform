@@ -55,6 +55,23 @@ describe('a paved migration', () => {
 		].join('\n')
 		expect(classify(sql).refused).toEqual([])
 	})
+
+	test("the scan migration may replace a file table's status check, in exactly the form fileScanSql writes", () => {
+		const widen =
+			"ALTER TABLE fabrika_files_attachments DROP CONSTRAINT IF EXISTS fabrika_files_attachments_status_check, ADD CONSTRAINT fabrika_files_attachments_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected'));"
+		expect(classify(widen).refused).toEqual([])
+		expect(classify(widen.toLowerCase()).refused).toEqual([])
+		for (
+			const altered of [
+				widen.replace("'rejected'", "'rejected', 'served'"),
+				widen.replace(', ADD CONSTRAINT', ', ADD COLUMN x text, ADD CONSTRAINT'),
+				widen.replace('fabrika_files_attachments_status CHECK', 'fabrika_files_attachments_other CHECK'),
+				'ALTER TABLE fabrika_files_attachments DROP CONSTRAINT IF EXISTS fabrika_files_attachments_status_check;',
+			]
+		) {
+			expect(classify(altered).refused).toEqual([expect.objectContaining({ reason: expect.stringContaining('fabrika_files_attachments') })])
+		}
+	})
 })
 
 describe('refused: what escapes the schema, the transaction or the platform', () => {
