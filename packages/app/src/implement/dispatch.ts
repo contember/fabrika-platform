@@ -63,7 +63,7 @@ import { endpointData, Invocation, siteData, type SiteDeclaration } from './invo
 import { createScope, type IssuableLink, linkIssuing, memberDirectory, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
-import { deliveryIdOf, deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
+import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
 import type { WorkloadCredential } from './workload'
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
@@ -651,9 +651,9 @@ export class ContractRuntime {
 			await invocation?.commit(null)
 		} catch (error) {
 			await invocation?.rollback()
-			// The provider redelivers a failed delivery; forgetting its id lets the redelivery run.
-			// The header is GitHub's word, unsigned: it names the delivery in the log and decides nothing.
-			console.error(`fabrika: ${served.row.id}: delivery ${deliveryIdOf(request) ?? '(unnamed)'} failed; GitHub's redelivery runs it again`)
+			// The provider redelivers a failed delivery; forgetting its key lets the redelivery run. The unsigned
+			// delivery header is the caller's word, so the log names only the endpoint.
+			console.error(`fabrika: ${served.row.id}: delivery_failed; the provider's redelivery runs it again`)
 			await tables.forgetDelivery(binding.id, key)
 			throw error
 		}

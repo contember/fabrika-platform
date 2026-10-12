@@ -575,11 +575,14 @@ class HookedStore implements FileObjectStore {
 	async delete(key: string): Promise<void> {
 		if ((this.#faults.failDeletes ?? 0) > 0) {
 			this.#faults.failDeletes = (this.#faults.failDeletes ?? 0) - 1
-			throw new Error('the store is unavailable')
+			// A storage error's name and message are the driver's, and may quote the request.
+			throw Object.assign(new Error(`the store is unavailable for ${STORAGE_SECRET}`), { name: STORAGE_SECRET })
 		}
 		await this.#inner.delete(key)
 	}
 }
+
+const STORAGE_SECRET = 'StorageRequestSecretMarker'
 
 /** Makes the collection's pending rows look abandoned: older than the grace period. */
 async function agePendingRows(): Promise<void> {
@@ -602,6 +605,9 @@ describe.skipIf(!hasPostgres)('the pending row is the intent to clean an object 
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			expect((await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' })).status).toBe(500)
+			const lines = log.mock.calls.map((call) => String(call[0]))
+			expect(lines).toContain("fabrika: files 'attachments' cleanup: object_delete_failed")
+			expect(lines.join('\n')).not.toContain(STORAGE_SECRET)
 		} finally {
 			log.mockRestore()
 		}
@@ -618,6 +624,26 @@ describe.skipIf(!hasPostgres)('the pending row is the intent to clean an object 
 		await sweepThrough(bootApp(filesApp(scoped(tables)), { database, files: inner }))
 		expect(inner.objects.has(key ?? '')).toBe(false)
 		expect((await rows()).some((row) => row['id'] === id)).toBe(false)
+	})
+
+	test('a sweep whose delete fails logs its step, answers the remove, and the next sweep retries', async () => {
+		const inner = new MemoryFileObjects()
+		const faulty = new HookedStore(inner, { failDeletes: 1 })
+		const app = bootApp(filesApp(scoped(tables)), { database, files: faulty })
+		const note = await seedNote('w1')
+		const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			resultOf(await send(app, '/api/files.attachments.remove', { token: await editorOf(W1), body: { id } }))
+			const lines = log.mock.calls.map((call) => String(call[0]))
+			expect(lines).toContain("fabrika: files 'attachments' sweep: object_delete_failed")
+			expect(lines.join('\n')).not.toContain(STORAGE_SECRET)
+		} finally {
+			log.mockRestore()
+		}
+		expect(inner.objects.has(`attachments/${id}`)).toBe(true)
+		await sweepThrough(app)
+		expect(inner.objects.has(`attachments/${id}`)).toBe(false)
 	})
 
 	test('a failure of the final metadata write deletes the object and abandons the row', async () => {

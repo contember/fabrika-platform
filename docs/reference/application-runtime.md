@@ -562,8 +562,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   when IAM refuses its key, cannot be asked, or signs a token without a declared action;
   nothing is recorded, so GitHub redelivers), and the delivery key,
   `sha256(bindingId ‖ raw body)`: a key the binding already received in the last 30 days
-  is answered 200 and not run again, whatever its unsigned `X-GitHub-Delivery` says (that
-  header only names the delivery in the log). The handler gets `ctx.refs`, a `Ref` of the
+  is answered 200 and not run again, whatever its unsigned `X-GitHub-Delivery` says (the
+  framework reads that header for nothing, not even the log). The handler gets `ctx.refs`, a `Ref` of the
   bound value for each declared action, and `ctx.delivery.key`. **It runs at least
   once**: a failing handler forgets the key so GitHub's redelivery runs it again. A
   delivery runs in one transaction (above), so the failed run kept nothing. Bindings and delivery keys live in the framework's `fabrika_*`

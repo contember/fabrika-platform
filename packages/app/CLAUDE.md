@@ -443,7 +443,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   `instanceof` against the framework's own classes, never by `name`. The server log gets one line,
   `fabrika: <endpoint>: <code>`, plus a framework failure's `reason` and its fixed catalog text (`SERVER_FAULTS`,
   `CAPABILITY_REFUSALS`, `@fabrika/db`'s `QUERY_REFUSALS`); never a message, which can quote request data, and nothing
-  of any other error, its name included. Each of those classes takes its reason first: a new failure picks one. With an Operations DSN it is also one `RequestFailed` event (logger `fabrika.requests`): fingerprint
+  of any other error, its name included. Each of those classes takes its reason first: a new failure picks one. Every other runtime
+  log line follows the same rule: a failed webhook delivery logs `delivery_failed`, a file cleanup or sweep the step that
+  failed (`object_delete_failed` …), a job its failure code; none interpolates an error, its name or message, or a
+  request value. With an Operations DSN it is also one `RequestFailed` event (logger `fabrika.requests`): fingerprint
   `fabrika-request-failed`/endpoint/code, tags endpoint, code, reason, status and the proxy's request id when it is a bounded
   token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the error's name or message, the
   input, a header or a row: an application or a driver writes those. The delivery is not awaited; the Worker adapter
@@ -490,8 +493,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   that could not run. Never verify the signature after parsing.
 - **Replay protection keys on authenticated content only**: the delivery key is
   `sha256(bindingId ‖ raw body)`, kept per binding for `WEBHOOK_REPLAY_RETENTION_MS`
-  (30 days). `X-GitHub-Delivery` is unsigned: it names the delivery in the log and decides
-  nothing. A redelivery of one event therefore has the same key and is ignored.
+  (30 days). `X-GitHub-Delivery` is unsigned, the caller's word: it decides nothing and reaches no log line. A redelivery of one event therefore has the same key and is ignored.
 - **A webhook handler is at-least-once.** The key is recorded before the handler runs, outside any transaction of the
   handler, and forgotten when it throws, so GitHub's redelivery runs a failed delivery again. The handler gets the key
   as `ctx.delivery.key`; idempotent writes key on it. A staged-kit delivery's writes are one invocation transaction,

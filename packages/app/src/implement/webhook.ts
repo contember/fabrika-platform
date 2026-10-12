@@ -31,14 +31,6 @@ export function webhookSubject(bindingId: string): string {
 	return `webhook:${bindingId}`
 }
 
-/** GitHub's delivery id, for the log only: the header is not signed, so it decides nothing. */
-const DELIVERY_ID = /^[A-Za-z0-9-]{1,100}$/
-
-export function deliveryIdOf(request: Request): string | null {
-	const id = request.headers.get('X-GitHub-Delivery')
-	return id !== null && DELIVERY_ID.test(id) ? id : null
-}
-
 /**
  * A delivery key is kept this long per binding. GitHub signs no timestamp, so a body replayed after the window
  * runs again; GitHub itself redelivers for three days.

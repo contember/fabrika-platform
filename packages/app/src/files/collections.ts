@@ -15,6 +15,9 @@ import type { ContractDatabase, ImplementationDatabase } from '../implement/impl
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
 
+/** Which step of a file cleanup or sweep failed: the whole of what its log line says about the failure. */
+type FileCleanupStep = 'rows_read_failed' | 'object_delete_failed' | 'row_delete_failed'
+
 /** How many removable files one sweep handles; the next remove picks up the rest. */
 const SWEEP_BATCH = 20
 const MAX_NAME_CODE_POINTS = 255
@@ -242,13 +245,18 @@ export class FileCollections {
 		return jsonResponse({ result: { id } }, 200)
 	}
 
-	/** Deletes the object, then the pending row; a failure of either leaves the row for the sweep. */
+	/**
+	 * Deletes the object, then the pending row; a failure of either leaves the row for the sweep. The log names the step
+	 * that failed, never the error: a storage or driver error's name and message are not the framework's.
+	 */
 	async #abandon(collection: Collection, id: string, objectKey: string): Promise<void> {
+		let step: FileCleanupStep = 'object_delete_failed'
 		try {
 			await this.#store.delete(objectKey)
+			step = 'row_delete_failed'
 			await collection.table.abandon(id)
-		} catch (error) {
-			console.error(`fabrika: files '${collection.name}' cleanup: ${error instanceof Error ? error.name : typeof error} thrown`)
+		} catch {
+			console.error(`fabrika: files '${collection.name}' cleanup: ${step}`)
 		}
 	}
 
@@ -281,13 +289,16 @@ export class FileCollections {
 	 */
 	async #sweep(collection: Collection): Promise<void> {
 		const pendingBefore = new Date(Date.now() - PENDING_GRACE_MS)
+		let step: FileCleanupStep = 'rows_read_failed'
 		try {
 			for (const file of await collection.table.removable(SWEEP_BATCH, pendingBefore)) {
+				step = 'object_delete_failed'
 				await this.#store.delete(file.objectKey)
+				step = 'row_delete_failed'
 				await collection.table.purge(file.id, pendingBefore)
 			}
-		} catch (error) {
-			console.error(`fabrika: files '${collection.name}' sweep: ${error instanceof Error ? error.name : typeof error} thrown`)
+		} catch {
+			console.error(`fabrika: files '${collection.name}' sweep: ${step}`)
 		}
 	}
 

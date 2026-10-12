@@ -390,10 +390,11 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 		seen.failNextPush = true
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5')).status).toBe(500)
-			expect(log.mock.calls.map((call) => String(call[0]))).toContain(
-				"fabrika: github: delivery d-5 failed; GitHub's redelivery runs it again",
-			)
+			// The delivery header is unsigned, the caller's word: it reaches no log line.
+			expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'RequestSecretMarker-5')).status).toBe(500)
+			const lines = log.mock.calls.map((call) => String(call[0]))
+			expect(lines).toContain("fabrika: github: delivery_failed; the provider's redelivery runs it again")
+			expect(lines.join('\n')).not.toContain('RequestSecretMarker')
 		} finally {
 			log.mockRestore()
 		}
