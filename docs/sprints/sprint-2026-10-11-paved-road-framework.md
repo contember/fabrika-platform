@@ -1024,3 +1024,9 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   the documented escape keeps only `process`. The directory witness is `packages/local-stack/__tests__/
   member-directory.test.ts`: proxy-core's verify service with a token cache, the real IAM RPC on its SQLite harness,
   `boot`. The proxy admits a holder of the action in another workspace (it reads no body); the access form refuses it.
+- **WU13b review round 2 (integrator decision).** A server module (under `src/`, not a test) refuses every value use
+  of `globalThis`, `global`, `self`, `window` and `Bun` (`typeof` tests and types stay), instead of enumerating
+  spellings; round 1's destructuring and global-path special cases are deleted. `globalPath` stays: `web/` modules
+  still reach `window`, and `checkFetch`, `eval` and `innerHTML` read through it. No example or fixture used a global
+  object in `src/`. A schema const and the methods applied to it are one chain for the string order rule
+  (`stringStepProblem`), refused by the reader at the call that adds the check.

@@ -5,7 +5,17 @@ import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
-import { BUILDER_IMPORTS, type BuilderKind, decompose, isComputedMember, isKitName, KIT_BUILDERS, KIT_CALLBACKS, type Link } from '../rules/literal'
+import {
+	BUILDER_IMPORTS,
+	type BuilderKind,
+	decompose,
+	isComputedMember,
+	isKitName,
+	KIT_BUILDERS,
+	KIT_CALLBACKS,
+	type Link,
+	stringStepProblem,
+} from '../rules/literal'
 import type { ReaderProblems } from './problems'
 import { buildSchema } from './schema'
 
@@ -28,7 +38,15 @@ export type LiteralValue =
 	/** Entries in source order; a repeated key keeps its first position and its last value, as in an object literal. */
 	| { readonly kind: 'object'; readonly entries: ReadonlyMap<string, LiteralValue>; readonly at: Located }
 	/** `nodes` counts the schema with every shared part expanded, as the artifact will hold it; `depth` its nesting. */
-	| { readonly kind: 'schema'; readonly schema: z.ZodType; readonly nodes: number; readonly depth: number; readonly at: Located }
+	| {
+		readonly kind: 'schema'
+		readonly schema: z.ZodType
+		readonly nodes: number
+		readonly depth: number
+		/** The chain that built it, factory first (`iso` for `z.iso.*`), across a const and the methods applied to it. */
+		readonly steps: readonly string[]
+		readonly at: Located
+	}
 	/** `c.rpc(…)` or `l.query(…)`, with its arguments read. */
 	| { readonly kind: 'builder'; readonly kit: Kit; readonly name: string; readonly args: readonly LiteralValue[]; readonly at: Located }
 	| { readonly kind: 'contract'; readonly args: readonly LiteralValue[]; readonly at: Located }
@@ -474,6 +492,18 @@ export class ValueReader {
 		receiver: Extract<LiteralValue, { kind: 'schema' }> | null,
 		isIso: boolean,
 	): LiteralValue | null {
+		const added = steps.map((step) => step.name)
+		// `z.iso.<format>()` counts as the one format `iso`, as the literal rule reads it.
+		const names = receiver === null ? (isIso ? ['iso', ...added.slice(1)] : added) : [...receiver.steps, ...added]
+		if (receiver !== null) {
+			// A method on a schema const meets the const's own checks only here: the literal rule saw the two apart.
+			const order = stringStepProblem(names)
+			const offending = order === undefined ? undefined : steps[order.index - receiver.steps.length]
+			if (order !== undefined && offending !== undefined) {
+				this.#problems.add({ module: located.module, node: offending.call }, order.message, order.allowed)
+				return null
+			}
+		}
 		let schema: z.ZodType | undefined = receiver?.schema
 		let size: SchemaSize = receiver === null ? { nodes: 0, depth: 0 } : { nodes: receiver.nodes, depth: receiver.depth }
 		for (const step of steps) {
@@ -495,7 +525,7 @@ export class ValueReader {
 			}
 			schema = built.schema
 		}
-		return schema === undefined ? null : { kind: 'schema', schema, nodes: size.nodes, depth: size.depth, at: located }
+		return schema === undefined ? null : { kind: 'schema', schema, nodes: size.nodes, depth: size.depth, steps: names, at: located }
 	}
 
 	#arguments(module: ParsedModule, call: AstNode, scope: Scope, roleAt: (position: number) => Role): LiteralValue[] | null {

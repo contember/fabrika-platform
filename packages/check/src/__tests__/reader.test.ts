@@ -205,6 +205,22 @@ describe('a schema method on a literal schema const', () => {
 		expect(readContractSource(application(withStatus(INPUT), SCHEMAS_WITH_STATUS), {})).toEqual(compileContract(runtime, {}))
 	})
 
+	test('a string check whose order matters is refused at the call that adds it, written out or on an imported const', () => {
+		const direct = edited('z.strictObject({ id: z.uuid() })', 'z.strictObject({ id: z.uuid(), link: z.url().max(80) })')
+		expect(refusal(application(direct))).toEqual([
+			'fabrika.contract.ts:12:62 literal z.url() rewrites the value, so another string check depends on its order',
+		])
+		const schemas = `${SCHEMAS}export const Url = z.url()\n`
+		const imported = edited(
+			"import { Note } from './src/schemas'",
+			"import { Note, Url } from './src/schemas'",
+			edited('z.strictObject({ id: z.uuid() })', 'z.strictObject({ id: z.uuid(), link: Url.max(80) })'),
+		)
+		expect(refusal(application(imported, schemas))).toEqual([
+			'fabrika.contract.ts:12:62 contract z.url() rewrites the value, so another string check depends on its order',
+		])
+	})
+
 	test('a method outside the subset is refused at its call, and a method on a value that is no schema at the call', () => {
 		expect(refusal(application(withStatus('z.strictObject({ id: z.uuid(), status: Status.transform((value) => value) })'), SCHEMAS_WITH_STATUS)))
 			.toEqual(["fabrika.contract.ts:12:64 literal '.transform()' makes the schema unserializable"])
