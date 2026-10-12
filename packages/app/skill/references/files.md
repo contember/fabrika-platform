@@ -50,8 +50,26 @@ installs ClamAV and runs the scan job. The download answers 409 `quarantined` un
   400 `empty`.
 - A ZIP or Office document must start with the ZIP header. Any other file that holds a ZIP signature anywhere is
   rejected, even a rare harmless PDF or image; that is the fail-closed cost.
-- A collection that turns `scan` on after its table exists needs `fileScanSql('<name>')` of `@fabrika/db` in a new
-  migration; `fabrika-check` names it.
+- A table written by the `fileTableSql` below can already hold the scan states: turning `scan` on needs no migration.
+  Only a table created by an earlier two-state `fileTableSql` (its check names `'pending', 'live'` alone) needs
+  `fileScanSql('<name>')` of `@fabrika/db` in a new migration, and `fabrika-check` names it. On a current table that
+  migration fails: it adds the constraint, columns and index again.
+- ClamAV holds about 1 GB of signatures in memory. On Zerops the deploy service must declare
+  `verticalAutoscaling: { minRam: 2 }` (GB), or the build refuses the application. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import:
+  raise an existing service's RAM through Zerops itself.
+
+```text
+// the deploy service in the services of fabrika.config.ts
+{
+	hostname: 'tasksapi',
+	type: 'alpine/bun@1.3',
+	priority: 10,
+	enableSubdomainAccess: false,
+	minContainers: 1,
+	maxContainers: 2,
+	verticalAutoscaling: { minRam: 2 },
+}
+```
 
 ## Its table
 
