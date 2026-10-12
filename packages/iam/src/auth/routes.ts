@@ -51,7 +51,7 @@ export async function handleAuth(
 		return request.method === 'GET' ? handleCallback(request, services, env, ctx, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/forgot-password') {
-		return handleForgotPassword(request, services, ctx, clientAddress)
+		return handleForgotPassword(request, services, ctx, clientAddress, requestId)
 	}
 	if (url.pathname === '/auth/password/enroll') {
 		return handlePasswordAction(request, services, ctx, 'enrollment', requestId)

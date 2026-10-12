@@ -1,5 +1,5 @@
 import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
-import type { GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
+import type { AuditEventInput, GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import { logWarn } from './log'
 import { makeRoleSource } from './roles'
@@ -106,9 +106,14 @@ export type ResolveUserResult =
 export interface UserPrincipalStore {
 	getUserByExternalId(sub: string): Promise<PrincipalRow | null>
 	getUserByEmail(email: string): Promise<PrincipalRow | null>
-	refreshUserLabel(id: string, email: string): Promise<void>
-	claimInvitedUser(id: string, sub: string, label: string): Promise<PrincipalRow | null>
-	createUser(sub: string, email: string): Promise<PrincipalRow>
+	refreshUserLabel(id: string, email: string, audit?: AuditEventInput): Promise<void>
+	claimInvitedUser(id: string, sub: string, label: string, audit?: AuditEventInput): Promise<PrincipalRow | null>
+	createUser(sub: string, email: string, audit?: (principalId: string) => AuditEventInput): Promise<PrincipalRow>
+}
+
+/** The record of a change a login made to its own principal: by the principal, about it, with no email in it. */
+function loginEvent(requestId: string, principalId: string, action: string): AuditEventInput {
+	return { requestId, principalId, principalLabel: principalId, app: 'propustka', action, resourceType: 'principal', resourceId: principalId }
 }
 
 /**
@@ -122,8 +127,11 @@ export interface UserPrincipalStore {
  * The mailbox, not the spelling, is what matches: the store normalizes on both sides, so an invite
  * for `Bob@Example.com` is claimed by an IdP that says `bob@example.com` instead of lazy-creating a
  * second principal and stranding every grant on the first.
+ *
+ * Every write records itself in its own transaction, under the login's `requestId`: a creation, a claim, and a refresh
+ * of the mailbox the IdP now reports.
  */
-export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, email: string): Promise<ResolveUserResult> {
+export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, email: string, requestId: string): Promise<ResolveUserResult> {
 	const mailbox = normalizeEmailIdentity(email)
 	// 1. By sub — a returning user. Refresh mailbox/label if the token's email changed.
 	const bySub = await db.getUserByExternalId(sub)
@@ -133,7 +141,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 		}
 		if (bySub.email !== mailbox || bySub.label !== email) {
 			try {
-				await db.refreshUserLabel(bySub.id, email)
+				await db.refreshUserLabel(bySub.id, email, loginEvent(requestId, bySub.id, 'iam.principal.refresh'))
 			} catch (err) {
 				// Non-fatal: the new token email may collide with another principal's
 				// unique-email row. This user is already a known principal by sub, so a
@@ -155,7 +163,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 				// An invited-but-disabled principal — treat as not allowed.
 				return { ok: false, reason: 'disabled' }
 			}
-			const claimed = await db.claimInvitedUser(byEmail.id, sub, email)
+			const claimed = await db.claimInvitedUser(byEmail.id, sub, email, loginEvent(requestId, byEmail.id, 'iam.principal.claim'))
 			if (claimed) {
 				return { ok: true, principal: claimed }
 			}
@@ -177,7 +185,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 
 	// 3. Lazy-create, zero grants — unprivileged until granted or matched.
 	try {
-		const created = await db.createUser(sub, email)
+		const created = await db.createUser(sub, email, (principalId) => loginEvent(requestId, principalId, 'iam.principal.create'))
 		return { ok: true, principal: created }
 	} catch (err) {
 		// Lazy-create race: two concurrent first logins for the same brand-new sub both

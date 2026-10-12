@@ -136,14 +136,15 @@ export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId:
 	}
 
 	const { principals, grants, credentials, audit } = c.services.repositories
-	await audit.commit([
-		grants.deleteGrantsForPrincipalStatement(principalId),
-		principals.disablePrincipalStatement(principalId),
-		credentials.revokeCredentialsForPrincipalStatement(principalId),
-		audit.eventStatement(
-			adminEvent(c, { action: 'iam.apikey.revoke', resourceType: 'principal', resourceId: principalId, metadata: { label: principal.label } }),
-		),
-	])
+	// One transaction, recorded only when it deleted a grant, disabled the principal or revoked a key.
+	await audit.writer.run(
+		[
+			grants.deleteGrantsForPrincipalChange(principalId),
+			principals.disablePrincipalChange(principalId),
+			credentials.revokeCredentialsForPrincipalChange(principalId),
+		],
+		adminEvent(c, { action: 'iam.apikey.revoke', resourceType: 'principal', resourceId: principalId, metadata: { label: principal.label } }),
+	)
 	return { ok: true }
 }
 

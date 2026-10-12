@@ -40,6 +40,7 @@ import { contractGrantProblem } from './contract-rules'
 import {
 	type AppScopeRow,
 	type AuditEventInput,
+	auditLabelOf,
 	type DelegatedEndpointRow,
 	type InvitationRow,
 	type PrincipalRow,
@@ -205,7 +206,7 @@ function memberEvent(
 	requestId: string,
 	event: { action: string; resourceType: string; resourceId: string; metadata?: unknown },
 ): AuditEventInput {
-	return { requestId, principalId: caller.principal.id, principalLabel: caller.principal.label, app: caller.app, ...event }
+	return { requestId, principalId: caller.principal.id, principalLabel: auditLabelOf(caller.principal), app: caller.app, ...event }
 }
 
 function scopeId(scope: Scope): string {
@@ -557,7 +558,7 @@ export async function acceptInvitation(
 	const accepted = await services.repositories.membership.acceptInvitation(invitation, principal.id, assigners, {
 		requestId,
 		principalId: principal.id,
-		principalLabel: principal.label,
+		principalLabel: auditLabelOf(principal),
 		app: invitation.app,
 		action: 'iam.member.accept',
 		resourceType: 'scope',

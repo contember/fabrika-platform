@@ -9,7 +9,7 @@ import { readCookie, serializeCookie } from './cookies'
 import { type Handoff, handoffOf, handoffRedirectOr, readHandoff } from './handoff'
 import { authError, redirectHeaders, safeRedirect } from './http'
 import { type AuthEnv, authErrorEndingFlight, decodeFlight, encodeFlight, OIDC_COOKIE, OIDC_TTL_SECONDS } from './oidc-flight'
-import { issueSession, refuseLogin } from './sessions'
+import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 export async function handleOidcStart(request: Request, services: Services, env: AuthEnv): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
@@ -71,20 +71,22 @@ export async function handleCallback(
 	const flight = await decodeFlight(env, readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
 	// EVERY terminal outcome below consumes the flight. The cookie holds a live PKCE verifier and the
 	// state nonce; leaving it behind on a failure kept both replayable for the rest of their 600s.
-	const refuse = (message: string, status: number): Response => authErrorEndingFlight(message, status)
+	// Every refusal is a refused login, logged before the answer.
+	const refuse = (reason: LoginRefusal, message: string, status: number): Promise<Response> =>
+		refuseLogin(services, { requestId, principalId: null, reason }, () => authErrorEndingFlight(message, status))
 
 	// CSRF: the state echoed by the IdP must match the one in the flight WE signed.
 	if (!code || !state || !flight || flight.state !== state) {
-		return refuse('invalid OIDC state', 400)
+		return refuse('oidc_invalid_state', 'invalid OIDC state', 400)
 	}
 
 	const idToken = await services.oidc.exchangeCode(code, flight.verifier)
 	if (!idToken) {
-		return refuse('code exchange failed', 502)
+		return refuse('oidc_code_exchange_failed', 'code exchange failed', 502)
 	}
 	const identity = await services.oidc.verifyIdToken(idToken)
 	if (!identity) {
-		return refuse('invalid id_token', 401)
+		return refuse('oidc_invalid_id_token', 'invalid id_token', 401)
 	}
 
 	// Admission: who may log in as a human. The central allowlist (`HUMAN_EMAIL_DOMAINS`/
@@ -95,19 +97,15 @@ export async function handleCallback(
 		const known = (await services.repositories.principals.getUserByExternalId(identity.sub))
 			?? (await services.repositories.principals.getUserByEmail(identity.email))
 		if (!known) {
-			return refuseLogin(services, { requestId, principalId: null, reason: 'oidc_not_admitted' }, () => refuse('login refused (not allowed)', 403))
+			return refuse('oidc_not_admitted', 'login refused (not allowed)', 403)
 		}
 	}
 
 	// Resolve (or claim/lazy-create) the principal from the verified OIDC identity — the 3-step flow
 	// keyed on the IdP `sub` and verified email.
-	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email)
+	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email, requestId)
 	if (!resolved.ok) {
-		return refuseLogin(
-			services,
-			{ requestId, principalId: null, reason: `oidc_${resolved.reason}` },
-			() => refuse(`login refused (${resolved.reason})`, 403),
-		)
+		return refuse(`oidc_${resolved.reason}`, `login refused (${resolved.reason})`, 403)
 	}
 
 	// Re-validate the handoff on the way back: the flight is ours (signature-checked), but the registry
@@ -122,7 +120,7 @@ export async function handleCallback(
 			flight.handoffChallenge ?? null,
 		)
 	if (reading.kind === 'refused') {
-		return refuse(reading.message, 400)
+		return refuse('handoff_refused', reading.message, 400)
 	}
 
 	return issueSession(request, services, ctx, {

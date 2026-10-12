@@ -1,6 +1,6 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from '../email-identity'
-import { type AuditEventInput, auditEventStatement } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './audit'
 import { firstRow, unixNow } from './sql'
 
 export interface PrincipalRow {
@@ -41,7 +41,10 @@ export function principalStatus(row: PrincipalRow): PrincipalStatus {
  * whatever spelling they hold, the mailbox lands in `email` and the spelling in `label`.
  */
 export class PrincipalRepository {
-	constructor(protected readonly db: SqlDatabase) {}
+	constructor(
+		protected readonly db: SqlDatabase,
+		protected readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
+	) {}
 
 	// ── Principals ──────────────────────────────────────────────────────────
 
@@ -82,14 +85,13 @@ export class PrincipalRepository {
 	 * The reservation moves WITH the mailbox: leaving a stale claim behind would let the next invite
 	 * of the new address create a second principal for the same human.
 	 */
-	async refreshUserLabel(id: string, email: string): Promise<void> {
+	async refreshUserLabel(id: string, email: string, audit?: AuditEventInput): Promise<void> {
 		const mailbox = normalizeEmailIdentity(email)
-		await this.db.batch([
-			this.db
-				.prepare('UPDATE principals SET email = ?, label = ? WHERE id = ? AND (email IS DISTINCT FROM ? OR label IS DISTINCT FROM ?)')
-				.bind(mailbox, email, id, mailbox, email),
-			this.claimMailboxStatement(mailbox, id),
-		])
+		const refresh: SqlChange = {
+			sql: 'UPDATE principals SET email = ?, label = ? WHERE id = ? AND (email IS DISTINCT FROM ? OR label IS DISTINCT FROM ?) RETURNING id',
+			binds: [mailbox, email, id, mailbox, email],
+		}
+		await this.db.batch([...this.writer.changed([refresh], audit).statements, this.claimMailboxStatement(mailbox, id)])
 	}
 
 	/**
@@ -98,18 +100,19 @@ export class PrincipalRepository {
 	 * a row twice. The mailbox is untouched — it is what matched this row in the first place.
 	 * Returns the claimed row, or null if the row was concurrently claimed / not found.
 	 */
-	async claimInvitedUser(id: string, sub: string, label: string): Promise<PrincipalRow | null> {
-		const now = unixNow()
-		return this.db
-			.prepare(`UPDATE principals SET external_id = ?, label = ?, activated_at = COALESCE(activated_at, ?)
+	async claimInvitedUser(id: string, sub: string, label: string, audit?: AuditEventInput): Promise<PrincipalRow | null> {
+		const claim: SqlChange = {
+			sql: `UPDATE principals SET external_id = ?, label = ?, activated_at = COALESCE(activated_at, ?)
 				WHERE id = ? AND type = 'user' AND external_id IS NULL
-				RETURNING *`)
-			.bind(sub, label, now, id)
-			.first<PrincipalRow>()
+				RETURNING *`,
+			binds: [sub, label, unixNow(), id],
+		}
+		const [claimed] = await this.writer.run<PrincipalRow>([claim], audit)
+		return claimed ?? null
 	}
 
-	/** Lazy-create a user keyed by the verified `sub`, reserving its mailbox in the same transaction. */
-	async createUser(sub: string, email: string): Promise<PrincipalRow> {
+	/** Lazy-create a user keyed by the verified `sub`, reserving its mailbox and writing `audit` in the same transaction. */
+	async createUser(sub: string, email: string, audit?: (principalId: string) => AuditEventInput): Promise<PrincipalRow> {
 		const id = uuidv7()
 		const now = unixNow()
 		const mailbox = normalizeEmailIdentity(email)
@@ -119,6 +122,7 @@ export class PrincipalRepository {
 					VALUES (?, 'user', ?, ?, ?, ?, ?) RETURNING *`)
 				.bind(id, sub, mailbox, email, now, now),
 			this.claimMailboxStatement(mailbox, id),
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit(id))]),
 		])
 	}
 
@@ -252,37 +256,24 @@ export class PrincipalRepository {
 
 	/** Disable a principal. Returns whether this call disabled it; `audit` is written only then. */
 	disablePrincipal(id: string, audit?: AuditEventInput): Promise<boolean> {
-		return this.guardedUpdate(id, this.disablePrincipalStatement(id), 'disabled_at IS NULL', audit)
+		return this.guardedUpdate(this.disablePrincipalChange(id), audit)
 	}
 
-	disablePrincipalStatement(id: string): SqlStatement {
-		return this.db.prepare('UPDATE principals SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL RETURNING id').bind(unixNow(), id)
+	/** The disabling of a principal, as a change an audited revocation groups with others. */
+	disablePrincipalChange(id: string): SqlChange {
+		return { sql: 'UPDATE principals SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL RETURNING id', binds: [unixNow(), id] }
 	}
 
 	/** Enable a principal. Returns whether this call enabled it; `audit` is written only then. */
 	enablePrincipal(id: string, audit?: AuditEventInput): Promise<boolean> {
 		return this.guardedUpdate(
-			id,
-			this.db.prepare('UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL RETURNING id').bind(id),
-			'disabled_at IS NOT NULL',
+			{ sql: 'UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL RETURNING id', binds: [id] },
 			audit,
 		)
 	}
 
-	/**
-	 * Run an UPDATE … RETURNING guarded by `guard`, recording `audit` exactly when it matched: the row is locked first,
-	 * so a concurrent change of the same principal waits and then reads the guard false.
-	 */
-	private async guardedUpdate(id: string, update: SqlStatement, guard: string, audit: AuditEventInput | undefined): Promise<boolean> {
-		if (audit === undefined) {
-			return (await update.all()).results.length > 0
-		}
-		const [, , updated] = await this.db.batch([
-			this.db.prepare('UPDATE principals SET created_at = created_at WHERE id = ?').bind(id),
-			auditEventStatement(this.db, audit, { sql: `EXISTS (SELECT 1 FROM principals WHERE id = ? AND ${guard})`, binds: [id] }),
-			update,
-		])
-		return (updated?.results.length ?? 0) > 0
+	private async guardedUpdate(update: SqlChange, audit: AuditEventInput | undefined): Promise<boolean> {
+		return (await this.writer.run([update], audit)).length > 0
 	}
 
 	/** Hard-delete a principal (cancels an unclaimed invite; cascades grants). */

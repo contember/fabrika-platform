@@ -13,7 +13,7 @@ import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PA
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { LOCAL_DEV_ADMIN_ID, sessionUsable } from '../auth'
 import { handleAuth } from '../auth/routes'
-import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../db'
+import { type AuthenticationMethod, createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { RequestContext } from '../env'
 import { pkceChallenge } from '../oidc'
 import { hashToken } from '../secret'
@@ -117,7 +117,7 @@ describe.skipIf(!hasPostgres)('a session whose method the installation has since
 	beforeAll(async () => {
 		if (!hasPostgres) return
 		fixture = await createPostgres('session_method')
-		repositories = createIamRepositories(fixture.db)
+		repositories = createPostgresIamRepositories(fixture.db)
 	})
 
 	afterAll(async () => {

@@ -1,7 +1,7 @@
 import type { WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
-import { type AuditEventInput, auditEventStatement } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
 import { firstRow, unixNow } from './sql'
 
 /** A role/policy bundle row (the `roles` table). `permissions` is a JSON array string. */
@@ -63,7 +63,10 @@ export interface AppActionRow {
 }
 
 export class AppSchemaRepository {
-	constructor(protected readonly db: SqlDatabase) {}
+	constructor(
+		protected readonly db: SqlDatabase,
+		protected readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
+	) {}
 
 	/**
 	 * The set of app ids propustka knows about — the distinct `app` across the schema tables
@@ -150,21 +153,10 @@ export class AppSchemaRepository {
 		return row
 	}
 
-	/**
-	 * Delete a role. `audit` is written only when the role still exists, behind a row lock, so two concurrent deletes
-	 * record one removal.
-	 */
+	/** Delete a role. `audit` is written exactly when this call deleted it. */
 	async deleteRole(app: string, roleKey: string, audit?: AuditEventInput): Promise<boolean> {
-		const remove = this.db.prepare('DELETE FROM roles WHERE app = ? AND role_key = ? RETURNING role_key').bind(app, roleKey)
-		if (audit === undefined) {
-			return (await remove.all()).results.length > 0
-		}
-		const [, , removed] = await this.db.batch([
-			this.db.prepare('UPDATE roles SET created_at = created_at WHERE app = ? AND role_key = ?').bind(app, roleKey),
-			auditEventStatement(this.db, audit, { sql: 'EXISTS (SELECT 1 FROM roles WHERE app = ? AND role_key = ?)', binds: [app, roleKey] }),
-			remove,
-		])
-		return (removed?.results.length ?? 0) > 0
+		const remove = { sql: 'DELETE FROM roles WHERE app = ? AND role_key = ? RETURNING role_key', binds: [app, roleKey] }
+		return (await this.writer.run([remove], audit)).length > 0
 	}
 
 	/** The app's action catalog as plain strings — the validation source for patterns. */

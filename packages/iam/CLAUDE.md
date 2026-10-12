@@ -284,20 +284,30 @@ fails if that stops being true — it is the guard, not documentation of one.
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding
   the session cookie and the single-use handoff code.
-- **EVERY IAM-OWNED CHANGE WRITES ITS `audit_events` ROW IN THE CHANGE'S OWN BATCH** (`auditEventStatement`,
-  `repositories/audit.ts`). A use case builds the record (`adminEvent`, `memberEvent`) and hands it to the repository
-  that makes the change, or composes several repositories' statement builders into one `audit.commit([...])`. A failed
-  insert rolls the change back; never write a change's record afterwards or in `waitUntil`. A guarded change records
-  itself only where its guard holds: the record is an `INSERT … SELECT … WHERE <condition>`, and a condition read
-  BEFORE the change sits behind a row-locking no-op UPDATE first in the batch, or two concurrent Postgres
-  transactions both read it true (`durable-audit.test.ts` fails without the lock). A no-op — a held role, a revoked
-  session, a disabled principal — writes no row. A role revocation writes one row per role it removed.
-  `writeAuditEvent` alone is only for rows that record no change of IAM's: an application's `audit` event, an admin's
-  access, a failed email delivery. `IamRpc.audit` stays best-effort (backlog 71).
+- **EVERY IAM-OWNED CHANGE WRITES ITS `audit_events` ROW IN THE CHANGE'S OWN TRANSACTION** (`repositories/audit.ts`).
+  A use case builds the record (`adminEvent`, `memberEvent`, a login's or a principal's own event) and hands it to the
+  repository that makes the change, or composes several repositories' builders into one `audit.commit([...])` or
+  `audit.writer.run([...])`. A failed insert rolls the change back; never write a change's record afterwards or in
+  `waitUntil`. This covers OIDC principal creation, claim and refresh, password completion and rehash, and a workload's
+  first key, whose principal is created in the key's batch.
+- **A GUARDED CHANGE IS RECORDED FROM WHAT IT CHANGED, NEVER FROM AN EARLIER EXISTENCE CHECK** (`AuditWriter`). Its
+  SQL is a `SqlChange` ending in `RETURNING`. On Postgres the change and its record are ONE statement,
+  `WITH c0 AS (<change>) INSERT INTO audit_events … WHERE EXISTS (SELECT 1 FROM c0)`, because another writer (an admin
+  grant beside a membership one, a login beside a bulk revoke) can invalidate any check read before the change. SQLite/D1
+  serializes writers, so there `INSERT … WHERE changes() > 0` right after the change is exact. The dialect is the
+  composition's (`createIamRepositories(db, {}, dialect)`; `createPostgresIamRepositories`); a repository built
+  without one assumes SQLite and fails loudly on Postgres (`changes()` does not exist there). A no-op — a held role, a
+  revoked session, a disabled principal, a bulk revoke with nothing left — writes no row. A role revocation writes
+  one row per role it removed. `writeAuditEvent` alone is only for rows that record no change of IAM's: an
+  application's `audit` event, an admin's access, a failed email delivery. `IamRpc.audit` stays best-effort
+  (backlog 71).
+- **AN AUDIT ROW HOLDS NO EMAIL.** `principal_label` is `auditLabelOf(principal)`: a user's id (its label spells its
+  mailbox), a service's key name. No metadata names an address. Application events through `IamRpc.audit` carry the
+  application's own label.
 - **A LOGIN, A REFUSED LOGIN AND A LOGOUT WRITE `auth_log` BEFORE THE ANSWER.** `createSession` takes the login's row and
   `revokeSessionByHash` writes the `logout` row from the session it ends, each in the session's batch; a refused
-  password or OIDC login goes through `refuseLogin`. A row that cannot be written answers 503 and opens or ends no
-  session. A login of a principal holding `iam.admin` at IAM is `privileged = 1`. Mint rows (`mintToken`,
+  password, OIDC, handoff or local login goes through `refuseLogin` with a fixed `LoginRefusal` reason, never what
+  the caller submitted. A row that cannot be written answers 503 and opens or ends no session. A login of a principal holding `iam.admin` at IAM is `privileged = 1`. Mint rows (`mintToken`,
   `mintFromKey`, the handoff exchange, the workload token) are not logins and stay in `waitUntil`.
 - **EVERY `/admin/*` REQUEST OF AN INSTALLATION ADMIN WRITES ONE `iam.admin.access` ROW BEFORE IT RUNS** (`admin/access.ts`),
   reads included: method, route template, and for `/admin/rpc` the procedure (a well-formed name, else null), under
@@ -376,7 +386,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
   in `@fabrika/auth-core` matches them; never pre-expand.
 - **Both migration sets must land the same OUTCOME.** `migrations/` (SQLite/D1) and
-  `migrations-postgres/` state the same schema; `src/db.ts` runs unmodified against both, and
+  `migrations-postgres/` state the same schema; `src/db.ts` runs against both with one dialect switch (how a guarded
+  change writes its record, above), and
   `src/__tests__/postgres-schema.test.ts` pins it against a real database. Add a change to both,
   knowingly. Bundle `iam`, its ledger, and advisory lock `7214839201` are durable identity; before 1.0
   the history may be squashed when installations are reinstalled (ADR-0017). A migration that cannot

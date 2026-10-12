@@ -73,25 +73,31 @@ export interface AuthLogInput {
 }
 
 /**
- * The condition, evaluated inside a change's own batch, under which that change's audit row is written: a
- * guarded change records itself only where its guard holds. A guard read BEFORE the change must sit behind a
- * row lock taken earlier in the batch, or two concurrent Postgres transactions both read it true.
+ * The `principal_label` an audit row stores for a principal: a user's is its id, because a user's label spells its
+ * mailbox and an audit row holds no email; a service's is its key name. A caller of unknown kind is treated as a user.
  */
-export interface AuditCondition {
+export function auditLabelOf(
+	principal: { readonly id: string; readonly type: 'user' | 'service' | undefined; readonly label: string | null },
+): string {
+	return principal.type === 'service' ? principal.label ?? principal.id : principal.id
+}
+
+/** A write that ends in `RETURNING`, as SQL text and its bound values, so an `AuditWriter` can wrap it. */
+export interface SqlChange {
 	readonly sql: string
 	readonly binds: readonly unknown[]
 }
 
+/** The SQL dialect a composition root runs on: D1/SQLite or Postgres. */
+export type SqlDialect = 'sqlite' | 'postgres'
+
 const AUDIT_COLUMNS =
 	'(id, request_id, principal_id, principal_label, credential_id, app, action, resource_type, resource_id, diff, metadata, created_at)'
 
-/**
- * The INSERT of one audit row, for the batch of the change it records: the row and the change commit together, and
- * a failed insert rolls the change back. Diff and metadata are stored JSON-encoded.
- */
-export function auditEventStatement(db: SqlDatabase, event: AuditEventInput, when?: AuditCondition): SqlStatement {
-	const values = [
-		uuidv7(),
+/** The bound values of one audit row, in `AUDIT_COLUMNS` order; `id` is the row's own. */
+function auditValues(id: string, event: AuditEventInput): unknown[] {
+	return [
+		id,
 		event.requestId,
 		event.principalId,
 		event.principalLabel,
@@ -104,12 +110,94 @@ export function auditEventStatement(db: SqlDatabase, event: AuditEventInput, whe
 		event.metadata === undefined ? null : JSON.stringify(event.metadata),
 		unixNow(),
 	]
-	if (when === undefined) {
-		return db.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values)
-	}
+}
+
+const AUDIT_PLACEHOLDERS = '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?'
+
+/**
+ * The INSERT of one audit row, for the batch of an unconditional change it records: the row and the change commit
+ * together, and a failed insert rolls the change back. Diff and metadata are stored JSON-encoded.
+ */
+export function auditEventStatement(db: SqlDatabase, event: AuditEventInput): SqlStatement {
+	return db.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} VALUES (${AUDIT_PLACEHOLDERS})`).bind(...auditValues(uuidv7(), event))
+}
+
+/**
+ * `auditEventStatement` whose `resource_id` is read in the batch by `resourceId`, a one-row SELECT of one column: for
+ * a resource whose id the batch itself settles, such as a principal another writer may have created first.
+ */
+export function auditEventAboutStatement(db: SqlDatabase, event: AuditEventInput, resourceId: SqlChange): SqlStatement {
+	const values = auditValues(uuidv7(), event)
+	const before = values.slice(0, 8)
+	const after = values.slice(9)
 	return db
-		.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${when.sql}`)
-		.bind(...values, ...when.binds)
+		.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ?, (${resourceId.sql}), ?, ?, ?`)
+		.bind(...before, ...resourceId.binds, ...after)
+}
+
+/** A change and its record, as batch statements, and where the change's `RETURNING` rows land in the batch results. */
+export interface AuditedChange {
+	readonly statements: SqlStatement[]
+	/** The rows the LAST change returned, read from the results of a batch whose statements start at `offset`. */
+	rows<T>(results: SqlQueryResult<T>[], offset?: number): T[]
+}
+
+/**
+ * Writes the record of a guarded change exactly when the change changed a row, decided by the change itself and never
+ * by an earlier existence check another writer can invalidate.
+ *
+ * - **Postgres** runs the changes and the record as ONE statement: `WITH c0 AS (<change> RETURNING …), … INSERT INTO
+ *   audit_events … WHERE EXISTS (SELECT 1 FROM c0) …`. The record sees exactly the rows this statement changed.
+ *   Data-modifying CTEs share one snapshot, so the changes of one group must not depend on each other.
+ * - **SQLite/D1** has no data-modifying CTE, but it serializes writers, so `changes()` right after each change is
+ *   exact: the record is inserted after the first change that changed a row, and its fixed id keeps it to one.
+ */
+export class AuditWriter {
+	constructor(
+		private readonly db: SqlDatabase,
+		readonly dialect: SqlDialect,
+	) {}
+
+	/** The changes and, when `event` is given, their record; without one, the changes alone (a seed, a test). */
+	changed(changes: readonly SqlChange[], event: AuditEventInput | undefined): AuditedChange {
+		if (changes.length === 0) {
+			throw new Error('an audited change needs at least one write')
+		}
+		if (event === undefined) {
+			const last = changes.length - 1
+			return {
+				statements: changes.map((change) => this.db.prepare(change.sql).bind(...change.binds)),
+				rows: (results, offset = 0) => results[offset + last]?.results ?? [],
+			}
+		}
+		const id = uuidv7()
+		const values = auditValues(id, event)
+		if (this.dialect === 'postgres') {
+			const ctes = changes.map((change, index) => `c${index} AS (${change.sql})`)
+			const changed = changes.map((_, index) => `EXISTS (SELECT 1 FROM c${index})`).join(' OR ')
+			const statement = this.db
+				.prepare(`WITH ${ctes.join(', ')}, recorded AS (
+					INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ${AUDIT_PLACEHOLDERS} WHERE ${changed} RETURNING id
+				) SELECT * FROM c${changes.length - 1}`)
+				.bind(...changes.flatMap((change) => change.binds), ...values)
+			return { statements: [statement], rows: (results, offset = 0) => results[offset]?.results ?? [] }
+		}
+		const statements = changes.flatMap((change) => [
+			this.db.prepare(change.sql).bind(...change.binds),
+			this.db
+				.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ${AUDIT_PLACEHOLDERS}
+					WHERE changes() > 0 AND NOT EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`)
+				.bind(...values, id),
+		])
+		const last = (changes.length - 1) * 2
+		return { statements, rows: (results, offset = 0) => results[offset + last]?.results ?? [] }
+	}
+
+	/** Run one audited group as its own batch and answer the rows its last change returned. */
+	async run<T>(changes: readonly SqlChange[], event: AuditEventInput | undefined): Promise<T[]> {
+		const change = this.changed(changes, event)
+		return change.rows(await this.db.batch<T>(change.statements))
+	}
 }
 
 /**
@@ -135,7 +223,10 @@ export function authLogStatement(db: SqlDatabase, input: AuthLogInput): SqlState
 }
 
 export class AuditRepository {
-	constructor(protected readonly db: SqlDatabase) {}
+	constructor(
+		protected readonly db: SqlDatabase,
+		readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
+	) {}
 
 	/** Write an audit row that records no change of IAM's own, such as an application's event or an admin's access. */
 	async writeAuditEvent(input: AuditEventInput): Promise<void> {
@@ -155,8 +246,8 @@ export class AuditRepository {
 	}
 
 	/** The statement form of `auditEventStatement`, for a use case that composes a `commit`. */
-	eventStatement(event: AuditEventInput, when?: AuditCondition): SqlStatement {
-		return auditEventStatement(this.db, event, when)
+	eventStatement(event: AuditEventInput): SqlStatement {
+		return auditEventStatement(this.db, event)
 	}
 
 	// ── Audit reads (admin) ───────────────────────────────────────────────────

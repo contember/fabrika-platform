@@ -14,7 +14,7 @@
 import { buildAccessClaims } from '@fabrika/auth-core'
 import { createBackgroundTasks, type PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createIamRepositories, type IamRepositories } from '../db'
+import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { applyMigrations } from '../node/migrate'
@@ -40,7 +40,7 @@ beforeAll(async () => {
 	}
 	fixture = await createPostgres('iam')
 	raw = fixture.db
-	db = createIamRepositories(raw)
+	db = createPostgresIamRepositories(raw)
 })
 
 afterAll(async () => {

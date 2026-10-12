@@ -1,7 +1,8 @@
 import { parseJsonStringArray, type WorkloadKind } from '@fabrika/auth-core'
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
+import { auditEventAboutStatement, type AuditEventInput } from './audit'
 import type { PrincipalRow } from './principals'
-import { firstRow, unixNow } from './sql'
+import { unixNow } from './sql'
 
 /** A workload's identity (the `workload_principals` table). */
 export interface WorkloadPrincipalRow {
@@ -32,29 +33,66 @@ export class WorkloadRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
 	/**
-	 * The workload's principal, created on first use. Both inserts do nothing on a conflict, so two concurrent callers
-	 * end with one principal and one identity row, and both read it back.
+	 * Issue one key of a workload in ONE transaction: the principal and its identity on first use, the revocation of every
+	 * other live key except `keep`, the key, and `audit` about the principal. The principal is addressed by its external
+	 * id throughout, and both identity inserts do nothing on a conflict, so two concurrent first issuances end with one
+	 * principal that holds both keys' history. Answers the principal's id.
 	 */
-	async ensurePrincipal(app: string, kind: WorkloadKind, name: string): Promise<PrincipalRow> {
-		const externalId = workloadExternalId(app, kind, name)
+	async issueKey(
+		input: {
+			app: string
+			kind: WorkloadKind
+			name: string
+			credentialId: string
+			tokenHash: string
+			issuedBy: string
+			expiresAt: number
+			keep: string | null
+		},
+		audit: AuditEventInput,
+	): Promise<string> {
+		const externalId = workloadExternalId(input.app, input.kind, input.name)
+		const label = `${input.kind}:${input.name}`
 		const now = unixNow()
-		await this.db.batch([
+		const principal = { sql: `SELECT id FROM principals WHERE type = 'service' AND external_id = ?`, binds: [externalId] }
+		const statements: SqlStatement[] = [
+			...this.identityStatements(input.app, input.kind, input.name, externalId, label, now),
+			this.db
+				.prepare(`UPDATE credentials SET revoked_at = ? WHERE principal_id = (${principal.sql}) AND revoked_at IS NULL AND id <> ?`)
+				.bind(now, externalId, input.keep ?? ''),
+			this.db
+				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at)
+					SELECT ?, ?, label, id, ?, ?, ?, ? FROM principals WHERE type = 'service' AND external_id = ?`)
+				.bind(input.credentialId, input.tokenHash, input.app, input.issuedBy, input.expiresAt, now, externalId),
+			auditEventAboutStatement(this.db, audit, principal),
+		]
+		await this.db.batch(statements)
+		const principalId = await this.findPrincipalId(input.app, input.kind, input.name)
+		if (principalId === null) throw new Error('a workload principal vanished after its key was issued')
+		return principalId
+	}
+
+	/** The workload's principal, or null when no key was ever issued for it. */
+	async findPrincipal(app: string, kind: WorkloadKind, name: string): Promise<PrincipalRow | null> {
+		return this.db
+			.prepare(`SELECT p.* FROM principals p JOIN workload_principals w ON w.principal_id = p.id
+				WHERE w.app = ? AND w.kind = ? AND w.name = ?`)
+			.bind(app, kind, name)
+			.first<PrincipalRow>()
+	}
+
+	private identityStatements(app: string, kind: WorkloadKind, name: string, externalId: string, label: string, now: number): SqlStatement[] {
+		return [
 			this.db
 				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
 					VALUES (?, 'service', ?, NULL, ?, ?, ?) ON CONFLICT DO NOTHING`)
-				.bind(uuidv7(), externalId, `${kind}:${name}`, now, now),
+				.bind(uuidv7(), externalId, label, now, now),
 			this.db
 				.prepare(`INSERT INTO workload_principals (principal_id, app, kind, name)
 					SELECT id, ?, ?, ? FROM principals WHERE type = 'service' AND external_id = ?
 					ON CONFLICT DO NOTHING`)
 				.bind(app, kind, name, externalId),
-		])
-		return firstRow<PrincipalRow>(
-			this.db
-				.prepare(`SELECT p.* FROM principals p JOIN workload_principals w ON w.principal_id = p.id
-					WHERE w.app = ? AND w.kind = ? AND w.name = ?`)
-				.bind(app, kind, name),
-		)
+		]
 	}
 
 	/** The workload's principal id, or null when no key was ever issued for it. */

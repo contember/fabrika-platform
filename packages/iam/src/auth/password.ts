@@ -1,5 +1,6 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { z } from 'zod'
+import { type AuditEventInput } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 
 import { type RequestContext } from '../env'
@@ -95,7 +96,7 @@ export async function handlePasswordLogin(
 		stringValue(form.get(AUTH_HANDOFF_CHALLENGE_PARAM)),
 	)
 	if (reading.kind === 'refused') {
-		return authError(reading.message, 400)
+		return refuseLogin(services, { requestId, principalId: null, reason: 'handoff_refused' }, () => authError(reading.message, 400))
 	}
 	const handoff = handoffOf(reading)
 	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
@@ -106,7 +107,11 @@ export async function handlePasswordLogin(
 		...loginHandoffFields(handoff),
 	}
 	if (!login.success) {
-		return loginPage({ ...retry, error: 'Invalid email or password.' })
+		return refuseLogin(
+			services,
+			{ requestId, principalId: null, reason: 'password_malformed' },
+			() => loginPage({ ...retry, error: 'Invalid email or password.' }),
+		)
 	}
 	const { email, password } = login.data
 	const passwordWithinLimit = Array.from(password).length <= PASSWORD_MAX_CODE_POINTS
@@ -140,7 +145,11 @@ export async function handlePasswordLogin(
 	if (!blocked && valid && lookup.status === 'found') {
 		if (needsRehash) {
 			// Replacing derived material deliberately revokes older password sessions.
-			await services.repositories.passwords.upsertCredential(lookup.principal.id, await services.passwordHasher.hash(password))
+			await services.repositories.passwords.upsertCredential(
+				lookup.principal.id,
+				await services.passwordHasher.hash(password),
+				selfEvent(requestId, lookup.principal.id, 'iam.password.rehash'),
+			)
 		}
 		await services.repositories.passwords.clearLoginFailures(accountKey)
 		return issueSession(request, services, ctx, {
@@ -185,6 +194,7 @@ export async function handleForgotPassword(
 	services: Services,
 	ctx: RequestContext,
 	clientAddress: string | null,
+	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
 	if (request.method === 'GET') return forgotPasswordPage({})
@@ -210,18 +220,18 @@ export async function handleForgotPassword(
 		recordLoginFailure(services, accountKey, RECOVERY_ACCOUNT_MAX_ATTEMPTS),
 		recordLoginFailure(services, globalKey, RECOVERY_GLOBAL_MAX_ATTEMPTS),
 	])
-	ctx.waitUntil(runForgotPassword(services, email).catch(() => console.error('Password recovery request failed')))
+	ctx.waitUntil(runForgotPassword(services, email, requestId).catch(() => console.error('Password recovery request failed')))
 	return forgotPasswordPage({ sent: true })
 }
 
-async function runForgotPassword(services: Services, email: string): Promise<void> {
+async function runForgotPassword(services: Services, email: string, requestId: string): Promise<void> {
 	let lookup = await services.repositories.passwords.lookupActionUser(email)
 	if (
 		lookup.status === 'missing'
 		&& !services.config.authentication.oidc.enabled
 		&& matchingBootstrapEmail(email, services.config) !== null
 	) {
-		const principal = await safelyCreateBootstrapPrincipal(services, email)
+		const principal = await safelyCreateBootstrapPrincipal(services, email, requestId)
 		if (principal !== null) lookup = { status: 'found', principal, account: await services.repositories.passwords.getAccount(principal.id) }
 	}
 
@@ -240,7 +250,7 @@ async function runForgotPassword(services: Services, email: string): Promise<voi
 	}
 }
 
-async function safelyCreateBootstrapPrincipal(services: Services, email: string) {
+async function safelyCreateBootstrapPrincipal(services: Services, email: string, requestId: string) {
 	// Re-check through the case-insensitive, ambiguity-detecting lookup before the unique insert.
 	const existing = await services.repositories.passwords.lookupActionUser(email)
 	if (existing.status === 'found') return existing.principal
@@ -248,7 +258,11 @@ async function safelyCreateBootstrapPrincipal(services: Services, email: string)
 	const canonical = matchingBootstrapEmail(email, services.config)
 	if (canonical === null) return null
 	try {
-		const principal = await services.repositories.principals.inviteUser(canonical)
+		const principal = await services.repositories.principals.inviteUser(
+			canonical,
+			canonical,
+			(principalId) => selfEvent(requestId, principalId, 'iam.principal.bootstrap'),
+		)
 		await services.repositories.passwords.enableEnrollment(principal.id)
 		return principal
 	} catch {
@@ -284,7 +298,7 @@ export async function handlePasswordAction(
 		tokenHash,
 		purpose,
 		password: await services.passwordHasher.hash(policy.password),
-	})
+	}, selfEvent(requestId, principal.id, `iam.password.${purpose}.complete`))
 	if (completed === null) return invalidActionPage()
 	const completedPrincipal = await services.repositories.principals.getPrincipalById(completed.principalId)
 	if (completedPrincipal === null || completedPrincipal.disabled_at !== null) return invalidActionPage()
@@ -301,4 +315,9 @@ export async function handlePasswordAction(
 function matchingBootstrapEmail(email: string, config: Config): string | null {
 	const normalized = normalizeEmailIdentity(email)
 	return config.bootstrapAdmins.has(normalized) ? normalized : null
+}
+
+/** The record of a change a principal made to its own credentials: by it, about it, and with no email in it. */
+function selfEvent(requestId: string, principalId: string, action: string): AuditEventInput {
+	return { requestId, principalId, principalLabel: principalId, app: 'propustka', action, resourceType: 'principal', resourceId: principalId }
 }

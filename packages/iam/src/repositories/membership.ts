@@ -1,6 +1,6 @@
 import type { Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
-import { type AuditEventInput, auditEventStatement } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange, type SqlDialect } from './audit'
 import type { GrantRow } from './grants'
 import { unixNow } from './sql'
 
@@ -64,20 +64,24 @@ export type InvitationAcceptance = 'accepted' | 'not_allowed' | 'not_open'
 
 export interface MembershipRepositoryOptions {
 	/**
-	 * Lock the inviter's assigning grant while an acceptance commits (`FOR SHARE`), so a removal of that grant waits
-	 * for it. Postgres only: SQLite has no row locks, and D1 runs a batch alone, which is atomic already.
+	 * The dialect of `db`. On Postgres an acceptance locks the inviter's assigning grant while it commits (`FOR SHARE`),
+	 * so a removal of that grant waits for it; SQLite has no row locks, and D1 runs a batch alone, which is atomic
+	 * already. It also picks how a change writes its record (`AuditWriter`).
 	 */
-	readonly lockInviterGrant?: boolean
+	readonly dialect?: SqlDialect
 }
 
 export class MembershipRepository {
 	readonly #inviterLock: string
+	protected readonly writer: AuditWriter
 
 	constructor(
 		protected readonly db: SqlDatabase,
 		options: MembershipRepositoryOptions = {},
 	) {
-		this.#inviterLock = options.lockInviterGrant === true ? 'FOR SHARE' : ''
+		const dialect = options.dialect ?? 'sqlite'
+		this.#inviterLock = dialect === 'postgres' ? 'FOR SHARE' : ''
+		this.writer = new AuditWriter(db, dialect)
 	}
 
 	async issueDelegationGrant(input: {
@@ -153,32 +157,21 @@ export class MembershipRepository {
 	}
 
 	/**
-	 * Grant a membership role in `scope`. Returns the row when this call granted or renewed it, null when it was held.
-	 * `audit` is written exactly then: the target principal's row is locked first, so a concurrent assignment of the
-	 * same role waits and then finds it held.
+	 * Grant a membership role in `scope`. Returns the row when this call granted or renewed it, null when it was held;
+	 * `audit` is written exactly then.
 	 */
 	async grantMembershipRole(
 		input: { app: string; principalId: string; roleKey: string; scope: Scope; grantedBy: string },
 		audit?: AuditEventInput,
 	): Promise<GrantRow | null> {
 		const now = unixNow()
-		const grant = this.db
-			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?) ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`)
-			.bind(uuidv7(), input.principalId, input.app, input.roleKey, input.scope.type, input.scope.value, input.grantedBy, now, now)
-		if (audit === undefined) {
-			return grant.first<GrantRow>()
+		const grant: SqlChange = {
+			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
+				VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?) ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
+			binds: [uuidv7(), input.principalId, input.app, input.roleKey, input.scope.type, input.scope.value, input.grantedBy, now, now],
 		}
-		const [, , granted] = await this.db.batch<GrantRow>([
-			this.db.prepare('UPDATE principals SET created_at = created_at WHERE id = ?').bind(input.principalId),
-			auditEventStatement(this.db, audit, {
-				sql: `NOT EXISTS (SELECT 1 FROM grants WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?
-					AND (expires_at IS NULL OR expires_at > ?))`,
-				binds: [input.app, input.principalId, input.roleKey, input.scope.type, input.scope.value, now],
-			}),
-			grant,
-		])
-		return granted?.results[0] ?? null
+		const [granted] = await this.writer.run<GrantRow>([grant], audit)
+		return granted ?? null
 	}
 
 	/** Remove one role grant of a principal in `scope`. Returns whether a row went. */
@@ -198,18 +191,19 @@ export class MembershipRepository {
 	 * holders therefore run one after the other, and the second sees the first's delete.
 	 */
 	async deleteCreatorGrantUnlessLast(app: string, principalId: string, roleKey: string, scope: Scope): Promise<boolean> {
+		const remove = this.deleteCreatorChange(app, principalId, roleKey, scope, unixNow())
 		const [, , deleted] = await this.db.batch<{ role_key: string }>([
 			...this.scopeLockStatements(app, scope),
-			this.deleteCreatorStatement(app, principalId, roleKey, scope, unixNow()),
+			this.db.prepare(remove.sql).bind(...remove.binds),
 		])
 		return (deleted?.results.length ?? 0) > 0
 	}
 
 	/**
 	 * Remove a member's roles in `scope`, in one transaction under the value's lock (`deleteCreatorGrantUnlessLast`),
-	 * writing one `audit` row per role this call removed. The creator role goes only while another principal holds it,
-	 * and while the member still holds it no other role goes either, so a refused creator leaves every role in place.
-	 * Answers the roles removed.
+	 * writing one `audit` row per role this call removed, decided by each DELETE itself. The creator role goes only
+	 * while another principal holds it, and while the member still holds it no other role goes either, so a refused
+	 * creator leaves every role in place. Answers the roles removed.
 	 */
 	async revokeMemberRoles(
 		input: { app: string; principalId: string; scope: Scope; roles: readonly string[]; creatorRole: string | null },
@@ -217,43 +211,38 @@ export class MembershipRepository {
 	): Promise<string[]> {
 		const { app, principalId, scope } = input
 		const now = unixNow()
-		const statements: SqlStatement[] = this.scopeLockStatements(app, scope)
 		const creator = input.creatorRole !== null && input.roles.includes(input.creatorRole) ? input.creatorRole : null
-		const held = (roleKey: string) => ({
-			sql: `SELECT 1 FROM grants WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?`,
-			binds: [app, principalId, roleKey, scope.type, scope.value],
-		})
-		if (creator !== null) {
-			const other = this.otherCreatorHolder(app, principalId, creator, scope, now)
-			const target = held(creator)
-			statements.push(
-				auditEventStatement(this.db, audit(creator), {
-					sql: `EXISTS (${target.sql}) AND EXISTS (${other.sql})`,
-					binds: [...target.binds, ...other.binds],
-				}),
-				this.deleteCreatorStatement(app, principalId, creator, scope, now),
-			)
+		const groups = [
+			...(creator === null ? [] : [this.writer.changed([this.deleteCreatorChange(app, principalId, creator, scope, now)], audit(creator))]),
+			...input.roles.filter((roleKey) => roleKey !== creator).map((roleKey) => {
+				// While the member still holds an active creator grant here, no other role of it goes.
+				const creatorHeld = creator === null ? '' : `AND NOT EXISTS (SELECT 1 FROM grants
+					WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?
+						AND (expires_at IS NULL OR expires_at > ?))`
+				const remove: SqlChange = {
+					sql: `DELETE FROM grants WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?
+						${creatorHeld} RETURNING role_key`,
+					binds: [
+						app,
+						principalId,
+						roleKey,
+						scope.type,
+						scope.value,
+						...(creator === null ? [] : [app, principalId, creator, scope.type, scope.value, now]),
+					],
+				}
+				return this.writer.changed([remove], audit(roleKey))
+			}),
+		]
+		const lock = this.scopeLockStatements(app, scope)
+		const results = await this.db.batch<{ role_key: string }>([...lock, ...groups.flatMap((group) => group.statements)])
+		let offset = lock.length
+		const removed: string[] = []
+		for (const group of groups) {
+			removed.push(...group.rows(results, offset).map((row) => row.role_key))
+			offset += group.statements.length
 		}
-		const creatorStillHeld = creator === null
-			? null
-			: { sql: `${held(creator).sql} AND (expires_at IS NULL OR expires_at > ?)`, binds: [...held(creator).binds, now] }
-		for (const roleKey of input.roles) {
-			if (roleKey === creator) continue
-			const target = held(roleKey)
-			const guard = creatorStillHeld === null
-				? { sql: `EXISTS (${target.sql})`, binds: target.binds }
-				: { sql: `EXISTS (${target.sql}) AND NOT EXISTS (${creatorStillHeld.sql})`, binds: [...target.binds, ...creatorStillHeld.binds] }
-			statements.push(
-				auditEventStatement(this.db, audit(roleKey), guard),
-				this.db
-					.prepare(`DELETE FROM grants WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?
-						${creatorStillHeld === null ? '' : `AND NOT EXISTS (${creatorStillHeld.sql})`}
-						RETURNING role_key`)
-					.bind(app, principalId, roleKey, scope.type, scope.value, ...(creatorStillHeld === null ? [] : creatorStillHeld.binds)),
-			)
-		}
-		const results = await this.db.batch<{ role_key: string }>(statements)
-		return results.flatMap((result) => result.results.map((row) => row.role_key))
+		return removed
 	}
 
 	/** Create the value's `membership_scopes` row on demand and lock it; see `deleteCreatorGrantUnlessLast`. */
@@ -269,23 +258,18 @@ export class MembershipRepository {
 		]
 	}
 
-	/** Another principal's active grant of the creator role in `scope`, as a subquery. */
-	private otherCreatorHolder(app: string, principalId: string, roleKey: string, scope: Scope, now: number): { sql: string; binds: unknown[] } {
+	/** The DELETE of a principal's creator grant in `scope`, only while another principal holds the role there. */
+	private deleteCreatorChange(app: string, principalId: string, roleKey: string, scope: Scope, now: number): SqlChange {
 		return {
-			sql: `SELECT 1 FROM grants other
-				WHERE other.app = ? AND other.role_key = ? AND other.scope_type = ? AND other.scope_value = ?
-					AND other.principal_id <> ? AND (other.expires_at IS NULL OR other.expires_at > ?)`,
-			binds: [app, roleKey, scope.type, scope.value, principalId, now],
+			sql: `DELETE FROM grants
+				WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?
+					AND EXISTS (
+						SELECT 1 FROM grants other
+						WHERE other.app = ? AND other.role_key = ? AND other.scope_type = ? AND other.scope_value = ?
+							AND other.principal_id <> ? AND (other.expires_at IS NULL OR other.expires_at > ?))
+				RETURNING role_key`,
+			binds: [app, principalId, roleKey, scope.type, scope.value, app, roleKey, scope.type, scope.value, principalId, now],
 		}
-	}
-
-	private deleteCreatorStatement(app: string, principalId: string, roleKey: string, scope: Scope, now: number): SqlStatement {
-		const other = this.otherCreatorHolder(app, principalId, roleKey, scope, now)
-		return this.db
-			.prepare(`DELETE FROM grants
-				WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ? AND EXISTS (${other.sql})
-				RETURNING role_key`)
-			.bind(app, principalId, roleKey, scope.type, scope.value, ...other.binds)
 	}
 
 	/**
@@ -304,24 +288,23 @@ export class MembershipRepository {
 		const now = unixNow()
 		const id = uuidv7()
 		const key = [input.app, input.scope.type, input.scope.value, input.roleKey, input.email]
-		const [, inserted] = await this.db.batch<InvitationRow>([
+		const opened = this.writer.changed([{
+			sql: `INSERT INTO membership_invitations
+					(id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (app, scope_type, scope_value, role_key, email) WHERE accepted_at IS NULL AND revoked_at IS NULL DO NOTHING
+				RETURNING *`,
+			binds: [id, input.tokenHash, ...key, input.invitedBy, input.expiresAt, now],
+		}], audit?.(id))
+		const results = await this.db.batch<InvitationRow>([
 			this.db
 				.prepare(`UPDATE membership_invitations SET revoked_at = ?
 					WHERE app = ? AND scope_type = ? AND scope_value = ? AND role_key = ? AND email = ?
 						AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= ?`)
 				.bind(now, ...key, now),
-			this.db
-				.prepare(`INSERT INTO membership_invitations
-						(id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-					ON CONFLICT (app, scope_type, scope_value, role_key, email) WHERE accepted_at IS NULL AND revoked_at IS NULL DO NOTHING
-					RETURNING *`)
-				.bind(id, input.tokenHash, ...key, input.invitedBy, input.expiresAt, now),
-			...(audit === undefined
-				? []
-				: [auditEventStatement(this.db, audit(id), { sql: 'EXISTS (SELECT 1 FROM membership_invitations WHERE id = ?)', binds: [id] })]),
+			...opened.statements,
 		])
-		const created = inserted?.results[0] ?? null
+		const created = opened.rows(results, 1)[0] ?? null
 		if (created !== null) {
 			return { invitation: created, created: true }
 		}
@@ -350,22 +333,13 @@ export class MembershipRepository {
 		await this.db.batch(audit === undefined ? [remove] : [remove, auditEventStatement(this.db, audit)])
 	}
 
-	/**
-	 * Close an open invitation. Answers whether it was still open; `audit` is written exactly then, behind a lock on
-	 * the invitation's row.
-	 */
+	/** Close an open invitation. Answers whether it was still open; `audit` is written exactly then. */
 	async revokeInvitation(id: string, audit?: AuditEventInput): Promise<boolean> {
-		const open = 'accepted_at IS NULL AND revoked_at IS NULL'
-		const revoke = this.db.prepare(`UPDATE membership_invitations SET revoked_at = ? WHERE id = ? AND ${open} RETURNING id`).bind(unixNow(), id)
-		if (audit === undefined) {
-			return (await revoke.all()).results.length > 0
+		const revoke: SqlChange = {
+			sql: 'UPDATE membership_invitations SET revoked_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL RETURNING id',
+			binds: [unixNow(), id],
 		}
-		const [, , revoked] = await this.db.batch([
-			this.db.prepare('UPDATE membership_invitations SET created_at = created_at WHERE id = ?').bind(id),
-			auditEventStatement(this.db, audit, { sql: `EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND ${open})`, binds: [id] }),
-			revoke,
-		])
-		return (revoked?.results.length ?? 0) > 0
+		return (await this.writer.run([revoke], audit)).length > 0
 	}
 
 	/**
@@ -389,29 +363,31 @@ export class MembershipRepository {
 		const now = unixNow()
 		const acceptanceId = uuidv7()
 		const placeholders = assigners.map(() => '?').join(', ')
-		const [accepted] = await this.db.batch<{ id: string }>([
-			this.db
-				.prepare(`UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
-					WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
-						AND EXISTS (
-							SELECT 1 FROM grants
-							WHERE app = ? AND principal_id = ? AND scope_type = ? AND scope_value = ? AND role_key IN (${placeholders})
-								AND (expires_at IS NULL OR expires_at > ?)
-							${this.#inviterLock})
-					RETURNING id`)
-				.bind(
-					now,
-					principalId,
-					acceptanceId,
-					invitation.id,
-					now,
-					invitation.app,
-					invitation.invited_by,
-					invitation.scope_type,
-					invitation.scope_value,
-					...assigners,
-					now,
-				),
+		const accept = this.writer.changed([{
+			sql: `UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
+				WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+					AND EXISTS (
+						SELECT 1 FROM grants
+						WHERE app = ? AND principal_id = ? AND scope_type = ? AND scope_value = ? AND role_key IN (${placeholders})
+							AND (expires_at IS NULL OR expires_at > ?)
+						${this.#inviterLock})
+				RETURNING id`,
+			binds: [
+				now,
+				principalId,
+				acceptanceId,
+				invitation.id,
+				now,
+				invitation.app,
+				invitation.invited_by,
+				invitation.scope_type,
+				invitation.scope_value,
+				...assigners,
+				now,
+			],
+		}], audit)
+		const results = await this.db.batch<{ id: string }>([
+			...accept.statements,
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
 					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?
@@ -430,16 +406,8 @@ export class MembershipRepository {
 					acceptanceId,
 					now,
 				),
-			...(audit === undefined
-				? []
-				: [
-					auditEventStatement(this.db, audit, {
-						sql: 'EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)',
-						binds: [invitation.id, acceptanceId],
-					}),
-				]),
 		])
-		if ((accepted?.results.length ?? 0) > 0) {
+		if (accept.rows(results).length > 0) {
 			return 'accepted'
 		}
 		const current = await this.getInvitationById(invitation.id)

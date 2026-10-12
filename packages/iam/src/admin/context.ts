@@ -1,5 +1,5 @@
 import { type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
-import { type AuditEventInput } from '../db'
+import { type AuditEventInput, auditLabelOf } from '../db'
 import { type RequestContext } from '../env'
 import { type Services } from '../services'
 
@@ -57,7 +57,7 @@ export function adminEvent(
 	return {
 		requestId: c.requestId,
 		principalId: c.admin.id,
-		principalLabel: c.admin.label ?? c.admin.id,
+		principalLabel: auditLabelOf(c.admin),
 		app: c.app,
 		action: event.action,
 		resourceType: event.resourceType,

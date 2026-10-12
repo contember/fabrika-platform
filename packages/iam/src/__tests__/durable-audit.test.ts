@@ -11,14 +11,16 @@ import { PostgresDatabase } from '@fabrika/platform-node'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
+import { handleAuth } from '../auth/routes'
 import { handleLogout, issueSession } from '../auth/sessions'
 import { runIamMaintenance } from '../cron'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { assignMember, createScope, requestDelegation, revokeMember } from '../membership'
+import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
-import { adminTokenFor, createHarness, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
+import { adminTokenFor, createHarness, makeServicesFor, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
 import {
 	APP,
 	CALLER_ENV,
@@ -330,6 +332,170 @@ function durableAuditSuite(backend: () => Backend): void {
 		expect(await eventsOfRequest(b, tag)).toHaveLength(2)
 	})
 
+	describe('every change of security state carries its own record', () => {
+		test('a password completion records itself; a fault in the record leaves the token unspent and no credential', async () => {
+			const b = backend()
+			const user = await b.repositories.principals.createUser(`sub-${unique('user')}`, `${unique('user')}@example.test`)
+			await b.repositories.passwords.enableEnrollment(user.id)
+			const tokenHash = await hashToken(unique('action'))
+			await b.repositories.passwords.issueActionToken({
+				principalId: user.id,
+				purpose: 'enrollment',
+				tokenHash,
+				expiresAt: Math.floor(Date.now() / 1000) + 600,
+			})
+			const password = { algorithm: 'test', parameters: '{}', salt: 'salt', passwordHash: 'hash' }
+			const complete = () =>
+				b.repositories.passwords.completeAction({ tokenHash, purpose: 'enrollment', password }, {
+					requestId: unique('req'),
+					principalId: user.id,
+					principalLabel: user.id,
+					app: 'propustka',
+					action: 'iam.password.enrollment.complete',
+					resourceType: 'principal',
+					resourceId: user.id,
+				})
+
+			const restore = await b.fault('audit_events', 'action', 'iam.password.enrollment.complete')
+			expect(await complete().catch((err: unknown) => err)).toBeInstanceOf(Error)
+			await restore()
+			expect(await b.repositories.passwords.getCredential(user.id)).toBeNull()
+
+			expect(await complete()).toEqual({ principalId: user.id })
+			expect(await complete()).toBeNull()
+			expect(await events(b, 'iam.password.enrollment.complete', user.id)).toHaveLength(1)
+		})
+
+		test('a password rehash records itself in its own batch', async () => {
+			const b = backend()
+			const user = await b.repositories.principals.createUser(`sub-${unique('user')}`, `${unique('user')}@example.test`)
+			const event = {
+				requestId: unique('req'),
+				principalId: user.id,
+				principalLabel: user.id,
+				app: 'propustka',
+				action: 'iam.password.rehash',
+				resourceType: 'principal',
+				resourceId: user.id,
+			}
+			const restore = await b.fault('audit_events', 'action', 'iam.password.rehash')
+			const faulted = await b.repositories.passwords.upsertCredential(
+				user.id,
+				{ algorithm: 'test', parameters: '{}', salt: 's', passwordHash: 'h' },
+				event,
+			).catch((err: unknown) => err)
+			await restore()
+			expect(faulted).toBeInstanceOf(Error)
+			expect(await b.repositories.passwords.getCredential(user.id)).toBeNull()
+		})
+
+		test('an OIDC login creates, claims and refreshes its principal with one record each, and a fault creates nothing', async () => {
+			const b = backend()
+			const sub = `sub-${unique('oidc')}`
+			const email = `${unique('oidc')}@example.test`
+			const restore = await b.fault('audit_events', 'action', 'iam.principal.create')
+			expect(await resolveUserPrincipal(b.repositories.principals, sub, email, unique('req'))).toEqual({ ok: false, reason: 'unknown_principal' })
+			await restore()
+			expect(await b.repositories.principals.getUserByExternalId(sub)).toBeNull()
+
+			const created = await resolveUserPrincipal(b.repositories.principals, sub, email, unique('req'))
+			if (!created.ok) throw new Error('expected a principal')
+			expect(await events(b, 'iam.principal.create', created.principal.id)).toHaveLength(1)
+			// The same identity again changes nothing and records nothing; a new mailbox is a refresh.
+			await resolveUserPrincipal(b.repositories.principals, sub, email, unique('req'))
+			await resolveUserPrincipal(b.repositories.principals, sub, `moved-${email}`, unique('req'))
+			expect(await events(b, 'iam.principal.refresh', created.principal.id)).toHaveLength(1)
+
+			const invitedEmail = `${unique('invited')}@example.test`
+			const invited = await b.repositories.principals.inviteUser(invitedEmail)
+			expect((await resolveUserPrincipal(b.repositories.principals, `sub-${unique('claim')}`, invitedEmail, unique('req'))).ok).toBe(true)
+			expect(await events(b, 'iam.principal.claim', invited.id)).toHaveLength(1)
+		})
+
+		test("a first workload key creates its principal in the key's transaction; a fault leaves no principal", async () => {
+			const b = backend()
+			const a = await admin(b)
+			const name = `job_${unique('w').replaceAll('-', '_')}`
+			const issue = (requestId: string) =>
+				a.call('workloads.issueKey', { app: 'notes@prod', kind: 'job', name, expiresAt: Math.floor(Date.now() / 1000) + 3600, keep: null }, requestId)
+
+			const restore = await b.fault('audit_events', 'action', 'iam.workload.key.issue')
+			expect((await issue(unique('req'))).status).toBe(500)
+			await restore()
+			expect(await b.repositories.workloads.findPrincipal('notes@prod', 'job', name)).toBeNull()
+			const { results } = await b.db.prepare('SELECT principal_id FROM workload_principals WHERE name = ?').bind(name).all()
+			expect(results).toEqual([])
+
+			const issued = await issue(unique('req'))
+			expect(issued.status).toBe(200)
+			const principalId = prop(prop(await issued.json(), 'result'), 'principalId')
+			if (typeof principalId !== 'string') throw new Error('expected a principal id')
+			expect(await events(b, 'iam.workload.key.issue', principalId)).toHaveLength(1)
+		})
+
+		test('a bulk revocation that revokes nothing records nothing: workload keys, an API key', async () => {
+			const b = backend()
+			const a = await admin(b)
+			const name = `job_${unique('w').replaceAll('-', '_')}`
+			const workload = { app: 'notes@prod', kind: 'job', name }
+			expect((await a.call('workloads.issueKey', { ...workload, expiresAt: Math.floor(Date.now() / 1000) + 3600, keep: null }, unique('req'))).status)
+				.toBe(200)
+			const provisioned = await a.call('apiKeys.provision', { label: unique('svc'), type: 'service', roleKey: 'admin', app: null }, unique('req'))
+			const apiKeyPrincipal = prop(prop(await provisioned.json(), 'result'), 'principalId')
+			if (typeof apiKeyPrincipal !== 'string') throw new Error('expected a principal id')
+
+			for (let attempt = 0; attempt < 2; attempt++) {
+				expect((await a.call('workloads.revokeKeys', workload, unique('req'))).status).toBe(200)
+				expect((await a.call('apiKeys.revoke', { principalId: apiKeyPrincipal }, unique('req'))).status).toBe(200)
+			}
+			const workloadPrincipal = await b.repositories.workloads.findPrincipalId('notes@prod', 'job', name)
+			expect(await events(b, 'iam.workload.key.revoke', workloadPrincipal ?? '')).toHaveLength(1)
+			expect(await events(b, 'iam.apikey.revoke', apiKeyPrincipal)).toHaveLength(1)
+		})
+
+		test('an audit row holds no email: the admin is labelled by its id, and an invitation names no address', async () => {
+			const b = backend()
+			const a = await admin(b)
+			const requestId = unique('req')
+			const email = `${unique('invitee')}@example.test`
+			expect((await a.call('principals.invite', { email }, requestId)).status).toBe(200)
+			const { results } = await b.db
+				.prepare('SELECT principal_label, metadata FROM audit_events WHERE request_id = ?')
+				.bind(requestId)
+				.all<{ principal_label: string; metadata: string | null }>()
+			expect(results).toHaveLength(2)
+			for (const row of results) {
+				expect(row.principal_label).toBe(a.id)
+				expect(row.metadata ?? '').not.toContain('@')
+			}
+		})
+
+		test('a malformed password login is a logged refusal, and one that cannot be logged answers 503', async () => {
+			const b = backend()
+			const services = makeServicesFor(b.repositories, { environment: 'stage', issuer: ORIGIN, authentication: { oidc: false, password: true } })
+			const login = (requestId: string) =>
+				handleAuth(
+					new Request(`${ORIGIN}/auth/login`, {
+						method: 'POST',
+						headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' },
+						body: new URLSearchParams({ email: 'not an address', password: 'whatever' }),
+					}),
+					services,
+					{ FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS, ENVIRONMENT: 'stage' },
+					{ waitUntil() {} },
+					null,
+					requestId,
+				)
+			const requestId = unique('req')
+			expect((await login(requestId)).status).toBe(401)
+			expect(await authLogOf(b, requestId)).toEqual([{ kind: 'authenticate', decision: 'deny', reason: 'password_malformed', privileged: 0 }])
+
+			const restore = await b.fault('auth_log', 'reason', 'password_malformed')
+			expect((await login(unique('req'))).status).toBe(503)
+			await restore()
+		})
+	})
+
 	describe('logins and logouts', () => {
 		async function login(b: Backend, principalId: string, requestId: string): Promise<Response> {
 			const services = (await membershipFixture(b.repositories)).services
@@ -430,6 +596,108 @@ describe.skipIf(!hasPostgres)('durable audit — Postgres', () => {
 })
 
 describe.skipIf(!hasPostgres)('durable audit — concurrent guarded changes on Postgres', () => {
+	/** The audit rows written under one request id — one call's record. */
+	async function recorded(b: Backend, requestId: string): Promise<number> {
+		return (await eventsOfRequest(b, requestId)).length
+	}
+
+	function event(action: string, resourceId: string) {
+		return { requestId: unique('req'), principalId: null, principalLabel: 'test', app: 'propustka', action, resourceType: 'test', resourceId }
+	}
+
+	test('a bulk session revocation racing new logins records exactly when it revoked something', async () => {
+		if (postgres === null) throw new Error('postgres backend not ready')
+		const b = postgres
+		const user = await b.repositories.principals.createUser(`sub-${unique('user')}`, `${unique('user')}@example.test`)
+		const login = async () =>
+			b.repositories.sessions.createSession({
+				tokenHash: await hashToken(unique('token')),
+				principalId: user.id,
+				idpSub: 'sub',
+				expiresAt: Math.floor(Date.now() / 1000) + 3600,
+			})
+		for (let round = 0; round < 20; round++) {
+			const revocation = event('test.session.revoke_all', user.id)
+			const [, revoked] = await Promise.all([login(), b.repositories.sessions.revokeSessionsForPrincipal(user.id, revocation)])
+			expect(await recorded(b, revocation.requestId)).toBe(revoked > 0 ? 1 : 0)
+		}
+	})
+
+	test('a membership assignment racing an admin grant of the same role: each call records exactly its own change', async () => {
+		if (postgres === null) throw new Error('postgres backend not ready')
+		const b = postgres
+		const user = await b.repositories.principals.createUser(`sub-${unique('user')}`, `${unique('user')}@example.test`)
+		const scope = { type: 'workspace', value: unique('ws') }
+		for (let round = 0; round < 10; round++) {
+			const membershipEvent = event('test.member.assign', scope.value)
+			const adminEvent = event('test.grant.create', scope.value)
+			const [assigned, granted] = await Promise.all([
+				b.repositories.membership.grantMembershipRole({ app: APP, principalId: user.id, roleKey: 'editor', scope, grantedBy: user.id }, membershipEvent),
+				b.repositories.grants.createRoleGrantUnlessHeld(
+					{ principalId: user.id, app: APP, roleKey: 'editor', scopeType: scope.type, scopeValue: scope.value },
+					() => adminEvent,
+				),
+			])
+			expect([assigned !== null, granted !== null].filter(Boolean)).toHaveLength(1)
+			expect(await recorded(b, membershipEvent.requestId)).toBe(assigned === null ? 0 : 1)
+			expect(await recorded(b, adminEvent.requestId)).toBe(granted === null ? 0 : 1)
+			await b.db.prepare('DELETE FROM grants WHERE principal_id = ?').bind(user.id).run()
+		}
+	})
+
+	test('a member revocation racing an admin delete of the same grant: each call records exactly its own change', async () => {
+		if (postgres === null) throw new Error('postgres backend not ready')
+		const b = postgres
+		const user = await b.repositories.principals.createUser(`sub-${unique('user')}`, `${unique('user')}@example.test`)
+		const scope = { type: 'workspace', value: unique('ws') }
+		for (let round = 0; round < 10; round++) {
+			const grant = await b.repositories.grants.createRoleGrantUnlessHeld({
+				principalId: user.id,
+				app: APP,
+				roleKey: 'editor',
+				scopeType: scope.type,
+				scopeValue: scope.value,
+			})
+			if (grant === null) throw new Error('expected a grant')
+			const membershipEvent = event('test.member.revoke', scope.value)
+			const adminEvent = event('test.grant.revoke', grant.id)
+			const [removed, deleted] = await Promise.all([
+				b.repositories.membership.revokeMemberRoles(
+					{ app: APP, principalId: user.id, scope, roles: ['editor'], creatorRole: 'owner' },
+					() => membershipEvent,
+				),
+				b.repositories.grants.deleteGrant(grant.id, adminEvent),
+			])
+			expect([removed.length > 0, deleted].filter(Boolean)).toHaveLength(1)
+			expect(await recorded(b, membershipEvent.requestId)).toBe(removed.length)
+			expect(await recorded(b, adminEvent.requestId)).toBe(deleted ? 1 : 0)
+		}
+	})
+
+	test('two concurrent first issuances of a workload key end with one principal and two recorded keys', async () => {
+		if (postgres === null) throw new Error('postgres backend not ready')
+		const b = postgres
+		const name = `job_${unique('w').replaceAll('-', '_')}`
+		const issue = () =>
+			b.repositories.workloads.issueKey(
+				{
+					app: APP,
+					kind: 'job',
+					name,
+					credentialId: crypto.randomUUID(),
+					tokenHash: crypto.randomUUID(),
+					issuedBy: 'provisioning-admin',
+					expiresAt: Math.floor(Date.now() / 1000) + 3600,
+					keep: null,
+				},
+				event('test.workload.key.issue', ''),
+			)
+		const [first, second] = await Promise.all([issue(), issue()])
+		expect(first).toBe(second)
+		const { results } = await b.db.prepare("SELECT id FROM audit_events WHERE action = 'test.workload.key.issue' AND resource_id = ?").bind(first).all()
+		expect(results).toHaveLength(2)
+	})
+
 	test('two concurrent revocations of one credential and one session each record one change', async () => {
 		if (postgres === null) throw new Error('postgres backend not ready')
 		const b = postgres

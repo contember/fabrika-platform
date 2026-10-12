@@ -1,7 +1,7 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from './email-identity'
 import type { StoredPasswordHash } from './password-crypto'
-import { type AuditEventInput, auditEventStatement } from './repositories/audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './repositories/audit'
 import type { PrincipalRow } from './repositories/principals'
 
 export type PasswordActionPurpose = 'enrollment' | 'reset'
@@ -73,7 +73,10 @@ async function firstRow<T>(statement: SqlStatement): Promise<T> {
 }
 
 export class PasswordRepository {
-	constructor(protected readonly db: SqlDatabase) {}
+	constructor(
+		protected readonly db: SqlDatabase,
+		protected readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
+	) {}
 
 	async getAccount(principalId: string): Promise<PasswordAccountRow | null> {
 		return this.db.prepare('SELECT * FROM password_accounts WHERE principal_id = ?').bind(principalId).first<PasswordAccountRow>()
@@ -140,8 +143,8 @@ export class PasswordRepository {
 		return { status: 'found', principal, account: await this.getAccount(principal.id) }
 	}
 
-	/** Replace the password, activate the principal, and revoke prior password sessions atomically. */
-	async upsertCredential(principalId: string, password: StoredPasswordHash): Promise<void> {
+	/** Replace the password, activate the principal, revoke prior password sessions, and write `audit`, atomically. */
+	async upsertCredential(principalId: string, password: StoredPasswordHash, audit?: AuditEventInput): Promise<void> {
 		const now = unixNow()
 		await this.db.batch([
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
@@ -161,6 +164,7 @@ export class PasswordRepository {
 			this.db.prepare(`UPDATE principals SET activated_at = COALESCE(activated_at, ?)
 				WHERE id = ? AND type = 'user'`).bind(now, principalId),
 			this.revokePasswordSessionsStatement(principalId, now),
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit)]),
 		])
 	}
 
@@ -252,16 +256,19 @@ export class PasswordRepository {
 			.first<PasswordActionTokenRow>()
 	}
 
-	/** Consume an action token and replace the credential as one race-safe transaction. */
+	/**
+	 * Consume an action token and replace the credential as one race-safe transaction, with `audit` written exactly when
+	 * this call consumed the token.
+	 */
 	async completeAction(input: {
 		tokenHash: string
 		purpose: PasswordActionPurpose
 		password: StoredPasswordHash
-	}): Promise<{ principalId: string } | null> {
+	}, audit?: AuditEventInput): Promise<{ principalId: string } | null> {
 		const now = unixNow()
 		const consumptionId = uuidv7()
-		const results = await this.db.batch<PasswordActionTokenRow>([
-			this.db.prepare(`UPDATE password_action_tokens SET consumed_at = ?, consumption_id = ?
+		const consume: SqlChange = {
+			sql: `UPDATE password_action_tokens SET consumed_at = ?, consumption_id = ?
 				WHERE token_hash = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?
 					AND EXISTS (
 						SELECT 1 FROM principals p
@@ -269,7 +276,12 @@ export class PasswordRepository {
 						WHERE p.id = password_action_tokens.principal_id
 							AND p.disabled_at IS NULL AND a.state <> 'disabled'
 					)
-				RETURNING *`).bind(now, consumptionId, input.tokenHash, input.purpose, now),
+				RETURNING *`,
+			binds: [now, consumptionId, input.tokenHash, input.purpose, now],
+		}
+		const consumed = this.writer.changed([consume], audit)
+		const results = await this.db.batch<PasswordActionTokenRow>([
+			...consumed.statements,
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
 				SELECT principal_id, 'enabled', ?, ? FROM password_action_tokens WHERE consumption_id = ?
 				ON CONFLICT (principal_id) DO UPDATE SET state = 'enabled', updated_at = excluded.updated_at`)
@@ -291,7 +303,7 @@ export class PasswordRepository {
 				WHERE principal_id = (SELECT principal_id FROM password_action_tokens WHERE consumption_id = ?)
 					AND authentication_method = 'password' AND revoked_at IS NULL`).bind(now, consumptionId),
 		])
-		const principalId = results[0]?.results[0]?.principal_id
+		const principalId = consumed.rows(results)[0]?.principal_id
 		return principalId === undefined ? null : { principalId }
 	}
 

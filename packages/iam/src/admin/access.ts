@@ -1,3 +1,4 @@
+import { auditLabelOf } from '../db'
 import { prop } from '../json'
 import type { Services } from '../services'
 import type { ResolvedAdmin } from './router'
@@ -24,7 +25,7 @@ export async function recordAdminAccess(services: Services, admin: ResolvedAdmin
 	await services.repositories.audit.writeAuditEvent({
 		requestId,
 		principalId: admin.id,
-		principalLabel: admin.label ?? admin.id,
+		principalLabel: auditLabelOf(admin),
 		app: admin.audience,
 		action: ADMIN_ACCESS_ACTION,
 		resourceType: 'admin_route',

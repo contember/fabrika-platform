@@ -1452,3 +1452,11 @@ ADR-0022 or ADR-0050.
   SQLite). Mint rows stay in `waitUntil` (not logins). `iam-contract`'s `AuthLogDto` gained `kind: 'logout'` and
   `privileged`, outside the touch points. Discovery: concurrent statements on the connection the IAM test fixture
   migrated with hang in Bun SQL; a fresh pool does not, so `durable-audit.test.ts` runs on a pool of its own.
+- **WU18 review round 1.** A guarded change's record no longer rests on an existence check behind a row lock: other
+  writers (an admin grant beside a membership one, a login beside a bulk revoke) took no such lock. `AuditWriter`
+  writes the record from what the change itself changed — one `WITH c AS (… RETURNING) INSERT … WHERE EXISTS` statement
+  on Postgres, `changes()` right after the change on SQLite/D1, whose writers are serialized; the composition passes
+  the dialect. OIDC principal create, claim and refresh, password completion and rehash, the forgot-password bootstrap
+  principal and a workload's first principal now commit with their record; bulk revocations that change nothing record
+  nothing; audit rows label a user by its id and carry no address; every terminal login refusal is logged with a fixed
+  reason. Five Postgres suites built the SQLite composition over Postgres and now use `createPostgresIamRepositories`.

@@ -2,7 +2,7 @@ import { type DeviceAuthorizationConsent } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createIamRepositories, type IamRepositories } from '../db'
+import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import { pkceChallenge, randomToken } from '../oidc'
 import { hashToken } from '../secret'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
@@ -16,7 +16,7 @@ beforeAll(async () => {
 	if (postgresUrl === null) return
 	fixture = await createPostgres('iam_device')
 	pool = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 4 })
-	repositories = createIamRepositories(pool)
+	repositories = createPostgresIamRepositories(pool)
 })
 afterAll(async () => {
 	await pool?.close()

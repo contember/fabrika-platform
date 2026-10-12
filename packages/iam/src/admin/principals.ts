@@ -121,7 +121,7 @@ export async function invitePrincipalUseCase(c: AdminContext, input: InviteReque
 		principal = await c.services.repositories.principals.inviteUser(
 			normalizedEmail,
 			email,
-			(principalId) => adminEvent(c, { action: 'iam.principal.invite', resourceType: 'principal', resourceId: principalId, metadata: { email } }),
+			(principalId) => adminEvent(c, { action: 'iam.principal.invite', resourceType: 'principal', resourceId: principalId }),
 		)
 	} catch (cause) {
 		if ((await c.services.repositories.passwords.lookupActionUser(normalizedEmail)).status !== 'missing') {

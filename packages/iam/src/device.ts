@@ -26,6 +26,7 @@ import {
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { contractPatternsProblem } from './contract-rules'
+import { auditLabelOf } from './db'
 import type { Env } from './env'
 import { pkceChallenge } from './oidc'
 import type { DeviceAuthorizationRow, DeviceReceiptRow } from './repositories/device'
@@ -243,7 +244,7 @@ export async function exchangeDeviceAuthorization(services: Services, raw: unkno
 		consentId: consent.consentId,
 		tokenHash: await hashToken(token),
 		requestId,
-		approverLabel: principal.label,
+		approverLabel: auditLabelOf(principal),
 	})
 	if (issued) return { ok: true, token, receipt: receiptFromRow({ ...issued, revoked_at: null }) }
 	const recovered = await services.repositories.device.get(row.id)

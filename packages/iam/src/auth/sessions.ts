@@ -99,9 +99,23 @@ export async function issueSession(
  * Answer a refused login after its `deny` row is in `auth_log`. A refusal that cannot be logged answers 503 instead,
  * so no login attempt goes unrecorded.
  */
+/** The fixed `auth_log.reason` of a refused login. A reason never carries what the caller submitted. */
+export type LoginRefusal =
+	| 'password_invalid'
+	| 'password_throttled'
+	| 'password_malformed'
+	| 'handoff_refused'
+	| 'oidc_invalid_state'
+	| 'oidc_code_exchange_failed'
+	| 'oidc_invalid_id_token'
+	| 'oidc_not_admitted'
+	| 'oidc_disabled'
+	| 'oidc_unknown_principal'
+	| 'local_login_refused'
+
 export async function refuseLogin(
 	services: Services,
-	entry: { requestId: string; principalId: string | null; reason: string },
+	entry: { requestId: string; principalId: string | null; reason: LoginRefusal },
 	answer: () => Response | Promise<Response>,
 ): Promise<Response> {
 	try {

@@ -81,7 +81,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 		})
-		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com')
+		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
 		if (res.ok) {
 			expect(res.principal.id).toBe('p1')
@@ -100,7 +100,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 		})
-		const res = await resolveUserPrincipal(db, 'sub-1', 'new@x.com')
+		const res = await resolveUserPrincipal(db, 'sub-1', 'new@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
 		if (res.ok) {
 			expect(res.principal.id).toBe('p1')
@@ -113,14 +113,14 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 	test('disabled returning user → disabled', async () => {
 		const db = new FakeStore()
 		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-1', email: 'a@x.com', label: 'a@x.com', disabled_at: 123, activated_at: 0, created_at: 0 })
-		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com')
+		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com', 'req-resolve')
 		expect(res).toEqual({ ok: false, reason: 'disabled' })
 	})
 
 	test('2. claims an invited row by verified email and binds the sub', async () => {
 		const db = new FakeStore()
 		db.rows.push(invited('invitee@x.com'))
-		const res = await resolveUserPrincipal(db, 'sub-new', 'invitee@x.com')
+		const res = await resolveUserPrincipal(db, 'sub-new', 'invitee@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
 		if (res.ok) {
 			expect(res.principal.external_id).toBe('sub-new')
@@ -130,7 +130,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 
 	test('3. lazy-creates when neither sub nor email match', async () => {
 		const db = new FakeStore()
-		const res = await resolveUserPrincipal(db, 'sub-x', 'fresh@x.com')
+		const res = await resolveUserPrincipal(db, 'sub-x', 'fresh@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
 		if (res.ok) {
 			expect(res.principal.external_id).toBe('sub-x')
@@ -151,7 +151,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 		})
-		const res = await resolveUserPrincipal(db, 'sub-other', 'shared@x.com')
+		const res = await resolveUserPrincipal(db, 'sub-other', 'shared@x.com', 'req-resolve')
 		expect(res).toEqual({ ok: false, reason: 'unknown_principal' })
 		// No second user was created.
 		expect(db.rows).toHaveLength(1)

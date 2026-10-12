@@ -2,7 +2,7 @@ import { parseAccessClaims } from '@fabrika/auth-core'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
-import { createIamRepositories, type IamRepositories } from '../db'
+import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import { hashToken } from '../secret'
 import { oauthFixture, tokenBody } from './helpers/oauth'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
@@ -17,7 +17,7 @@ beforeAll(async () => {
 	if (postgresUrl === null) return
 	database = await createPostgres('iam_oauth')
 	pool = PostgresDatabase.connect(postgresUrl, { connection: { search_path: database.schema }, max: 4 })
-	repositories = createIamRepositories(pool)
+	repositories = createPostgresIamRepositories(pool)
 })
 afterEach(() => {
 	active?.restoreFetch()

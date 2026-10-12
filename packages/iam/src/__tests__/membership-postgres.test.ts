@@ -173,7 +173,7 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 	test('an inviter removed after the acceptance checks passed and before its write grants nothing, and the invitation stays open', async () => {
 		if (fixture === null) throw new Error('fixture')
 		const email = new CapturingEmail()
-		const removing = new InviterRemovedBeforeAcceptance(fixture.db, { lockInviterGrant: true })
+		const removing = new InviterRemovedBeforeAcceptance(fixture.db, { dialect: 'postgres' })
 		const f = await membershipFixture({ ...repositories, membership: removing }, { email })
 		fixtureSeq += 1
 		const owner = await f.person(`removed-owner-${fixtureSeq}`)

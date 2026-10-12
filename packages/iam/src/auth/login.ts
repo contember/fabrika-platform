@@ -10,7 +10,7 @@ import { authError, redirectHeaders } from './http'
 
 import { startOidc } from './oidc'
 import { type AuthEnv } from './oidc-flight'
-import { currentSession, issueSession } from './sessions'
+import { currentSession, issueSession, refuseLogin } from './sessions'
 
 export async function handleLogin(
 	request: Request,
@@ -67,9 +67,13 @@ async function handleLocalLogin(
 	redirect: string,
 	handoff: Handoff | null = null,
 ): Promise<Response> {
-	const resolved = await resolveUserPrincipal(services.repositories.principals, LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_EMAIL)
+	const resolved = await resolveUserPrincipal(services.repositories.principals, LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_EMAIL, requestId)
 	if (!resolved.ok) {
-		return authError(`local login refused (${resolved.reason})`, 403)
+		return refuseLogin(
+			services,
+			{ requestId, principalId: null, reason: 'local_login_refused' },
+			() => authError(`local login refused (${resolved.reason})`, 403),
+		)
 	}
 	return issueSession(request, services, ctx, {
 		principalId: resolved.principal.id,

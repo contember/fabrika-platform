@@ -39,6 +39,7 @@ import type {
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
 import { resolveCaller, verifiedTokenApp } from './auth'
+import { auditLabelOf } from './db'
 import { approveDeviceAuthorization, denyDeviceAuthorization, inspectDeviceAuthorization, listOwnDeviceAuthorizations } from './device'
 import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
@@ -286,7 +287,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				return await revokeKey(services, input, { id: revoker.id, permissions: revoker.permissions }, res.verifiedApp, {
 					requestId: input.requestId,
 					principalId: revoker.id,
-					principalLabel: revoker.label ?? revoker.id,
+					principalLabel: auditLabelOf({ id: revoker.id, type: revoker.type, label: revoker.label }),
 					app: res.verifiedApp,
 					action: 'iam.credential.revoke',
 					resourceType: 'credential',
@@ -328,7 +329,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				const { result } = await issueKey(services, input, { id: issuer.id, permissions: issuer.permissions }, app, (issued) => ({
 					requestId: input.requestId,
 					principalId: issuer.id,
-					principalLabel: issuer.label ?? issuer.id,
+					principalLabel: auditLabelOf({ id: issuer.id, type: issuer.type, label: issuer.label }),
 					app,
 					action: 'iam.credential.create',
 					resourceType: 'credential',

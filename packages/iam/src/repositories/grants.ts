@@ -1,5 +1,5 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
-import { type AuditEventInput, auditEventStatement } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './audit'
 import { firstRow, unixNow } from './sql'
 
 /** A grant written for a workload principal: its authority is its declared actions, never a grant. */
@@ -40,7 +40,10 @@ export interface CreateGrantInput {
 }
 
 export class GrantRepository {
-	constructor(protected readonly db: SqlDatabase) {}
+	constructor(
+		protected readonly db: SqlDatabase,
+		protected readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
+	) {}
 
 	/** Active (non-expired) grants for a principal, ALL apps (admin/effective view). */
 	async getActiveGrants(principalId: string): Promise<GrantRow[]> {
@@ -156,24 +159,21 @@ export class GrantRepository {
 			? `(principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL`
 			: `(principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL`
 		const id = uuidv7()
-		const insert = this.grantStatement(id, input, `ON CONFLICT ${target} DO NOTHING`)
-		if (audit === undefined) {
-			return insert.first<GrantRow>()
-		}
-		// The id is this call's own, so the row is recorded exactly when this statement inserted it.
-		const [created] = await this.db.batch<GrantRow>([
-			insert,
-			auditEventStatement(this.db, audit(id), { sql: 'EXISTS (SELECT 1 FROM grants WHERE id = ?)', binds: [id] }),
-		])
-		return created?.results[0] ?? null
+		const [created] = await this.writer.run<GrantRow>([this.grantChange(id, input, `ON CONFLICT ${target} DO NOTHING`)], audit?.(id))
+		return created ?? null
 	}
 
 	/** The INSERT of one grant with a caller-generated id, for a batch that also writes its principal and record. */
 	grantStatement(id: string, input: CreateGrantInput, onConflict: string = ''): SqlStatement {
-		return this.db
-			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${onConflict} RETURNING *`)
-			.bind(
+		const insert = this.grantChange(id, input, onConflict)
+		return this.db.prepare(insert.sql).bind(...insert.binds)
+	}
+
+	private grantChange(id: string, input: CreateGrantInput, onConflict: string): SqlChange {
+		return {
+			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${onConflict} RETURNING *`,
+			binds: [
 				id,
 				input.principalId,
 				input.app ?? null,
@@ -184,32 +184,22 @@ export class GrantRepository {
 				input.grantedBy ?? null,
 				input.expiresAt ?? null,
 				unixNow(),
-			)
+			],
+		}
 	}
 
-	/**
-	 * Delete a grant. With `audit`, the record is written only when the grant still exists, behind a row lock, so two
-	 * concurrent deletes record one removal.
-	 */
+	/** Delete a grant. `audit` is written exactly when this call deleted it. */
 	async deleteGrant(id: string, audit?: AuditEventInput): Promise<boolean> {
-		const remove = this.db.prepare('DELETE FROM grants WHERE id = ? RETURNING id').bind(id)
-		if (audit === undefined) {
-			return (await remove.all()).results.length > 0
-		}
-		const [, , removed] = await this.db.batch([
-			this.db.prepare('UPDATE grants SET created_at = created_at WHERE id = ?').bind(id),
-			auditEventStatement(this.db, audit, { sql: 'EXISTS (SELECT 1 FROM grants WHERE id = ?)', binds: [id] }),
-			remove,
-		])
-		return (removed?.results.length ?? 0) > 0
+		return (await this.writer.run([{ sql: 'DELETE FROM grants WHERE id = ? RETURNING id', binds: [id] }], audit)).length > 0
 	}
 
 	/** Delete all grants for a principal (revocation). */
 	async deleteGrantsForPrincipal(principalId: string): Promise<void> {
-		await this.deleteGrantsForPrincipalStatement(principalId).run()
+		await this.writer.run([this.deleteGrantsForPrincipalChange(principalId)], undefined)
 	}
 
-	deleteGrantsForPrincipalStatement(principalId: string): SqlStatement {
-		return this.db.prepare('DELETE FROM grants WHERE principal_id = ?').bind(principalId)
+	/** Every grant of a principal, as a change an audited revocation groups with others. */
+	deleteGrantsForPrincipalChange(principalId: string): SqlChange {
+		return { sql: 'DELETE FROM grants WHERE principal_id = ? RETURNING id', binds: [principalId] }
 	}
 }

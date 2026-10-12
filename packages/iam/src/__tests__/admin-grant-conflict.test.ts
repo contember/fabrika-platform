@@ -8,7 +8,7 @@
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
-import { createIamRepositories, type IamRepositories } from '../db'
+import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { adminTokenFor, createHarness, seedAppAction, TEST_SIGNING_KEYS } from './helpers/harness'
@@ -154,7 +154,7 @@ describe.skipIf(!hasPostgres)('grants.create conflicts on Postgres', () => {
 		if (fixture === null) throw new Error('the Postgres fixture is not up')
 		const db = fixture.db
 		return {
-			repositories: createIamRepositories(db),
+			repositories: createPostgresIamRepositories(db),
 			registerApp: async (app) => {
 				await db.prepare('INSERT INTO app_actions (app, action, description) VALUES (?, ?, NULL) ON CONFLICT DO NOTHING').bind(app, 'deploy.run').run()
 			},
