@@ -599,3 +599,11 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   never built, so `/` answered no file); the browser identity's notes grant replaced the witness grant
   (`packages/iam/src/node/browser-identity.ts`, one line). The scenario throws an uncaught error whose function name
   carries the run marker, because the SPA sets no SDK fingerprint and the grouping is by type and frames.
+- **WU20 review round 1.** Framework refusal messages can quote request data, so `QueryRefusedError`,
+  `CapabilityRefusedError` and `ServerFault` take a `reason` from a closed catalog (`QUERY_REFUSALS` in `@fabrika/db`,
+  `CAPABILITY_REFUSALS`, `SERVER_FAULTS`), and the log line prints the code, the reason and its fixed text only
+  (`query_refused: sql_read_only: sql: 'read' runs queries only; …`); the message stays on the error for the author's
+  own run. Every throw site in `@fabrika/db` (123) and the app (39) names a reason. Early proxy refusals carry the named
+  host's transport header; the Cloudflare Worker's initialization 503 the named host's treatment; an application's own
+  HSTS is dropped on `http` (Caddy deletes it only on `http`, because a named delete runs after the set). The followed
+  agent-change commit's SPA is built before Notes serves it; the SDK scenario passes after that follow, without a reset.
