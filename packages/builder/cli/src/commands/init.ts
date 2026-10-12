@@ -74,6 +74,12 @@ export async function cmdInit(argv: string[]): Promise<number> {
 				+ `${support.written.length} installed, ${support.updated.length} updated, `
 				+ `${support.skipped.length} current, ${support.preserved.length} user-edited preserved`,
 		)
+		if (support.appSkill?.from === 'builder') {
+			console.error(
+				`[fabrika] the application has not installed @fabrika/app: installed the builder's fabrika-app rules `
+					+ `(${support.appSkill.version}); run bun install, then fabrika builder init again for the pinned version`,
+			)
+		}
 	} else {
 		console.error(`[fabrika] agent support: source dir not found, skipped installation`)
 	}

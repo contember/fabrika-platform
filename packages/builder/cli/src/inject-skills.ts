@@ -1,4 +1,4 @@
-import { APP_AGENT_SKILL_NAME, readAppAgentSkill } from '@fabrika/app/agent-skill'
+import { APP_AGENT_SKILL_NAME, type AppAgentSkill, installedAppAgentSkill, readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname, join, relative, resolve } from 'path'
@@ -22,9 +22,16 @@ function isAgentHost(value: string): value is AgentHost {
 	return value === 'claude' || value === 'codex'
 }
 
+/** Where the installed `fabrika-app` skill came from: the application's own `@fabrika/app`, or the builder's. */
+export interface AppSkillSource {
+	from: 'application' | 'builder'
+	version: string
+}
+
 export interface InjectResult {
 	sourceDir: string | null
 	hosts: AgentHost[]
+	appSkill: AppSkillSource | null
 	written: string[]
 	updated: string[]
 	skipped: string[]
@@ -73,6 +80,7 @@ export function injectAgentSupport(repoRoot: string, opts: InjectOptions = {}): 
 	const result: InjectResult = {
 		sourceDir,
 		hosts,
+		appSkill: null,
 		written: [],
 		updated: [],
 		skipped: [],
@@ -81,7 +89,11 @@ export function injectAgentSupport(repoRoot: string, opts: InjectOptions = {}): 
 	if (!sourceDir) return result
 
 	const root = resolve(repoRoot)
-	const desired = renderDesiredFiles(sourceDir, hosts)
+	// The application's pinned `@fabrika/app` is the version its code compiles against; before `bun install` there is none.
+	const pinned = installedAppAgentSkill(root)
+	const appSkill = pinned ?? readAppAgentSkill()
+	result.appSkill = { from: pinned === null ? 'builder' : 'application', version: appSkill.version }
+	const desired = renderDesiredFiles(sourceDir, hosts, appSkill)
 	const manifestPath = join(root, MANIFEST_RELATIVE_PATH)
 	const manifest = readManifest(manifestPath)
 
@@ -101,11 +113,10 @@ function normalizeHosts(hosts?: AgentHost[]): AgentHost[] {
 	return [...new Set(selected)].sort()
 }
 
-function renderDesiredFiles(sourceDir: string, hosts: AgentHost[]): DesiredFile[] {
+function renderDesiredFiles(sourceDir: string, hosts: AgentHost[], appSkill: AppAgentSkill): DesiredFile[] {
 	const skill = readFileSync(join(sourceDir, 'SKILL.md'), 'utf-8')
 	const agents = readAgentSources(join(sourceDir, 'agents'))
 	const resources = readSkillResources(sourceDir)
-	const appSkill = readAppAgentSkill()
 	const files: DesiredFile[] = []
 
 	for (const host of hosts) {
@@ -116,7 +127,11 @@ function renderDesiredFiles(sourceDir: string, hosts: AgentHost[]): DesiredFile[
 			content: host === 'claude' ? renderClaudeSkill(skill) : skill,
 			host,
 		})
-		files.push({ relativePath: join(skillsDir, APP_AGENT_SKILL_NAME, 'SKILL.md'), content: appSkill.text, host })
+		const appSkillRoot = join(skillsDir, APP_AGENT_SKILL_NAME)
+		files.push({ relativePath: join(appSkillRoot, 'SKILL.md'), content: appSkill.text, host })
+		for (const reference of appSkill.references) {
+			files.push({ relativePath: join(appSkillRoot, reference.path), content: reference.text, host })
+		}
 		for (const resource of resources) {
 			if (host === 'claude' && resource.relativePath === join('agents', 'openai.yaml')) continue
 			files.push({

@@ -60,12 +60,31 @@ describe('dual-host installation', () => {
 		expect(Object.keys(record(manifest['files'])).length).toBe(result.written.length)
 	})
 
-	test('installs the application rules of @fabrika/app verbatim as a skill for each host', () => {
+	test("installs the builder's own fabrika-app skill, every reference file included, when the application has none", () => {
 		fixture = makeFixture()
-		injectAgentSupport(fixture.root)
-		const source = readAppAgentSkill().text
+		const result = injectAgentSupport(fixture.root)
+		const skill = readAppAgentSkill()
+		expect(result.appSkill).toEqual({ from: 'builder', version: skill.version })
 		for (const skillsDir of ['.claude/skills', '.agents/skills']) {
-			expect(readFileSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, 'SKILL.md'), 'utf-8')).toBe(source)
+			expect(readFileSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, 'SKILL.md'), 'utf-8')).toBe(skill.text)
+			for (const reference of skill.references) {
+				expect(readFileSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, reference.path), 'utf-8')).toBe(reference.text)
+			}
+		}
+	})
+
+	test('installs every file of the fabrika-app skill from the @fabrika/app the application pinned', () => {
+		fixture = makeFixture()
+		const pinned = '---\nname: fabrika-app\nversion: 9.8.7\ndescription: >\n  The pinned rules.\n---\n\n# Fabrika application rules\n'
+		const reference = '# references/endpoint.md — the pinned endpoints\n'
+		fixture.write('node_modules/@fabrika/app/skill/SKILL.md', pinned)
+		fixture.write('node_modules/@fabrika/app/skill/references/endpoint.md', reference)
+		const result = injectAgentSupport(fixture.root)
+		expect(result.appSkill).toEqual({ from: 'application', version: '9.8.7' })
+		for (const skillsDir of ['.claude/skills', '.agents/skills']) {
+			expect(readFileSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, 'SKILL.md'), 'utf-8')).toBe(pinned)
+			expect(readFileSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, 'references/endpoint.md'), 'utf-8')).toBe(reference)
+			expect(existsSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, 'references/jobs.md'))).toBe(false)
 		}
 	})
 
