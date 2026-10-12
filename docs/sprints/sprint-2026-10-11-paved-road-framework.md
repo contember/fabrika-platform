@@ -718,3 +718,58 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   the digest covers it and a baseline without it widens. (3) A generated member's id and label are the other side's
   markers, so `kit.leaked` catches a cross-org member in an answer. After the rebase onto WU20, the new throw sites
   name `facility_unbound`, `directory_unlocated` (new) and `iam_answer_mismatch` (a lookup answered for another id).
+- **WU11 — the CRM** (`examples/crm`, in `test:examples`): the dogfood surface in six slices (orgs, companies,
+  contacts, deals, tasks, activities), the attachments of a deal, the hourly `overdue` job and the SPA through the plugin
+  (`web/__tests__/bundle.test.ts`: no handler code, no server module). Added: `deals.reopen` and a closed-deal rule for
+  `move`, both under `getForUpdate` (seeds `api.deals.move: lead`, `api.deals.reopen: won`; two concurrent reopens give
+  200 and 409); `deals.source`; the deal owner as the column write action `deals.assign`; `orgs.members` on the
+  `crm.read` directory (`directory: 'labels'`) for the owner and assignee pickers; `deals.pipeline` on `sql: 'read'`
+  with `ctx.sql.scope(ctx.within, 'deals', 'd')` (every stage in order, empty ones included: an `unnest` of the stages
+  left-joined to the scoped deals). Lists are keyset pages; mutations answer `Saved`; `remove` takes `expectVersion`.
+  `fabrika-check`: 0 refusals, 0 hints. 154 tests on Postgres (131 generated, 23 authored).
+- **WU11 — counts** (raw `wc -l`, the baseline's file classes; dogfood at `204b8f6`):
+
+  | Class                                                                         | Baseline (10 files) |                 CRM (14 files) |
+  | ----------------------------------------------------------------------------- | ------------------: | -----------------------------: |
+  | shell + handlers + data access (contract, `app.ts`, `database.ts`, stores)    |                 440 |                            319 |
+  | — of it: vocabulary · schemas · contract · endpoints · logic · kit · `app.ts` |                   — | 30 · 24 · 29 · 221 · 4 · 5 · 6 |
+  | `src/db/tables.ts`                                                            |                  59 |                             51 |
+  | `fabrika.config.ts`                                                           |                  39 |                             29 |
+  | **hand-written server lines**                                                 |             **538** |                **399** (−26 %) |
+  | migrations                                                                    |                 115 |                            117 |
+  | authored tests (+ fixtures)                                                   |                 236 |                      349 (+ 2) |
+
+  Pass: 399 ≤ 400 with 30 RPC endpoints against the baseline's 25, and no file that only mirrors another (the
+  handler tree, `database.ts` and the stores are gone). 383 lines without comments and blank lines. The margin is thin:
+  the 400 needed cutting restating comments, one-line schemas through a shared `MaybeText`, and destructuring edit
+  inputs (`({ input: { expectVersion, ...contact } })`: a handler's input omits the access form's `from` field, so the
+  rest is the column set). The 7 list handlers repeat one 2-line page mapping (`items`/`next` through `fromRow`); a
+  `fromPage` beside `fromRow` would save 14 lines (not added: framework API and the skill, out of WU11).
+- **WU11 — bug found: the seed sampled a `date` as a full ISO timestamp** (`packages/db/src/testing.ts` `sampleOf`),
+  and the policy probe inserts it through the layer, which takes a day only as `YYYY-MM-DD` since WU13a: a table with a
+  required insertable `date` failed its generated insert case with a 500. Fixed in the seed; the CRM's `tasks.due_on`
+  is the witness.
+- **WU11 — deviation trial on the CRM.** Branch `wu/pr11-crm-deviation` (not for merge), commit pair `332170ab` →
+  `089ac8f3`: an `auditor` role (`crm.audit`, a global grant) with `admin.stageChanges` (`unscoped: {
+  deal_stage_changes: 'read' }`) and `admin.pipelines` (`sql: 'read'`, `unscoped: { deals: 'read' }`), and a migration
+  with a plpgsql `AFTER UPDATE OF stage` trigger on `deals` writing `deal_stage_changes`. Nothing refused: tsc clean,
+  `fabrika-check` 0/0, 162 tests. `readAccessSnapshot` + `classifyAccess` over the pair: `widening`, 11 lines, 5 of them
+  closer review — `api.admin.pipelines` declares raw SQL (`read`), declares table `deals` unscoped (`read`);
+  `api.admin.stageChanges` declares table `deal_stage_changes` unscoped (`read`); the migration declares function
+  `deals_record_stage_change` and trigger `deals.deals_record_stage_change`. `snapshotDeviations` of the head also names
+  `api.deals.pipeline`'s raw SQL, the base's one deviation.
+- **WU11 — `ctx.sql` without the declaration** (`sql: 'read'` dropped from `deals.pipeline`): tsc names the fix at the
+  line (`Unavailable<"ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site">`, and a
+  cascade of TS7006 in an authored test that reads the output's type); `fabrika-check` 0 refusals, 2 hints
+  `sql-undeclared … (allowed form: sql: 'read' in the options of 'pipeline')`; at runtime the site has no `ctx.sql`,
+  the call is a `TypeError`, the request a 500 (log `api.deals.pipeline: TypeError thrown`) and nothing reaches the
+  database. The refusal does not name the declaration at runtime; a named throw would be friendlier (not done).
+- **WU11 — the parked run on Notes.** The agent change fixture (`fixtures/source/notes-agent-change.patch`, re-pinned to
+  `3b293853`) gains `20261010090100_note_titles.sql`, a `BEFORE INSERT OR UPDATE OF title` trigger that trims a note's
+  title. On `local:up` the pinned commit deployed and was approved; the change parked on protected `prod` as run
+  `01a130d2-eb5b-…` with 7 widening lines, the function and the trigger marked "needs closer review" — agent-browser
+  screenshot `notes-parked-closer-review.png` (WU11 scratchpad, `wu11/`). `tests/browser/notes-agent-adds-endpoint-and-table.test.ts`
+  expects those lines now (not run: `test:browser`); `local-source-fixtures` tests pass (17, the deployable archive on Postgres).
+- **WU11 — the fresh-agent trial's inputs** are `examples/crm/TRIAL.md`: five groups (companies & contacts, deals,
+  tasks with the job, activities, orgs and people), a product owner's brief each, the starting copy (checked green for
+  groups A and B: 112 and 109 tests) and how a run is judged. Not run here (the integrator's part 3).

@@ -140,7 +140,8 @@ Notes example as its repository holds it, plus the entrypoint the build writes
 (`applicationFixtureSource`). The application repository has a second commit on top of
 that one, `agentChange`: an agent's change to Notes under the fabrika-app skill
 (`fixtures/source/notes-agent-change.patch`) — the endpoint `api.notes.rename`, the child
-table `note_labels` with its policy and migration, and the regenerated code and tests.
+table `note_labels` with its policy and migration, a migration that declares a trigger (database code, which the
+approval marks "needs closer review"), and the regenerated code and tests.
 `deployable.test.ts` checks both archives as a production build does: the checker, and
 on Postgres `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db
 test-isolation`. Preparation stores their manifests and archives
