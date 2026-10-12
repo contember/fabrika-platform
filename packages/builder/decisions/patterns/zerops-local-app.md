@@ -9,8 +9,8 @@ recommends: [tailwind, opice]
 conflicts: [single-worker-spa]
 status: wip
 sources:
-  - where: "examples/zerops-app/fabrika.contract.ts + src/app.ts + README.md in fabrika-platform"
-    read: "The contract's mounts, `implement` over the data layer, and the limits of the example's local run instructions."
+  - where: "examples/zerops-app/fabrika.contract.ts + src/notes/endpoints.ts + src/app.ts + README.md in fabrika-platform"
+    read: "The contract's mounts, `serve` over the data layer, the SPA build, and the limits of the example's local run instructions."
   - where: "docs/reference/application-runtime.md (Serving a contract, Testing a contract application) in fabrika-platform"
     read: "The generated entrypoint, the framework variables `boot` needs, `testKit` and the generated tests."
   - where: "docs/reference/local-development.md + packages/local-stack/CLAUDE.md in fabrika-platform"

@@ -4,3 +4,5 @@ fabrika.manifest.json
 *.local
 # The platform build writes the entrypoint; the local stack writes it before it starts Notes.
 /fabrika/entry.generated.ts
+# The SPA build writes it (`bun run build:web`).
+/dist/

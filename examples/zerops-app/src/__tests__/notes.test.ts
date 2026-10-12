@@ -52,12 +52,29 @@ if (postgres !== null) {
 			expect(await statusOf(reader.notes.create({ workspaceId: 'w1', title: 'No' }))).toBe(403)
 
 			expect(await statusOf(authorApi.notes.trash({ id, expectVersion: 2 }))).toBe(409)
-			expect(await authorApi.notes.trash({ id, expectVersion: 1 })).toEqual({ id })
-			expect(await statusOf(authorApi.notes.remove({ id }))).toBe(403)
+			expect(await authorApi.notes.trash({ id, expectVersion: 1 })).toEqual({ id, version: 2 })
+			expect(await statusOf(authorApi.notes.remove({ id, expectVersion: 2 }))).toBe(403)
 
 			const editor = createClient(contract, 'api', { fetch: kit.browser(inW1('editor')) })
-			expect(await editor.notes.remove({ id })).toEqual({ id })
+			expect(await editor.notes.remove({ id, expectVersion: 2 })).toEqual({ id })
 			expect(await statusOf(editor.notes.get({ id }))).toBe(404)
+		})
+
+		test('only a note in the trash is restored', async () => {
+			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Kept' })
+			expect(await statusOf(authorApi.notes.restore({ id, expectVersion: 1 }))).toBe(409)
+			await authorApi.notes.trash({ id, expectVersion: 1 })
+			expect(await authorApi.notes.restore({ id, expectVersion: 2 })).toEqual({ id, version: 3 })
+			expect((await authorApi.notes.get({ id })).trashed).toBe(false)
+		})
+
+		test('the nightly purge deletes the notes in the trash and keeps the others', async () => {
+			const kept = await authorApi.notes.create({ workspaceId: 'w1', title: 'Purge keeps' })
+			const trashed = await authorApi.notes.create({ workspaceId: 'w1', title: 'Purge deletes' })
+			await authorApi.notes.trash({ id: trashed.id, expectVersion: 1 })
+			expect(await kit.runJob('purge')).toEqual({ status: 'succeeded', attempts: 1 })
+			expect(await statusOf(authorApi.notes.get({ id: trashed.id }))).toBe(404)
+			expect((await authorApi.notes.get({ id: kept.id })).title).toBe('Purge keeps')
 		})
 
 		test('a script with a key of its own workspace lists; without a credential the proxy sends the caller to sign in', async () => {

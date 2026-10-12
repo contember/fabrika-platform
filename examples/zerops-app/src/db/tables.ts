@@ -4,7 +4,7 @@ import { columns } from './schema.generated'
 
 export const tables = defineTables(vocabulary, columns)({
 	notes: {
-		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		scope: { dimension: 'note' },
 		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
 		insert: ['title', 'trashed'],
 		update: ['trashed'],

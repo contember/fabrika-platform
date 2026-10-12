@@ -4,9 +4,13 @@
 # `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the
 # crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.
 #
-# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects.
+# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and
+# write `dist/web`, which the contract's `site` mount serves.
 
 zerops:
   - setup: notesapi
     build:
       base: alpine/bun@1.3
+      buildCommands:
+        - bun install --frozen-lockfile
+        - bun run build:web

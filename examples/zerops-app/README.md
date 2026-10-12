@@ -12,21 +12,27 @@ directly.
 
 ## What is where
 
-| File                                                         | What it is                                                                                        |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `fabrika.contract.ts`                                        | Who may call what: dimensions, actions, roles, the `/api` procedures, `attachments`, `purge`.     |
-| `src/db/tables.ts`                                           | The table policy of `notes`: its scope, the action of each operation, the writable columns.       |
-| `db/migrations/`                                             | Plain SQL of the application's schema, the file collection's table included.                      |
-| `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                         |
-| `src/db/database.ts`, `src/db/stores/`                       | The data layer, `scoped(tables)`, and the store every handler and the job reach rows through.     |
-| `src/app.ts`                                                 | `implement(contract, …)`: one handler per procedure, and the `purge` job.                         |
-| `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start.                 |
-| `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin.                  |
-| `fabrika.config.ts`                                          | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table. |
-| `fabrika.cheap.config.ts`                                    | The cheap tier: the bucket and the runtime, on the namespace's shared PostgreSQL.                 |
-| `zerops.yaml`                                                | Only the build base. The platform generates the rest of the setup (ADR-0043).                     |
+| File                                                         | What it is                                                                                         |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `src/vocabulary.ts`                                          | The authorization vocabulary: dimensions, actions, roles.                                          |
+| `src/db/tables.ts`                                           | The table policy of `notes`: its scope, the action of each operation, the writable columns.        |
+| `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit every endpoint is built with.                             |
+| `src/schemas.ts`                                             | The inputs, outputs and limits the shell and the SPA share.                                        |
+| `src/notes/endpoints.ts`                                     | The notes slice: each endpoint with its `.handle(…)`, and the `purge` job.                         |
+| `fabrika.contract.ts`                                        | Who may call what: the `/api` mount, the SPA, `attachments`, `purge`, the health check.            |
+| `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`, which the generated entrypoint boots.             |
+| `db/migrations/`                                             | Plain SQL of the application's schema, the file collection's table included.                       |
+| `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                          |
+| `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start. Never edited.    |
+| `src/__tests__/endpoint-access.fixtures.ts`                  | The seed the generated tests need: only a note in the trash is restored.                           |
+| `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin; the job runs too. |
+| `web/`, `build-web.ts`                                       | The SPA and its build through `@fabrika/check/bun-plugin`, which leaves the handlers out.          |
+| `fabrika.config.ts`                                          | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table.  |
+| `fabrika.cheap.config.ts`                                    | The cheap tier: the bucket and the runtime, on the namespace's shared PostgreSQL.                  |
+| `zerops.yaml`                                                | The build base and the SPA build. The platform generates the rest of the setup (ADR-0043).         |
 
-`fabrika/entry.generated.ts` is not committed: the platform build writes it, and so does the local stack.
+`fabrika/entry.generated.ts` and `dist/` are not committed: the platform build writes them, and the local stack writes
+the entrypoint.
 
 ## How a deploy runs it
 
@@ -36,8 +42,8 @@ The data layer scopes every row operation by the capability the endpoint's acces
 contract, the table policies and the migrations at the commit; a change that widens access on `prod` waits for a person
 to approve it in the console.
 
-On Zerops the platform owns the setup. The build installs, runs `bun test`, writes the entrypoint, runs `fabrika-check`
-and the type check. The start script runs `fabrika db migrate`, `fabrika db codegen --verify` and
+On Zerops the platform owns the setup. The build runs the SPA build (`bun run build:web`), then installs, runs
+`bun test`, writes the entrypoint, runs `fabrika-check` and the type check. The start script runs `fabrika db migrate`, `fabrika db codegen --verify` and
 `fabrika db test-isolation`, then the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
@@ -54,7 +60,8 @@ bun run typecheck
 bunx fabrika-check .
 ```
 
-Without `FABRIKA_TEST_POSTGRES_URL` every database test skips, and a skip proves nothing. `--isolate` is required
+Without `FABRIKA_TEST_POSTGRES_URL` every database test skips, and a skip proves nothing. `bun run build:web` writes
+the SPA to `dist/web`. `--isolate` is required
 because the generated endpoint access test and `notes.test.ts` both boot the application, and its data layer binds
 once per process.
 
@@ -64,7 +71,7 @@ After a change to the contract or the table policies:
 fabrika db new <slug>                                   # a new migration; never edit a committed one
 FABRIKA_APP_ID=notes FABRIKA_APP_DATABASE_URL=postgres://… fabrika db migrate
 FABRIKA_APP_ID=notes FABRIKA_APP_DATABASE_URL=postgres://… fabrika db codegen
-fabrika db test-scaffold
+fabrika db test-scaffold                                # a precondition's state goes to seeds in endpoint-access.fixtures.ts
 ```
 
 In fabrika-platform, `bun run local:smoke` deploys this directory through Control and the Zerops emulator and serves
@@ -86,7 +93,8 @@ git commit -m "…" && git push origin main
 ```
 
 `bun.lock` here pins the packages of the last release that the mirror installed. The example now needs `@fabrika/db`,
-`@fabrika/proxy-core` and `@fabrika/platform` of a release that carries the contract framework, so export it only
+`@fabrika/proxy-core`, `@fabrika/platform` and `@fabrika/check` (the SPA build's plugin) of a release that carries the
+staged kit, and `kysely` (the generated schema's types), so export it only
 after that release, with the pins and the lockfile refreshed in the mirror as above. A fresh export must pass
 `bun install --frozen-lockfile`, `bun run typecheck` and `bun run test` from its repository root. Do not edit the
 mirror directly, and do not use `git subtree split`: it replays the monorepo's history into a public repository.

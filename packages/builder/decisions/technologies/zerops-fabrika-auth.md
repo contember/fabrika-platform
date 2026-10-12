@@ -12,8 +12,8 @@ status: wip
 sources:
   - where: "packages/app/skill/SKILL.md in fabrika-platform (the `fabrika-app` skill)"
     read: "The application rules: contract first, access forms, table policies, what the checker refuses, what is not built."
-  - where: "examples/zerops-app/fabrika.contract.ts + src/db/tables.ts + src/app.ts in fabrika-platform"
-    read: "A worked contract: the vocabulary, the `/api` mount, the access forms and the handlers behind them."
+  - where: "examples/zerops-app/src/vocabulary.ts + src/db/tables.ts + src/notes/endpoints.ts + fabrika.contract.ts in fabrika-platform"
+    read: "A worked contract: the vocabulary, the `/api` mount, the access forms and the handlers beside them."
   - where: "docs/reference/application-runtime.md (Contracts, Serving a contract) in fabrika-platform"
     read: "What the proxy and `boot` check per request, in order, and what `boot` refuses to start with."
   - where: "docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md + 0023-one-session-per-host.md in fabrika-platform"

@@ -914,3 +914,36 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   the published snapshot's; `get_deployment` answers `deviations` (the run's closer-review lines, parked or not); the
   builder daemon defaults the field to `[]` for an older Control. Browser check skipped: the dashboard dev server needs
   a running Control; the components are witnessed by `packages/dashboard/src/__tests__/deviations.test.ts`.
+- **WU8 — the application surface.** `@fabrika/app/implement` no longer exports `implement`; the mirrored tree stays
+  in `implement/implement.ts` as the framework tests' entry (relative imports). `scoped(tables)` answers
+  `ScopedDatabase<DB, P>` = the policies and a type-only brand; `defineStore(layer, table, build)` /
+  `defineChildStore` are free functions exported from `@fabrika/db/testing` only, and `DimensionTable`/`ChildTable`
+  left the root. Runtime messages name `serve(contract, { database })` and `defineApp(…, { imports })`.
+- **WU8 — SIGNATURE ADDITION: a kit without tables.** `examples/app` (Cloudflare, no data layer) could not leave
+  `implement`, so `defineApp(vocabulary)` is a third overload (`NoTablesIndex`: `ctx.db` is an `Unavailable`), served
+  with `serve(contract, { database: null })` (and only then null, `isTableless`); `boot` serves its procedures without
+  `ctx.db` and refuses a site that declares `sql`. The reader accepts the one-argument call. A tableless kit with
+  imports is not built (no overload); `connect-shop` stays a framework fixture and its checker test reads its shell.
+- **WU8 — the generated tests (with the ergonomics probe's F1, F10, F11, F12).** `endpoint-access.fixtures.ts` takes
+  `export const seeds = { '<endpoint id>': { <column>: <value> } }` beside `fixtures`: the state `seedWorlds(tables,
+  table, values)` writes into both rows of the table that owns the endpoint's dimension (a placing column is
+  refused). `leaked` answers `{ answered: true, leaked }` for a 2xx or a 4xx other than 401/403/404 (a precondition's
+  409), `denied` stays exact. New cases: `own` (a caller with only a write action, or a link holder bound with
+  `testCaller(grants, { kind: 'link', link: { mount, chain } })`, reaches its own object, 200) and a leak case for an
+  `in` site that declares `sql` (every table that lies in the dimension, seeded per scope). `unscoped` drops the leak
+  case and keeps the denial. `testKit(…).runJob(name)` runs a cron job; `testDatabase` now applies the framework's
+  tables first, as `fabrika db migrate` does (jobs and webhooks need them). The root `dprint.json` excludes the
+  generated tests of `examples/*` and `packages/cli`'s fixtures (F12: the simpler of the two).
+- **WU8 — the Zerops example.** In WU1's layout: `src/app-kit.ts`, `src/schemas.ts`, `src/notes/endpoints.ts` (six
+  endpoints, `restore` with `getForUpdate` and a seed, the `purge` job in its fenced transaction), `src/app.ts` =
+  `serve(…)`, an SPA (`web/`, `build-web.ts` through the plugin, `c.spa('/')`, `zerops.yaml` `buildCommands`), `kysely`
+  and `@fabrika/check` in `package.json` (F10a). `remove` takes `expectVersion` and mutations answer `Saved`. Counts
+  (hand-written server files: contract, configs, `src/` without tests and generated files): before 8 files, 230 lines
+  (136 in 6 files without the two provider configs); after 9 files, 220 lines (126 in 7 files), with one endpoint and
+  the SPA mount more. `fabrika-check`: 0 refusals, 0 hints. The mirror's `bun.lock` is not refreshed (needs a release).
+- **WU8 — outside the listed touch points.** `examples/app` (above), `packages/local-stack/src/local-source-fixtures/generate.ts`
+  (`dist` is not committed), `packages/platform-artifacts`' example endpoint list, `packages/builder` docs that named
+  `implement`, `packages/cli/src/connect.ts`'s hint. The agent change patch is regenerated in the new form (rename +
+  `note_labels`, codegen from a real migrate) and the fixtures re-pinned.
+- **WU8 → WU10.** `packages/app/skill/SKILL.md` (and so `AGENTS.md`) still describe `implement`, `src/db/database.ts`,
+  `defineStore` and `connect` on `implement` (lines 13, 68–69, 93, 112): prose, no code block, so left for WU10.

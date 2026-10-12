@@ -32,7 +32,7 @@ Read installed contracts and the linked public examples before scaffolding.
 
 - `zerops-platform` owns provider configuration and private runtime services.
 - `zerops-fabrika-auth` supplies the contract (`fabrika.contract.ts`), which the
-  proxy enforces as an endpoint table and the framework serves through `implement`.
+  proxy enforces as an endpoint table and the framework serves through `serve`.
 - `zerops-local-app` composes the generated Bun entrypoint, the SPA mount and the
   local IAM/proxy loop.
 - `zerops-control-deploy` defines the human/admin/agent deployment boundary.
@@ -68,9 +68,9 @@ or choose a replacement destination when prerequisites are missing.
 5. Report the actual local preview URL and checks. Production deployment follows
    `zerops-control-deploy`; a passing local test is not a successful remote run.
 
-The public notes example (`fabrika.contract.ts`, `src/db/tables.ts`,
-`db/migrations/`, `src/app.ts` and its generated tests, plus an `attachments` file
-collection and a `purge` job) supplies the backend/config reference, not a
-ready-made SPA or arbitrary-project dev launcher. Its `AGENTS.md` carries the
+The public notes example (`src/vocabulary.ts`, `src/db/tables.ts`, the `src/notes/` slice,
+`fabrika.contract.ts`, `db/migrations/`, `src/app.ts` and its generated tests, plus an
+`attachments` file collection, a `purge` job and a minimal SPA) supplies the backend/config
+reference, not an arbitrary-project dev launcher. Its `AGENTS.md` carries the
 `fabrika-app` rules. Scaffold and verify the local composition
 described in `zerops-local-app` before claiming the application runs locally.

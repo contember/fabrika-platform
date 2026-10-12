@@ -12,7 +12,7 @@ export const fixtureInputs = fileURLToPath(new URL('../../fixtures/source/', imp
 export const applicationFixtureRoot = fileURLToPath(new URL('../../../../examples/zerops-app/', import.meta.url))
 
 /** What the example's `.gitignore` keeps out of its repository; the generated entry is added as the build writes it. */
-const UNCOMMITTED = new Set(['node_modules', 'fabrika', '.env', 'fabrika.manifest.json'])
+const UNCOMMITTED = new Set(['node_modules', 'fabrika', 'dist', '.env', 'fabrika.manifest.json'])
 
 /**
  * The complete application commit: every file of the example an author pushes, and the entrypoint the platform build

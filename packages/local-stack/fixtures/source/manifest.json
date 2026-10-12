@@ -29,12 +29,12 @@
 		"archiveSha256": "2040d69c8da442a88817c841359ece578e36fd25e1421cb4fdc7f781a95c9858"
 	},
 	"application": {
-		"commitSha": "3188100d059773e2601e8babf6118b98530854c3",
-		"treeSha": "2b47ce178eafd928a8a82d896805b4938b840846",
+		"commitSha": "7085541e682c8a0ce01c0c8210b5e6f60c52ce25",
+		"treeSha": "02eb371f428948bff4ef4876e216b3fdb3a7a5f4",
 		"tree": [
 			{
 				"path": ".gitignore",
-				"sha": "29bc94e4ee8b6d464f9bceba4d0aa6a4bbf97ca1",
+				"sha": "40c7dbb0a54633dfe5e86caaffd096c0ddf71624",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -46,7 +46,13 @@
 			},
 			{
 				"path": "README.md",
-				"sha": "22ea5c346f22422859f415b9f18514ffe6b2083c",
+				"sha": "bd71089ee7831981c2ab3ba1959b8018aea39d89",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "build-web.ts",
+				"sha": "550b8e8079bde4a9e23fea17f3abaca208bcf4d7",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -88,7 +94,7 @@
 			},
 			{
 				"path": "fabrika.contract.ts",
-				"sha": "85e2cca55495b45fb67119c90791b10517262677",
+				"sha": "e38da09509eb4109da2b04fa8b41a9d81eea911b",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -106,43 +112,55 @@
 			},
 			{
 				"path": "package.json",
-				"sha": "a59dfa4826f0da4f580f908279c43d166be9e87f",
+				"sha": "35fd43dc6958c1d595e7a87f57e88cd2279877b4",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src",
-				"sha": "b0a4b2afc2ad5f69f0bc543ce81f9b08bd65737d",
+				"sha": "41383377cd70349d10e6d75e7f4331c711651614",
 				"type": "tree",
 				"mode": "040000"
 			},
 			{
 				"path": "src/__tests__",
-				"sha": "08d9d598bb95e75110a446b58a4d73cd2169c13e",
+				"sha": "86ccd8261dc969b5da1265526993580bfcba9c59",
 				"type": "tree",
 				"mode": "040000"
 			},
 			{
+				"path": "src/__tests__/endpoint-access.fixtures.ts",
+				"sha": "8c5ded6aeb42665d4585d913a60967095250dde2",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
 				"path": "src/__tests__/endpoint-access.test.ts",
-				"sha": "e13b793e1eb719439c04a1fdba865e735a619823",
+				"sha": "4b7d6cc56c43ddc64c0299909fc8900854a0f770",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src/__tests__/notes.test.ts",
-				"sha": "3624e532cf8fc9a553e4deee0ef3dd85442c4ed7",
+				"sha": "cdd260d12f5d47c1c9b55c4a18fc909d4cd33710",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "src/app-kit.ts",
+				"sha": "28fa3a72622e5004fa0c56564ce834e3d48b1fd2",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src/app.ts",
-				"sha": "d8a1e43242508eb77be799866bfd3b48dd5d0d5a",
+				"sha": "0b6b599b2af3f69a2886a4bfae3f90814f5a53c2",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src/db",
-				"sha": "7b317a253962de90782d426ef68a22e2128e13de",
+				"sha": "75d0ee7d46a1fffabf4529a6242fc3dd40cde511",
 				"type": "tree",
 				"mode": "040000"
 			},
@@ -159,32 +177,32 @@
 				"mode": "100644"
 			},
 			{
-				"path": "src/db/database.ts",
-				"sha": "1320058966071852d7017a8c82762d0d6b9e9128",
-				"type": "blob",
-				"mode": "100644"
-			},
-			{
 				"path": "src/db/schema.generated.ts",
 				"sha": "67db8727c05442fe74eed82396592f127d9bfe47",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
-				"path": "src/db/stores",
-				"sha": "6f9eba21c6c65bb4da8d9a879354c39c72e9f838",
-				"type": "tree",
-				"mode": "040000"
-			},
-			{
-				"path": "src/db/stores/notes.ts",
-				"sha": "b14b0600a2ff95f91b5c41567445fb5bae65f8e0",
+				"path": "src/db/tables.ts",
+				"sha": "8680d6a42041c6c048ed5795344d515ebd107b31",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
-				"path": "src/db/tables.ts",
-				"sha": "fa8358e85fdac4eb709ffcb82f13bb0ab90805d6",
+				"path": "src/notes",
+				"sha": "f0d21428a6764917eb290893c3336195e908b062",
+				"type": "tree",
+				"mode": "040000"
+			},
+			{
+				"path": "src/notes/endpoints.ts",
+				"sha": "50f6345677cd625831881f803e12ab8f5c35f009",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "src/schemas.ts",
+				"sha": "cc13ac339c665e9c9a46f3e7ea71650bd46100cc",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -196,29 +214,59 @@
 			},
 			{
 				"path": "tsconfig.json",
-				"sha": "5b482827ad1945239bf05a8769f48651a7521cd4",
+				"sha": "83a9313b85e73f0a9a2702430c7b712cd4e65023",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "web",
+				"sha": "38d297fb0697653dc0a536a55364a8d0e58bb7f4",
+				"type": "tree",
+				"mode": "040000"
+			},
+			{
+				"path": "web/__tests__",
+				"sha": "9916378b1b855c495f39493679e841e1e8d33dab",
+				"type": "tree",
+				"mode": "040000"
+			},
+			{
+				"path": "web/__tests__/bundle.test.ts",
+				"sha": "a9187eb0e22c61d3e85c9236bcbc4c00f1102073",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "web/index.html",
+				"sha": "109f0f5fab683051d3914f6864538532175d07b9",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "web/main.ts",
+				"sha": "62bef21b7739e706a15115d37a8ac5430cd445d3",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "zerops.yaml",
-				"sha": "cdcd0f5fbe7ef014f9b5bdacf8e67cbff2345551",
+				"sha": "594d0d3d12d8a9901c42d6a61b5a8dd24bdfa3bc",
 				"type": "blob",
 				"mode": "100644"
 			}
 		],
-		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n",
-		"descriptorSha256": "7cd30b94055b3b17e757ee55c1ce468e907f7d8f647ebbc34985471b15ea15fe",
-		"archiveBytes": 19544,
-		"archiveSha256": "30c6f932baf3ceb99356dd9e0070e5fcad4ae72ba90012834749e8cc8539a07f"
+		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
+		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
+		"archiveBytes": 21939,
+		"archiveSha256": "9969fe3aa23da62bdb1b35b01a95b1fb8897b326581f0c4d34ac1d9199625ba2"
 	},
 	"agentChange": {
-		"commitSha": "6d1a9332b247c473938a518607366d2d29b5ddb7",
-		"treeSha": "5fbdbf4292e71d940bc5cb84d11768bb00b91c37",
+		"commitSha": "c0cc16d14103a22d0072689c7d5f0abb2da812e9",
+		"treeSha": "eb8548a2e13c991705e1bce40096c2fdb4aea5b0",
 		"tree": [
 			{
 				"path": ".gitignore",
-				"sha": "29bc94e4ee8b6d464f9bceba4d0aa6a4bbf97ca1",
+				"sha": "40c7dbb0a54633dfe5e86caaffd096c0ddf71624",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -230,7 +278,13 @@
 			},
 			{
 				"path": "README.md",
-				"sha": "22ea5c346f22422859f415b9f18514ffe6b2083c",
+				"sha": "bd71089ee7831981c2ab3ba1959b8018aea39d89",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "build-web.ts",
+				"sha": "550b8e8079bde4a9e23fea17f3abaca208bcf4d7",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -278,7 +332,7 @@
 			},
 			{
 				"path": "fabrika.contract.ts",
-				"sha": "f4897dba913a53957c3e7a33919565d333cc9a54",
+				"sha": "e38da09509eb4109da2b04fa8b41a9d81eea911b",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -296,43 +350,55 @@
 			},
 			{
 				"path": "package.json",
-				"sha": "a59dfa4826f0da4f580f908279c43d166be9e87f",
+				"sha": "35fd43dc6958c1d595e7a87f57e88cd2279877b4",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src",
-				"sha": "849952ea7705c802ab12438c6f8508d8923e222d",
+				"sha": "794b86d9fc75190b6766fa45005e36d12ab2a216",
 				"type": "tree",
 				"mode": "040000"
 			},
 			{
 				"path": "src/__tests__",
-				"sha": "d59575b0fff1163144200dacc428aba033aaf21a",
+				"sha": "469945d716cda3c76d8df3355d64e9402a0870df",
 				"type": "tree",
 				"mode": "040000"
 			},
 			{
+				"path": "src/__tests__/endpoint-access.fixtures.ts",
+				"sha": "8c5ded6aeb42665d4585d913a60967095250dde2",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
 				"path": "src/__tests__/endpoint-access.test.ts",
-				"sha": "d70a3ace154e1613e6627f48e3755717cb9eaa33",
+				"sha": "25b22f6896fa8c92b25b90799ac57107581cfa46",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src/__tests__/notes.test.ts",
-				"sha": "3624e532cf8fc9a553e4deee0ef3dd85442c4ed7",
+				"sha": "cdd260d12f5d47c1c9b55c4a18fc909d4cd33710",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "src/app-kit.ts",
+				"sha": "28fa3a72622e5004fa0c56564ce834e3d48b1fd2",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src/app.ts",
-				"sha": "41c4a9da67245246e50ade1333af2f4591e07c19",
+				"sha": "0b6b599b2af3f69a2886a4bfae3f90814f5a53c2",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "src/db",
-				"sha": "c01c166aa519cb25989da75446e4de0c53f48507",
+				"sha": "28200d72eb58403a152cbefd02be2e0895a1a6a7",
 				"type": "tree",
 				"mode": "040000"
 			},
@@ -355,32 +421,32 @@
 				"mode": "100644"
 			},
 			{
-				"path": "src/db/database.ts",
-				"sha": "1320058966071852d7017a8c82762d0d6b9e9128",
-				"type": "blob",
-				"mode": "100644"
-			},
-			{
 				"path": "src/db/schema.generated.ts",
 				"sha": "3233d5ffa391b78f596174a96246b97c9b6b9087",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
-				"path": "src/db/stores",
-				"sha": "42f5fc1642e4a80950b441531d3cc364a4d1fbf9",
-				"type": "tree",
-				"mode": "040000"
-			},
-			{
-				"path": "src/db/stores/notes.ts",
-				"sha": "47b8d2a92c51b042c328b9f33ed360990f991767",
+				"path": "src/db/tables.ts",
+				"sha": "23b0926f67abc59ebb2100109807e5f1fec5be1f",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
-				"path": "src/db/tables.ts",
-				"sha": "77f5155cd0a31cc4682932a8ef17da6f246a3603",
+				"path": "src/notes",
+				"sha": "001e3f5b916ae36a78e099a111c05495153959fc",
+				"type": "tree",
+				"mode": "040000"
+			},
+			{
+				"path": "src/notes/endpoints.ts",
+				"sha": "7f7588b97d02a82b090b59629a6ee6f4218a5378",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "src/schemas.ts",
+				"sha": "bcfd4c1f3f7ce5bee4788cd68c681df1878ff2ea",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -392,20 +458,50 @@
 			},
 			{
 				"path": "tsconfig.json",
-				"sha": "5b482827ad1945239bf05a8769f48651a7521cd4",
+				"sha": "83a9313b85e73f0a9a2702430c7b712cd4e65023",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "web",
+				"sha": "38d297fb0697653dc0a536a55364a8d0e58bb7f4",
+				"type": "tree",
+				"mode": "040000"
+			},
+			{
+				"path": "web/__tests__",
+				"sha": "9916378b1b855c495f39493679e841e1e8d33dab",
+				"type": "tree",
+				"mode": "040000"
+			},
+			{
+				"path": "web/__tests__/bundle.test.ts",
+				"sha": "a9187eb0e22c61d3e85c9236bcbc4c00f1102073",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "web/index.html",
+				"sha": "109f0f5fab683051d3914f6864538532175d07b9",
+				"type": "blob",
+				"mode": "100644"
+			},
+			{
+				"path": "web/main.ts",
+				"sha": "62bef21b7739e706a15115d37a8ac5430cd445d3",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "zerops.yaml",
-				"sha": "cdcd0f5fbe7ef014f9b5bdacf8e67cbff2345551",
+				"sha": "594d0d3d12d8a9901c42d6a61b5a8dd24bdfa3bc",
 				"type": "blob",
 				"mode": "100644"
 			}
 		],
-		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n",
-		"descriptorSha256": "7cd30b94055b3b17e757ee55c1ce468e907f7d8f647ebbc34985471b15ea15fe",
-		"archiveBytes": 20168,
-		"archiveSha256": "6edc4ad057c6ac66c86dac7bacb6b36d7994393867c8ecdb52a444a8c10d9155"
+		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
+		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
+		"archiveBytes": 22528,
+		"archiveSha256": "b132362e099f89ed959fad4a8b629d6a64cb423c852e66a3b71b99c43c55e1ae"
 	}
 }

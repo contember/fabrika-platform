@@ -4,17 +4,20 @@
 	"type": "module",
 	"scripts": {
 		"build:manifest": "fabrika app build --env=prod",
+		"build:web": "bun build-web.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test --isolate"
 	},
 	"dependencies": {
-		"zod": "^3.25.76",
 		"@fabrika/app": "^0.0.4",
 		"@fabrika/db": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",
-		"@fabrika/proxy-core": "^0.0.4"
+		"@fabrika/proxy-core": "^0.0.4",
+		"kysely": "0.29.6",
+		"zod": "^3.25.76"
 	},
 	"devDependencies": {
+		"@fabrika/check": "^0.0.4",
 		"@fabrika/cli": "^0.0.4",
 		"@fabrika/platform": "^0.0.4",
 		"@types/bun": "latest",
