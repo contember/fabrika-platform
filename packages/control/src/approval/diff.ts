@@ -106,6 +106,9 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		removed: (name) => `Role \`${name}\` is removed`,
 		changed: roleChanges,
 	})
+	for (const [name, role] of Object.entries(candidate.roles)) {
+		if (!Object.hasOwn(baseline.roles, name)) changes.add(...externalChange(name, undefined, role.external))
+	}
 	compareKeyed(changes, record(baseline.mounts), record(candidate.mounts), {
 		added: (name, mount) => `New ${mount.kind} mount \`${name}\``,
 		removed: (name) => `Mount \`${name}\` is removed`,
@@ -655,16 +658,27 @@ function endpointMap(rows: readonly EndpointRow[]): Map<string, EndpointRow> {
 
 function roleChanges(name: string, from: RoleArtifact, to: RoleArtifact): AccessChange[] {
 	const role = `Role \`${name}\``
+	const external = externalChange(name, from.external, to.external)
 	if (from.member === null || to.member === null || from.member.scope !== to.member.scope) {
 		return [
 			...setChanges(role, from.grants, to.grants, 'gains', 'loses'),
 			...valueChange(`${role} membership`, from.member, to.member),
+			...external,
 		]
 	}
 	return [
 		...setChanges(role, from.grants, to.grants, 'gains', 'loses'),
 		...setChanges(role, from.member.assignableBy, to.member.assignableBy, 'can be assigned by', 'can no longer be assigned by'),
+		...external,
 	]
+}
+
+/** An external role may be held by a person from outside the organization (ADR-0051). */
+function externalChange(name: string, before: true | undefined, after: true | undefined): AccessChange[] {
+	if (before === after) return []
+	return after === true
+		? [widening(`Role \`${name}\` may be held by external principals, people from outside the organization`)]
+		: [removal(`Role \`${name}\` may no longer be held by external principals`)]
 }
 
 function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollectionArtifact): AccessChange[] {

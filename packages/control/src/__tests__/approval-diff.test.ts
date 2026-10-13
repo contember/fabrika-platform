@@ -219,6 +219,18 @@ describe('classifyAccess', () => {
 		expect(lines(listed, snapshot())).toContain('Endpoint `api.remove` no longer reads the members of `workspace`')
 	})
 
+	test('a role that admits external principals widens; losing it removes; a new external role names it', () => {
+		const role = `editor: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } }`
+		const external = snapshot(edited(role, role.replace(' } }', ' }, external: true }')))
+		const line = 'Role `editor` may be held by external principals, people from outside the organization'
+		expect(classifyAccess(snapshot(), external)).toEqual({ outcome: 'widening', changes: [{ widens: true, line }] })
+		expect(classifyAccess(external, snapshot())).toEqual({
+			outcome: 'removal',
+			changes: [{ widens: false, line: 'Role `editor` may no longer be held by external principals' }],
+		})
+		expect(classifyAccess(EMPTY_SNAPSHOT, external).changes).toContainEqual({ widens: true, line })
+	})
+
 	test('a membership role that loses its scope widens: it could then be granted globally', () => {
 		const candidate = snapshot(
 			edited(
