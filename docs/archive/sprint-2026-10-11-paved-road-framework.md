@@ -1005,3 +1005,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   migration, its generated columns and both literal copies of its policies), and `TestAuthority` mints an `app`
   capability. `names` moved from `orm.ts` to `policy.ts` as `namesAction`, shared by `ctx.db.app` and the scope check.
   Out of its scope: a fragment ties neither the statement's operation nor a `Ref`'s or `Within`'s action → backlog 134.
+- **After close — the fresh-agent trial, round 2 (2026-10-13).** The same six agents on `2569e38c` with the skill as
+  closed. tsc + checker runs (failing): gpt-a 2 (0), opus-b 3 (1), gpt-b 6 (2), opus-c 2 (0), gpt-d 2 (0), opus-e
+  2 (0): 5 of 6 within the cap, against 3 of 6 in round 1. gpt-b's failing runs were the skill's `exactInteger(text:
+  string)` sample (the sum is `string | number | null`) and the undocumented `testCaller` label. The judge found no
+  edited generated file, no widened access, and every reference test passing on every trial (162–171 per copy). WU24
+  (`0167ca15`, `c6a4d69b`) fixed those two and four smaller skill gaps the agents noted: a job's `ctx.within`
+  dimension, the UTC day, label nullability, and how to confirm a test ran. Left: backlog 137.
