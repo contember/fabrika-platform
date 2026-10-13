@@ -199,8 +199,10 @@ handoff. This enrollment lives as long as the invitation, 7 days (ADR-0020).
   in another browser profile. Nothing is written and the link stays valid.
 - Every acceptance, this one and a signed-in one, writes only while the
   inviter is still enabled and holds its assigning role, and the application's
-  schema is at the revision its check read. A reconcile, a disable or a
-  removal in between makes it write nothing, and the invitation stays open.
+  schema is at the revision its check read. A reconcile, a disable or the
+  removal of the assigning grant in between makes it write nothing, and the
+  invitation stays open. Removing another grant of the inviter's that supplied
+  one of the role's actions is not serialized with it.
 
 ## First administrator
 
