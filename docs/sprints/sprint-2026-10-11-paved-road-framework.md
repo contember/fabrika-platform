@@ -507,6 +507,18 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
 - **Touch points.** `packages/{app,db,check}`, `packages/app/skill/`, `examples/zerops-app/AGENTS.md`, the
   local-stack source pin.
 
+### WU23c — An app capability's SQL scope reaches only what `ctx.db.app` reaches (S)
+
+- **Problem.** The private dogfood found that `ctx.sql.scope(ctx.app, table)` rendered `(true)` for any table: an
+  `app` endpoint of one action scoped a raw read of a dimension table whose read action is another to every row,
+  although `ctx.db.app` does not list that table.
+- **Scope.** `scopeTerms` refuses an `app` capability on a table `ctx.db.app` does not list for its action
+  (`checkAppReach`): an application table under any action it names, a dimension or child table under its read action
+  only, no reference or inbox table. `appGrant` and `appRowPredicate` keep it too: an `app` capability addresses a row
+  and writes in an application table only.
+- **Acceptance / witness.** `raw-sql.test.ts`: the unit cases of `ctx.sql.scope` over a recording connection, and the
+  Postgres case (every row by the read action, an application table by its policy's actions, any other refused).
+
 ### Design review of the gap units (binding)
 
 A design review of WU14–WU21 at `77683fa2` added these requirements; each unit's acceptance includes them:
@@ -1105,3 +1117,6 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   to the visitor-intake kit, which has an inbox. (2) A `'read' | 'write'` or optional mode hid an unscoped write of a
   read-only table: any mode that may be `'write'` is refused (mistakes 39, 40, matrix rows). (3) `errors.md` names the
   answers outside the envelope: the health check and the SPA's browser configuration.
+- **WU23c — the fixture has an application table.** `settings` joined the shared `@fabrika/db` test fixture (its
+  migration, its generated columns and both literal copies of its policies), and `TestAuthority` mints an `app`
+  capability. `names` moved from `orm.ts` to `policy.ts` as `namesAction`, shared by `ctx.db.app` and the scope check.
