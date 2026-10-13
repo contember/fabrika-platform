@@ -93,6 +93,7 @@ export function dbRoleToDef(row: RoleRow): RoleDef {
 		...(row.member_scope !== null
 			? { member: { scope: row.member_scope, ...(row.assignable_by === null ? {} : { assignableBy: parseJsonStringArray(row.assignable_by) }) } }
 			: {}),
+		...(row.external === 1 ? { external: true } : {}),
 	}
 }
 

@@ -1,6 +1,6 @@
 import { type CreateGrantRequest, type GrantDto, type OkResponse } from '@fabrika/iam-contract'
-import { contractGrantProblem } from '../contract-rules'
-import { type GrantRow } from '../db'
+import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
+import { ExternalGrantError, type GrantRow } from '../db'
 import { type AdminContext, adminEvent, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
 
@@ -32,6 +32,10 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
+	const external = await externalGrantProblem(c.services.repositories.appSchema, principal, app, roleOrInline)
+	if (external !== null) {
+		return fail(409, external)
+	}
 	const values = { principalId, app, scopeType: scope.scopeType, scopeValue: scope.scopeValue, grantedBy: c.admin.id, expiresAt }
 	const roleKey = roleOrInline.roleKey
 	const record = (grantId: string) =>
@@ -49,16 +53,22 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 			},
 		})
 	let grant: GrantRow
-	if (roleKey === null) {
-		grant = await c.services.repositories.grants.createGrant({ ...values, permissions: roleOrInline.permissions }, record)
-	} else {
-		const created = await c.services.repositories.grants.createRoleGrantUnlessHeld({ ...values, roleKey }, record)
-		if (created === null) {
-			const held = await findHeldRoleGrant(c, { ...values, roleKey }).catch(() => undefined)
-			const naming = held === undefined ? '' : `: ${held.id}`
-			return fail(409, `principal ${principalId} already holds this grant${naming}`)
+	try {
+		if (roleKey === null) {
+			grant = await c.services.repositories.grants.createGrant({ ...values, permissions: roleOrInline.permissions }, record)
+		} else {
+			const created = await c.services.repositories.grants.createRoleGrantUnlessHeld({ ...values, roleKey }, record)
+			if (created === null) {
+				const held = await findHeldRoleGrant(c, { ...values, roleKey }).catch(() => undefined)
+				const naming = held === undefined ? '' : `: ${held.id}`
+				return fail(409, `principal ${principalId} already holds this grant${naming}`)
+			}
+			grant = created
 		}
-		grant = created
+	} catch (cause) {
+		// A reconcile narrowed the role between the check above and the write, which carries the condition itself.
+		if (cause instanceof ExternalGrantError) return fail(409, cause.message)
+		throw cause
 	}
 	const cache = new RoleKnownCache(c.services)
 	return toGrantDto(grant, cache)

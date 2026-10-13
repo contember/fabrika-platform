@@ -22,6 +22,7 @@ const roleSchema = z.object({
 	description: z.string().min(1).optional(),
 	permissions: z.array(z.string().min(1)),
 	member: z.object({ scope: z.string().min(1), assignableBy: z.array(z.string().min(1)).optional() }).optional(),
+	external: z.literal(true).optional(),
 })
 /** A link lives at most a year; the mount's `maxDays` is the bound a contract states below that. */
 const MAX_LINK_DAYS = 365
@@ -103,6 +104,9 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 				path: ['roles', key, 'name'],
 				message: `role ${quote(key)} is a built-in IAM role; a membership role or a contract application role needs another key`,
 			})
+		}
+		if (role.external === true && role.member === undefined) {
+			issues.push({ path: ['roles', key, 'external'], message: `role ${quote(key)} is declared external and is not a membership role` })
 		}
 		for (const [index, assigner] of (role.member?.assignableBy ?? []).entries()) {
 			if (role.member !== undefined && !membershipRoleOf(assigner, role.member.scope)) {

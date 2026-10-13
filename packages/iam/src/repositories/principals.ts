@@ -1,3 +1,4 @@
+import type { PrincipalAffiliation } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from '../email-identity'
 import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './audit'
@@ -14,6 +15,8 @@ export interface PrincipalRow {
 	disabled_at: number | null
 	activated_at: number | null
 	created_at: number
+	/** `external`: a person from outside the organization, who holds only roles declared external (ADR-0051). */
+	affiliation: PrincipalAffiliation
 }
 
 /** Derived principal status — invited (not activated) → active → disabled. */
@@ -97,13 +100,13 @@ export class PrincipalRepository {
 	/**
 	 * Claim an invited row in one statement: bind `external_id = sub`, activate it, and set the
 	 * display label, but only while still unclaimed (`external_id IS NULL`) to avoid a race claiming
-	 * a row twice. The mailbox is untouched — it is what matched this row in the first place.
+	 * a row twice, and only an internal one: an IdP never claims an external principal (ADR-0051). The mailbox is untouched — it is what matched this row in the first place.
 	 * Returns the claimed row, or null if the row was concurrently claimed / not found.
 	 */
 	async claimInvitedUser(id: string, sub: string, label: string, audit?: AuditEventInput): Promise<PrincipalRow | null> {
 		const claim: SqlChange = {
 			sql: `UPDATE principals SET external_id = ?, label = ?, activated_at = COALESCE(activated_at, ?)
-				WHERE id = ? AND type = 'user' AND external_id IS NULL
+				WHERE id = ? AND type = 'user' AND external_id IS NULL AND affiliation = 'internal'
 				RETURNING *`,
 			binds: [sub, label, unixNow(), id],
 		}
@@ -126,15 +129,23 @@ export class PrincipalRepository {
 		])
 	}
 
-	/** Invite a user by mailbox (external_id NULL = unclaimed), reserving it and writing `audit` in the same transaction. */
-	async inviteUser(email: string, label: string = email, audit?: (principalId: string) => AuditEventInput): Promise<PrincipalRow> {
+	/**
+	 * Invite a user by mailbox (external_id NULL = unclaimed), reserving it and writing `audit` in the same transaction.
+	 * Only an installation administrator creates an `external` one; OIDC never claims it (ADR-0051).
+	 */
+	async inviteUser(
+		email: string,
+		label: string = email,
+		audit?: (principalId: string) => AuditEventInput,
+		affiliation: PrincipalAffiliation = 'internal',
+	): Promise<PrincipalRow> {
 		const id = uuidv7()
 		const mailbox = normalizeEmailIdentity(email)
 		return this.insertUser([
 			this.db
-				.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
-					VALUES (?, 'user', NULL, ?, ?, ?) RETURNING *`)
-				.bind(id, mailbox, label, unixNow()),
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at, affiliation)
+					VALUES (?, 'user', NULL, ?, ?, ?, ?) RETURNING *`)
+				.bind(id, mailbox, label, unixNow(), affiliation),
 			this.claimMailboxStatement(mailbox, id),
 			...(audit === undefined ? [] : [auditEventStatement(this.db, audit(id))]),
 		])
@@ -268,6 +279,17 @@ export class PrincipalRepository {
 	enablePrincipal(id: string, audit?: AuditEventInput): Promise<boolean> {
 		return this.guardedUpdate(
 			{ sql: 'UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL RETURNING id', binds: [id] },
+			audit,
+		)
+	}
+
+	/**
+	 * Make an external principal internal (ADR-0051), an installation administrator's operation. Returns whether this
+	 * call changed it; `audit` is written only then. There is no way back: demotion is not an operation.
+	 */
+	promoteToInternal(id: string, audit?: AuditEventInput): Promise<boolean> {
+		return this.guardedUpdate(
+			{ sql: `UPDATE principals SET affiliation = 'internal' WHERE id = ? AND affiliation = 'external' RETURNING id`, binds: [id] },
 			audit,
 		)
 	}

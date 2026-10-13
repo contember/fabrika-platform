@@ -108,7 +108,7 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const lookup = { app: APP, credential: await owner.token(), requestId: 'pg-find', scope, action: 'notes.read' }
 		expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...lookup, principalId: editor.id })).toEqual({
 			ok: true,
-			member: { principalId: editor.id, label: `editor-${fixtureSeq}@example.test`, disabled: false },
+			member: { principalId: editor.id, label: `editor-${fixtureSeq}@example.test`, disabled: false, affiliation: 'internal' },
 		})
 		expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...lookup, principalId: 'no-such-principal' })).toEqual({ ok: true, member: null })
 

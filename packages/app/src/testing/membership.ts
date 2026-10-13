@@ -192,6 +192,7 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, inpu
 			email: manager ? member.label : null,
 			roles,
 			disabled: false,
+			affiliation: member.affiliation,
 		})
 	}
 	return { ok: true, members, invitations: [] }
@@ -218,7 +219,12 @@ function findMember(artifact: ContractArtifact, callers: DirectoryCallers, input
 	const manager = permits([...caller.perms], dimension.members.manage, input.scope)
 	return {
 		ok: true,
-		member: { principalId: found.caller.id, label: manager || dimension.directory === 'labels' ? found.caller.label : null, disabled: false },
+		member: {
+			principalId: found.caller.id,
+			label: manager || dimension.directory === 'labels' ? found.caller.label : null,
+			disabled: false,
+			affiliation: found.caller.affiliation,
+		},
 	}
 }
 
@@ -307,6 +313,12 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return permits([...caller.perms], members.manage, scope) ? null : NOT_ALLOWED
 	}
 
+	/** As IAM (ADR-0051): an external principal holds only a role the contract declares external. */
+	const externalProblem = (principal: TestCaller, role: string): MembershipFailure | null => {
+		if (principal.affiliation !== 'external' || artifact.roles[role]?.external === true) return null
+		return invalid(`an external principal holds only a role its application declares external, and '${role}' is not one`)
+	}
+
 	/** Could `caller` give `role` in `scope`: it holds an assigning role there and every action the role grants there. */
 	const roleProblem = (caller: TestCaller, scope: Scope, role: string): MembershipFailure | null => {
 		const declared = Object.hasOwn(artifact.roles, role) ? artifact.roles[role] : undefined
@@ -346,6 +358,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			return invalid(`scope '${input.dimension}' is not created by IAM: it needs a creator role and no containing scope`)
 		}
 		if (!permits([...caller.perms], spent.action)) return NOT_ALLOWED
+		const external = externalProblem(caller, dimension.creator)
+		if (external !== null) return external
 		const scope: Scope = { type: input.dimension, value: crypto.randomUUID() }
 		changes.assign(caller.id, dimension.creator, scope)
 		asked.push({ operation: 'createScope', principalId: caller.id, scope, role: dimension.creator })
@@ -363,7 +377,10 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (problem !== null) return problem
 		if ('principalId' in input.member) {
 			const { principalId } = input.member
-			if (!callers.all().some(({ caller: target }) => target.id === principalId && target.kind === 'human')) return NOT_FOUND
+			const target = callers.all().find(({ caller: candidate }) => candidate.id === principalId && candidate.kind === 'human')?.caller
+			if (target === undefined) return NOT_FOUND
+			const external = externalProblem(target, input.role)
+			if (external !== null) return external
 			changes.assign(principalId, input.role, input.scope)
 			asked.push({ operation: 'assignMember', principalId: caller.id, scope: input.scope, role: input.role, member: input.member, invitationId: null })
 			return { ok: true, assigned: { principalId, role: input.role } }

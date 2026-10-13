@@ -101,6 +101,7 @@ export const cs: Catalog = {
 			wrongAddressTitle: 'Pozvánka pro jinou adresu',
 			wrongAddressText: 'Jste přihlášeni adresou, na kterou tato pozvánka nebyla poslána. Přihlaste se pozvanou adresou.',
 			inviterCannotGrant: 'Osoba, která pozvánku poslala, už tuto roli nemůže udělit. Požádejte o novou pozvánku.',
+			roleNotEligible: 'Tento účet nemůže mít roli, kterou pozvánka dává. Obraťte se na toho, kdo ji poslal.',
 			acceptedTitle: 'Pozvánka přijata',
 			acceptedText: ({ role, scope, appName }) => `V aplikaci ${appName} teď máte roli ${role} (${scope}).`,
 			invalidTitle: 'Odkaz není k dispozici',

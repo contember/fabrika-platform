@@ -3,6 +3,12 @@ import type { Locale } from './locale'
 export type PrincipalType = 'user' | 'service'
 
 /**
+ * Whether a person belongs to the organization (ADR-0051). An `external` principal holds only grants of a role its
+ * application declares `external`; a service is always `internal`.
+ */
+export type PrincipalAffiliation = 'internal' | 'external'
+
+/**
  * The principal kind of a workload credential (ADR-0022 "Principal kinds"): a contract job, a webhook, or the connector
  * of a consuming application. IAM stores a workload principal as a `service` row and mints its key with this kind, so
  * a workload key is never a `machine` caller.
@@ -69,6 +75,8 @@ export interface RoleDef {
 	 * administrator assigns it.
 	 */
 	member?: { scope: string; assignableBy?: string[] }
+	/** An external principal may hold this membership role (ADR-0051). Only a membership role may declare it. */
+	external?: true
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
+import type { PermissionEntry, PermissionSource, PrincipalAffiliation, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
 import type { AuditEventInput, GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import { logWarn } from './log'
@@ -20,6 +20,11 @@ export interface ResolutionInputs {
 	grants: GrantRow[]
 	/** True when the user's email is in IAM_BOOTSTRAP_ADMINS (false for services). */
 	isBootstrapAdmin: boolean
+	/**
+	 * An `external` principal's grant counts only when it names a role of `app` declared external (ADR-0051): no inline,
+	 * cross-app or built-in grant, and no bootstrap `admin`.
+	 */
+	affiliation: PrincipalAffiliation
 }
 
 /**
@@ -57,10 +62,15 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 		entries.push({ action, scope, source })
 	}
 
+	const external = inputs.affiliation === 'external'
 	const expandRole = (roleKey: string, scope: Scope | null, source: PermissionSource): void => {
 		const role = roles.getRole(inputs.app, roleKey)
 		if (!role) {
 			// Dangling role key — resolves to zero permissions (fail-closed).
+			return
+		}
+		if (external && role.external !== true) {
+			// An external principal's grant of a role not declared external (a grant older than a narrowing).
 			return
 		}
 		if (role.member !== undefined && scope?.type !== role.member.scope) {
@@ -75,6 +85,9 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 	// 1. Explicit grants — EITHER a named role OR an inline action-pattern set.
 	for (const grant of inputs.grants) {
 		const scope = rowScope(grant.scope_type, grant.scope_value)
+		if (external && (grant.app === null || grant.role_key === null)) {
+			continue
+		}
 		if (grant.role_key !== null) {
 			expandRole(grant.role_key, scope, 'grant')
 		} else if (grant.permissions !== null) {
@@ -86,7 +99,7 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 
 	// 2. Bootstrap admins (users only) — the built-in global `admin` role, source
 	// 'bootstrap'. `admin` is a cross-app built-in, so it resolves even at app=null.
-	if (inputs.isBootstrapAdmin) {
+	if (inputs.isBootstrapAdmin && !external) {
 		expandRole('admin', null, 'bootstrap')
 	}
 
@@ -97,7 +110,7 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 
 export type ResolveUserResult =
 	| { ok: true; principal: PrincipalRow }
-	| { ok: false; reason: 'disabled' | 'unknown_principal' }
+	| { ok: false; reason: 'disabled' | 'unknown_principal' | 'external_principal' }
 
 /**
  * The narrow principal capability that user resolution needs. Keeping the contract local makes the
@@ -136,6 +149,9 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 	// 1. By sub — a returning user. Refresh mailbox/label if the token's email changed.
 	const bySub = await db.getUserByExternalId(sub)
 	if (bySub) {
+		if (bySub.affiliation === 'external') {
+			return { ok: false, reason: 'external_principal' }
+		}
 		if (bySub.disabled_at !== null) {
 			return { ok: false, reason: 'disabled' }
 		}
@@ -147,7 +163,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 				// unique-email row. This user is already a known principal by sub, so a
 				// cosmetic label refresh must never lock them out — keep serving the
 				// existing identity (its current email/label) and skip the refresh.
-				logWarn(`refreshUserLabel skipped for principal ${bySub.id} (email collision on '${email}')`, err)
+				logWarn(`refreshUserLabel skipped for principal ${bySub.id} (its new mailbox collides with another principal)`, err)
 				return { ok: true, principal: bySub }
 			}
 		}
@@ -157,6 +173,10 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 	// 2. Match the verified email.
 	const byEmail = await db.getUserByEmail(email)
 	if (byEmail) {
+		if (byEmail.affiliation === 'external') {
+			// An external person authenticates by password only; an IdP presenting the address claims nothing (ADR-0051).
+			return { ok: false, reason: 'external_principal' }
+		}
 		if (byEmail.external_id === null) {
 			// An invited row — claim it.
 			if (byEmail.disabled_at !== null) {
@@ -237,6 +257,7 @@ function toRoleDef(row: RoleRow): RoleDef {
 		...(row.description !== null ? { description: row.description } : {}),
 		permissions: parseStoredPermissions(row.permissions),
 		...(row.member_scope !== null ? { member: { scope: row.member_scope } } : {}),
+		...(row.external === 1 ? { external: true } : {}),
 	}
 }
 
@@ -262,8 +283,8 @@ export async function resolvePermissionsAt(
 ): Promise<PermissionEntry[]> {
 	const crossApp = reachesCrossAppAuthority(services.config, app)
 	const grants = await services.repositories.grants.getActiveGrantsForApp(principal.id, app, { includeCrossApp: crossApp })
-	const isBootstrapAdmin = crossApp && principal.type === 'user' && principal.email !== null
+	const isBootstrapAdmin = crossApp && principal.type === 'user' && principal.affiliation === 'internal' && principal.email !== null
 		&& services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
 	const roles = await loadRoleSource(services.repositories, app)
-	return computePermissions({ app, grants, isBootstrapAdmin }, roles)
+	return computePermissions({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation }, roles)
 }

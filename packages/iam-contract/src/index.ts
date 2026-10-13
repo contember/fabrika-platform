@@ -18,6 +18,7 @@ import type {
 	Locale,
 	PermissionEntry,
 	PermissionSource,
+	PrincipalAffiliation,
 	PrincipalType,
 	RoleDef,
 } from '@fabrika/auth-core'
@@ -50,6 +51,8 @@ export interface PrincipalListItem {
 	email: string | null
 	externalId: string | null
 	status: PrincipalStatus
+	/** `external`: a person from outside the organization, who holds only roles declared external (ADR-0051). */
+	affiliation: PrincipalAffiliation
 	createdAt: number
 }
 
@@ -87,6 +90,8 @@ export interface PrincipalDetail extends PrincipalListItem {
 
 export interface InviteRequest {
 	email: string
+	/** Omitted: `internal`. An `external` user signs in by password only, and OIDC never claims it. */
+	affiliation?: PrincipalAffiliation
 }
 
 export interface UpdatePrincipalRequest {
@@ -529,6 +534,8 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
 		invite: RpcProcedure<InviteRequest, PrincipalListItem>
 		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
+		/** Make an external user internal. There is no way back; promoting an internal principal is a 409. */
+		promote: RpcProcedure<PrincipalIdInput, PrincipalListItem>
 	}
 	/**
 	 * Sessions an operator no longer trusts. Revoking an IAM session also ends every app session
@@ -587,5 +594,5 @@ export interface IamAdminRpcContract {
 	}
 }
 
-export type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalType, RoleDef }
+export type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }
 export * from './oauth'

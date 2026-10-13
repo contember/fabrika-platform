@@ -171,6 +171,30 @@ describe('login → callback (end to end with a fake IdP)', () => {
 		expect(session?.principal_id).toBe(principal?.id)
 	})
 
+	test("an IdP presenting an external principal's mailbox is refused and claims nothing, allowlisted or not (ADR-0051)", async () => {
+		for (const email of ['partner@contember.com', 'partner@partner.test']) {
+			const h = createHarness()
+			const external = await h.repositories.principals.inviteUser(email, email, undefined, 'external')
+			const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: `g-${email}`, email }) })
+			const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
+			const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
+			const flightCookie = setCookieValue(login, 'px_oidc')
+
+			const callback = await handleAuth(
+				new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `px_oidc=${flightCookie}` } }),
+				services,
+				AUTH_ENV,
+				ctx(),
+			)
+			expect(callback.status).toBe(403)
+			expect(await callback.text()).not.toContain('external')
+			expect(setCookieValue(callback, SESSION_COOKIE)).toBeNull()
+			expect((await h.repositories.principals.getPrincipalById(external.id))?.external_id).toBeNull()
+			const [refusal] = await h.repositories.audit.listAuthLog({ limit: 1 })
+			expect(refusal?.reason).toBe(email.endsWith('@contember.com') ? 'oidc_external_principal' : 'oidc_not_admitted')
+		}
+	})
+
 	/** Whether a response spends the in-flight cookie (Max-Age=0), which every terminal outcome must. */
 	function clearsFlight(res: Response): boolean {
 		return res.headers.getSetCookie().some((c) => c.startsWith('px_oidc=') && c.includes('Max-Age=0'))

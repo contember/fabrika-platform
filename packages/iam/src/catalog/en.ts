@@ -101,6 +101,7 @@ export const en: Catalog = {
 			wrongAddressTitle: 'Invitation for another address',
 			wrongAddressText: 'You are signed in with an address this invitation was not sent to. Sign in with the invited address.',
 			inviterCannotGrant: 'The person who sent this invitation can no longer give this role. Ask for a new invitation.',
+			roleNotEligible: 'This account cannot hold the role this invitation gives. Ask the person who sent it.',
 			acceptedTitle: 'Invitation accepted',
 			acceptedText: ({ role, scope, appName }) => `You are now ${role} of a ${scope} of ${appName}.`,
 			invalidTitle: 'Link unavailable',

@@ -24,6 +24,7 @@ const listItem = (id: string, email: string): PrincipalListItem => ({
 	email,
 	externalId: null,
 	status: 'invited',
+	affiliation: 'internal',
 	createdAt: 1,
 })
 

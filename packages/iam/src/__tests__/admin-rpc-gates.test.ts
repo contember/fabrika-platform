@@ -60,6 +60,7 @@ const INPUTS: Record<string, unknown> = {
 	'principals.get': { principalId: 'nobody' },
 	'principals.invite': { email: 'nobody@example.com' },
 	'principals.update': { principalId: 'nobody', disabled: true },
+	'principals.promote': { principalId: 'nobody' },
 	'sessions.list': { principalId: 'nobody' },
 	'sessions.revoke': { id: 'nobody' },
 	'sessions.revokeAll': { principalId: 'nobody' },

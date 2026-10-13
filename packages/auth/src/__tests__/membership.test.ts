@@ -60,7 +60,8 @@ describe('IamMembership', () => {
 			assignMember: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 			revokeMember: () => Promise.resolve({ ok: false, reason: 'last_creator' }),
 			listMembers: () => Promise.resolve({ ok: true, members: [], invitations: [] }),
-			findMember: (input) => Promise.resolve({ ok: true, member: { principalId: input.principalId, label: null, disabled: false } }),
+			findMember: (input) =>
+				Promise.resolve({ ok: true, member: { principalId: input.principalId, label: null, disabled: false, affiliation: 'internal' } }),
 			issueLink: () => Promise.resolve({ ok: true, key: 'px_k', id: 'c1', expiresAt: 2 }),
 			revokeLink: () => Promise.resolve({ ok: true }),
 		}
@@ -71,7 +72,7 @@ describe('IamMembership', () => {
 		expect(await membership.issueLink(caller, 'shared', [scope], 3)).toEqual({ ok: true, key: 'px_k', id: 'c1', expiresAt: 2 })
 		expect(await membership.findMember(caller, scope, 'p2', 'notes.read')).toEqual({
 			ok: true,
-			member: { principalId: 'p2', label: null, disabled: false },
+			member: { principalId: 'p2', label: null, disabled: false, affiliation: 'internal' },
 		})
 	})
 })

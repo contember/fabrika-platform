@@ -116,6 +116,7 @@ const assignSuccessSchema = z.union([
 	z.object({ ...okEnvelope, assigned: z.object({ principalId: z.string(), role: z.string() }) }),
 	z.object({ ...okEnvelope, invited: z.object({ invitationId: z.string(), role: z.string(), expiresAt: z.number().finite() }) }),
 ])
+const affiliationSchema = z.enum(['internal', 'external'])
 const listMembersSuccessSchema = z.object({
 	...okEnvelope,
 	members: z.array(z.object({
@@ -124,12 +125,13 @@ const listMembersSuccessSchema = z.object({
 		email: z.string().nullable(),
 		roles: z.array(z.string()),
 		disabled: z.boolean(),
+		affiliation: affiliationSchema,
 	})),
 	invitations: z.array(z.object({ id: z.string(), email: z.string(), role: z.string(), expiresAt: z.number().finite() })),
 })
 const findMemberSuccessSchema = z.object({
 	...okEnvelope,
-	member: z.object({ principalId: z.string(), label: z.string().nullable(), disabled: z.boolean() }).nullable(),
+	member: z.object({ principalId: z.string(), label: z.string().nullable(), disabled: z.boolean(), affiliation: affiliationSchema }).nullable(),
 })
 const issueLinkSuccessSchema = z.object({ ...okEnvelope, key: z.string().min(1), id: z.string(), expiresAt: z.number().finite() })
 const revokedSuccessSchema = z.object(okEnvelope)

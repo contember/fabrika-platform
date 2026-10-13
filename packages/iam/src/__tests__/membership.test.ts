@@ -595,8 +595,11 @@ describe('members.find: one member, for an endpoint below the directory', () => 
 		const { f, owner, editor, find } = await findFixture()
 		const writer = await f.person('writer')
 		await assign(f, owner, await workspaceOf(f, owner), 'editor', { principalId: writer.id })
-		expect(await find(editor, owner.id)).toEqual({ ok: true, member: { principalId: owner.id, label: null, disabled: false } })
-		expect(await find(owner, editor.id)).toEqual({ ok: true, member: { principalId: editor.id, label: 'editor@example.test', disabled: false } })
+		expect(await find(editor, owner.id)).toEqual({ ok: true, member: { principalId: owner.id, label: null, disabled: false, affiliation: 'internal' } })
+		expect(await find(owner, editor.id)).toEqual({
+			ok: true,
+			member: { principalId: editor.id, label: 'editor@example.test', disabled: false, affiliation: 'internal' },
+		})
 		// The writer is a member of another workspace only.
 		expect(await find(editor, writer.id)).toEqual({ ok: true, member: null })
 		expect(await find(editor, 'no-such-principal')).toEqual({ ok: true, member: null })
@@ -609,7 +612,10 @@ describe('members.find: one member, for an endpoint below the directory', () => 
 			scopes: LOOKUP_SCHEMA.scopes.map((scope): AppScopeDef => (scope.type === 'workspace' ? { ...scope, directory: 'labels' } : scope)),
 		}
 		const { owner, editor, find } = await findFixture(labelled)
-		expect(await find(editor, owner.id)).toEqual({ ok: true, member: { principalId: owner.id, label: 'owner@example.test', disabled: false } })
+		expect(await find(editor, owner.id)).toEqual({
+			ok: true,
+			member: { principalId: owner.id, label: 'owner@example.test', disabled: false, affiliation: 'internal' },
+		})
 	})
 
 	test('a grant on a note IAM cannot place, with the scope and its parent both substituted, finds nothing', async () => {

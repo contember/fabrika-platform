@@ -73,14 +73,17 @@ export class RecordingMembership implements IamMembershipRpc {
 		this.calls.push({ method: 'listMembers', input })
 		return this.#answer({
 			ok: true,
-			members: [{ principalId: 'user-1', label: null, email: null, roles: ['owner'], disabled: false }],
+			members: [{ principalId: 'user-1', label: null, email: null, roles: ['owner'], disabled: false, affiliation: 'internal' }],
 			invitations: [],
 		})
 	}
 
 	async findMember(input: FindMemberInput): Promise<FindMemberResult> {
 		this.calls.push({ method: 'findMember', input })
-		return this.#answer({ ok: true, member: input.principalId === 'user-1' ? { principalId: 'user-1', label: null, disabled: false } : null })
+		return this.#answer({
+			ok: true,
+			member: input.principalId === 'user-1' ? { principalId: 'user-1', label: null, disabled: false, affiliation: 'internal' } : null,
+		})
 	}
 
 	async issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {

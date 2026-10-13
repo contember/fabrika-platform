@@ -52,13 +52,17 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.query(({ ctx, input }) => adminUseCases.listPrincipals(context(ctx), input)),
 		get: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getPrincipal(context(ctx), input)),
 		invite: t.procedure
-			.input(z.object({ email: nonEmpty }))
+			.input(z.object({ email: nonEmpty, affiliation: z.enum(['internal', 'external']).optional() }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.invitePrincipal(context(ctx), input)),
 		update: t.procedure
 			.input(z.object({ principalId: nonEmpty, disabled: z.boolean() }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.updatePrincipal(context(ctx), input)),
+		promote: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.promotePrincipal(context(ctx), input)),
 	}),
 	// Revoking a PARENT already cascades to every app session derived from it, so `revoke` is one
 	// call and never a sweep — see `SessionRepository.revokeSessionById`.

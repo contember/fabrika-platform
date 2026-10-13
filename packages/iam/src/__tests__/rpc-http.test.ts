@@ -174,7 +174,7 @@ function recorder(canned: Canned = {}): Recorder {
 		},
 		findMember(input) {
 			note('findMember', input)
-			return Promise.resolve({ ok: true, member: { principalId: input.principalId, label: null, disabled: false } })
+			return Promise.resolve({ ok: true, member: { principalId: input.principalId, label: null, disabled: false, affiliation: 'internal' } })
 		},
 		issueLink(input) {
 			note('issueLink', input)
@@ -204,7 +204,7 @@ describe('the membership methods over /rpc/*', () => {
 		{
 			method: 'findMember',
 			body: { ...caller, scope, principalId: 'p', action: 'notes.read' },
-			result: { ok: true, member: { principalId: 'p', label: null, disabled: false } },
+			result: { ok: true, member: { principalId: 'p', label: null, disabled: false, affiliation: 'internal' } },
 		},
 		{
 			method: 'issueLink',

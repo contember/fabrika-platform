@@ -7,7 +7,7 @@ import { json, readJson } from './http'
 import { issueMembershipKeyUseCase } from './membership-keys'
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
 import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePolicyUseCase } from './policies'
-import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, updatePrincipalUseCase } from './principals'
+import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, promotePrincipalUseCase, updatePrincipalUseCase } from './principals'
 import { listSessionsUseCase, revokeSessionsForPrincipalUseCase, revokeSessionUseCase } from './sessions'
 import { createShareLinkUseCase, listShareLinksUseCase, revokeShareLinkUseCase } from './share-links'
 import { issueWorkloadKeyUseCase, revokeWorkloadKeysUseCase } from './workloads'
@@ -47,6 +47,7 @@ export const adminUseCases = {
 	getPrincipal: getPrincipalUseCase,
 	invitePrincipal: invitePrincipalUseCase,
 	updatePrincipal: updatePrincipalUseCase,
+	promotePrincipal: promotePrincipalUseCase,
 	listSessions: listSessionsUseCase,
 	revokeSession: revokeSessionUseCase,
 	revokeSessionsForPrincipal: revokeSessionsForPrincipalUseCase,

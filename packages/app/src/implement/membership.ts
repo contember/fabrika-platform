@@ -4,7 +4,7 @@
 // The framework writes no grant and mints no credential.
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
-import type { InvitationItem, IssueLinkResult, MemberItem, MembershipFailure, Scope } from '@fabrika/auth-core'
+import type { InvitationItem, IssueLinkResult, MemberItem, MembershipFailure, PrincipalAffiliation, Scope } from '@fabrika/auth-core'
 import type { CapabilityAuthority, RefGrant } from '@fabrika/db/capability'
 import { joinPath } from '../contract/defaults'
 import { ConflictError, ForbiddenError, HttpError, NotFoundError, UnauthorizedError } from '../errors'
@@ -41,6 +41,8 @@ export interface DirectoryMember {
 	/** Its membership roles in the target. */
 	readonly roles: readonly string[]
 	readonly disabled: boolean
+	/** `external`: a person from outside the organization (ADR-0051), for a staff UI to show. */
+	readonly affiliation: PrincipalAffiliation
 }
 
 /** One member a lookup found: never its email, and its label only where the directory shows labels. */
@@ -49,6 +51,7 @@ export interface Member {
 	/** The principal's display label; null unless the dimension declares `directory: 'labels'` or the caller manages its members. */
 	readonly label: string | null
 	readonly disabled: boolean
+	readonly affiliation: PrincipalAffiliation
 }
 
 /**
@@ -225,7 +228,12 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 			if (found.member.principalId !== principalId) {
 				throw new ServerFault('iam_answer_mismatch', `IAM answered '${found.member.principalId}' for a lookup of another principal`)
 			}
-			return Object.freeze({ principalId: found.member.principalId, label: found.member.label, disabled: found.member.disabled })
+			return Object.freeze({
+				principalId: found.member.principalId,
+				label: found.member.label,
+				disabled: found.member.disabled,
+				affiliation: found.member.affiliation,
+			})
 		},
 	}
 	if (!reach.lists) {
@@ -238,7 +246,13 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 			const listed = await ask(() => request.iam.listMembers(request.caller, scope), 'list members')
 			return Object.freeze(
 				listed.members.map((member) =>
-					Object.freeze({ principalId: member.principalId, label: member.label, roles: Object.freeze([...member.roles]), disabled: member.disabled })
+					Object.freeze({
+						principalId: member.principalId,
+						label: member.label,
+						roles: Object.freeze([...member.roles]),
+						disabled: member.disabled,
+						affiliation: member.affiliation,
+					})
 				),
 			)
 		},

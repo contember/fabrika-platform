@@ -107,6 +107,8 @@ export interface DimensionDeclaration {
 export interface RoleDeclaration {
 	readonly grants: readonly string[]
 	readonly member?: { readonly scope: string; readonly assignableBy: readonly string[] }
+	/** `true` only; `buildArtifact` refuses another value, and refuses it on a role without `member`. */
+	readonly external?: boolean
 }
 
 export type AccessDeclaration =

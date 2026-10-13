@@ -18,6 +18,8 @@ export interface RoleRow {
 	member_scope: string | null
 	/** JSON array of the membership roles whose holders may assign this one; NULL = only an administrator. */
 	assignable_by: string | null
+	/** 1 when an external principal may hold this membership role (ADR-0051); 0 for every other role. */
+	external: 0 | 1
 	created_at: number
 }
 
@@ -265,6 +267,7 @@ export class AppSchemaRepository {
 			permissions: string[]
 			memberScope?: string | null
 			assignableBy?: string[] | null
+			external?: boolean
 		}[]
 		/** The contract flag is part of the vocabulary: written in the same batch, so it never outlives the roles it constrains. */
 		contract?: boolean
@@ -349,14 +352,15 @@ export class AppSchemaRepository {
 		for (const role of input.roles) {
 			statements.push(
 				this.db
-					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, assignable_by, created_at)
-						VALUES (?, ?, ?, ?, ?, 'app', ?, ?, ?)
+					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, assignable_by, external, created_at)
+						VALUES (?, ?, ?, ?, ?, 'app', ?, ?, ?, ?)
 						ON CONFLICT (app, role_key) DO UPDATE SET
 							name = excluded.name,
 							description = excluded.description,
 							permissions = excluded.permissions,
 							member_scope = excluded.member_scope,
 							assignable_by = excluded.assignable_by,
+							external = excluded.external,
 							origin = 'app'
 						WHERE roles.origin = 'app'`)
 					.bind(
@@ -367,10 +371,22 @@ export class AppSchemaRepository {
 						JSON.stringify(role.permissions),
 						role.memberScope ?? null,
 						role.assignableBy == null ? null : JSON.stringify(role.assignableBy),
+						role.external === true ? 1 : 0,
 						unixNow(),
 					),
 			)
 		}
+		// The caller refuses a role an external principal holds and the schema no longer declares external with a 409
+		// first; this NOT NULL violation rolls the batch back if such a grant was written in between (ADR-0051).
+		statements.push(
+			this.db
+				.prepare(`INSERT INTO contract_apps (app, created_at) SELECT ?, NULL WHERE EXISTS (
+					SELECT 1 FROM grants g
+					JOIN principals p ON p.id = g.principal_id
+					JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+					WHERE g.app = ? AND p.affiliation = 'external' AND r.external = 0)`)
+				.bind(`${app}#internal-role-of-external-principal`, app),
+		)
 
 		for (const link of input.links ?? []) {
 			statements.push(

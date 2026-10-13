@@ -25,6 +25,7 @@ function toPrincipalListItem(row: PrincipalRow): PrincipalListItem {
 		email: row.email,
 		externalId: row.external_id,
 		status: principalStatus(row),
+		affiliation: row.affiliation,
 		createdAt: row.created_at,
 	}
 }
@@ -118,10 +119,12 @@ export async function invitePrincipalUseCase(c: AdminContext, input: InviteReque
 	let principal: PrincipalRow
 	try {
 		// The mailbox is what identifies the human; the spelling the admin typed survives as the label.
+		const affiliation = input.affiliation ?? 'internal'
 		principal = await c.services.repositories.principals.inviteUser(
 			normalizedEmail,
 			email,
-			(principalId) => adminEvent(c, { action: 'iam.principal.invite', resourceType: 'principal', resourceId: principalId }),
+			(principalId) => adminEvent(c, { action: 'iam.principal.invite', resourceType: 'principal', resourceId: principalId, metadata: { affiliation } }),
+			affiliation,
 		)
 	} catch (cause) {
 		if ((await c.services.repositories.passwords.lookupActionUser(normalizedEmail)).status !== 'missing') {
@@ -149,6 +152,28 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 			id,
 			adminEvent(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id }),
 		)
+	}
+	const updated = await c.services.repositories.principals.getPrincipalById(id)
+	if (!updated) return fail(404, 'principal not found')
+	return toPrincipalListItem(updated)
+}
+
+/**
+ * Make an external user internal (ADR-0051). It grants nothing: the user keeps its grants, every one of a role declared
+ * external, and from now on an OIDC login presenting its address may claim it. There is no demotion.
+ */
+export async function promotePrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<PrincipalListItem> {
+	const id = input.principalId
+	const row = await c.services.repositories.principals.getPrincipalById(id)
+	if (!row) {
+		return fail(404, 'principal not found')
+	}
+	const promoted = await c.services.repositories.principals.promoteToInternal(
+		id,
+		adminEvent(c, { action: 'iam.principal.promote', resourceType: 'principal', resourceId: id }),
+	)
+	if (!promoted) {
+		return fail(409, 'the principal is not external')
 	}
 	const updated = await c.services.repositories.principals.getPrincipalById(id)
 	if (!updated) return fail(404, 'principal not found')

@@ -90,7 +90,12 @@ function roleDef(key: string, role: RoleArtifact): RoleDef {
 	const permissions = [...role.grants]
 	return role.member === null
 		? { name: key, permissions }
-		: { name: key, permissions, member: { scope: role.member.scope, assignableBy: [...role.member.assignableBy] } }
+		: {
+			name: key,
+			permissions,
+			member: { scope: role.member.scope, assignableBy: [...role.member.assignableBy] },
+			...(role.external === true ? { external: true } : {}),
+		}
 }
 
 function linkDef(mount: LinkMountArtifact): AppLinkMountDef {

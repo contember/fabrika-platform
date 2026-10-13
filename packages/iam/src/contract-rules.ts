@@ -1,4 +1,5 @@
 import type { AppSchemaRepository } from './repositories/app-schema'
+import type { PrincipalRow } from './repositories/principals'
 import { BUILTIN_ROLES } from './roles'
 import { parseStoredPermissions } from './stored-permissions'
 
@@ -49,4 +50,31 @@ export async function contractGrantProblem(
 	const permissions = role === null ? BUILTIN_ROLES[grant.roleKey]?.permissions ?? [] : parseStoredPermissions(role.permissions)
 	const wildcard = firstWildcard(permissions)
 	return wildcard === undefined ? null : `role '${grant.roleKey}' lists the wildcard ${wildcard} and cannot be granted in a contract application`
+}
+
+/**
+ * Why `principal` may not hold this grant, or null (ADR-0051). An external principal holds only a role of one
+ * application that the role's schema declares external: no inline permissions, no cross-app grant, no built-in role and
+ * no custom policy. The write carries the same condition (`ELIGIBLE_GRANT_SQL`); this check names the reason first.
+ */
+export async function externalGrantProblem(
+	appSchema: Pick<AppSchemaRepository, 'getRole'>,
+	principal: Pick<PrincipalRow, 'affiliation'>,
+	app: string | null,
+	grant: { roleKey: string | null },
+): Promise<string | null> {
+	if (principal.affiliation !== 'external') {
+		return null
+	}
+	if (app === null) {
+		return 'an external principal holds no cross-app grant'
+	}
+	if (grant.roleKey === null) {
+		return 'an external principal holds no inline permissions, only a role its application declares external'
+	}
+	const role = Object.hasOwn(BUILTIN_ROLES, grant.roleKey) ? null : await appSchema.getRole(app, grant.roleKey)
+	if (role === null || role.external !== 1) {
+		return `an external principal holds only a role its application declares external, and '${grant.roleKey}' is not one`
+	}
+	return null
 }

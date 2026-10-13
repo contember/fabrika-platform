@@ -51,6 +51,7 @@ class FakeStore implements UserPrincipalStore {
 			disabled_at: null,
 			activated_at: 0,
 			created_at: 0,
+			affiliation: 'internal',
 		}
 		this.rows.push(row)
 		return Promise.resolve(row)
@@ -66,6 +67,7 @@ const invited = (email: string): PrincipalRow => ({
 	disabled_at: null,
 	activated_at: null,
 	created_at: 0,
+	affiliation: 'internal',
 })
 
 describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
@@ -80,6 +82,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			disabled_at: null,
 			activated_at: 0,
 			created_at: 0,
+			affiliation: 'internal',
 		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
@@ -99,6 +102,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			disabled_at: null,
 			activated_at: 0,
 			created_at: 0,
+			affiliation: 'internal',
 		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'new@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
@@ -112,7 +116,17 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 
 	test('disabled returning user → disabled', async () => {
 		const db = new FakeStore()
-		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-1', email: 'a@x.com', label: 'a@x.com', disabled_at: 123, activated_at: 0, created_at: 0 })
+		db.rows.push({
+			id: 'p1',
+			type: 'user',
+			external_id: 'sub-1',
+			email: 'a@x.com',
+			label: 'a@x.com',
+			disabled_at: 123,
+			activated_at: 0,
+			created_at: 0,
+			affiliation: 'internal',
+		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com', 'req-resolve')
 		expect(res).toEqual({ ok: false, reason: 'disabled' })
 	})
@@ -150,6 +164,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			disabled_at: null,
 			activated_at: 0,
 			created_at: 0,
+			affiliation: 'internal',
 		})
 		const res = await resolveUserPrincipal(db, 'sub-other', 'shared@x.com', 'req-resolve')
 		expect(res).toEqual({ ok: false, reason: 'unknown_principal' })

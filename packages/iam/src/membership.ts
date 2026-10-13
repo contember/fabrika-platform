@@ -43,7 +43,7 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
-import { contractGrantProblem } from './contract-rules'
+import { contractGrantProblem, externalGrantProblem } from './contract-rules'
 import {
 	type AppScopeRow,
 	type AuditEventInput,
@@ -324,8 +324,10 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
 		scopeType: input.dimension,
 	})
 	if (contract !== null) return invalid(contract)
+	const external = await externalGrantProblem(services.repositories.appSchema, caller.principal, caller.app, { roleKey: role.role_key })
+	if (external !== null) return invalid(external)
 	const scope: Scope = { type: input.dimension, value: uuidv7() }
-	await services.repositories.membership.createScope(
+	const created = await services.repositories.membership.createScope(
 		{ app: caller.app, scope, createdBy: caller.principal.id, roleKey: role.role_key },
 		memberEvent(caller, input.requestId, {
 			action: 'iam.scope.create',
@@ -334,6 +336,10 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
 			metadata: { role: role.role_key, endpoint: spent.endpoint.endpoint },
 		}),
 	)
+	if (!created) {
+		// A reconcile narrowed the creator role after the check above; the write carries the condition itself.
+		return invalid(`the creator role '${role.role_key}' is not declared external, and the caller is an external principal`)
+	}
 	return { ok: true, scope, role: role.role_key }
 }
 
@@ -365,7 +371,9 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 		if (target === null || target.type !== 'user') {
 			return NOT_FOUND
 		}
-		await services.repositories.membership.grantMembershipRole(
+		const external = await externalGrantProblem(services.repositories.appSchema, target, caller.app, { roleKey: role.role_key })
+		if (external !== null) return invalid(external)
+		const granted = await services.repositories.membership.grantMembershipRole(
 			{ app: caller.app, principalId: target.id, roleKey: role.role_key, scope: input.scope, grantedBy: caller.principal.id },
 			memberEvent(caller, input.requestId, {
 				action: 'iam.member.assign',
@@ -374,6 +382,11 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 				metadata: { principalId: target.id, role: role.role_key },
 			}),
 		)
+		const eligible = { principalId: target.id, app: caller.app, roleKey: role.role_key }
+		if (granted === null && !(await services.repositories.grants.isEligibleGrant(eligible))) {
+			// Not held but refused: a reconcile narrowed the role after the check above.
+			return invalid(`role '${role.role_key}' is not declared external, and the member is an external principal`)
+		}
 		return { ok: true, assigned: { principalId: target.id, role: role.role_key } }
 	}
 
@@ -547,6 +560,7 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 				email: manager ? row.email : null,
 				roles: [row.role_key],
 				disabled: row.disabled_at !== null,
+				affiliation: row.affiliation,
 			})
 		} else {
 			member.roles.push(row.role_key)
@@ -599,6 +613,7 @@ export async function findMember(services: Services, env: CallerEnv, ctx: Reques
 			principalId: grant.principal_id,
 			label: manager || dimension.members_directory === 'labels' ? grant.label : null,
 			disabled: grant.disabled_at !== null,
+			affiliation: grant.affiliation,
 		},
 	}
 }
@@ -613,6 +628,8 @@ export type AcceptInvitationOutcome =
 	| { ok: false; reason: 'wrong_principal' }
 	/** The inviter could no longer give the role. */
 	| { ok: false; reason: 'not_allowed' }
+	/** The signed-in principal is external and the role is not declared external (ADR-0051). */
+	| { ok: false; reason: 'not_eligible' }
 
 /**
  * Accept an invitation for a signed-in principal. The emailed one-time token proves control of the
@@ -633,6 +650,9 @@ export async function acceptInvitation(
 	}
 	if (principal.type !== 'user' || principal.email === null || principal.email !== invitation.email) {
 		return { ok: false, reason: 'wrong_principal' }
+	}
+	if ((await externalGrantProblem(services.repositories.appSchema, principal, invitation.app, { roleKey: invitation.role_key })) !== null) {
+		return { ok: false, reason: 'not_eligible' }
 	}
 	const inviter = await services.repositories.principals.getPrincipalById(invitation.invited_by)
 	const role = await services.repositories.appSchema.getRole(invitation.app, invitation.role_key)

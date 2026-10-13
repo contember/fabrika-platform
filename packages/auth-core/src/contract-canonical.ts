@@ -67,6 +67,7 @@ function canonicalRole(role: RoleArtifact): RoleArtifact {
 	return {
 		grants: sorted(role.grants),
 		member: role.member === null ? null : { scope: role.member.scope, assignableBy: sorted(role.member.assignableBy) },
+		...(role.external === true ? { external: true } : {}),
 	}
 }
 

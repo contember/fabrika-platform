@@ -28,7 +28,7 @@ interface FakeIam {
 }
 
 const user = (id: string, email: string, status: 'invited' | 'active' | 'disabled', password: PasswordState): FakePrincipal => ({
-	item: { id, type: 'user', label: email, email, externalId: null, status, createdAt: 1 },
+	item: { id, type: 'user', label: email, email, externalId: null, status, affiliation: 'internal', createdAt: 1 },
 	grants: [],
 	password,
 })

@@ -144,6 +144,22 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				+ 'Delete or re-scope those grants first.',
 		)
 	}
+	// An external principal holds only roles declared external (ADR-0051): a schema that narrows a role one holds, or
+	// declares an internal role under a key one still holds, is refused with the grants named.
+	const externalHeld: string[] = []
+	for (const [roleKey, def] of Object.entries(schema.roles)) {
+		if (def.external === true) continue
+		for (const grant of await c.services.repositories.grants.listExternalHoldersOfRole(app, roleKey)) {
+			externalHeld.push(`${grant.id} (role '${roleKey}')`)
+		}
+	}
+	if (externalHeld.length > 0) {
+		return error(
+			409,
+			`the app declares a role that is not external while external principals hold it: ${externalHeld.join(', ')}. `
+				+ 'Delete those grants first, or keep the role external.',
+		)
+	}
 	await c.services.repositories.appSchema.reconcileAppSchema(
 		{
 			app,
@@ -164,6 +180,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				permissions: def.permissions,
 				memberScope: def.member?.scope ?? null,
 				assignableBy: def.member?.assignableBy ?? null,
+				external: def.external === true,
 			})),
 			contract: schema.contract === true,
 			links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),

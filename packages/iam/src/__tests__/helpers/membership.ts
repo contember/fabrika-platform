@@ -2,7 +2,9 @@ import { type AppSchema, buildAccessClaims, type WorkloadKind } from '@fabrika/a
 import type { Scope } from '@fabrika/auth-core'
 import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
 import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { handleAdmin } from '../../admin/router'
+import { createIamApp } from '../../app'
 import {
 	type AuditEventInput,
 	type IamRepositories,
@@ -18,7 +20,7 @@ import { generateToken, hashToken } from '../../secret'
 import type { Services } from '../../services'
 import { getSigner } from '../../signing'
 import { mintFromKey } from '../../tokens'
-import { adminTokenFor, makeServicesFor, TEST_SIGNING_ENV } from './harness'
+import { adminTokenFor, makeServicesFor, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './harness'
 
 // A multi-tenant application for the membership witnesses (ADR-0012 §6), reconciled
 // through the real admin PUT so its declarations pass the same validation a deploy's do.
@@ -136,6 +138,10 @@ export interface MembershipFixture {
 	readonly services: Services
 	readonly ctx: PendingWork
 	person(name: string): Promise<Person>
+	/** A person from outside the organization, created as an installation administrator creates one (ADR-0051). */
+	external(name: string): Promise<Person>
+	/** Call `/admin/rpc` as the fixture's installation administrator. */
+	adminRpc(method: string, input: unknown): Promise<Response>
 	/** A workload key, issued as Control issues it (`workloads.issueKey`). */
 	workload(kind: WorkloadKind, name: string): Promise<Workload>
 	putSchema(schema: AppSchema): Promise<Response>
@@ -173,6 +179,35 @@ export async function membershipFixture(repositories: IamRepositories, options: 
 			const principal = await repositories.principals.createUser(`sub-${name}`, `${name}@example.test`)
 			return { id: principal.id, token: (app = APP) => mintedToken(services, principal, app) }
 		},
+		async external(name: string): Promise<Person> {
+			const principal = await repositories.principals.inviteUser(`${name}@partner.test`, `${name}@partner.test`, undefined, 'external')
+			return { id: principal.id, token: (app = APP) => mintedToken(services, principal, app) }
+		},
+		adminRpc: async (method: string, input: unknown): Promise<Response> =>
+			createIamApp().fetch(
+				new Request(`${ORIGIN}/admin/rpc`, {
+					method: 'POST',
+					headers: { authorization: `Bearer ${adminBearer}`, 'content-type': 'application/json' },
+					body: JSON.stringify({ method, input }),
+				}),
+				{
+					DB: unusedDatabase,
+					REPOSITORIES: repositories,
+					HUMAN_EMAIL_DOMAINS: '[]',
+					HUMAN_EMAILS: '[]',
+					IAM_BOOTSTRAP_ADMINS: '[]',
+					ENVIRONMENT: 'stage',
+					ISSUER: ORIGIN,
+					FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
+					FABRIKA_IAM_PROVISIONING_KEY: '',
+					OIDC_ISSUER: 'https://idp.test',
+					OIDC_CLIENT_ID: 'client',
+					OIDC_CLIENT_SECRET: 'secret',
+					OIDC_SCOPES: '',
+					OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+				},
+				ctx,
+			),
 		async workload(kind: WorkloadKind, name: string): Promise<Workload> {
 			const key = `px_${generateToken()}`
 			const id = await repositories.workloads.issueKey(

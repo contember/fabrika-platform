@@ -392,9 +392,16 @@ class ArtifactBuilder {
 					}
 				}
 			}
+			if (role.external !== undefined && role.external !== true) {
+				this.#problem(where, `its external is ${String(role.external)} (allowed: external: true, or no external)`)
+			}
+			if (role.external === true && role.member === undefined) {
+				this.#problem(where, 'is declared external and is not a membership role: only a role with member: { scope, … } may admit externals')
+			}
 			roles[name] = {
 				grants: [...role.grants],
 				member: role.member === undefined ? null : { scope: role.member.scope, assignableBy: [...role.member.assignableBy] },
+				...(role.external === true ? { external: true } : {}),
 			}
 		}
 		return roles

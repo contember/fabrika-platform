@@ -1,6 +1,6 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
-import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './audit'
-import { firstRow, unixNow } from './sql'
+import { type AuditEventInput, AuditWriter, type SqlChange } from './audit'
+import { unixNow } from './sql'
 
 /** A grant written for a workload principal: its authority is its declared actions, never a grant. */
 export class WorkloadGrantError extends Error {
@@ -8,6 +8,26 @@ export class WorkloadGrantError extends Error {
 	constructor() {
 		super('a workload principal holds no grant')
 	}
+}
+
+/** A grant an external principal may not hold: its authority is only roles its application declares external. */
+export class ExternalGrantError extends Error {
+	override readonly name = 'ExternalGrantError'
+	constructor() {
+		super('an external principal holds only a role its application declares external')
+	}
+}
+
+/**
+ * The condition every grant write carries (ADR-0051): the principal is internal, or the grant names a role of its app
+ * declared external. Binds the principal id, the app and the role key; a null app or role key never matches a role, so
+ * an inline, cross-app or built-in grant is refused for an external principal.
+ */
+export const ELIGIBLE_GRANT_SQL = `(NOT EXISTS (SELECT 1 FROM principals ep WHERE ep.id = ? AND ep.affiliation = 'external')
+	OR EXISTS (SELECT 1 FROM roles er WHERE er.app = ? AND er.role_key = ? AND er.external = 1))`
+
+export function eligibleGrantBinds(input: { principalId: string; app?: string | null; roleKey?: string | null }): (string | null)[] {
+	return [input.principalId, input.app ?? null, input.roleKey ?? null]
 }
 
 export interface GrantRow {
@@ -74,6 +94,17 @@ export class GrantRepository {
 		return results
 	}
 
+	/** Grants of `roleKey` at `app` held by an external principal. */
+	async listExternalHoldersOfRole(app: string, roleKey: string): Promise<GrantRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT g.* FROM grants g JOIN principals p ON p.id = g.principal_id
+				WHERE g.app = ? AND g.role_key = ? AND p.affiliation = 'external'
+				ORDER BY g.id`)
+			.bind(app, roleKey)
+			.all<GrantRow>()
+		return results
+	}
+
 	/** Grants of `roleKey` at `app` that are not in a value of `scopeType` — global ones included. */
 	async listRoleGrantsOutsideScope(app: string, roleKey: string, scopeType: string): Promise<GrantRow[]> {
 		const { results } = await this.db
@@ -119,18 +150,23 @@ export class GrantRepository {
 	 * action-pattern set, JSON-encoded here) — the caller MUST supply exactly one; the
 	 * DB CHECK rejects both/neither. `scopeType`/`scopeValue` are both-or-neither (both
 	 * null = global). The handler validates which is set; this layer just persists it.
-	 * `audit` is the change's record, written in the same batch.
+	 * `audit` is the change's record, written in the same batch. Throws `ExternalGrantError`, writing
+	 * nothing, for a grant the principal may not hold (ADR-0051).
 	 */
 	async createGrant(input: CreateGrantInput, audit?: (grantId: string) => AuditEventInput): Promise<GrantRow> {
 		await this.refuseWorkload(input.principalId)
 		const id = uuidv7()
-		if (audit === undefined) {
-			return firstRow<GrantRow>(this.grantStatement(id, input, ''))
+		const [created] = await this.writer.run<GrantRow>([this.grantChange(id, input, '')], audit?.(id))
+		if (created === undefined) {
+			// The insert carries the eligibility condition, so the only way it writes nothing is an ineligible grant.
+			throw new ExternalGrantError()
 		}
-		const [created] = await this.db.batch<GrantRow>([this.grantStatement(id, input, ''), auditEventStatement(this.db, audit(id))])
-		const row = created?.results[0]
-		if (row === undefined) throw new Error('expected a row from a RETURNING statement, got none')
-		return row
+		return created
+	}
+
+	/** Whether `principalId` may hold this grant: it is internal, or the role is one its app declares external. */
+	async isEligibleGrant(input: { principalId: string; app?: string | null; roleKey?: string | null }): Promise<boolean> {
+		return (await this.db.prepare(`SELECT 1 AS eligible WHERE ${ELIGIBLE_GRANT_SQL}`).bind(...eligibleGrantBinds(input)).first()) !== null
 	}
 
 	/** Whether `principalId` is a job's, a webhook's or a connector's principal, which holds no grant. */
@@ -148,7 +184,8 @@ export class GrantRepository {
 	/**
 	 * Create a ROLE grant, or answer null when the principal already holds it. The conflict target is
 	 * the one unique index this grant falls under (`idx_grants_uq_scoped` / `idx_grants_uq_global`), so
-	 * the statement itself decides on both engines and any other failure still throws.
+	 * the statement itself decides on both engines and any other failure still throws. A grant the
+	 * principal may not hold writes nothing and throws `ExternalGrantError` (ADR-0051).
 	 */
 	async createRoleGrantUnlessHeld(
 		input: CreateGrantInput & { roleKey: string; permissions?: null },
@@ -160,6 +197,9 @@ export class GrantRepository {
 			: `(principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL`
 		const id = uuidv7()
 		const [created] = await this.writer.run<GrantRow>([this.grantChange(id, input, `ON CONFLICT ${target} DO NOTHING`)], audit?.(id))
+		if (created === undefined && !(await this.isEligibleGrant(input))) {
+			throw new ExternalGrantError()
+		}
 		return created ?? null
 	}
 
@@ -172,7 +212,7 @@ export class GrantRepository {
 	private grantChange(id: string, input: CreateGrantInput, onConflict: string): SqlChange {
 		return {
 			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${onConflict} RETURNING *`,
+				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${ELIGIBLE_GRANT_SQL} ${onConflict} RETURNING *`,
 			binds: [
 				id,
 				input.principalId,
@@ -184,6 +224,7 @@ export class GrantRepository {
 				input.grantedBy ?? null,
 				input.expiresAt ?? null,
 				unixNow(),
+				...eligibleGrantBinds(input),
 			],
 		}
 	}

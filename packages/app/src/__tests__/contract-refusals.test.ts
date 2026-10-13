@@ -1,7 +1,7 @@
 // What `compileContract` refuses that the types let through, and what `buildArtifact` refuses in a declaration a
 // reader of source could produce. Every refusal names where it is and the allowed form.
 
-import type { SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
+import { canonicalArtifactJson, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -349,6 +349,34 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			"dimension 'workspace': its directory is 'names' (allowed: 'labels')",
 			"dimension 'note': declares a directory and no members: { manage, list } whose list it labels",
 		])
+	})
+
+	test('external on a role that is not a membership role, or a value other than true', () => {
+		const problems = build({
+			...base,
+			roles: {
+				...base.roles,
+				support: { grants: ['contacts.read'], external: true },
+				editor: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: false },
+			},
+		})
+		expect(problems).toEqual([
+			"role 'support': is declared external and is not a membership role: only a role with member: { scope, … } may admit externals",
+			"role 'editor': its external is false (allowed: external: true, or no external)",
+		])
+	})
+
+	test('an external membership role reaches the artifact; a role without it keeps the shape it had, so digests stay', () => {
+		const artifact = buildArtifact(
+			{
+				...base,
+				roles: { ...base.roles, partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true } },
+			},
+			notesArtifact.tables,
+		)
+		expect(artifact.roles['partner']).toEqual({ grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true })
+		expect(Object.keys(artifact.roles['editor'] ?? {}).sort()).toEqual(['grants', 'member'])
+		expect(canonicalArtifactJson(buildArtifact(base, notesArtifact.tables))).not.toContain('"external"')
 	})
 
 	test("a role named after one of IAM's own roles", () => {

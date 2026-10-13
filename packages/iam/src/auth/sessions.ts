@@ -114,6 +114,7 @@ export type LoginRefusal =
 	| 'oidc_not_admitted'
 	| 'oidc_disabled'
 	| 'oidc_unknown_principal'
+	| 'oidc_external_principal'
 	| 'local_login_refused'
 
 export async function refuseLogin(

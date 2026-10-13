@@ -52,7 +52,7 @@ const scopeEq = (a: Scope | null, b: Scope | null): boolean => a === null ? b ==
 const has = (entries: PermissionEntry[], action: string, scope: Scope | null, source: string): boolean =>
 	entries.some((e) => e.action === action && scopeEq(e.scope, scope) && e.source === source)
 
-const base: ResolutionInputs = { app: APP, grants: [], isBootstrapAdmin: false }
+const base: ResolutionInputs = { app: APP, grants: [], isBootstrapAdmin: false, affiliation: 'internal' }
 
 describe('computePermissions — role grants', () => {
 	test('expands a grant role into its permission patterns (source grant)', () => {
@@ -122,7 +122,7 @@ describe('computePermissions — built-in admin & per-app resolution', () => {
 	test('the built-in admin role resolves even with no app DB roles loaded', () => {
 		const emptyRoles = makeRoleSource({})
 		const entries = computePermissions(
-			{ app: APP, grants: [roleGrant('admin', null)], isBootstrapAdmin: false },
+			{ app: APP, grants: [roleGrant('admin', null)], isBootstrapAdmin: false, affiliation: 'internal' },
 			emptyRoles,
 		)
 		expect(entries).toEqual([{ action: '*', scope: null, source: 'grant' }])
@@ -132,7 +132,7 @@ describe('computePermissions — built-in admin & per-app resolution', () => {
 		const emptyRoles = makeRoleSource({})
 		const adminGrant: GrantRow = { ...roleGrant('admin', null), app: null }
 		const entries = computePermissions(
-			{ app: null, grants: [adminGrant], isBootstrapAdmin: false },
+			{ app: null, grants: [adminGrant], isBootstrapAdmin: false, affiliation: 'internal' },
 			emptyRoles,
 		)
 		expect(entries).toEqual([{ action: '*', scope: null, source: 'grant' }])
@@ -142,7 +142,7 @@ describe('computePermissions — built-in admin & per-app resolution', () => {
 		// `viewer` lives in APP_ROLES; an empty source must not resolve it.
 		const emptyRoles = makeRoleSource({})
 		const entries = computePermissions(
-			{ app: APP, grants: [roleGrant('viewer', null)], isBootstrapAdmin: false },
+			{ app: APP, grants: [roleGrant('viewer', null)], isBootstrapAdmin: false, affiliation: 'internal' },
 			emptyRoles,
 		)
 		expect(entries).toEqual([])
@@ -151,13 +151,13 @@ describe('computePermissions — built-in admin & per-app resolution', () => {
 
 describe('computePermissions — bootstrap', () => {
 	test('bootstrap admin unions a global admin role with source bootstrap', () => {
-		const entries = computePermissions({ ...base, isBootstrapAdmin: true }, roles)
+		const entries = computePermissions({ ...base, isBootstrapAdmin: true, affiliation: 'internal' }, roles)
 		expect(entries).toEqual([{ action: '*', scope: null, source: 'bootstrap' }])
 	})
 
 	test('unions grants and bootstrap', () => {
 		const entries = computePermissions(
-			{ app: APP, grants: [roleGrant('viewer', TEAM('acme'))], isBootstrapAdmin: true },
+			{ app: APP, grants: [roleGrant('viewer', TEAM('acme'))], isBootstrapAdmin: true, affiliation: 'internal' },
 			roles,
 		)
 		expect(has(entries, 'project.read', TEAM('acme'), 'grant')).toBe(true)
@@ -174,7 +174,7 @@ describe('computePermissions — dedup', () => {
 	test('same permission from different sources is kept separately (source distinguishes)', () => {
 		// A global `admin` grant (→ '*' source 'grant') plus bootstrap (→ '*' source 'bootstrap'):
 		// same action+scope, different source, kept as two distinct entries.
-		const entries = computePermissions({ ...base, grants: [roleGrant('admin', null)], isBootstrapAdmin: true }, roles)
+		const entries = computePermissions({ ...base, grants: [roleGrant('admin', null)], isBootstrapAdmin: true, affiliation: 'internal' }, roles)
 		expect(has(entries, '*', null, 'grant')).toBe(true)
 		expect(has(entries, '*', null, 'bootstrap')).toBe(true)
 	})
@@ -195,5 +195,33 @@ describe('computePermissions — membership roles', () => {
 	test('a global grant, or one in another dimension, contributes nothing (fail-closed)', () => {
 		expect(computePermissions({ ...base, grants: [roleGrant('owner', null)] }, memberRoles)).toEqual([])
 		expect(computePermissions({ ...base, grants: [roleGrant('owner', { type: 'workspace', value: 'w' })] }, memberRoles)).toEqual([])
+	})
+})
+
+describe('computePermissions — an external principal (ADR-0051)', () => {
+	const externalRoles = makeRoleSource({
+		partner: { name: 'Partner', permissions: ['project.read'], member: { scope: 'team' }, external: true },
+		owner: { name: 'Owner', permissions: ['project.read', 'project.write'], member: { scope: 'team' } },
+	})
+	const external: ResolutionInputs = { ...base, affiliation: 'external' }
+
+	test('a grant of a role declared external resolves; any other role, inline or built-in grant contributes nothing', () => {
+		const grants = [
+			roleGrant('partner', TEAM('acme')),
+			roleGrant('owner', TEAM('acme')),
+			roleGrant('admin', null),
+			inlineGrant(['project.write'], TEAM('acme')),
+		]
+		expect(computePermissions({ ...external, grants }, externalRoles)).toEqual([{ action: 'project.read', scope: TEAM('acme'), source: 'grant' }])
+	})
+
+	test('a cross-app grant and the bootstrap admin reach no external principal', () => {
+		const crossApp = { ...roleGrant('partner', TEAM('acme')), app: null }
+		expect(computePermissions({ ...external, grants: [crossApp], isBootstrapAdmin: true }, externalRoles)).toEqual([])
+	})
+
+	test('an internal principal holds an external role like any other', () => {
+		const entries = computePermissions({ ...base, grants: [roleGrant('partner', TEAM('acme')), roleGrant('owner', TEAM('acme'))] }, externalRoles)
+		expect(entries.map((entry) => entry.action).sort()).toEqual(['project.read', 'project.write'])
 	})
 })

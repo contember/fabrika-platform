@@ -1,7 +1,7 @@
-import type { Scope } from '@fabrika/auth-core'
+import type { PrincipalAffiliation, Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange, type SqlDialect } from './audit'
-import type { GrantRow } from './grants'
+import { ELIGIBLE_GRANT_SQL, eligibleGrantBinds, type GrantRow } from './grants'
 import { unixNow } from './sql'
 
 /** A single-use delegation grant (`delegation_grants`). Only its hash is stored. */
@@ -42,6 +42,7 @@ export interface MemberGrantRow {
 	label: string
 	email: string | null
 	disabled_at: number | null
+	affiliation: PrincipalAffiliation
 }
 
 /**
@@ -114,19 +115,26 @@ export class MembershipRepository {
 		return this.db.prepare('SELECT * FROM delegation_grants WHERE grant_hash = ?').bind(grantHash).first<DelegationGrantRow>()
 	}
 
-	/** Record a value IAM generated, grant its creator the creator role, and write `audit`, in one transaction. */
-	async createScope(input: { app: string; scope: Scope; createdBy: string; roleKey: string }, audit?: AuditEventInput): Promise<void> {
+	/**
+	 * Record a value IAM generated, grant its creator the creator role, and write `audit`, in one transaction. Both writes
+	 * carry the eligibility condition (ADR-0051), so a creator who may not hold the role writes nothing: answers false.
+	 */
+	async createScope(input: { app: string; scope: Scope; createdBy: string; roleKey: string }, audit?: AuditEventInput): Promise<boolean> {
 		const now = unixNow()
-		await this.db.batch([
-			this.db
-				.prepare('INSERT INTO membership_scopes (app, scope_type, scope_value, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
-				.bind(input.app, input.scope.type, input.scope.value, input.createdBy, now),
-			this.db
-				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-					VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?)`)
-				.bind(uuidv7(), input.createdBy, input.app, input.roleKey, input.scope.type, input.scope.value, input.createdBy, now),
-			...(audit === undefined ? [] : [auditEventStatement(this.db, audit)]),
-		])
+		const eligible = eligibleGrantBinds({ principalId: input.createdBy, app: input.app, roleKey: input.roleKey })
+		const created = this.writer.changed([
+			{
+				sql: `INSERT INTO membership_scopes (app, scope_type, scope_value, created_by, created_at)
+					SELECT ?, ?, ?, ?, ? WHERE ${ELIGIBLE_GRANT_SQL} RETURNING scope_value`,
+				binds: [input.app, input.scope.type, input.scope.value, input.createdBy, now, ...eligible],
+			},
+			{
+				sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
+					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${ELIGIBLE_GRANT_SQL} RETURNING id`,
+				binds: [uuidv7(), input.createdBy, input.app, input.roleKey, input.scope.type, input.scope.value, input.createdBy, now, ...eligible],
+			},
+		], audit)
+		return created.rows(await this.db.batch(created.statements)).length > 0
 	}
 
 	/** The active role grants a principal holds in exactly `scope` — the roles it holds "there". */
@@ -144,7 +152,7 @@ export class MembershipRepository {
 	/** Every active grant of a membership role of `scope.type` in `scope`, with its principal. */
 	async listMemberGrants(app: string, scope: Scope): Promise<MemberGrantRow[]> {
 		const { results } = await this.db
-			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at
+			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at, p.affiliation
 				FROM grants g
 				JOIN principals p ON p.id = g.principal_id
 				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
@@ -159,7 +167,7 @@ export class MembershipRepository {
 	/** Every active grant of a membership role of `scope.type` in `scope` held by `principalId`, with the principal. */
 	async listMemberGrantsOf(app: string, scope: Scope, principalId: string): Promise<MemberGrantRow[]> {
 		const { results } = await this.db
-			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at
+			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at, p.affiliation
 				FROM grants g
 				JOIN principals p ON p.id = g.principal_id
 				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
@@ -172,8 +180,8 @@ export class MembershipRepository {
 	}
 
 	/**
-	 * Grant a membership role in `scope`. Returns the row when this call granted or renewed it, null when it was held;
-	 * `audit` is written exactly then.
+	 * Grant a membership role in `scope`. Returns the row when this call granted or renewed it, null when it was held or
+	 * the principal may not hold it (ADR-0051: the insert carries the condition); `audit` is written exactly then.
 	 */
 	async grantMembershipRole(
 		input: { app: string; principalId: string; roleKey: string; scope: Scope; grantedBy: string },
@@ -182,8 +190,19 @@ export class MembershipRepository {
 		const now = unixNow()
 		const grant: SqlChange = {
 			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?) ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
-			binds: [uuidv7(), input.principalId, input.app, input.roleKey, input.scope.type, input.scope.value, input.grantedBy, now, now],
+				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${ELIGIBLE_GRANT_SQL} ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
+			binds: [
+				uuidv7(),
+				input.principalId,
+				input.app,
+				input.roleKey,
+				input.scope.type,
+				input.scope.value,
+				input.grantedBy,
+				now,
+				...eligibleGrantBinds(input),
+				now,
+			],
 		}
 		const [granted] = await this.writer.run<GrantRow>([grant], audit)
 		return granted ?? null
@@ -386,6 +405,7 @@ export class MembershipRepository {
 						WHERE app = ? AND principal_id = ? AND scope_type = ? AND scope_value = ? AND role_key IN (${placeholders})
 							AND (expires_at IS NULL OR expires_at > ?)
 						${this.#inviterLock})
+					AND ${ELIGIBLE_GRANT_SQL}
 				RETURNING id`,
 			binds: [
 				now,
@@ -399,6 +419,7 @@ export class MembershipRepository {
 				invitation.scope_value,
 				...assigners,
 				now,
+				...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }),
 			],
 		}], audit)
 		const results = await this.db.batch<{ id: string }>([
@@ -406,7 +427,7 @@ export class MembershipRepository {
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
 					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?
-					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)
+					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?) AND ${ELIGIBLE_GRANT_SQL}
 					${RENEW_EXPIRED_MEMBERSHIP}`)
 				.bind(
 					uuidv7(),
@@ -419,6 +440,7 @@ export class MembershipRepository {
 					now,
 					invitation.id,
 					acceptanceId,
+					...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }),
 					now,
 				),
 		])

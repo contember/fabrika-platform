@@ -258,8 +258,21 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		if (callerOptions.link !== undefined && kind !== 'link') {
 			throw new Error("only a link holder's key is bound to an object: testCaller(grants, { kind: 'link', link: { mount, chain } })")
 		}
+		const affiliation = callerOptions.affiliation ?? 'internal'
+		if (affiliation === 'external') {
+			if (kind !== 'human') {
+				throw new Error("only a human is external: testCaller(grants, { affiliation: 'external' })")
+			}
+			const roles = app.contract.vocabulary.roles
+			for (const grant of grants) {
+				if (!('role' in grant) || !Object.hasOwn(roles, grant.role) || roles[grant.role]?.external !== true) {
+					throw new Error('an external caller holds only roles the contract declares external: { member: { … }, external: true }')
+				}
+			}
+		}
 		const credentials = {
 			id: callerOptions.id ?? `${kind}-${issued}`,
+			affiliation,
 			perms: Object.freeze(resolveGrants(app.contract, grants)),
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,

@@ -99,12 +99,13 @@ export async function handleCallback(
 
 	// Admission: who may log in as a human. The central allowlist (`HUMAN_EMAIL_DOMAINS`/
 	// `HUMAN_EMAILS`, with a `*` entry meaning admit-all) gates SELF-PROVISIONING of a new identity.
-	// An already-known or invited principal (and a bootstrap admin) is always admitted regardless —
-	// so check existence WITHOUT lazily creating before refusing a non-allowlisted newcomer.
+	// An already-known or invited INTERNAL principal (and a bootstrap admin) is always admitted regardless —
+	// so check existence WITHOUT lazily creating before refusing a non-allowlisted newcomer. An external
+	// principal is no reason to admit anyone: OIDC never claims it (ADR-0051).
 	if (!admitted(identity.email, services.config)) {
 		const known = (await services.repositories.principals.getUserByExternalId(identity.sub))
 			?? (await services.repositories.principals.getUserByEmail(identity.email))
-		if (!known) {
+		if (!known || known.affiliation === 'external') {
 			return refuse('oidc_not_admitted', { kind: 'not_admitted' }, 403)
 		}
 	}
@@ -113,7 +114,11 @@ export async function handleCallback(
 	// keyed on the IdP `sub` and verified email.
 	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email, requestId)
 	if (!resolved.ok) {
-		return refuse(`oidc_${resolved.reason}`, { kind: 'login_refused', reason: resolved.reason }, 403)
+		// The answer does not say an external principal holds the address.
+		const failure: AuthFailure = resolved.reason === 'external_principal'
+			? { kind: 'not_admitted' }
+			: { kind: 'login_refused', reason: resolved.reason }
+		return refuse(`oidc_${resolved.reason}`, failure, 403)
 	}
 
 	// Re-validate the handoff on the way back: the flight is ours (signature-checked), but the registry

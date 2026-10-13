@@ -1,7 +1,7 @@
 // Test callers: a principal of the test IAM with the permissions its grants resolve to, as IAM resolves them, and
 // the credential it presents.
 
-import type { PermissionEntry } from '@fabrika/auth-core'
+import type { PermissionEntry, PrincipalAffiliation } from '@fabrika/auth-core'
 import type { ActionOf, AnyContract, DimensionOf, RoleOf } from '../contract/define'
 
 /** `app` is the connector of another application: its key reaches only the exports that application consumes. */
@@ -24,6 +24,11 @@ export interface TestCallerOptions {
 	readonly via?: 'session' | 'key'
 	readonly id?: string
 	readonly label?: string
+	/**
+	 * Defaults to `internal`. An `external` human holds only roles the contract declares `external`, as IAM resolves it
+	 * (ADR-0051); the kit refuses any other grant for one.
+	 */
+	readonly affiliation?: PrincipalAffiliation
 	/** The consuming application's id, for an `app` caller. */
 	readonly app?: string
 	/**
@@ -41,6 +46,8 @@ export interface TestLink {
 interface TestCallerCredential {
 	/** The principal id, or the share key's credential id for a link. */
 	readonly id: string
+	/** `internal` for every caller but an `external` human. */
+	readonly affiliation: PrincipalAffiliation
 	readonly perms: readonly PermissionEntry[]
 	/** The `px_` key a key caller presents as a bearer; `null` for a session. */
 	readonly key: string | null

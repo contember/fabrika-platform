@@ -219,6 +219,18 @@ fails if that stops being true — it is the guard, not documentation of one.
   reaches no application. Declaring a role a membership role while it has a grant outside its
   dimension is a 409 naming the grants, and a guard statement in the reconcile batch rolls it back if
   one was written after the check. Resolution is the third lock: such a grant contributes nothing.
+- **AN EXTERNAL PRINCIPAL HOLDS ONLY GRANTS OF A ROLE ITS APPLICATION DECLARES EXTERNAL (ADR-0051).**
+  `principals.affiliation` is `internal` (every service, every row before migration 0011) or `external`;
+  `roles.external` is 1 only on a reconciled membership role (both `CHECK`ed). Three locks, like `member.scope`:
+  every grant write carries `ELIGIBLE_GRANT_SQL` in the statement that writes (`repositories/grants.ts`, and the
+  membership repository's assignment, acceptance and scope creation), after `externalGrantProblem`
+  (`src/contract-rules.ts`) names the reason — so no inline permissions, custom policy, built-in role or cross-app
+  grant for an external; a reconcile that declares a role not external while an external holds it is a 409 naming the
+  grants, plus a guard statement in the batch; and `computePermissions` drops such a grant, and gives an external no
+  bootstrap `admin` and no cross-app grant. OIDC never claims or creates an external principal: `resolveUserPrincipal`
+  refuses it (`oidc_external_principal`), `claimInvitedUser` matches only an internal row, and the allowlist's
+  known-principal bypass admits only an internal one. Only `principals.promote` (installation admin, audited) makes one
+  internal; there is no demotion.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and

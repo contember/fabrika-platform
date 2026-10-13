@@ -57,6 +57,8 @@ export async function handleInvitation(request: Request, services: Services, req
 				return invalid()
 			case 'wrong_principal':
 				return invitationOutcomePage({ presentation: linked, title: (t) => t.wrongAddressTitle, text: (t) => t.wrongAddressText, status: 403 })
+			case 'not_eligible':
+				return invitationOutcomePage({ presentation: linked, title: (t) => t.unavailableTitle, text: (t) => t.roleNotEligible, status: 403 })
 			case 'not_allowed':
 				return invitationOutcomePage({ presentation: linked, title: (t) => t.unavailableTitle, text: (t) => t.inviterCannotGrant, status: 403 })
 		}

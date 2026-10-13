@@ -220,6 +220,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		z.strictObject({
 			grants: actions,
 			member: z.strictObject({ scope: name, assignableBy: z.array(roleKey) }).nullable(),
+			external: z.literal(true).optional(),
 		}),
 	),
 	mounts: record(mount),

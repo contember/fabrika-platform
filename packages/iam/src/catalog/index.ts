@@ -63,6 +63,8 @@ export interface PageText {
 		readonly wrongAddressTitle: string
 		readonly wrongAddressText: string
 		readonly inviterCannotGrant: string
+		/** An external principal and a role not declared external (ADR-0051). */
+		readonly roleNotEligible: string
 		readonly acceptedTitle: string
 		readonly acceptedText: (values: { readonly role: string; readonly scope: string; readonly appName: string }) => string
 		readonly invalidTitle: string

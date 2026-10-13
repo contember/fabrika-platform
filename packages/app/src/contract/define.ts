@@ -77,6 +77,11 @@ export interface RoleDef<A extends string, D extends string, R extends string> {
 	readonly grants: readonly A[]
 	/** A membership role, granted in one value of `scope` by a holder of an `assignableBy` role there. */
 	readonly member?: { readonly scope: D; readonly assignableBy: readonly R[] }
+	/**
+	 * An external principal, a person from outside the organization, may hold this membership role (ADR-0051). Absent,
+	 * only internal people hold it. Only a role with `member` may declare it; an internal person may hold it too.
+	 */
+	readonly external?: true
 }
 
 export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation {

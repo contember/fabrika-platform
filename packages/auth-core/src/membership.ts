@@ -6,7 +6,7 @@
 // and a platform component that implements `IamRpc` does not have to.
 
 import type { ContractArtifact, DimensionArtifact, EndpointRow } from './contract'
-import type { Scope } from './types'
+import type { PrincipalAffiliation, Scope } from './types'
 
 /**
  * What an endpoint may ask IAM about the members of its own target (`ctx.members`): `manage` where its action is the
@@ -211,6 +211,8 @@ export interface MemberItem {
 	email: string | null
 	roles: string[]
 	disabled: boolean
+	/** An `external` member is a person from outside the organization (ADR-0051). */
+	affiliation: PrincipalAffiliation
 }
 
 export interface InvitationItem {
@@ -238,6 +240,7 @@ export interface FoundMember {
 	/** The principal's display label; null unless the dimension declares `directory: 'labels'` or the caller holds `members.manage` there. */
 	label: string | null
 	disabled: boolean
+	affiliation: PrincipalAffiliation
 }
 
 /** `member` is null for a principal that holds no membership role in `scope`, unknown ones included. */
