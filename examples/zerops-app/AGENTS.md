@@ -2871,12 +2871,13 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
 - `src/db/__tests__/<table>.policy-isolation.test.ts`: the data layer keeps each table's rows in their scope.
 - `src/__tests__/endpoint-access.test.ts`: every `on` and `in` endpoint refuses another scope's object (404 or 403);
   every `on` and `over` endpoint, and every `in` endpoint that declares `sql`, answers nothing of another scope; a
-  caller with only an endpoint's write action reaches its own object (200). An `app` or `creates` endpoint refuses a
-  holder of its action in one scope only (403) and answers a global holder.
+  caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
+  `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder.
 - Their kit stands in for IAM: it creates a scope, assigns or invites a member and issues a link under IAM's rules for
   the caller's grants, and grants nobody anything. So the caller of an endpoint with the dimension's `members.manage`
-  holds it on the object itself, with every membership role there (one of them is in the assigned role's
-  `assignableBy`); the caller of an endpoint that `issues` also holds the actions its link grants.
+  holds it on the object itself, with one role the assigned role's `assignableBy` names and the assigned role's
+  actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
+  endpoint that `issues` also holds the actions its link grants.
 
 Run them after every change of the contract or the tables. The platform runs them at every start, and the
 application is not ready until each passes. A failing generated test is a bug in the handler, the policy or the

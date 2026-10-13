@@ -29,8 +29,8 @@
 		"archiveSha256": "2040d69c8da442a88817c841359ece578e36fd25e1421cb4fdc7f781a95c9858"
 	},
 	"application": {
-		"commitSha": "03fc2fe2e85b934a25efde8abe36b4837090c473",
-		"treeSha": "a1ab5417e11d7e6fa88a221e3c93277ceefbd61f",
+		"commitSha": "1d3c23c02d7c59693a0b7b8a951a4ff42d1e58d6",
+		"treeSha": "3d11a0de73c8f6aa71dcc0895f9572564a94378f",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -40,7 +40,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "e1a97ac604ebe17e4f3912d0ab76931905fbbfdc",
+				"sha": "92f46c9f73707ae6e6df9c7272f3122183432201",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -118,13 +118,13 @@
 			},
 			{
 				"path": "src",
-				"sha": "dc63e6ad644126afe5af8be8d465dd93db070708",
+				"sha": "ff70db16fee0fe592c00daca7c15d518c844be43",
 				"type": "tree",
 				"mode": "040000"
 			},
 			{
 				"path": "src/__tests__",
-				"sha": "c65a763c1ea55de2759edc4c2dec1a2de1960c0d",
+				"sha": "1ce2d4a3d95920784b9376bc22131e4475a62c32",
 				"type": "tree",
 				"mode": "040000"
 			},
@@ -136,7 +136,7 @@
 			},
 			{
 				"path": "src/__tests__/endpoint-access.test.ts",
-				"sha": "56e5ed9dc73cc83010854c3da61d674308a61e84",
+				"sha": "bfc9d2e2c84c14bfebd012488ac014def0048469",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -263,12 +263,12 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 66077,
-		"archiveSha256": "b0e8161e44184d66e6a5e085e60c21a965f9b6abdb3c226ba1c1adca98f0dea0"
+		"archiveBytes": 66149,
+		"archiveSha256": "1d02a2cfc714ac5dc8da82888c38262f693f736e91bb1a25f3d9a2518732169a"
 	},
 	"agentChange": {
-		"commitSha": "6cf18c7e68da13fd861947d3a005723c4a10d420",
-		"treeSha": "2aa5bbb9e3eac01b47af3d4ac3247e08e88c1910",
+		"commitSha": "421fb46344280645787441dff0394ece87a01da1",
+		"treeSha": "39caa61947ce9eb699d4d76cbef8752faae762fd",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -278,7 +278,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "e1a97ac604ebe17e4f3912d0ab76931905fbbfdc",
+				"sha": "92f46c9f73707ae6e6df9c7272f3122183432201",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -368,13 +368,13 @@
 			},
 			{
 				"path": "src",
-				"sha": "d609222193936e9acecce56c941f44c606c68b86",
+				"sha": "323b17d57deed8e5d2c88cc626c62c98361a592d",
 				"type": "tree",
 				"mode": "040000"
 			},
 			{
 				"path": "src/__tests__",
-				"sha": "d190999386d50c0af81fa3116e20d8256ef0c4be",
+				"sha": "c217015514a6b4939a84d2854c165cb3953d8417",
 				"type": "tree",
 				"mode": "040000"
 			},
@@ -386,7 +386,7 @@
 			},
 			{
 				"path": "src/__tests__/endpoint-access.test.ts",
-				"sha": "39d10f3c0d8cbdad953e82708607bdb555bc4e51",
+				"sha": "39f8b734b0b9f882ab8544f999cc05c47bb33855",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -519,7 +519,7 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 66790,
-		"archiveSha256": "31be61db67e8c55e330974e692be935ef3eb70813aa89a8363bfc403b7bbed1a"
+		"archiveBytes": 66945,
+		"archiveSha256": "41681d21573269369c0568e5a7ce6f61b2109d570c57561e67ee8d5f4cb2fa08"
 	}
 }

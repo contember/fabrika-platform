@@ -1,11 +1,23 @@
 // The endpoint access kit's stand-in for IAM's membership writes: each operation answers under IAM's rules for the
 // caller's grants and spends one delegation grant, and none of them grants the kit's callers anything.
 
-import type { MembershipCaller, MemberTarget, PermissionEntry, Scope } from '@fabrika/auth-core'
-import { describe, expect, test } from 'bun:test'
+import { defineContract } from '@fabrika/app/contract'
+import {
+	DELEGATION_GRANT_TTL_SECONDS,
+	MAX_INVITATION_EMAIL_LENGTH,
+	MAX_LINK_CHAIN_LENGTH,
+	MAX_MEMBERSHIP_SCOPE_PART_LENGTH,
+	type MembershipCaller,
+	type MemberTarget,
+	type PermissionEntry,
+	type Scope,
+} from '@fabrika/auth-core'
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test'
+import { z } from 'zod/v4'
 import { compileContract } from '../contract/compile'
 import type { LabelledTestCaller, LinkTestCaller, TestCaller } from '../testing/caller'
-import { kitMembership, type TestMembership } from '../testing/membership'
+import { managerGrants } from '../testing/endpoint-access'
+import { credentialCallers, kitMembership, type MintedToken, type TestMembership } from '../testing/membership'
 import { contract } from './fixtures/multi-tenant/fabrika.contract'
 import { tables } from './fixtures/multi-tenant/src/db/tables'
 
@@ -18,12 +30,14 @@ const entry = (action: string, scope: Scope | null = null): PermissionEntry => (
 const roleEntries = (role: 'owner' | 'editor', scope: Scope): PermissionEntry[] =>
 	(artifact.roles[role]?.grants ?? []).map((action) => entry(action, scope))
 
-/** The kit's callers, each with its credential, its permissions and its membership roles. */
-function callersOf(...callers: { readonly caller: TestCaller; readonly memberships: readonly TestMembership[] }[]) {
-	return {
-		byCredential: (credential: string) => callers.find(({ caller }) => caller.key === credential)?.caller,
-		all: () => callers,
-	}
+const APP = 'notes@test'
+
+type Held = { readonly caller: TestCaller; readonly memberships: readonly TestMembership[] }
+
+/** The kit's callers of `APP`, each with its `px_` key, its permissions and its membership roles. */
+function callersOf(callers: readonly Held[], tokens: ReadonlyMap<string, MintedToken> = new Map()) {
+	const keys = new Map(callers.flatMap(({ caller }) => (caller.key === null ? [] : [[caller.key, caller] as const])))
+	return credentialCallers(APP, keys, tokens, () => callers)
 }
 
 function person(id: string, perms: readonly PermissionEntry[], kind: LabelledTestCaller['kind'] = 'human'): LabelledTestCaller {
@@ -49,11 +63,14 @@ const scopedStarter = person('scoped-starter', [entry('workspaces.create', ACME)
 const script = person('script', [entry('workspaces.create')], 'machine')
 const sharer = person('sharer', [entry('notes.share', ACME)])
 const outsider = person('outsider', roleEntries('owner', OTHER))
+const coOwner = person('co-owner', roleEntries('owner', ACME))
+const connector = person('connector', [entry('notes.share', ACME), entry('notes.read', ACME), entry('notes.admin', ACME)], 'app')
 
-const standIn = () =>
+const standIn = (extra: readonly Held[] = []) =>
 	kitMembership(
 		artifact,
-		callersOf(
+		callersOf([
+			...extra,
 			{ caller: owner, memberships: [{ role: 'owner', scope: ACME }] },
 			{ caller: editor, memberships: [{ role: 'editor', scope: ACME }] },
 			{ caller: manager, memberships: [{ role: 'editor', scope: ACME }] },
@@ -63,10 +80,11 @@ const standIn = () =>
 			{ caller: sharer, memberships: [] },
 			{ caller: outsider, memberships: [{ role: 'owner', scope: OTHER }] },
 			{ caller: holder, memberships: [] },
-		),
+			{ caller: connector, memberships: [] },
+		]),
 	)
 
-const as = (caller: TestCaller, requestId = 'req-1'): MembershipCaller => ({ app: 'notes@test', credential: caller.key, requestId })
+const as = (caller: TestCaller, requestId = 'req-1'): MembershipCaller => ({ app: APP, credential: caller.key, requestId })
 
 /** A grant the proxy would obtain for `endpoint`, or the refusal's reason. */
 async function delegation(membership: ReturnType<typeof standIn>, caller: TestCaller, endpoint: string, requestId = 'req-1'): Promise<string> {
@@ -146,8 +164,9 @@ describe('the stand-in assigns and revokes under members.manage, assignableBy an
 		const membership = standIn()
 		const revoke = async (caller: TestCaller, member: { principalId: string } | { invitationId: string }) =>
 			membership.rpc.revokeMember({ ...as(caller), delegation: await delegation(membership, caller, 'api.members.remove'), scope: ACME, member })
-		expect(await revoke(owner, { principalId: 'editor' })).toEqual({ ok: true })
 		expect(await revoke(manager, { principalId: 'editor' })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await revoke(owner, { principalId: 'editor' })).toEqual({ ok: true })
+		expect(await revoke(manager, { principalId: 'editor' })).toEqual({ ok: true })
 		expect(await revoke(owner, { invitationId: 'invitation-unknown' })).toEqual({ ok: false, reason: 'not_found' })
 		const invited = await assign(membership, owner, ACME, 'editor')
 		const invitationId = invited.ok && 'invited' in invited ? invited.invited.invitationId : ''
@@ -176,5 +195,186 @@ describe('the stand-in issues a share link for a holder of issuedBy and every gr
 		expect(await membership.rpc.revokeLink({ ...as(outsider), id })).toEqual({ ok: false, reason: 'not_allowed' })
 		expect(await membership.rpc.revokeLink({ ...as(owner), id })).toEqual({ ok: true })
 		expect(await membership.rpc.revokeLink({ ...as(editor), id: 'link-unknown' })).toEqual({ ok: false, reason: 'not_found' })
+	})
+})
+
+describe('the stand-in keeps the last creator, as IAM does', () => {
+	const revoke = async (membership: ReturnType<typeof standIn>, caller: TestCaller, principalId: string) =>
+		membership.rpc.revokeMember({
+			...as(caller),
+			delegation: await delegation(membership, caller, 'api.members.remove'),
+			scope: ACME,
+			member: { principalId },
+		})
+
+	test("the only owner's own revoke is last_creator", async () => {
+		expect(await revoke(standIn(), owner, 'owner')).toEqual({ ok: false, reason: 'last_creator' })
+	})
+
+	test('with another owner one revoke passes, and the next one of the remaining owner is last_creator', async () => {
+		const membership = standIn([{ caller: coOwner, memberships: [{ role: 'owner', scope: ACME }] }])
+		expect(await revoke(membership, owner, 'co-owner')).toEqual({ ok: true })
+		expect(await revoke(membership, owner, 'owner')).toEqual({ ok: false, reason: 'last_creator' })
+	})
+
+	test('an owner it assigned counts as another holder, and the directory still shows nobody new', async () => {
+		const membership = standIn()
+		const assigned = await membership.rpc.assignMember({
+			...as(owner),
+			delegation: await delegation(membership, owner, 'api.members.invite'),
+			scope: ACME,
+			role: 'owner',
+			member: { principalId: 'starter' },
+		})
+		expect(assigned).toMatchObject({ ok: true })
+		expect(await revoke(membership, owner, 'owner')).toEqual({ ok: true })
+		const listed = await membership.rpc.listMembers({ ...as(owner), scope: ACME })
+		expect(listed.ok ? listed.members.map((member) => member.principalId).sort() : listed.reason).toEqual(['editor', 'manager', 'owner'])
+	})
+})
+
+describe("the stand-in applies IAM's input bounds", () => {
+	const longest = 'v'.repeat(MAX_MEMBERSHIP_SCOPE_PART_LENGTH)
+
+	test('a scope type or value is 1 to the maximum characters', async () => {
+		const membership = standIn()
+		const list = (scope: Scope) => membership.rpc.listMembers({ ...as(owner), scope })
+		expect(await list({ type: 'workspace', value: '' })).toMatchObject({ reason: 'invalid_request' })
+		expect(await list({ type: 'workspace', value: `${longest}v` })).toMatchObject({ reason: 'invalid_request' })
+		expect(await list({ type: 'workspace', value: longest })).toEqual({ ok: false, reason: 'not_allowed' })
+		const assigned = await membership.rpc.assignMember({
+			...as(owner),
+			delegation: await delegation(membership, owner, 'api.members.invite'),
+			scope: { type: 'workspace', value: '' },
+			role: 'editor',
+			member: { email: 'ann@example.test' },
+		})
+		expect(assigned).toMatchObject({ reason: 'invalid_request' })
+	})
+
+	test('a link chain names at most the maximum values, each one in bounds', async () => {
+		const membership = standIn()
+		const issue = (chain: Scope[]) => membership.rpc.issueLink({ ...as(owner), mount: 'shared', chain, days: 1 })
+		expect(await issue([{ type: 'note', value: '' }, ACME])).toMatchObject({ reason: 'invalid_request' })
+		const tooLong = Array.from({ length: MAX_LINK_CHAIN_LENGTH + 1 }, () => NOTE)
+		expect(await issue(tooLong)).toEqual({ ok: false, reason: 'invalid_request', message: `a link chain names 1 to ${MAX_LINK_CHAIN_LENGTH} values` })
+	})
+
+	test('an invited address is normalized and at most the maximum length', async () => {
+		const membership = standIn()
+		const invite = async (email: string) =>
+			membership.rpc.assignMember({
+				...as(owner),
+				delegation: await delegation(membership, owner, 'api.members.invite'),
+				scope: ACME,
+				role: 'editor',
+				member: { email },
+			})
+		const local = 'a'.repeat(MAX_INVITATION_EMAIL_LENGTH - '@example.test'.length)
+		expect(await invite(`${local}a@example.test`)).toMatchObject({ reason: 'invalid_request' })
+		expect(await invite(` Ann@Example.TEST `)).toMatchObject({ ok: true })
+		const [write] = membership.asked
+		expect(write?.operation === 'assignMember' ? write.member : null).toEqual({ email: 'ann@example.test' })
+		expect(await invite(`${local}@example.test`)).toMatchObject({ ok: true })
+	})
+
+	test('a lookup of an empty or too long principal id finds no member', async () => {
+		const blank = person('', roleEntries('editor', ACME))
+		const membership = standIn([{ caller: blank, memberships: [{ role: 'editor', scope: ACME }] }])
+		const find = (principalId: string) => membership.rpc.findMember({ ...as(owner), scope: ACME, principalId, action: 'notes.read' })
+		expect(await find('')).toEqual({ ok: true, member: null })
+		expect(await find(`${longest}v`)).toEqual({ ok: true, member: null })
+		expect(await find('editor')).toMatchObject({ ok: true, member: { principalId: 'editor' } })
+	})
+})
+
+describe('the stand-in resolves a credential as IAM does', () => {
+	test('a credential presented for another application is invalid_token', async () => {
+		const membership = standIn()
+		const asked = await membership.rpc.requestDelegation({ ...as(owner), app: 'other@test', endpoint: 'api.members.invite' })
+		expect(asked).toEqual({ ok: false, reason: 'invalid_token' })
+	})
+
+	test("another application's connector manages no member, lists none and issues no link", async () => {
+		const membership = standIn()
+		expect(await membership.rpc.requestDelegation({ ...as(connector), endpoint: 'api.members.invite' })).toEqual({ ok: false, reason: 'invalid_token' })
+		expect(await membership.rpc.listMembers({ ...as(connector), scope: ACME })).toEqual({ ok: false, reason: 'invalid_token' })
+		expect(await membership.rpc.issueLink({ ...as(connector), mount: 'shared', chain: [NOTE, ACME], days: 1 })).toEqual({
+			ok: false,
+			reason: 'invalid_token',
+		})
+	})
+
+	test('a token counts until its exp, and not at it', () => {
+		const at = Math.floor(Date.now() / 1000)
+		const tokens = new Map<string, MintedToken>([['live', { caller: owner, expiresAt: at + 60 }], ['spent', { caller: owner, expiresAt: at }]])
+		const callers = callersOf([], tokens)
+		expect(callers.byCredential(APP, 'live')).toBe(owner)
+		expect(callers.byCredential(APP, 'spent')).toBeUndefined()
+		expect(callers.byCredential('other@test', 'live')).toBeUndefined()
+	})
+})
+
+describe('a delegation grant expires at its expiresAt, as IAM consumes it', () => {
+	afterEach(() => {
+		setSystemTime()
+	})
+
+	test('a grant spent one second before it passes; one spent at it is invalid_delegation', async () => {
+		const start = new Date('2026-10-13T12:00:00Z')
+		const revokeAt = async (offset: number) => {
+			setSystemTime(start)
+			const membership = standIn()
+			const grant = await delegation(membership, owner, 'api.members.remove')
+			setSystemTime(new Date(start.getTime() + offset * 1000))
+			return membership.rpc.revokeMember({ ...as(owner), delegation: grant, scope: ACME, member: { principalId: 'editor' } })
+		}
+		expect(await revokeAt(DELEGATION_GRANT_TTL_SECONDS - 1)).toEqual({ ok: true })
+		expect(await revokeAt(DELEGATION_GRANT_TTL_SECONDS)).toEqual({ ok: false, reason: 'invalid_delegation' })
+	})
+})
+
+describe('a member manager of the generated cases holds the least IAM requires', () => {
+	const team = compileContract(
+		defineContract({
+			app: 'teams',
+			dimensions: { team: { members: { manage: 'teams.admin', list: 'teams.read' } } },
+			actions: { 'teams.read': 'Read', 'teams.write': 'Write', 'teams.audit': 'Audit', 'teams.admin': 'Manage members' },
+			roles: {
+				viewer: { grants: ['teams.read'], member: { scope: 'team', assignableBy: ['lead'] } },
+				editor: { grants: ['teams.read', 'teams.write'], member: { scope: 'team', assignableBy: ['lead', 'editor'] } },
+				auditor: { grants: ['teams.read', 'teams.audit'], member: { scope: 'team', assignableBy: ['lead'] } },
+				lead: { grants: ['teams.read', 'teams.write', 'teams.admin'], member: { scope: 'team', assignableBy: ['lead'] } },
+			},
+		}, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				invite: c.mutation({
+					input: z.strictObject({ teamId: z.string(), role: z.string() }),
+					output: z.strictObject({ ok: z.boolean() }),
+					access: { action: 'teams.admin', in: 'team', from: 'teamId' },
+				}),
+			}),
+		})),
+		{},
+	)
+	const scope = { type: 'team', value: 't-1' }
+
+	test('the role the input names: one assigning role and its actions, no other role', () => {
+		expect(managerGrants(team, 'teams.admin', { teamId: 't-1', role: 'editor' }, scope)).toEqual([
+			{ action: 'teams.admin', scope },
+			{ action: 'teams.read', scope },
+			{ action: 'teams.write', scope },
+			{ role: 'editor', scope },
+		])
+	})
+
+	test('an input that names no role covers every membership role through the one role that assigns them all', () => {
+		expect(managerGrants(team, 'teams.admin', { teamId: 't-1' }, scope)).toEqual([
+			{ action: 'teams.admin', scope },
+			{ action: 'teams.audit', scope },
+			{ action: 'teams.read', scope },
+			{ action: 'teams.write', scope },
+			{ role: 'lead', scope },
+		])
 	})
 })

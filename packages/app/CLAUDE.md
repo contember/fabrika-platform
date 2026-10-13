@@ -784,8 +784,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   storage: `kit.file` seeds one file per scope through the real upload endpoint. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
-  holder, reaches its own object; on an endpoint that manages members, also every membership role on the target's
-  value, and on one that issues links the actions they grant, as IAM requires); each takes the author's seed, the state
+  holder, reaches its own object; on an endpoint that manages members, also on the target's value one assigning role
+  and the actions of the roles its input names, and on one that issues links the actions they grant, as IAM requires); each takes the author's seed, the state
   `seedWorlds` writes into both rows. An `app` or `creates` procedure gets `scoped` (a holder of the action in one
   scope: exactly 403, from the proxy or IAM) and `global` (a global holder: answered unless a 401, 403 or 5xx), and an application table `appPolicyIsolationKit`, whose probe procedures are
   `app` endpoints over one row `seedRow` writes. A leak scans every value of

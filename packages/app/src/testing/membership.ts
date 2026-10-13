@@ -2,7 +2,8 @@
 // `get()`) from the kit's own callers, as IAM answers it from its grants. `kitDirectory`, the default of `testKit`,
 // refuses every write by name. `kitMembership`, which the endpoint access kit boots with, also answers the writes
 // under IAM's rules for the caller's grants: the delegation grant, `members.manage`, `assignableBy`, the role's
-// actions and a link mount's `issuedBy`. It records each write it allowed and grants the kit's callers nothing.
+// actions, a link mount's `issuedBy`, the last creator and IAM's input bounds. It records each write it allowed and
+// grants the kit's callers nothing.
 
 import {
 	API_KEY_PREFIX,
@@ -19,14 +20,18 @@ import {
 	type FindMemberInput,
 	type FindMemberResult,
 	type IamMembershipRpc,
+	invitedAddress,
 	type IssueLinkInput,
 	type IssueLinkResult,
 	type ListMembersInput,
 	type ListMembersResult,
 	matchAction,
+	MAX_LINK_CHAIN_LENGTH,
+	MAX_MEMBERSHIP_SCOPE_PART_LENGTH,
 	type MemberItem,
 	type MembershipCaller,
 	type MembershipFailure,
+	membershipScopeProblem,
 	type MemberTarget,
 	permits,
 	type RequestDelegationInput,
@@ -46,8 +51,11 @@ export interface TestMembership {
 }
 
 export interface DirectoryCallers {
-	/** The caller a membership request's credential (its token or `px_` key) belongs to. */
-	byCredential(credential: string): TestCaller | undefined
+	/**
+	 * The caller a membership request's credential (its token or `px_` key) belongs to, as IAM verifies it for `app`:
+	 * none for a credential of another application or an expired token.
+	 */
+	byCredential(app: string, credential: string): TestCaller | undefined
 	/** Every caller with its membership roles. */
 	all(): readonly { readonly caller: TestCaller; readonly memberships: readonly TestMembership[] }[]
 }
@@ -72,6 +80,33 @@ export interface KitMembership {
 	readonly rpc: IamMembershipRpc
 	/** Every write it allowed, in order. */
 	readonly asked: readonly AskedWrite[]
+}
+
+/** A token the kit's IAM signed, for the caller it was minted for, until its `exp`. */
+export interface MintedToken {
+	readonly caller: TestCaller
+	readonly expiresAt: number
+}
+
+/**
+ * The kit's callers as IAM resolves a membership request's credential for `app`: a `px_` key the kit issued, or a token
+ * it signed that has not expired; nothing for another application.
+ */
+export function credentialCallers(
+	app: string,
+	keys: ReadonlyMap<string, TestCaller>,
+	tokens: ReadonlyMap<string, MintedToken>,
+	memberships: () => ReturnType<DirectoryCallers['all']>,
+): DirectoryCallers {
+	return {
+		byCredential(audience, credential) {
+			if (audience !== app) return undefined
+			const minted = tokens.get(credential)
+			if (minted === undefined) return keys.get(credential)
+			return minted.expiresAt > now() ? minted.caller : undefined
+		},
+		all: memberships,
+	}
 }
 
 const NOT_ALLOWED: MembershipFailure = { ok: false, reason: 'not_allowed' }
@@ -108,13 +143,13 @@ export function writesThroughIam(artifact: ContractArtifact): boolean {
 }
 
 /**
- * The caller of a membership operation, as IAM resolves it: a link holder is never a member caller, and `userOnly`
- * refuses a script and a connector, which create no scope and manage no member.
+ * The caller of a membership operation, as IAM resolves it: another application's connector calls none, a link holder
+ * is never a member caller, and `userOnly` refuses a script, which creates no scope and manages no member.
  */
 function memberCaller(callers: DirectoryCallers, input: MembershipCaller, userOnly: boolean): LabelledTestCaller | MembershipFailure {
 	if (input.credential === null) return { ok: false, reason: 'missing_token' }
-	const caller = callers.byCredential(input.credential)
-	if (caller === undefined) return { ok: false, reason: 'invalid_token' }
+	const caller = callers.byCredential(input.app, input.credential)
+	if (caller === undefined || caller.kind === 'app') return { ok: false, reason: 'invalid_token' }
 	if (caller.kind === 'link' || (userOnly && caller.kind !== 'human')) return NOT_ALLOWED
 	return caller
 }
@@ -139,6 +174,8 @@ function membershipsOf(callers: DirectoryCallers, principalId: string): readonly
 function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, input: ListMembersInput): ListMembersResult {
 	const caller = memberCaller(callers, input, false)
 	if (isFailure(caller)) return caller
+	const problem = membershipScopeProblem(input.scope)
+	if (problem !== null) return invalid(problem)
 	const dimension = dimensionOf(artifact, input.scope.type)
 	if (dimension?.members === null || dimension?.members === undefined) {
 		return invalid(`scope '${input.scope.type}' declares no members`)
@@ -163,6 +200,8 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, inpu
 function findMember(artifact: ContractArtifact, callers: DirectoryCallers, input: FindMemberInput): FindMemberResult {
 	const caller = memberCaller(callers, input, false)
 	if (isFailure(caller)) return caller
+	const problem = membershipScopeProblem(input.scope)
+	if (problem !== null) return invalid(problem)
 	const dimension = dimensionOf(artifact, input.scope.type)
 	if (dimension?.members === null || dimension?.members === undefined) {
 		return invalid(`scope '${input.scope.type}' declares no members`)
@@ -171,6 +210,7 @@ function findMember(artifact: ContractArtifact, callers: DirectoryCallers, input
 	if (!directoryLookups(artifact, input.scope.type).includes(input.action) || !permits([...caller.perms], input.action, input.scope)) {
 		return NOT_ALLOWED
 	}
+	if (input.principalId === '' || input.principalId.length > MAX_MEMBERSHIP_SCOPE_PART_LENGTH) return { ok: true, member: null }
 	const found = callers.all().find(({ caller: member, memberships }) =>
 		member.id === input.principalId && rolesIn(artifact, memberships, input.scope).length > 0
 	)
@@ -197,6 +237,38 @@ export function kitDirectory(artifact: ContractArtifact, callers: DirectoryCalle
 	}
 }
 
+/**
+ * The membership roles held after the stand-in's own assignments and revocations: what a revoke removes and whether a
+ * value keeps a creator. It never reaches the kit's callers, whose tokens and directory stay as the test made them.
+ */
+function membershipChanges(artifact: ContractArtifact, callers: DirectoryCallers) {
+	const key = (principalId: string, role: string, scope: Scope) => JSON.stringify([principalId, role, scope.type, scope.value])
+	const added = new Map<string, { readonly principalId: string; readonly role: string; readonly scope: Scope }>()
+	const removed = new Set<string>()
+	const rolesOf = (principalId: string, scope: Scope): string[] => {
+		const held = [
+			...rolesIn(artifact, membershipsOf(callers, principalId), scope),
+			...[...added.values()].filter((grant) => grant.principalId === principalId && sameScope(grant.scope, scope)).map((grant) => grant.role),
+		]
+		return [...new Set(held)].filter((role) => !removed.has(key(principalId, role, scope)))
+	}
+	const principals = () => [...new Set([...callers.all().map(({ caller }) => caller.id), ...[...added.values()].map((grant) => grant.principalId)])]
+	return {
+		rolesOf,
+		othersHold: (principalId: string, role: string, scope: Scope): boolean =>
+			principals().some((other) => other !== principalId && rolesOf(other, scope).includes(role)),
+		assign(principalId: string, role: string, scope: Scope): void {
+			removed.delete(key(principalId, role, scope))
+			added.set(key(principalId, role, scope), { principalId, role, scope })
+		},
+		revoke(principalId: string, role: string, scope: Scope): void {
+			removed.add(key(principalId, role, scope))
+		},
+	}
+}
+
+const sameScope = (left: Scope, right: Scope): boolean => left.type === right.type && left.value === right.value
+
 interface DelegationGrant {
 	readonly principalId: string
 	readonly endpoint: string
@@ -212,13 +284,14 @@ interface DelegationGrant {
 export function kitMembership(artifact: ContractArtifact, callers: DirectoryCallers): KitMembership {
 	const asked: AskedWrite[] = []
 	const grants = new Map<string, DelegationGrant>()
+	const changes = membershipChanges(artifact, callers)
 
 	/** Spends the request's grant before its binding is compared, as IAM does, so each attempt is single use. */
 	const spend = (caller: TestCaller, input: { delegation: string; requestId: string }, purpose: EndpointDelegation, dimension: string) => {
 		const grant = grants.get(input.delegation)
 		grants.delete(input.delegation)
 		if (
-			grant === undefined || grant.expiresAt < now() || grant.principalId !== caller.id || grant.requestId !== input.requestId
+			grant === undefined || grant.expiresAt <= now() || grant.principalId !== caller.id || grant.requestId !== input.requestId
 			|| grant.purpose !== purpose || grant.dimension !== dimension
 		) {
 			return INVALID_DELEGATION
@@ -281,17 +354,21 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (isFailure(caller)) return caller
 		const spent = spend(caller, input, 'members', input.scope.type)
 		if ('ok' in spent) return spent
+		const scopeProblem = membershipScopeProblem(input.scope)
+		if (scopeProblem !== null) return invalid(scopeProblem)
 		const problem = manageProblem(caller, input.scope) ?? roleProblem(caller, input.scope, input.role)
 		if (problem !== null) return problem
 		if ('principalId' in input.member) {
 			const { principalId } = input.member
 			if (!callers.all().some(({ caller: target }) => target.id === principalId && target.kind === 'human')) return NOT_FOUND
+			changes.assign(principalId, input.role, input.scope)
 			asked.push({ operation: 'assignMember', principalId: caller.id, scope: input.scope, role: input.role, member: input.member, invitationId: null })
 			return { ok: true, assigned: { principalId, role: input.role } }
 		}
-		if (!/^[^\s@]+@[^\s@]+$/.test(input.member.email)) return invalid('the member email is not an address')
+		const email = invitedAddress(input.member.email)
+		if (email === null) return invalid('the member email is not an address')
 		const invitationId = `invitation-${randomId()}`
-		asked.push({ operation: 'assignMember', principalId: caller.id, scope: input.scope, role: input.role, member: input.member, invitationId })
+		asked.push({ operation: 'assignMember', principalId: caller.id, scope: input.scope, role: input.role, member: { email }, invitationId })
 		return { ok: true, invited: { invitationId, role: input.role, expiresAt: now() + INVITATION_TTL_SECONDS } }
 	}
 
@@ -306,6 +383,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (isFailure(caller)) return caller
 		const spent = spend(caller, input, 'members', input.scope.type)
 		if ('ok' in spent) return spent
+		const scopeProblem = membershipScopeProblem(input.scope)
+		if (scopeProblem !== null) return invalid(scopeProblem)
 		const manage = manageProblem(caller, input.scope)
 		if (manage !== null) return manage
 		let roles: string[]
@@ -318,24 +397,35 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			if (only !== null && artifact.roles[only]?.member?.scope !== input.scope.type) {
 				return invalid(`role '${only}' is not a membership role of scope '${input.scope.type}'`)
 			}
-			roles = rolesIn(artifact, membershipsOf(callers, input.member.principalId), input.scope).filter((role) => only === null || role === only)
+			roles = changes.rolesOf(input.member.principalId, input.scope).filter((role) => only === null || role === only)
 		}
 		for (const role of roles) {
 			const problem = roleProblem(caller, input.scope, role)
 			if (problem !== null) return problem
 		}
 		asked.push({ operation: 'revokeMember', principalId: caller.id, scope: input.scope, member: input.member })
-		return { ok: true }
+		if ('invitationId' in input.member) return { ok: true }
+		// As IAM: every other role goes, and the creator role only while another principal still holds it there.
+		const target = input.member.principalId
+		const creator = dimensionOf(artifact, input.scope.type)?.creator ?? null
+		const lastCreator = creator !== null && roles.includes(creator) && !changes.othersHold(target, creator, input.scope)
+		for (const role of roles) {
+			if (!lastCreator || role !== creator) changes.revoke(target, role, input.scope)
+		}
+		return lastCreator ? { ok: false, reason: 'last_creator' } : { ok: true }
 	}
 
 	/** Why `chain` is not the object of the mount's dimension followed by each value containing it, or `null`. */
 	const chainProblem = (dimension: string, chain: readonly Scope[]): string | null => {
+		if (chain.length === 0 || chain.length > MAX_LINK_CHAIN_LENGTH) return `a link chain names 1 to ${MAX_LINK_CHAIN_LENGTH} values`
 		let expected: string | null = dimension
 		for (const scope of chain) {
+			const problem = membershipScopeProblem(scope)
+			if (problem !== null) return problem
 			if (scope.type !== expected) return `the link chain names '${scope.type}' where the schema contains '${expected ?? 'nothing'}'`
 			expected = dimensionOf(artifact, scope.type)?.in ?? null
 		}
-		return chain.length === 0 ? 'a link chain names its object first' : expected === null ? null : `the link chain stops before '${expected}'`
+		return expected === null ? null : `the link chain stops before '${expected}'`
 	}
 
 	/** A share link, for a holder of the mount's `issuedBy` and of every action it grants on some value of the chain. */

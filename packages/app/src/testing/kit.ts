@@ -39,7 +39,7 @@ import type { ApplicationEnvironment, ContractImplementation } from '../implemen
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import { type LabelledTestCaller, type LinkTestCaller, resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
-import { type DirectoryCallers, kitDirectory, kitMembership, type TestMembership, writesThroughIam } from './membership'
+import { credentialCallers, kitDirectory, kitMembership, type MintedToken, type TestMembership, writesThroughIam } from './membership'
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
@@ -208,12 +208,9 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 	}
 	const byKey = new Map<string, TestCaller>()
 	const bySession = new Map<string, TestCaller>()
-	const byToken = new Map<string, TestCaller>()
+	const byToken = new Map<string, MintedToken>()
 	const memberships = new Map<TestCaller, readonly TestMembership[]>()
-	const directoryCallers: DirectoryCallers = {
-		byCredential: (credential) => byToken.get(credential) ?? byKey.get(credential),
-		all: () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })),
-	}
+	const directoryCallers = credentialCallers(appId, byKey, byToken, () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })))
 	// A member directory reads the kit's own callers; a contract that writes through IAM needs `options.membership`,
 	// unless the kit stands in for IAM's writes too, and then it also issues the proxy's delegation grants.
 	const standIn = options.membership === undefined && writes === 'stand-in' ? kitMembership(artifact, directoryCallers).rpc : undefined
@@ -309,7 +306,7 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		const { privateKey } = await signing
 		const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
 		if (token.length > MAX_ACCESS_TOKEN_BYTES) return null
-		byToken.set(token, caller)
+		byToken.set(token, { caller, expiresAt: claims.exp })
 		return { token, expiresAt: claims.exp }
 	}
 

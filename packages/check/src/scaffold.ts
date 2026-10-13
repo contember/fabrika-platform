@@ -211,18 +211,18 @@ const ownerRead = (policies: Policies, dimension: string): string | undefined =>
 	Object.values(policies).find((policy) => policy.scope.mode === 'dimension' && policy.scope.dimension === dimension)?.actions.read
 
 /**
- * What the `own` case's caller holds: the endpoint's action, plus what IAM requires of a member manager (the membership
- * roles there) or of a link's issuer (the actions the link grants).
+ * What the `own` case's caller holds: the endpoint's action, plus what IAM requires of a link's issuer (the actions the
+ * link grants) and of a member manager (an assigning role and the assigned role's actions).
  */
 const ownGrants = (row: EndpointRow, artifact: ContractArtifact, action: string, dimension: string): string => {
-	if (endpointMembers(artifact, row) === 'manage') return `${action} and the membership roles there`
 	const issues = artifact.declared?.[row.id]?.issues
 	const granted = Object.entries(artifact.mounts).flatMap(([name, mount]) =>
 		mount.kind === 'link' && mount.dimension === dimension && mount.issuedBy === action && (issues === undefined || issues === name)
 			? mount.grants
 			: []
 	)
-	return [action, ...new Set(granted)].join(', ')
+	const held = [action, ...new Set(granted)].join(', ')
+	return endpointMembers(artifact, row) === 'manage' ? `${held}, an assigning role and the assigned role's actions` : held
 }
 
 /**
@@ -352,8 +352,9 @@ const endpointTestBody = (
 	const body = [
 		'// The endpoint access tests of this application, written by fabrika db test-scaffold from fabrika.contract.ts and',
 		'// src/db/tables.ts. They run src/app.ts itself: callers of two scopes that share no value ask every endpoint with an',
-		"// access form, and a caller with only the endpoint's action asks for its own object. A handler bug that needs other",
-		'// data or another order is beyond them; the state a precondition needs is a seed in endpoint-access.fixtures.ts.',
+		"// access form, and a caller with only the endpoint's action, plus what IAM requires of a member manager or a link's",
+		'// issuer, asks for its own object. A handler bug that needs other data or another order is beyond them; the state a',
+		'// precondition needs is a seed in endpoint-access.fixtures.ts.',
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a contract change.',
 		'',
 		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",

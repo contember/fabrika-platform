@@ -7,12 +7,14 @@
 import {
 	type AccessForm,
 	type Caller,
+	type ContractArtifact,
 	type EndpointDirectory,
 	endpointDirectory,
 	endpointMembers,
 	type EndpointMethod,
 	type FileCollectionArtifact,
 	type SchemaShape,
+	type Scope,
 } from '@fabrika/auth-core'
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
@@ -61,7 +63,9 @@ export interface EndpointAccessKit {
 	leaked(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<LeakOutcome>
 	/**
 	 * A caller that holds only the endpoint's action asks for its own object: a person or a script in its scope, or, on
-	 * a link mount, the holder of a link bound to the object. A write action reads its own target.
+	 * a link mount, the holder of a link bound to the object. A write action reads its own target. Where IAM requires more
+	 * of the caller, it holds that too: a member manager an assigning role and the assigned role's actions, a link's
+	 * issuer the actions the link grants.
 	 */
 	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 	/**
@@ -123,7 +127,7 @@ interface InTarget {
 	readonly chain: Chain
 }
 
-type Grant =
+export type Grant =
 	| { readonly action: string; readonly scope: { readonly type: string; readonly value: string } }
 	| { readonly role: string; readonly scope: { readonly type: string; readonly value: string } }
 
@@ -204,6 +208,34 @@ function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationE
 			mount,
 		) => (mount.kind === 'form' && mount.challenge !== undefined ? [[mount.challenge.secret, 'unused']] : [])),
 	)
+}
+
+/**
+ * The least a member manager holds in `scope` for IAM to let it give or remove the roles a case may ask for: the
+ * endpoint's action, one assigning role of each (`assignableBy`), and the actions of each as plain grants. The roles a
+ * case asks for are the membership roles its input names; an input that names none may ask for any, so the caller
+ * then covers every membership role of the dimension. Where one role assigns them all, it is the only role held.
+ */
+export const managerGrants = (
+	artifact: Pick<ContractArtifact, 'roles'>,
+	action: string,
+	input: Readonly<Record<string, unknown>>,
+	scope: Scope,
+): Grant[] => {
+	const roles = artifact.roles
+	const members = Object.keys(roles).sort().filter((role) => roles[role]?.member?.scope === scope.type)
+	const named = members.filter((role) => Object.values(input).includes(role))
+	const targets = named.length > 0 ? named : members
+	const assignersOf = (role: string): readonly string[] => roles[role]?.member?.assignableBy ?? []
+	const narrowest = (candidates: readonly string[]): string | undefined =>
+		[...candidates].sort((left, right) => (roles[left]?.grants.length ?? 0) - (roles[right]?.grants.length ?? 0))[0]
+	const common = narrowest(members.filter((role) => targets.every((target) => assignersOf(target).includes(role))))
+	const assigners = common === undefined ? targets.flatMap((target) => narrowest(assignersOf(target)) ?? []) : [common]
+	const actions = [action, ...targets.flatMap((target) => roles[target]?.grants ?? [])]
+	return [
+		...[...new Set(actions)].map((held) => ({ action: held, scope })),
+		...[...new Set(assigners)].map((role) => ({ role, scope })),
+	]
 }
 
 /**
@@ -482,20 +514,18 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 	/**
 	 * The grants a case's caller holds: its side's, or, on an endpoint that reads a member directory, the action on the
 	 * directory's value, where IAM checks a lookup and a list: a caller who may read it, still only in its own scope. On
-	 * an endpoint that manages members it is the action on the target's own value, with every membership role there, so
-	 * IAM finds an assigning role and the actions of the role assigned. An endpoint that issues links adds the actions
-	 * its mounts grant, which IAM requires of the issuer.
+	 * an endpoint that manages members it is the action on the target's own value with the least IAM requires there to
+	 * assign or revoke a role (`managerGrants`). An endpoint that issues links adds the actions its mounts grant, which
+	 * IAM requires of the issuer.
 	 */
-	const holding = (row: ActionEndpoint, grants: readonly Grant[], chain: Chain): readonly Grant[] => {
+	const holding = (row: ActionEndpoint, input: Readonly<Record<string, unknown>>, grants: readonly Grant[], chain: Chain): readonly Grant[] => {
 		const { directory, manages } = row
 		const at = (dimension: string) => chain.find((link) => link.type === dimension)?.value
 		const managed = manages === null ? undefined : at(manages)
 		const listed = directory === null ? undefined : at(directory.dimension)
 		let held = grants
 		if (manages !== null && managed !== undefined) {
-			const scope = { type: manages, value: managed }
-			const roles = Object.keys(kit.artifact.roles).sort().filter((role) => kit.artifact.roles[role]?.member?.scope === manages)
-			held = [{ action: row.action, scope }, ...roles.map((role) => ({ role, scope }))]
+			held = managerGrants(kit.artifact, row.action, input, { type: manages, value: managed })
 		} else if (directory !== null && listed !== undefined) {
 			held = [{ action: row.action, scope: { type: directory.dimension, value: listed } }]
 		}
@@ -548,7 +578,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			}
 			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
 			const asked = withMember(row, withTarget(input, access.from, scopes.other.target), scopes.own.chain)
-			const { status } = await ask(row, holding(row, scopes.own.grants, scopes.own.chain), asked.input)
+			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked.input)
 			return { status }
 		},
 		async leaked(endpoint, input, seed = {}) {
@@ -557,7 +587,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			if (access.form === 'in') {
 				const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
 				const grants = (targets: readonly InTarget[]): Grant[] =>
-					targets.flatMap(({ target, chain }) => holding(row, [{ action, scope: { type: access.dimension, value: target } }], chain))
+					targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
 				const marks: string[] = []
 				for (const side of scopes.other) {
 					const asked = addressed(row, input, access.from, side)
@@ -578,8 +608,8 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				: await listScopesOf(action, access.dimension)
 			const from = access.form === 'on' ? access.from : null
 			const other = addressed(row, input, from, scopes.other)
-			await ask(row, holding(row, scopes.other.grants, scopes.other.chain), other.input)
-			const answer = await ask(row, holding(row, scopes.own.grants, scopes.own.chain), addressed(row, input, from, scopes.own).input)
+			await ask(row, holding(row, input, scopes.other.grants, scopes.other.chain), other.input)
+			const answer = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), addressed(row, input, from, scopes.own).input)
 			return leakOutcome([answer], [...scopes.other.values, ...other.marks])
 		},
 		async own(endpoint, input, seed = {}) {
@@ -593,7 +623,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				return { status }
 			}
 			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
-			const { status } = await ask(row, holding(row, scopes.own.grants, scopes.own.chain), addressed(row, input, access.from, scopes.own).input)
+			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), addressed(row, input, access.from, scopes.own).input)
 			return { status }
 		},
 		async file(name, operation, caller) {

@@ -1080,9 +1080,11 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   scope creation, member management and share links, under IAM's rules for the caller's grants: a single-use
   delegation grant per request, `members.manage` on the value itself, an assigning role there (`assignableBy`), every
   action of the role assigned, a link mount's `issuedBy` and grants on its chain. It records each write it allowed
-  and grants the kit's callers nothing. A case's caller of an endpoint that manages members holds the action and every
-  membership role of the dimension on its target's value; one of an endpoint that issues links also holds the actions
-  the links grant. The cases:
+  and grants the kit's callers nothing. A case's caller of an endpoint that manages members holds, on its target's
+  value, the action, one assigning role of each role the input names (every membership role of the dimension when it
+  names none) and those roles' actions; one of an endpoint that issues links also holds the actions the links grant.
+  The stand-in also refuses the last creator's revoke (`last_creator`), IAM's input bounds, a credential of another
+  application, an expired token and a connector. The cases:
   - **Denial.** For every procedure with an `on` or `in` access form, a caller holding the action in one scope names
     the other scope's object or value and gets 404 (`on`) or 403 (`in`), exactly.
   - **Leak.** For every `on` and `over` procedure, and every `in` procedure that declares `sql`, a caller of the other
@@ -1098,8 +1100,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   - **Creates.** For every `creates` procedure the same two cases: a caller holding the action in one value of the
     dimension only is 403 (IAM creates a value only for a global holder), and a global holder gets an answer.
   - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
-    (a write-only role), a caller holding only that action asks for its own object and gets 200: the capability
-    reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.
+    (a write-only role), a caller holding only that action, plus what IAM requires of a member manager or a link's
+    issuer (above), asks for its own object and gets 200: the capability reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.
   - **Files.** A file collection's endpoints get the same cases
     over a file the kit uploads in each scope (`kit.file`, objects in memory): upload,
     download and remove of an own file pass, of the other scope's are 404, and a caller
