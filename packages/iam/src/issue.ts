@@ -108,6 +108,12 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 	if (expiryProblem !== null) {
 		return refused(expiryProblem)
 	}
+	// An external principal's authority is its live external roles (ADR-0051): it issues only a key bound to itself,
+	// which resolves those live. A service or standalone key would freeze a copy that outlives them.
+	const selfBound = input.service === undefined && input.principalId === issuer.id
+	if (!selfBound && (await services.repositories.principals.getPrincipalById(issuer.id))?.affiliation !== 'internal') {
+		return NOT_ALLOWED
+	}
 
 	// Service mode: create a NEW machine principal + grant and bind the key to it (the folded
 	// issueServiceToken). The grant is scoped to the issuer's verified `app`; the issuer must hold

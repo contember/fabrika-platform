@@ -43,9 +43,15 @@ async function human(services: Services, env: Env, input: DeviceAuthorizationCal
 	return activeHuman(services, claims.sub)
 }
 
+/**
+ * An active internal user. A device key is a new service principal holding frozen inline grants, so an external principal
+ * (ADR-0051), whose authority is only its live external roles, never approves one.
+ */
 async function activeHuman(services: Services, id: string) {
 	const principal = await services.repositories.principals.getPrincipalById(id)
-	return principal?.type === 'user' && principal.disabled_at === null && principal.activated_at !== null ? principal : null
+	return principal?.type === 'user' && principal.affiliation === 'internal' && principal.disabled_at === null && principal.activated_at !== null
+		? principal
+		: null
 }
 
 function requestFromRow(row: DeviceAuthorizationRow) {

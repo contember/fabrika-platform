@@ -66,9 +66,23 @@ export class CredentialRepository {
 		return id
 	}
 
-	/** The INSERTs of one credential with a caller-generated id and its inline grants, for a batch with its record. */
+	/**
+	 * The INSERTs of one credential with a caller-generated id and its inline grants, for a batch with its record. A
+	 * credential not bound to its issuer (a service key, a standalone key) holds authority of its own, so an external
+	 * issuer, whose authority is only its live external roles, writes none (ADR-0051): the guard's NOT NULL violation
+	 * rolls the batch back, behind `issueKey`'s refusal.
+	 */
 	credentialStatements(id: string, input: CreateCredentialInput): SqlStatement[] {
+		const independent = (input.principalId ?? null) !== input.issuedBy
 		const statements: SqlStatement[] = [
+			...(independent
+				? [
+					this.db
+						.prepare(`INSERT INTO contract_apps (app, created_at) SELECT ?, NULL WHERE EXISTS (
+							SELECT 1 FROM principals WHERE id = ? AND affiliation = 'external')`)
+						.bind(`${input.issuedBy}#external-issuer`, input.issuedBy),
+				]
+				: []),
 			this.db
 				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at)
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)

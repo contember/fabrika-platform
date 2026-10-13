@@ -28,6 +28,13 @@ export interface DeviceReceiptRow extends DeviceAuthorizationRow {
 	revoked_at: number | null
 }
 
+/**
+ * The approver `approver` (a column or a placeholder) is internal: a device key is a service principal with frozen
+ * grants, never an external principal's (ADR-0051).
+ */
+const internalApprover = (approver: string): string =>
+	`NOT EXISTS (SELECT 1 FROM principals ap WHERE ap.id = ${approver} AND ap.affiliation = 'external')`
+
 export class DeviceAuthorizationRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
@@ -67,8 +74,9 @@ export class DeviceAuthorizationRepository {
 	async approve(id: string, approverId: string, consent: DeviceAuthorizationConsent): Promise<boolean> {
 		return await this.db.prepare(`UPDATE device_authorizations
 			SET status = 'approved', approver_id = ?, consent_id = ?, scope_type = ?, scope_value = ?, key_expires_at = ?
-			WHERE id = ? AND status = 'pending' AND expires_at > ? RETURNING id`)
-			.bind(approverId, consent.consentId, consent.scope.type, consent.scope.value, consent.keyExpiresAt, id, unixNow()).first<{ id: string }>() !== null
+			WHERE id = ? AND status = 'pending' AND expires_at > ? AND ${internalApprover('?')} RETURNING id`)
+			.bind(approverId, consent.consentId, consent.scope.type, consent.scope.value, consent.keyExpiresAt, id, unixNow(), approverId)
+			.first<{ id: string }>() !== null
 	}
 
 	async terminate(id: string, status: 'denied' | 'cancelled' | 'authority_lost'): Promise<void> {
@@ -94,7 +102,8 @@ export class DeviceAuthorizationRepository {
 			this.db.prepare(`UPDATE device_authorizations SET claim_id = ?
 				WHERE id = ? AND consent_id = ? AND status = 'approved' AND claim_id IS NULL
 				AND expires_at > ? AND key_expires_at > ?
-				AND NOT (permissions LIKE '%*%' AND EXISTS (SELECT 1 FROM contract_apps c WHERE c.app = device_authorizations.app))`)
+				AND NOT (permissions LIKE '%*%' AND EXISTS (SELECT 1 FROM contract_apps c WHERE c.app = device_authorizations.app))
+				AND ${internalApprover('device_authorizations.approver_id')}`)
 				.bind(claimId, input.attemptId, input.consentId, now, now),
 			this.db.prepare(`INSERT INTO principals (id, type, label, created_at)
 				SELECT ?, 'service', label, ? FROM device_authorizations WHERE claim_id = ?`).bind(principalId, now, claimId),

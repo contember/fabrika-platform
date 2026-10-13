@@ -5,11 +5,16 @@
 // an administrator's promotion makes it internal.
 
 import type { AppSchema, MembershipCaller, Scope } from '@fabrika/auth-core'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createPostgresIamRepositories, ExternalGrantError, type IamRepositories } from '../db'
+import { approveDeviceAuthorization, startDeviceAuthorization } from '../device'
+import type { Env } from '../env'
 import { acceptInvitation, assignMember, createScope, listMembers, requestDelegation } from '../membership'
+import { pkceChallenge, randomToken } from '../oidc'
 import { resolvePermissionsAt, resolveUserPrincipal } from '../resolve'
-import { createHarness, makeServicesFor } from './helpers/harness'
+import { createIamRpc } from '../rpc'
+import { CONSOLE_APP as CONSOLE, createHarness, makeServicesFor, TEST_SIGNING_KEYS } from './helpers/harness'
 import {
 	APP,
 	CALLER_ENV,
@@ -92,6 +97,25 @@ const BACKENDS: Backend[] = [
 ]
 
 let requestSeq = 0
+
+function rpcEnv(repositories: IamRepositories): Env {
+	return {
+		DB: unusedDatabase,
+		REPOSITORIES: repositories,
+		HUMAN_EMAIL_DOMAINS: '[]',
+		HUMAN_EMAILS: '[]',
+		IAM_BOOTSTRAP_ADMINS: '[]',
+		ENVIRONMENT: 'stage',
+		ISSUER: ORIGIN,
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
+		FABRIKA_IAM_PROVISIONING_KEY: '',
+		OIDC_ISSUER: 'https://idp.test',
+		OIDC_CLIENT_ID: 'client',
+		OIDC_CLIENT_SECRET: 'secret',
+		OIDC_SCOPES: '',
+		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+	}
+}
 
 async function caller(person: Person): Promise<MembershipCaller> {
 	requestSeq += 1
@@ -323,6 +347,63 @@ for (const backend of BACKENDS) {
 
 			const claimed = await resolveUserPrincipal(f.repositories.principals, sub, mailbox, 'req-oidc-2')
 			expect(claimed).toMatchObject({ ok: true, principal: { id: external.id, external_id: sub, affiliation: 'internal' } })
+		})
+
+		test('an external principal issues only a key bound to itself, and approves no device key', async () => {
+			const f = await partnerFixture(backend)
+			const external = await f.external(`ext-${crypto.randomUUID()}`)
+			await f.exec(`UPDATE principals SET activated_at = 1 WHERE id = '${external.id}'`)
+			// An external role at the console audience, where keys and device keys are issued.
+			const console = { type: 'workspace', value: 'console-workspace' }
+			await f.repositories.appSchema.reconcileAppSchema({
+				app: CONSOLE,
+				scopes: [{ scopeType: 'workspace' }],
+				actions: [{ action: 'deploy.trigger' }],
+				roles: [{ roleKey: 'partner', name: 'Partner', permissions: ['deploy.trigger'], memberScope: 'workspace', external: true }],
+			})
+			await f.repositories.grants.createGrant({
+				principalId: external.id,
+				app: CONSOLE,
+				roleKey: 'partner',
+				scopeType: console.type,
+				scopeValue: console.value,
+			})
+			const credential = await external.token(CONSOLE)
+			const rpc = createIamRpc(rpcEnv(f.repositories), { waitUntil() {} })
+			const keyCaller = { app: CONSOLE, credential, requestId: 'ext-key', expiresAt: Math.floor(Date.now() / 1000) + 3600 }
+
+			expect(await rpc.issueKey({ ...keyCaller, service: { label: 'frozen', permissions: ['deploy.trigger'], scope: console } }))
+				.toEqual({ ok: false, reason: 'not_allowed' })
+			expect(await rpc.issueKey({ ...keyCaller, permissions: [{ action: 'deploy.trigger', scope: console }] })).toEqual({
+				ok: false,
+				reason: 'not_allowed',
+			})
+			expect(await rpc.issueKey({ ...keyCaller, principalId: external.id })).toMatchObject({ ok: true })
+			// The guarded write refuses what a check before it would have missed.
+			await expect(
+				f.repositories.credentials.createCredential({
+					tokenHash: 'ext-standalone',
+					app: CONSOLE,
+					issuedBy: external.id,
+					grants: [{ action: 'deploy.trigger' }],
+				}),
+			).rejects.toThrow()
+			expect(await f.repositories.credentials.getActiveCredentialByHash('ext-standalone')).toBeNull()
+
+			const approvalVerifier = randomToken(32)
+			const started = await startDeviceAuthorization(f.services, {
+				app: CONSOLE,
+				label: 'device',
+				permissions: ['deploy.trigger'],
+				keyLifetimeSeconds: 3600,
+				approvalChallenge: await pkceChallenge(approvalVerifier),
+				redemptionChallenge: await pkceChallenge(randomToken(32)),
+			}, null)
+			if (!started.ok) throw new Error(`no device attempt: ${started.reason}`)
+			const approval = { app: CONSOLE, credential, requestId: 'ext-device', attemptId: started.attemptId, approvalVerifier, scope: console }
+			expect(await approveDeviceAuthorization(f.services, rpcEnv(f.repositories), approval)).toEqual({ ok: false, reason: 'not_allowed' })
+			const consent = { consentId: 'ext-consent', app: CONSOLE, label: 'device', permissions: ['deploy.trigger'], scope: console, keyExpiresAt: 1 }
+			expect(await f.repositories.device.approve(started.attemptId, external.id, consent)).toBe(false)
 		})
 
 		test('a bootstrap mailbox held by an external principal is no admin', async () => {
