@@ -1012,3 +1012,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   edited generated file, no widened access, and every reference test passing on every trial (162–171 per copy). WU24
   (`0167ca15`, `c6a4d69b`) fixed those two and four smaller skill gaps the agents noted: a job's `ctx.within`
   dimension, the UTC day, label nullability, and how to confirm a test ran. Left: backlog 137.
+- **After close — WU25.** The last gaps of trial rounds 3 and 4. `statusOf` of `@fabrika/app/testing` (`0227dfe8`)
+  answers 200 or the refusal's status and rethrows anything else; the skill, the Notes template and the CRM use it.
+  The skill (`3b0cf8ab`) says which loop steps a schema change and a handler-only change need, that a slice keeps its
+  own schemas, and that the loser of two deletes of one row answers 404 (witnessed by a CRM test). Backlog 137 closed
+  (`daa918fa`): the CRM pipeline is `aggregate` over `company` with no declared deviation, a task's default assignee is
+  `ctx.principal`, and a create's omissible field is `.optional()`. `classifyAccess` of the round-3 opus-b and
+  round-4 gpt-b deals against the new reference lists no pipeline change. The group B copy starts green (111 tests).

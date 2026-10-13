@@ -68,5 +68,4 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [134](134-a-sql-scope-fragment-does-not-tie-its-action-to-the-statement.md) — `ctx.sql.scope` checks neither the statement's operation nor, for a `Ref` or `Within`, the table's actions.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [136](136-an-unscoped-get-of-a-keyless-table-fails-only-at-run-time.md) — `ctx.db.unscoped.<reference or inbox>.get` type-checks and fails with `row_address`.
-- [137](137-the-crm-reference-and-the-skill-disagree-on-three-conventions.md) — the reference pipeline takes raw SQL where the skill takes `aggregate`; two more conventions unnamed.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
