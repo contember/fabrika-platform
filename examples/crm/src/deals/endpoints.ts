@@ -17,7 +17,7 @@ const Deal = z.strictObject({
 	version: z.int(),
 })
 const DealPage = z.strictObject({ items: z.array(Deal), next: Next })
-const NewDeal = z.strictObject({ companyId: z.uuid(), title: Name, value: z.int().min(0), stage: Stage, source: OptionalText })
+const NewDeal = z.strictObject({ companyId: z.uuid(), title: Name, value: z.int().min(0), source: OptionalText })
 const EditDeal = z.strictObject({ id: z.uuid(), title: Name, value: z.int().min(0), source: ClearableText, expectVersion: z.int().positive() })
 const MoveDeal = z.strictObject({ id: z.uuid(), stage: Stage, expectVersion: z.int().positive() })
 const AssignDeal = z.strictObject({ id: z.uuid(), newOwner: PrincipalId, expectVersion: z.int().positive() })
@@ -38,7 +38,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 			ctx.db.target.deals.insert({
 				title: input.title,
 				value: input.value,
-				stage: input.stage,
+				stage: 'lead',
 				source: input.source ?? null,
 				owner: ctx.principal.id,
 				owner_label: ctx.principal.label,

@@ -120,7 +120,6 @@ async function dealsView(): Promise<HTMLElement> {
 					companyId: field(form, 'companyId'),
 					title: field(form, 'title'),
 					value: Number(field(form, 'value')),
-					stage: stageOf(field(form, 'stage')),
 					source: orOmitted(field(form, 'source')),
 				})
 			),
@@ -128,7 +127,6 @@ async function dealsView(): Promise<HTMLElement> {
 		el('select', { name: 'companyId', 'aria-label': 'Company' }, ...options(companies.map((company) => ({ value: company.id, label: company.name })))),
 		el('input', { name: 'title', placeholder: 'Title', required: '' }),
 		el('input', { name: 'value', type: 'number', min: '0', value: '0', 'aria-label': 'Value' }),
-		el('select', { name: 'stage', 'aria-label': 'Stage' }, ...options(DEAL_STAGES.map((stage) => ({ value: stage, label: stage })))),
 		el('input', { name: 'source', placeholder: 'Source (referral, event…)' }),
 		el('button', { type: 'submit' }, 'Create deal'),
 	)

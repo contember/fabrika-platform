@@ -28,14 +28,15 @@ if (postgres !== null) {
 	const outsiderCaller = inOrg('manager', 'globex', 'mallory@globex.example')
 	const outsider = apiOf(outsiderCaller)
 
-	const newDeal = async (title: string, stage: 'lead' | 'won' = 'lead', value = 1000) => {
+	const newDeal = async (title: string, value = 1000) => {
 		const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: `${title} Inc` })
-		return { companyId, ...(await sales.deals.create({ companyId, title, value, stage })) }
+		return { companyId, ...(await sales.deals.create({ companyId, title, value })) }
 	}
 
 	describe('the pipeline', () => {
 		test('sales move an open deal; a viewer and another org cannot; a stale version is a conflict', async () => {
 			const { id } = await newDeal('Compression licence')
+			expect((await viewer.deals.get({ id })).stage).toBe('lead')
 			expect(await statusOf(viewer.deals.move({ id, stage: 'qualified', expectVersion: 1 }))).toBe(403)
 			expect(await statusOf(outsider.deals.move({ id, stage: 'qualified', expectVersion: 1 }))).toBe(404)
 			expect(await sales.deals.move({ id, stage: 'qualified', expectVersion: 1 })).toEqual({ id, version: 2 })
@@ -45,13 +46,15 @@ if (postgres !== null) {
 		})
 
 		test('a won deal does not move; it reopens to proposal, and an open deal does not reopen', async () => {
-			const { id } = await newDeal('Signed', 'won')
-			expect(await statusOf(sales.deals.move({ id, stage: 'lead', expectVersion: 1 }))).toBe(409)
-			expect(await statusOf(viewer.deals.reopen({ id, expectVersion: 1 }))).toBe(403)
-			expect(await statusOf(outsider.deals.reopen({ id, expectVersion: 1 }))).toBe(404)
-			expect(await sales.deals.reopen({ id, expectVersion: 1 })).toEqual({ id, version: 2 })
+			const { id } = await newDeal('Signed')
+			expect(await statusOf(sales.deals.reopen({ id, expectVersion: 1 }))).toBe(409)
+			await sales.deals.move({ id, stage: 'won', expectVersion: 1 })
+			expect(await statusOf(sales.deals.move({ id, stage: 'lead', expectVersion: 2 }))).toBe(409)
+			expect(await statusOf(viewer.deals.reopen({ id, expectVersion: 2 }))).toBe(403)
+			expect(await statusOf(outsider.deals.reopen({ id, expectVersion: 2 }))).toBe(404)
+			expect(await sales.deals.reopen({ id, expectVersion: 2 })).toEqual({ id, version: 3 })
 			expect((await viewer.deals.get({ id })).stage).toBe('proposal')
-			expect(await statusOf(sales.deals.reopen({ id, expectVersion: 2 }))).toBe(409)
+			expect(await statusOf(sales.deals.reopen({ id, expectVersion: 3 }))).toBe(409)
 		})
 
 		test('of two reopens of one lost deal at once, one wins and the other is a conflict', async () => {
@@ -105,7 +108,7 @@ if (postgres !== null) {
 
 		test('a deal records its source on create and on edit', async () => {
 			const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: 'Sourced' })
-			const { id } = await sales.deals.create({ companyId, title: 'Referred', value: 10, stage: 'lead', source: 'referral' })
+			const { id } = await sales.deals.create({ companyId, title: 'Referred', value: 10, source: 'referral' })
 			expect((await viewer.deals.get({ id })).source).toBe('referral')
 			await sales.deals.edit({ id, title: 'Referred', value: 10, source: 'event', expectVersion: 1 })
 			expect((await viewer.deals.get({ id })).source).toBe('event')
@@ -118,7 +121,8 @@ if (postgres !== null) {
 			const big = apiOf(inOrg('manager', 'initech'))
 			const { id: companyId } = await big.companies.create({ orgId: 'initech', name: 'Big Money' })
 			for (const title of ['Huge', 'Huger']) {
-				await big.deals.create({ companyId, title, value: 1_500_000_000, stage: 'qualified' })
+				const { id } = await big.deals.create({ companyId, title, value: 1_500_000_000 })
+				await big.deals.move({ id, stage: 'qualified', expectVersion: 1 })
 			}
 			const qualified = (await big.deals.pipeline()).stages.find((stage) => stage.stage === 'qualified')
 			expect(qualified).toEqual({ stage: 'qualified', count: 2, value: 3_000_000_000 })
@@ -126,8 +130,8 @@ if (postgres !== null) {
 
 		test('counts and sums the deals of each stage in pipeline order, empty stages included, of the caller’s orgs only', async () => {
 			const before = await viewer.deals.pipeline()
-			await newDeal('Big', 'lead', 5000)
-			await newDeal('Small', 'lead', 250)
+			await newDeal('Big', 5000)
+			await newDeal('Small', 250)
 			await outsider.companies.create({ orgId: 'globex', name: 'Elsewhere' })
 			const after = await viewer.deals.pipeline()
 			expect(after.stages.map((stage) => stage.stage)).toEqual([...DEAL_STAGES])

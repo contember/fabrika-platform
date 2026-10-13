@@ -34,7 +34,7 @@ if (postgres !== null) {
 	const outsiderApi = apiOf(outsider)
 
 	const newCompany = async (name: string) => (await manager.companies.create({ orgId: 'acme', name })).id
-	const newDeal = async (companyId: string, title: string) => (await salesApi.deals.create({ companyId, title, value: 1000, stage: 'lead' })).id
+	const newDeal = async (companyId: string, title: string) => (await salesApi.deals.create({ companyId, title, value: 1000 })).id
 
 	describe('orgs', () => {
 		test('a caller sees the orgs it holds a role in, and only those', async () => {

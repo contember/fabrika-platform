@@ -103,8 +103,8 @@ only a manager adds, edits and deletes them.
 
 A deal is an opportunity at a company: a title, a value in whole euros, a stage in our pipeline (lead, qualified,
 proposal, won, lost) and, when we know it, where it came from (a referral, an event: free text). Salespeople and
-managers open deals at a company, edit the title, value and source, and move a deal from stage to stage. A won or lost
-deal is closed: it cannot be moved anymore, but a salesperson can reopen it, which puts it back to proposal. Only a
+managers open deals at a company, edit the title, value and source, and move a deal from stage to stage. A new deal
+starts as a lead. A won or lost deal is closed: it cannot be moved anymore, but a salesperson can reopen it, which puts it back to proposal. Only a
 closed deal can be reopened. Two people acting on the same deal at the same moment must never both succeed.
 
 Whoever opens a deal owns it. Only a manager hands a deal over to another person of the org, picked from the org's
