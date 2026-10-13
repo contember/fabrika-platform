@@ -1,3 +1,24 @@
+> **OUTCOME — shipped 2026-10-13.** An application invites people from outside the organization by e-mail and IAM
+> keeps them out of internal roles. IAM knows a principal's affiliation and a role declared `external`; an external
+> holds only such roles, at every grant write, at reconcile and at resolution, issues only self-bound keys, never
+> authenticates by OIDC and is promoted only by an installation admin (WU1, ADR-0051). An application-wide staff role
+> may assign a membership role (WU2). IAM's pages and e-mails speak the application's language (`en`, `cs`), refusals
+> included, and a password action or an invitation ends in the application (WU3). An application words IAM's e-mails
+> in plain text; IAM builds the HTML (WU4, an MVP). One e-mail onboards a new external person: the principal is created
+> at acceptance with its password and grant in one transaction, under the inviter's checked authority and schema
+> revision, never over another signed-in account; resend rotates the link (WU5). Before them, backlog 113 gave the
+> generated tests a stand-in IAM for writes, and WU25 closed the fresh-agent trial's last gaps (`statusOf`, the loop's
+> wording, backlog 137). The owner cut the partner-portal recipe (WU6), application-authored HTML and repeated review
+> rounds. Every unit had a GPT review; WU1 took four rounds (independent keys, two Postgres races, two deadlocks), WU5
+> two (two P1 races). Commit map: backlog 113 → `aedd6992`…`aefc55f4`, WU3 → `fd0d21cc`…`c96aca62`, WU25 →
+> `de0876ee`…`c4bf574b`, WU1 → `c99bcc69`…`5778ddd5`, WU4 → `859e8691`…`0b75f748`, WU2 → `6c0338ef`…`52cbd14f`, WU5 →
+> `a381cbf9`…`3dbcdab7`. Verification at `3dbcdab7`: typecheck, lint, `format:check`, and `bun run test` with Postgres
+> and S3: 7465 pass, 38 skip, 0 fail; the agent interfaces 318, `examples/zerops-app` 47 and `examples/crm` 162 pass,
+> 0 fail. The fresh-agent trial of group B after WU24/WU25: opus-b 3 runs (1 failing), within the cap; gpt-b 4 runs (1
+> failing) in each of rounds 3, 4 and 5, one over the cap, each failure in the agent's own test code. Backlog closed:
+> 113, 137. Deferred: a browser run of the flows (138), application HTML e-mails (139), the stand-in's missing
+> membership answers (140), the supplementing-grant race (141).
+
 # Sprint — external people and a complete password flow (2026-10-13)
 
 **Goal.** An application invites people from outside the organization by e-mail, in its own language and wording;

@@ -9,6 +9,8 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [External people (2026-10-13)](sprint-2026-10-13-external-people.md)
+  — external principals and roles, application-wide assigners, IAM in the application's language, plain-text e-mail templates, one-e-mail onboarding.
 - [The paved-road framework (2026-10-13)](sprint-2026-10-11-paved-road-framework.md)
   — the second part: the public intake gaps (visitor links, form kicks, abuse control, malware quarantine, CSV downloads, HSTS), the member lookup, application-wide data, the CRM at 386 server lines against 538, the fresh-agent and private dogfood trials.
 - [The paved-road framework, core (2026-10-12)](sprint-2026-10-11-paved-road-core.md)

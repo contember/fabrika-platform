@@ -23,10 +23,10 @@ For editing an application from Claude or ChatGPT through MCP, see [MCP authorin
 
 [MCP application authoring](sprints/sprint-2026-10-07-mcp-authoring.md) is active: MCP in Control, IAM OAuth for Claude/ChatGPT, Git workspaces, stage deploys and pull requests on Zerops ([ADR-0049](decisions/0049-author-applications-through-mcp-in-control.md)).
 
-[External people](sprints/sprint-2026-10-13-external-people.md) is active: external principals and roles in IAM, application-wide assigners, localized IAM pages, application e-mail templates, one-e-mail onboarding.
-
 The application framework plan shipped and its idea documents were deleted; the contract is
 [ADR-0012](decisions/0012-fabrika-app-runtime.md) and [`reference/application-runtime.md`](reference/application-runtime.md). Its sprints: [M0](archive/sprint-2026-10-08-m0-current-holes.md) (shipped), [A-M1](archive/sprint-2026-10-08-a-m1-framework-core.md) (shipped), [A-M2](archive/sprint-2026-10-08-a-m2-data.md) (shipped), [A-M3](archive/sprint-2026-10-08-a-m3-multi-tenant.md) (shipped), [B-M1](archive/sprint-2026-10-08-b-m1-binding-contract.md) (shipped), [B-M2](archive/sprint-2026-10-09-b-m2-locked-providers.md) (shipped), [A-M4](archive/sprint-2026-10-09-a-m4-companions.md) (shipped), [B-M3](archive/sprint-2026-10-09-b-m3-workloads-and-platform.md) (shipped).
+
+[External people](archive/sprint-2026-10-13-external-people.md) shipped on 2026-10-13: external principals and roles in IAM ([ADR-0051](decisions/0051-external-principals.md)), application-wide assigners, IAM in the application's language, plain-text application e-mail templates, one-e-mail onboarding.
 
 The paved-road application framework shipped on 2026-10-13, in two parts: [the core](archive/sprint-2026-10-11-paved-road-core.md) (the staged kit, the mini-ORM, declared raw SQL, reviewed deviations, a role per application, the skill) and [the framework](archive/sprint-2026-10-11-paved-road-framework.md) (the public intake gaps, the CRM in `examples/crm`, the trials, application-wide data).
 
