@@ -18,7 +18,8 @@ const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
  *
  * An invitation that creates its principal (`invitationOffer`) answers that POST with a set-password form instead;
  * its POST, with the password, creates the external principal and accepts in one transaction, then signs the browser
- * in on IAM. Neither the GET nor the POST without a password changes anything, so a mail scanner spends nothing.
+ * in on IAM. Neither the GET nor the POST without a password changes anything, so a mail scanner spends nothing. A
+ * browser signed in here as anyone gets neither: it is told to sign out or use another browser profile first.
  *
  * The link's `?app=` picks the page's language; an accepted invitation lands on its own application's
  * registered origin, where the application's proxy signs the browser in through the normal handoff.
@@ -48,6 +49,16 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		return invitationOutcomePage({ presentation: linked, title: (t) => t.unavailableTitle, text: (t) => t.inviterCannotGrant, status: 403 })
 	}
 	if (offer.kind === 'create') {
+		// The new account would replace the browser's session silently, and the application would keep the old identity.
+		if ((await currentSession(request, services)) !== null) {
+			return invitationOutcomePage({
+				presentation: await presentationFor(services, offer.invitation.app),
+				title: (t) => t.otherAccountTitle,
+				text: (t) => t.otherAccountText(offer.invitation.email),
+				status: 409,
+				signOut: '/auth/logout',
+			})
+		}
 		const password = stringValue(form?.get('password') ?? null)
 		return password === null
 			? invitationPasswordPage({

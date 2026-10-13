@@ -76,6 +76,7 @@ async function reset(): Promise<void> {
 			'membership_invitations',
 			'app_presentation',
 			'app_mail_templates',
+			'app_schema_revisions',
 		]
 	) {
 		await raw.prepare(`DELETE FROM ${table}`).run()
@@ -109,6 +110,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0012_external_principals.sql' },
 			{ bundle: 'iam', name: '0013_app_mail_templates.sql' },
 			{ bundle: 'iam', name: '0014_invitation_wording.sql' },
+			{ bundle: 'iam', name: '0015_app_schema_revisions.sql' },
 		])
 	})
 
@@ -156,6 +158,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'membership_transport_keys',
 				'app_presentation',
 				'app_mail_templates',
+				'app_schema_revisions',
 			]
 		) {
 			expect(names).toContain(table)

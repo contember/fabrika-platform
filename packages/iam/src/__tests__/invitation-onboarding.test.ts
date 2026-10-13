@@ -1,22 +1,23 @@
-import { type AppSchema, SESSION_COOKIE } from '@fabrika/auth-core'
-import type { SqlDatabase } from '@fabrika/platform'
+import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { handleAuth } from '../auth/routes'
-import { type IamRepositories, type InvitationRow, MembershipRepository, type NewPrincipalAcceptance, type NewPrincipalEvents } from '../db'
+import type { IamRepositories } from '../db'
 import { assignMember, createScope, requestDelegation } from '../membership'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
 import { createHarness, type Harness, TestSqlDatabase } from './helpers/harness'
 import {
 	APP,
+	BetweenCheckAndWrite,
 	CALLER_ENV,
 	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
 	type MembershipFixture,
 	membershipFixture,
-	NOTES_SCHEMA,
+	ONBOARDING_SCHEMA,
 	ORIGIN,
 	type Person,
+	reconcilesBetween,
 } from './helpers/membership'
 
 // One e-mail onboards a person IAM does not know (D3 of the external-people sprint): an invitation to a role declared
@@ -26,14 +27,6 @@ import {
 const PASSWORD = 'a sufficiently long passphrase'
 const LANDING = 'https://notes.example.com'
 const NEWCOMER = 'newcomer@partner.test'
-
-const ONBOARDING_SCHEMA: AppSchema = {
-	...NOTES_SCHEMA,
-	roles: {
-		...NOTES_SCHEMA.roles,
-		partner: { name: 'Partner', permissions: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner', 'staff'] }, external: true },
-	},
-}
 
 class PlainHasher implements PasswordHasher {
 	async hash(password: string): Promise<StoredPasswordHash> {
@@ -45,28 +38,14 @@ class PlainHasher implements PasswordHasher {
 	}
 }
 
-/**
- * The deterministic interleaving of an acceptance that creates its principal and the inviter's removal: the inviter's
- * role goes after the use case checked the inviter and before the transaction that creates the principal.
- */
-class InviterRemovedBeforeCreation extends MembershipRepository {
-	removeBeforeCreation: (() => Promise<unknown>) | null = null
-
-	override async acceptAsNewPrincipal(
-		input: { readonly invitation: InvitationRow; readonly assigners: readonly string[]; readonly password: StoredPasswordHash },
-		events: (principalId: string) => NewPrincipalEvents,
-	): Promise<NewPrincipalAcceptance> {
-		await this.removeBeforeCreation?.()
-		return super.acceptAsNewPrincipal(input, events)
-	}
-}
-
 interface Onboarding {
 	readonly h: Harness
 	readonly f: MembershipFixture
 	readonly email: CapturingEmail
 	readonly owner: Person
 	readonly scope: { type: string; value: string }
+	/** Its membership repository: `between` runs a change after an acceptance's check and before its write. */
+	readonly membership: BetweenCheckAndWrite
 	invite(
 		address: string,
 		options?: { role?: string; label?: string; message?: string; resend?: boolean; by?: Person },
@@ -78,14 +57,12 @@ let seq = 0
 
 async function onboarding(options: {
 	password?: boolean
-	membership?: (db: SqlDatabase) => MembershipRepository
 	human?: { emailDomains?: readonly string[]; emails?: readonly string[] }
 	bootstrapAdmins?: ReadonlySet<string>
 } = {}): Promise<Onboarding> {
 	const h = createHarness()
-	const repositories: IamRepositories = options.membership === undefined
-		? h.repositories
-		: { ...h.repositories, membership: options.membership(new TestSqlDatabase(h.sqlite)) }
+	const membership = new BetweenCheckAndWrite(new TestSqlDatabase(h.sqlite))
+	const repositories: IamRepositories = { ...h.repositories, membership }
 	const email = new CapturingEmail()
 	const f = await membershipFixture(repositories, {
 		email,
@@ -115,6 +92,7 @@ async function onboarding(options: {
 		email,
 		owner,
 		scope: created.scope,
+		membership,
 		invite: async (address, invite = {}) => {
 			const { role = 'partner', by = owner, ...wording } = invite
 			return assignMember(f.services, CALLER_ENV, f.ctx, {
@@ -232,19 +210,11 @@ describe('an invitation that creates its principal', () => {
 	})
 
 	test("the inviter's removal between the check and the write creates nothing either", async () => {
-		let membership: InviterRemovedBeforeCreation | null = null
-		const o = await onboarding({
-			membership: (db) => {
-				membership = new InviterRemovedBeforeCreation(db)
-				return membership
-			},
-		})
+		const o = await onboarding()
 		const staff = await o.f.person('staff')
 		const staffGrant = await o.f.repositories.grants.createGrant({ principalId: staff.id, app: APP, roleKey: 'staff' })
 		await o.invite(NEWCOMER, { by: staff })
-		if (membership === null) throw new Error('fixture')
-		const repository: InviterRemovedBeforeCreation = membership
-		repository.removeBeforeCreation = () => o.f.repositories.grants.deleteGrant(staffGrant.id)
+		o.membership.between = () => o.f.repositories.grants.deleteGrant(staffGrant.id)
 
 		const response = await o.send(accept({ token: o.email.lastToken(), password: PASSWORD }))
 		expect(response.status).toBe(403)
@@ -382,5 +352,70 @@ describe("an invitation's label and message", () => {
 				invitation: { label: 'Acme' },
 			}),
 		).toMatchObject({ ok: false, reason: 'invalid_request' })
+	})
+})
+
+describe('a change between the check of an acceptance and its write', () => {
+	const changes: Record<string, (o: Onboarding, inviter: Person) => Promise<unknown>> = {
+		...Object.fromEntries(
+			Object.entries(reconcilesBetween(ONBOARDING_SCHEMA)).map(([name, schema]) => [
+				name,
+				async (o: Onboarding) => expect((await o.f.putSchema(schema)).status).toBe(200),
+			]),
+		),
+		'inviter disabled': (o, inviter) => o.f.repositories.principals.disablePrincipal(inviter.id),
+	}
+
+	for (const [name, change] of Object.entries(changes)) {
+		test(`${name}: the acceptance that creates its principal writes nothing`, async () => {
+			const o = await onboarding()
+			const staff = await o.f.person('staff')
+			await o.f.repositories.grants.createGrant({ principalId: staff.id, app: APP, roleKey: 'staff' })
+			await o.invite(NEWCOMER, { by: staff })
+			o.membership.between = () => change(o, staff)
+
+			expect((await o.send(accept({ token: o.email.lastToken(), password: PASSWORD }))).status).toBe(403)
+			expect(await o.f.repositories.principals.getUserByEmail(NEWCOMER)).toBeNull()
+			expect(await o.f.repositories.passwords.lookupLogin(NEWCOMER)).toEqual({ status: 'missing' })
+			const [open] = await o.f.repositories.membership.listOpenInvitations(APP, o.scope)
+			expect(open?.accepted_at).toBeNull()
+		})
+
+		test(`${name}: the signed-in acceptance writes nothing`, async () => {
+			const o = await onboarding()
+			const staff = await o.f.person('staff')
+			await o.f.repositories.grants.createGrant({ principalId: staff.id, app: APP, roleKey: 'staff' })
+			const invitee = await o.f.person('invitee')
+			await o.invite('invitee@example.test', { by: staff })
+			o.membership.between = () => change(o, staff)
+
+			const cookie = `${SESSION_COOKIE}=${await o.h.signSession(invitee.id)}`
+			expect((await o.send(accept({ token: o.email.lastToken() }, { Cookie: cookie }))).status).toBe(403)
+			expect(await o.f.repositories.membership.listRoleGrantsAt(APP, invitee.id, o.scope)).toEqual([])
+			expect(await o.f.repositories.membership.listOpenInvitations(APP, o.scope)).toHaveLength(1)
+		})
+	}
+})
+
+describe('an invitation that creates its principal, opened in a browser signed in as someone else', () => {
+	test('shows the invited address and asks to sign out, without consuming the link or writing anything', async () => {
+		const o = await onboarding()
+		await o.invite(NEWCOMER)
+		const token = o.email.lastToken()
+		const cookie = `${SESSION_COOKIE}=${await o.h.signSession(o.owner.id)}`
+
+		const submissions: Record<string, string>[] = [{ token }, { token, password: PASSWORD }]
+		for (const fields of submissions) {
+			const response = await o.send(accept(fields, { Cookie: cookie }))
+			expect(response.status).toBe(409)
+			const html = await response.text()
+			expect(html).toContain(NEWCOMER)
+			expect(html).toContain('href="/auth/logout"')
+			expect(html).not.toContain('name="password"')
+			expect(response.headers.get('set-cookie')).toBeNull()
+		}
+		expect(await o.f.repositories.principals.getUserByEmail(NEWCOMER)).toBeNull()
+		// Signed out, the same link still opens the set-password form.
+		expect(await (await o.send(accept({ token }))).text()).toContain('name="password"')
 	})
 })

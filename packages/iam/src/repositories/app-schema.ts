@@ -2,7 +2,7 @@ import type { WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
-import { firstRow, unixNow } from './sql'
+import { unixNow } from './sql'
 
 /** A role/policy bundle row (the `roles` table). `permissions` is a JSON array string. */
 export interface RoleRow {
@@ -180,19 +180,39 @@ export class AppSchemaRepository {
 				input.origin,
 				unixNow(),
 			)
-		if (audit === undefined) {
-			return firstRow<RoleRow>(upsert)
-		}
-		const [written] = await this.db.batch<RoleRow>([upsert, auditEventStatement(this.db, audit)])
-		const row = written?.results[0]
+		const results = await this.db.batch<RoleRow>([
+			this.bumpRevisionStatement(input.app),
+			upsert,
+			...(audit === undefined ? [] : [auditEventStatement(this.db, audit)]),
+		])
+		const row = results[1]?.results[0]
 		if (row === undefined) throw new Error('expected a row from a RETURNING statement, got none')
 		return row
 	}
 
 	/** Delete a role. `audit` is written exactly when this call deleted it. */
 	async deleteRole(app: string, roleKey: string, audit?: AuditEventInput): Promise<boolean> {
-		const remove = { sql: 'DELETE FROM roles WHERE app = ? AND role_key = ? RETURNING role_key', binds: [app, roleKey] }
-		return (await this.writer.run([remove], audit)).length > 0
+		const remove = this.writer.changed([{ sql: 'DELETE FROM roles WHERE app = ? AND role_key = ? RETURNING role_key', binds: [app, roleKey] }], audit)
+		const results = await this.db.batch([this.bumpRevisionStatement(app), ...remove.statements])
+		return remove.rows(results, 1).length > 0
+	}
+
+	/**
+	 * The revision of the app's schema and policies (`app_schema_revisions`); 0 for an app IAM never reconciled. A check
+	 * that authorizes a later write reads it FIRST, before the rows it checks, and the write requires it unchanged
+	 * (`schemaRevisionSql`): a reconcile in between then makes the write change nothing.
+	 */
+	async getSchemaRevision(app: string): Promise<number> {
+		const row = await this.db.prepare('SELECT revision FROM app_schema_revisions WHERE app = ?').bind(app).first<{ revision: number }>()
+		return row?.revision ?? 0
+	}
+
+	/** The first statement of every write of the app's schema or policies: it moves the revision on, and on Postgres locks it. */
+	private bumpRevisionStatement(app: string): SqlStatement {
+		return this.db
+			.prepare(`INSERT INTO app_schema_revisions (app, revision) VALUES (?, 1)
+				ON CONFLICT (app) DO UPDATE SET revision = app_schema_revisions.revision + 1`)
+			.bind(app)
 	}
 
 	/** The app's action catalog as plain strings — the validation source for patterns. */
@@ -298,6 +318,7 @@ export class AppSchemaRepository {
 	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
+			this.bumpRevisionStatement(app),
 			this.db.prepare('DELETE FROM app_scopes WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_actions WHERE app = ?').bind(app),
 			this.db.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app'`).bind(app),

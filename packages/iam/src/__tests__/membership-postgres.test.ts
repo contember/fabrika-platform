@@ -15,6 +15,7 @@ import {
 	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
+	inviterCheck,
 	InviterRemovedBeforeAcceptance,
 	type MembershipFixture,
 	membershipFixture,
@@ -177,10 +178,11 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const invitee = await f.person(`accept-invitee-${fixtureSeq}`)
 		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		if (invitation === null) throw new Error('fixture')
-		const outcomes = await Promise.all([1, 2, 3].map(() => concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner'])))
+		const ownerCheck = await inviterCheck(concurrent, ['owner'])
+		const outcomes = await Promise.all([1, 2, 3].map(() => concurrent.membership.acceptInvitation(invitation, invitee.id, ownerCheck)))
 		expect(outcomes.filter((outcome) => outcome === 'accepted')).toHaveLength(1)
 		await repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
-		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner'])).toBe('not_open')
+		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, ['owner']))).toBe('not_open')
 		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
 	})
 
@@ -236,7 +238,7 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 				scope.value,
 			])
 			let settled = false
-			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner']).finally(() => {
+			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, ['owner'])).finally(() => {
 				settled = true
 			})
 			await Bun.sleep(300)
@@ -280,9 +282,10 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 				'staff',
 			])
 			let settled = false
-			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner', 'manager', 'staff']).finally(() => {
-				settled = true
-			})
+			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, ['owner', 'manager', 'staff']))
+				.finally(() => {
+					settled = true
+				})
 			await Bun.sleep(300)
 			expect(settled).toBe(false)
 			await reserved.unsafe('COMMIT')

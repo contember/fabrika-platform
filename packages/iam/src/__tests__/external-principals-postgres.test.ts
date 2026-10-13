@@ -12,6 +12,7 @@ import { SQL } from 'bun'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { type AuditEventInput, createPostgresIamRepositories, ExternalGrantError, type IamRepositories } from '../db'
 import { createHarness } from './helpers/harness'
+import { inviterCheck } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
@@ -172,7 +173,12 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 		})
 		const pause = await pauseAt(fixture, audited('race.accept'), 1051103)
 		open.push(() => pause.release())
-		const accepting = repositories.membership.acceptInvitation(invitation, external.id, ['partner'], event('race.accept', external.id))
+		const accepting = repositories.membership.acceptInvitation(
+			invitation,
+			external.id,
+			await inviterCheck(repositories, ['partner'], APP),
+			event('race.accept', external.id),
+		)
 		await pause.reached()
 		const narrowing = concurrent.appSchema.reconcileAppSchema(schema(false)).then(() => 'committed', () => 'rolled back')
 		await pause.blocked()
@@ -201,7 +207,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 		open.push(() => pause.release())
 		const narrowing = concurrent.appSchema.reconcileAppSchema(schema(false), event('race.reconcile', external.id))
 		await pause.reached()
-		const accepting = repositories.membership.acceptInvitation(invitation, external.id, ['partner'])
+		const accepting = repositories.membership.acceptInvitation(invitation, external.id, await inviterCheck(repositories, ['partner'], APP))
 		await pause.blocked()
 		await pause.release()
 
@@ -350,7 +356,14 @@ describe('an acceptance whose grant writes nothing', () => {
 		// Stands in for a grant insert that matches nothing after the invitation was consumed.
 		h.sqlite.exec(`CREATE TRIGGER drop_grant BEFORE INSERT ON grants WHEN NEW.principal_id = '${external.id}' BEGIN SELECT RAISE(IGNORE); END`)
 
-		await expect(repositories.membership.acceptInvitation(invitation, external.id, ['partner'], event('race.accept', external.id))).rejects.toThrow()
+		await expect(
+			repositories.membership.acceptInvitation(
+				invitation,
+				external.id,
+				await inviterCheck(repositories, ['partner'], APP),
+				event('race.accept', external.id),
+			),
+		).rejects.toThrow()
 		expect((await repositories.membership.getInvitationById(invitation.id))?.accepted_at).toBeNull()
 		expect(await repositories.audit.listAuditEvents({ action: 'race.accept', limit: 5 })).toEqual([])
 	})

@@ -3,38 +3,33 @@
 // invitation or of two invitations to the same new mailbox, create exactly one principal, and an acceptance waits for
 // a removal of the inviter's grant and then creates nothing. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
-import { type AppSchema, type Scope } from '@fabrika/auth-core'
+import type { Scope } from '@fabrika/auth-core'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createPostgresIamRepositories, type IamRepositories, type InvitationRow } from '../db'
-import { acceptCreatingPrincipal, assignMember, createScope, invitationOffer, requestDelegation } from '../membership'
+import { acceptCreatingPrincipal, acceptInvitation, assignMember, createScope, invitationOffer, requestDelegation } from '../membership'
 import type { StoredPasswordHash } from '../password-crypto'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import {
 	APP,
+	BetweenCheckAndWrite,
 	CALLER_ENV,
 	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
+	inviterCheck,
 	type MembershipFixture,
 	membershipFixture,
-	NOTES_SCHEMA,
+	ONBOARDING_SCHEMA,
 	type Person,
+	reconcilesBetween,
 } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
 	console.warn(`invitation-onboarding-postgres.test.ts ${skipReason}`)
-}
-
-const ONBOARDING_SCHEMA: AppSchema = {
-	...NOTES_SCHEMA,
-	roles: {
-		...NOTES_SCHEMA.roles,
-		partner: { name: 'Partner', permissions: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner', 'staff'] }, external: true },
-	},
 }
 
 const PASSWORD: StoredPasswordHash = { algorithm: 'test', parameters: '{}', salt: 'salt', passwordHash: 'hash:a sufficiently long passphrase' }
@@ -66,13 +61,17 @@ interface Onboarding {
 	readonly scope: Scope
 	/** The fixture's services over the second pool, whose connections run transactions side by side. */
 	readonly parallel: Services
+	/** Its membership repository: `between` runs a change after an acceptance's check and before its write. */
+	readonly membership: BetweenCheckAndWrite
 	invite(address: string, options?: { resend?: boolean; by?: Person; scope?: Scope }): Promise<InvitationRow>
 	workspace(): Promise<Scope>
 }
 
 async function onboarding(): Promise<Onboarding> {
+	if (fixture === null) throw new Error('fixture')
 	const email = new CapturingEmail()
-	const f = await membershipFixture(repositories, { email, services: { authentication: { oidc: true, password: true } } })
+	const membership = new BetweenCheckAndWrite(fixture.db, { dialect: 'postgres' })
+	const f = await membershipFixture({ ...repositories, membership }, { email, services: { authentication: { oidc: true, password: true } } })
 	expect((await f.putSchema(ONBOARDING_SCHEMA)).status).toBe(200)
 	seq += 1
 	const owner = await f.person(`owner-${seq}`)
@@ -96,6 +95,7 @@ async function onboarding(): Promise<Onboarding> {
 		owner,
 		scope,
 		parallel: { ...f.services, repositories: concurrent },
+		membership,
 		workspace,
 		async invite(address, options = {}) {
 			const result = await assignMember(f.services, CALLER_ENV, f.ctx, {
@@ -170,7 +170,7 @@ describe.skipIf(!hasPostgres)('an invitation that creates its principal, on Post
 			const principal = await repositories.principals.getUserByEmail(mailbox)
 			if (principal === null) throw new Error('no principal')
 			const loser = outcomes[0]?.ok === true ? other : first
-			expect(await repositories.membership.acceptInvitation(loser, principal.id, ['owner', 'staff'])).toBe('accepted')
+			expect(await repositories.membership.acceptInvitation(loser, principal.id, await inviterCheck(repositories, ['owner', 'staff']))).toBe('accepted')
 		}
 	})
 
@@ -184,7 +184,13 @@ describe.skipIf(!hasPostgres)('an invitation that creates its principal, on Post
 		expect(after.token_hash).not.toBe(before.token_hash)
 		expect(await invitationOffer(o.f.services, oldToken)).toEqual({ kind: 'invalid' })
 		// A submission read under the old link writes nothing, even when it got past the lookup.
-		expect(await repositories.membership.acceptAsNewPrincipal({ invitation: before, assigners: ['owner'], password: PASSWORD }, eventsFor)).toEqual({
+		expect(
+			await repositories.membership.acceptAsNewPrincipal({
+				invitation: before,
+				inviter: await inviterCheck(repositories, ['owner']),
+				password: PASSWORD,
+			}, eventsFor),
+		).toEqual({
 			outcome: 'not_open',
 		})
 		expect(await principalsOf(mailbox)).toBe(0)
@@ -206,7 +212,11 @@ describe.skipIf(!hasPostgres)('an invitation that creates its principal, on Post
 			await reserved.unsafe('BEGIN')
 			await reserved.unsafe('DELETE FROM grants WHERE app = $1 AND principal_id = $2 AND role_key = $3', [APP, staff.id, 'staff'])
 			let settled = false
-			const acceptance = concurrent.membership.acceptAsNewPrincipal({ invitation, assigners: ['owner', 'staff'], password: PASSWORD }, eventsFor)
+			const acceptance = concurrent.membership.acceptAsNewPrincipal({
+				invitation,
+				inviter: await inviterCheck(concurrent, ['owner', 'staff']),
+				password: PASSWORD,
+			}, eventsFor)
 				.finally(() => {
 					settled = true
 				})
@@ -236,3 +246,136 @@ function eventsFor(principalId: string) {
 	})
 	return { principal: event('iam.principal.create'), acceptance: event('iam.member.accept'), password: event('iam.password.enrollment.complete') }
 }
+
+describe.skipIf(!hasPostgres)('a change between the check of an acceptance and its write, on Postgres', () => {
+	const changes: Record<string, (o: Onboarding, inviter: Person) => Promise<unknown>> = {
+		...Object.fromEntries(
+			Object.entries(reconcilesBetween(ONBOARDING_SCHEMA)).map(([name, schema]) => [
+				name,
+				async (o: Onboarding) => {
+					// The suite shares one app: earlier tests' partners in a workspace would make moving the role a 409.
+					await fixture?.db.prepare(`DELETE FROM grants WHERE app = ? AND role_key = 'partner'`).bind(APP).run()
+					expect((await o.f.putSchema(schema)).status).toBe(200)
+				},
+			]),
+		),
+		'inviter disabled': (o, inviter) => repositories.principals.disablePrincipal(inviter.id),
+	}
+
+	async function staffOf(o: Onboarding): Promise<Person> {
+		const staff = await o.f.person(`staff-${seq}`)
+		await repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff' })
+		return staff
+	}
+
+	for (const [name, change] of Object.entries(changes)) {
+		test(`${name}: the acceptance that creates its principal writes nothing`, async () => {
+			const o = await onboarding()
+			const staff = await staffOf(o)
+			const mailbox = `changed-${seq}@partner.test`
+			const invitation = await o.invite(mailbox, { by: staff })
+			o.membership.between = () => change(o, staff)
+			expect(await acceptCreatingPrincipal(o.f.services, invitation, PASSWORD, 'pg-changed')).toEqual({ ok: false, reason: 'not_allowed' })
+			expect(await principalsOf(mailbox)).toBe(0)
+			const open = await repositories.membership.getInvitationById(invitation.id)
+			expect([open?.accepted_at, open?.revoked_at]).toEqual([null, null])
+		})
+
+		test(`${name}: the signed-in acceptance writes nothing`, async () => {
+			const o = await onboarding()
+			const staff = await staffOf(o)
+			const invitee = await o.f.person(`changed-invitee-${seq}`)
+			await o.invite(`changed-invitee-${seq}@example.test`, { by: staff })
+			const principal = await repositories.principals.getPrincipalById(invitee.id)
+			if (principal === null) throw new Error('fixture')
+			o.membership.between = () => change(o, staff)
+			expect(await acceptInvitation(o.f.services, principal, o.email.lastToken(), 'pg-changed-signed-in')).toEqual({ ok: false, reason: 'not_allowed' })
+			expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, o.scope)).toEqual([])
+		})
+	}
+})
+
+describe.skipIf(!hasPostgres)("the inviter's disable and an acceptance, on two connections", () => {
+	async function staffInvitation(o: Onboarding): Promise<{ staff: Person; invitation: InvitationRow; mailbox: string }> {
+		const staff = await o.f.person(`racing-staff-${seq}`)
+		await repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff' })
+		const mailbox = `racing-${seq}@partner.test`
+		return { staff, mailbox, invitation: await o.invite(mailbox, { by: staff }) }
+	}
+
+	async function holding<T>(sql: string, binds: unknown[], during: () => Promise<T>): Promise<T> {
+		if (fixture === null || postgresUrl === null) throw new Error('fixture')
+		const other = new SQL({ url: postgresUrl, max: 1, connection: { search_path: fixture.schema } })
+		const reserved = await other.reserve()
+		try {
+			await reserved.unsafe('BEGIN')
+			await reserved.unsafe(sql, binds)
+			return await during()
+		} finally {
+			await reserved.unsafe('COMMIT')
+			reserved.release()
+			await other.close()
+		}
+	}
+
+	test('a disable that commits first: the acceptance waits for it, then creates nothing', async () => {
+		const o = await onboarding()
+		const { staff, invitation, mailbox } = await staffInvitation(o)
+		let settled = false
+		const { acceptance } = await holding('UPDATE principals SET disabled_at = 1 WHERE id = $1', [staff.id], async () => {
+			const pending = acceptCreatingPrincipal(o.parallel, invitation, PASSWORD, 'pg-disable-first').finally(() => {
+				settled = true
+			})
+			await Bun.sleep(300)
+			expect(settled).toBe(false)
+			return { acceptance: pending }
+		})
+		expect(await acceptance).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await principalsOf(mailbox)).toBe(0)
+	})
+
+	test('a disable that commits first: the signed-in acceptance waits for it, then grants nothing', async () => {
+		const o = await onboarding()
+		const staff = await o.f.person(`racing-staff-${seq}`)
+		await repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff' })
+		const invitee = await o.f.person(`racing-invitee-${seq}`)
+		await o.invite(`racing-invitee-${seq}@example.test`, { by: staff })
+		const invitation = await repositories.membership.getInvitationByHash(await hashToken(o.email.lastToken()))
+		if (invitation === null) throw new Error('fixture')
+		const check = await inviterCheck(concurrent, ['owner', 'staff'])
+		let settled = false
+		const { acceptance } = await holding('UPDATE principals SET disabled_at = 1 WHERE id = $1', [staff.id], async () => {
+			const pending = concurrent.membership.acceptInvitation(invitation, invitee.id, check).finally(() => {
+				settled = true
+			})
+			await Bun.sleep(300)
+			expect(settled).toBe(false)
+			return { acceptance: pending }
+		})
+		expect(await acceptance).toBe('not_allowed')
+		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, o.scope)).toEqual([])
+	})
+
+	test('an acceptance that holds the inviter first: the disable waits until the account is created', async () => {
+		const o = await onboarding()
+		const { staff, invitation, mailbox } = await staffInvitation(o)
+		let accepted = false
+		let disabled = false
+		// The role row held elsewhere stops the acceptance after it took the inviter's row and before it wrote anything.
+		const { acceptance, disable } = await holding(`SELECT 1 FROM roles WHERE app = $1 AND role_key = 'partner' FOR UPDATE`, [APP], async () => {
+			const pending = acceptCreatingPrincipal(o.parallel, invitation, PASSWORD, 'pg-acceptance-first').finally(() => {
+				accepted = true
+			})
+			await Bun.sleep(300)
+			const disabling = concurrent.principals.disablePrincipal(staff.id).finally(() => {
+				disabled = true
+			})
+			await Bun.sleep(300)
+			expect([accepted, disabled]).toEqual([false, false])
+			return { acceptance: pending, disable: disabling }
+		})
+		expect((await acceptance).ok).toBe(true)
+		expect(await disable).toBe(true)
+		expect(await principalsOf(mailbox)).toBe(1)
+	})
+})

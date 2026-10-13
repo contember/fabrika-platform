@@ -44,6 +44,7 @@ export {
 	type DelegationGrantRow,
 	type InvitationAcceptance,
 	type InvitationRow,
+	type InviterCheck,
 	type MemberGrantRow,
 	MembershipRepository,
 	type MembershipRepositoryOptions,

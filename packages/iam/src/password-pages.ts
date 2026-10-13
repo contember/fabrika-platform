@@ -209,15 +209,18 @@ export function invitationOutcomePage(
 		readonly text: (text: PageText['invitation']) => string
 		readonly status: number
 		readonly signIn?: string
+		/** IAM's sign-out page, which asks before it signs out. */
+		readonly signOut?: string
 	},
 ): Response {
 	const text = catalogFor(input.presentation.locale).pages.invitation
 	const title = input.title(text)
 	const signIn = input.signIn === undefined ? '' : `<p><a class="button" href="${escapeHtml(input.signIn)}">${escapeHtml(text.signIn)}</a></p>`
+	const signOut = input.signOut === undefined ? '' : `<p><a class="button" href="${escapeHtml(input.signOut)}">${escapeHtml(text.signOut)}</a></p>`
 	return htmlPage({
 		locale: input.presentation.locale,
 		title,
-		content: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(input.text(text))}</p>${signIn}`,
+		content: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(input.text(text))}</p>${signIn}${signOut}`,
 		status: input.status,
 	})
 }

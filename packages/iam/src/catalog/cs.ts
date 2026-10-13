@@ -97,6 +97,10 @@ export const cs: Catalog = {
 			createTitle: 'Zvolte si heslo',
 			createText: (address) => `Váš účet se přihlašuje adresou ${address} a heslem, které si zde zvolíte. Zvolením hesla pozvánku přijmete.`,
 			createSubmit: 'Nastavit heslo a přijmout',
+			otherAccountTitle: 'Jste přihlášeni jiným účtem',
+			otherAccountText: (address) =>
+				`Tato pozvánka zakládá nový účet pro adresu ${address} a tento prohlížeč je přihlášen jiným účtem. Nejprve se odhlaste, nebo otevřete odkaz z pozvánky v jiném profilu prohlížeče.`,
+			signOut: 'Odhlásit se',
 			signInFirstTitle: 'Nejprve se přihlaste',
 			signInFirstText: 'Přihlaste se pozvanou adresou a potom znovu otevřete odkaz z pozvánky.',
 			signIn: 'Přihlásit se',

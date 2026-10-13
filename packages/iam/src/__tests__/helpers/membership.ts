@@ -9,11 +9,15 @@ import {
 	type AuditEventInput,
 	type IamRepositories,
 	type InvitationRow,
+	type InviterCheck,
 	MembershipRepository,
 	type MembershipRepositoryOptions,
+	type NewPrincipalAcceptance,
+	type NewPrincipalEvents,
 	type PrincipalRow,
 } from '../../db'
 import type { RequestContext } from '../../env'
+import type { StoredPasswordHash } from '../../password-crypto'
 import type { InvitationAcceptance } from '../../repositories/membership'
 import { resolvePermissionsAt } from '../../resolve'
 import { generateToken, hashToken } from '../../secret'
@@ -70,6 +74,15 @@ export const NOTES_SCHEMA: AppSchema = {
 	delegations: {
 		[INVITE_ENDPOINT]: { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
 		[CREATE_ENDPOINT]: { action: 'workspaces.create', dimension: 'workspace', purpose: 'creates' },
+	},
+}
+
+/** `NOTES_SCHEMA` with `partner`, a role declared external, assignable by `owner` and the app-wide `staff`. */
+export const ONBOARDING_SCHEMA: AppSchema = {
+	...NOTES_SCHEMA,
+	roles: {
+		...NOTES_SCHEMA.roles,
+		partner: { name: 'Partner', permissions: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner', 'staff'] }, external: true },
 	},
 }
 
@@ -262,13 +275,80 @@ export class InviterRemovedBeforeAcceptance extends MembershipRepository {
 	override async acceptInvitation(
 		invitation: InvitationRow,
 		principalId: string,
-		assigners: readonly string[],
+		inviter: InviterCheck,
 		audit?: AuditEventInput,
 	): Promise<InvitationAcceptance> {
 		const removal = this.removeBeforeAcceptance
 		if (removal !== null) {
 			await this.deleteRoleGrant(removal.app, removal.principalId, removal.roleKey, removal.scope)
 		}
-		return super.acceptInvitation(invitation, principalId, assigners, audit)
+		return super.acceptInvitation(invitation, principalId, inviter, audit)
+	}
+}
+
+/** The authority a test hands an acceptance directly: `assigners`, under the app's schema revision as it is now. */
+export async function inviterCheck(repositories: IamRepositories, assigners: readonly string[], app: string = APP): Promise<InviterCheck> {
+	return { assigners, revision: await repositories.appSchema.getSchemaRevision(app) }
+}
+
+/**
+ * The deterministic interleaving of an acceptance and any change: `between` runs once, after the use case checked the
+ * inviter's authority and before the repository's write, for a signed-in acceptance and a creating one alike.
+ */
+export class BetweenCheckAndWrite extends MembershipRepository {
+	between: (() => Promise<unknown>) | null = null
+
+	constructor(db: SqlDatabase, options: MembershipRepositoryOptions = {}) {
+		super(db, options)
+	}
+
+	override async acceptInvitation(
+		invitation: InvitationRow,
+		principalId: string,
+		inviter: InviterCheck,
+		audit?: AuditEventInput,
+	): Promise<InvitationAcceptance> {
+		await this.runBetween()
+		return super.acceptInvitation(invitation, principalId, inviter, audit)
+	}
+
+	override async acceptAsNewPrincipal(
+		input: { readonly invitation: InvitationRow; readonly inviter: InviterCheck; readonly password: StoredPasswordHash },
+		events: (principalId: string) => NewPrincipalEvents,
+	): Promise<NewPrincipalAcceptance> {
+		await this.runBetween()
+		return super.acceptAsNewPrincipal(input, events)
+	}
+
+	private async runBetween(): Promise<void> {
+		const between = this.between
+		this.between = null
+		await between?.()
+	}
+}
+
+/**
+ * The changes a review showed an acceptance must not outlive, each made between the check and the write, over the
+ * onboarding schema (`partner`, external, assignable by `owner` and the app-wide `staff`): `staff` no longer assigns
+ * it, it grants an action `staff` lacks, or it moves to another dimension.
+ */
+export function reconcilesBetween(schema: AppSchema): Record<string, AppSchema> {
+	const partner = schema.roles['partner']
+	if (partner?.member === undefined) throw new Error('the schema declares no partner membership role')
+	return {
+		'assignableBy narrowed': {
+			...schema,
+			roles: { ...schema.roles, partner: { ...partner, member: { ...partner.member, assignableBy: ['owner'] } } },
+		},
+		'role actions widened': {
+			...schema,
+			roles: { ...schema.roles, partner: { ...partner, permissions: ['notes.read', 'notes.publish'] } },
+		},
+		'role moved to another dimension': {
+			...schema,
+			scopes: [...schema.scopes, { type: 'team', members: { manage: 'notes.admin', list: 'notes.read' } }],
+			// `owner` is a workspace role, so only the app-wide `staff` may still assign it there.
+			roles: { ...schema.roles, partner: { ...partner, member: { scope: 'team', assignableBy: ['staff'] } } },
+		},
 	}
 }

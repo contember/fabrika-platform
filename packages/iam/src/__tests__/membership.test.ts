@@ -35,6 +35,7 @@ import {
 	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
+	inviterCheck,
 	InviterRemovedBeforeAcceptance,
 	type MembershipFixture,
 	membershipFixture,
@@ -501,9 +502,11 @@ describe('an application-wide role in assignableBy assigns in every value, held 
 		const second = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		if (first === null || second === null) throw new Error('fixture')
 		const accepting = await f.person('first')
-		expect(await f.repositories.membership.acceptInvitation(first, accepting.id, ['staff'])).toBe('accepted')
+		expect(await f.repositories.membership.acceptInvitation(first, accepting.id, await inviterCheck(f.repositories, ['staff']))).toBe('accepted')
 		await f.repositories.grants.deleteGrant(grantId)
-		expect(await f.repositories.membership.acceptInvitation(second, (await f.person('second')).id, ['staff'])).toBe('not_allowed')
+		expect(await f.repositories.membership.acceptInvitation(second, (await f.person('second')).id, await inviterCheck(f.repositories, ['staff']))).toBe(
+			'not_allowed',
+		)
 	})
 
 	test('the role held in another value assigns nothing here', async () => {
@@ -995,10 +998,10 @@ describe('review round 1', () => {
 		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		const invitee = await f.person('invitee')
 		if (invitation === null) throw new Error('fixture')
-		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, ['owner'])).toBe('accepted')
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(f.repositories, ['owner']))).toBe('accepted')
 		await f.repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
 		// The second attempt passed its checks with the same open row before the first committed.
-		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, ['owner'])).toBe('not_open')
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(f.repositories, ['owner']))).toBe('not_open')
 		expect(await rolesOf(f, invitee, scope)).toEqual([])
 	})
 

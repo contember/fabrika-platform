@@ -89,6 +89,17 @@ export type NewPrincipalAcceptance =
 	| { readonly outcome: 'accepted'; readonly principal: PrincipalRow }
 	| { readonly outcome: Exclude<InvitationAcceptance, 'accepted'> | 'account_exists' }
 
+/**
+ * What authorized an acceptance, as the use case checked it: the roles that make the inviter an assigner of the
+ * invitation's role, and the revision of the app's schema and policies read BEFORE that check
+ * (`AppSchemaRepository.getSchemaRevision`). The acceptance writes only while the revision is unchanged, so the
+ * declarations the check read are the ones in force at the write.
+ */
+export interface InviterCheck {
+	readonly assigners: readonly string[]
+	readonly revision: number
+}
+
 /** The records of an acceptance that creates its principal, each written exactly when its change was. */
 export interface NewPrincipalEvents {
 	readonly principal: AuditEventInput
@@ -450,10 +461,11 @@ export class MembershipRepository {
 
 	/**
 	 * Accept an invitation for `principalId` and write its grant, in one transaction. The guarded UPDATE
-	 * stamps a fresh acceptance id on the invitation only when it is still open AND the inviter still holds one
-	 * of `assigners` in the value or, an application-wide role, globally (`ASSIGNING_GRANT`) — the authority
-	 * re-check is part of the statement that consumes the invitation, so a removal of the inviter cannot land
-	 * between a check and the write. The grant is written
+	 * stamps a fresh acceptance id on the invitation only when it is still open under this token AND the authority the
+	 * use case checked still holds (`checkedAuthority`): the inviter enabled, the app's schema revision unchanged, and
+	 * one of the assigners held in the value or, an application-wide role, globally (`ASSIGNING_GRANT`). The re-check
+	 * is part of the statement that consumes the invitation, so a removal or disable of the inviter, or a reconcile,
+	 * cannot land between a check and the write. The grant is written
 	 * only for the attempt holding that id — never on the strength of a timestamp another attempt can share.
 	 * An expired grant of the role is renewed; an active one is left as it is. A refused acceptance leaves the
 	 * invitation open. `audit` is written only for the attempt holding the acceptance id, in the same batch.
@@ -461,18 +473,19 @@ export class MembershipRepository {
 	async acceptInvitation(
 		invitation: InvitationRow,
 		principalId: string,
-		assigners: readonly string[],
+		inviter: InviterCheck,
 		audit?: AuditEventInput,
 	): Promise<InvitationAcceptance> {
-		if (assigners.length === 0) {
+		if (inviter.assigners.length === 0) {
 			return 'not_allowed'
 		}
 		const now = unixNow()
 		const acceptanceId = uuidv7()
+		const authority = this.checkedAuthority(invitation, inviter, now)
 		const accept = this.writer.changed([{
 			sql: `UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
 				WHERE id = ? AND token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
-					AND ${this.inviterAuthority(assigners)}
+					AND ${authority.sql}
 					AND ${this.#eligible}
 				RETURNING id`,
 			binds: [
@@ -482,11 +495,12 @@ export class MembershipRepository {
 				invitation.id,
 				invitation.token_hash,
 				now,
-				...this.inviterAuthorityBinds(invitation, assigners, now),
+				...authority.binds,
 				...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }),
 			],
 		}], audit)
 		const statements = [
+			...authority.locks,
 			...accept.statements,
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
@@ -530,7 +544,7 @@ export class MembershipRepository {
 		]
 		let accepted: boolean
 		try {
-			accepted = accept.rows(await this.db.batch<{ id: string }>(statements)).length > 0
+			accepted = accept.rows(await this.db.batch<{ id: string }>(statements), authority.locks.length).length > 0
 		} catch (cause) {
 			if (await this.ineligible(invitation, principalId)) return 'not_eligible'
 			throw cause
@@ -548,29 +562,32 @@ export class MembershipRepository {
 	 * Accept an invitation to a role declared external for a mailbox no principal holds, creating its principal, in ONE
 	 * transaction: an `external` user labelled with the invited address, active, with its mailbox claimed; the
 	 * acceptance and its grant as `acceptInvitation` writes them; an enabled password account holding `password`; and the
-	 * three records. The principal row comes first, so this transaction starts at it as every writer of a principal's
-	 * rows does (`principalLockStatements`); nobody else sees it before the commit.
+	 * three records. After the inviter's locks (`checkedAuthority`), the new principal's row is the first of its rows
+	 * written, as every writer of a principal's rows starts at it (`principalLockStatements`); nobody else sees it before
+	 * the commit.
 	 *
-	 * The principal is inserted only while the invitation is open under this token, the inviter still holds one of
-	 * `assigners` there (`FOR SHARE` on Postgres) and the role is still external (`FOR SHARE`), so a refusal writes
-	 * nothing. The acceptance repeats the inviter and eligibility conditions, and a guard rolls the whole batch back if
-	 * a change in between (the invitation cancelled or rotated) left the principal without its grant. A mailbox another
-	 * writer claimed first fails the principal's unique mailbox, which rolls the batch back: `account_exists`.
+	 * The principal is inserted only while the invitation is open under this token, the checked authority holds
+	 * (`checkedAuthority`: the inviter enabled, the schema revision unchanged, its assigning grant `FOR SHARE`) and the
+	 * role is still external (`FOR SHARE`), so a refusal writes nothing. The acceptance repeats the authority and
+	 * eligibility conditions, and a guard rolls the whole batch back if a change in between (the invitation cancelled or
+	 * rotated) left the principal without its grant. A mailbox another writer claimed first fails the principal's unique
+	 * mailbox, which rolls the batch back: `account_exists`.
 	 */
 	async acceptAsNewPrincipal(
-		input: { readonly invitation: InvitationRow; readonly assigners: readonly string[]; readonly password: StoredPasswordHash },
+		input: { readonly invitation: InvitationRow; readonly inviter: InviterCheck; readonly password: StoredPasswordHash },
 		events: (principalId: string) => NewPrincipalEvents,
 	): Promise<NewPrincipalAcceptance> {
-		const { invitation, assigners, password } = input
-		if (assigners.length === 0) {
+		const { invitation, password } = input
+		if (input.inviter.assigners.length === 0) {
 			return { outcome: 'not_allowed' }
 		}
 		const now = unixNow()
 		const principalId = uuidv7()
 		const acceptanceId = uuidv7()
 		const recorded = events(principalId)
-		const inviter = this.inviterAuthority(assigners)
-		const inviterBinds = this.inviterAuthorityBinds(invitation, assigners, now)
+		const authority = this.checkedAuthority(invitation, input.inviter, now)
+		const inviter = authority.sql
+		const inviterBinds = authority.binds
 		const eligible = eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key })
 		const accepted = `EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)`
 		const create = this.writer.changed([{
@@ -649,7 +666,7 @@ export class MembershipRepository {
 				invitation.scope_type,
 				invitation.scope_value,
 			)
-		const statements = [...create.statements, claim, ...accept.statements, grant, account, ...credential.statements, guard]
+		const statements = [...authority.locks, ...create.statements, claim, ...accept.statements, grant, account, ...credential.statements, guard]
 		let results: SqlQueryResult<{ id: string }>[]
 		try {
 			results = await this.db.batch<{ id: string }>(statements)
@@ -659,7 +676,7 @@ export class MembershipRepository {
 			if (refused !== null) return { outcome: refused }
 			throw cause
 		}
-		if (accept.rows(results, create.statements.length + 1).length === 0) {
+		if (accept.rows(results, authority.locks.length + create.statements.length + 1).length === 0) {
 			if (await this.mailboxHeld(invitation.email)) return { outcome: 'account_exists' }
 			return { outcome: (await this.newPrincipalRefusal(invitation)) ?? 'not_allowed' }
 		}
@@ -688,17 +705,47 @@ export class MembershipRepository {
 		return external === null ? 'not_eligible' : null
 	}
 
-	/** The SQL condition that the inviter still holds one of `assigners` in the value, or an application-wide one globally. */
-	private inviterAuthority(assigners: readonly string[]): string {
-		return `EXISTS (
-			SELECT 1 FROM grants
-			WHERE app = ? AND principal_id = ? AND ${ASSIGNING_GRANT} AND role_key IN (${assigners.map(() => '?').join(', ')})
-				AND (expires_at IS NULL OR expires_at > ?)
-			${this.#shareLock})`
-	}
-
-	private inviterAuthorityBinds(invitation: InvitationRow, assigners: readonly string[], now: number): (string | number)[] {
-		return [invitation.app, invitation.invited_by, invitation.scope_type, invitation.scope_value, ...assigners, now]
+	/**
+	 * What an acceptance's writes require of the authority `inviter` checked: the inviter is still enabled, the app's
+	 * schema revision is still the one read before the check, and the inviter still holds one of the assigners in the
+	 * value, or an application-wide one globally (`ASSIGNING_GRANT`).
+	 *
+	 * On Postgres `locks` come first in the batch, in the principal-first order: the inviter's principal row `FOR SHARE`
+	 * (a disable waits for the acceptance, or the acceptance reads the committed disable), then the revision row
+	 * `FOR SHARE` (a reconcile's increment, its first statement, waits, or the acceptance reads the new revision), and
+	 * only then do the writes' conditions lock the assigning grant and the role row. SQLite and D1 run one writer at a
+	 * time and need none.
+	 */
+	private checkedAuthority(
+		invitation: InvitationRow,
+		inviter: InviterCheck,
+		now: number,
+	): { readonly locks: SqlStatement[]; readonly sql: string; readonly binds: (string | number)[] } {
+		const locks = this.#shareLock === ''
+			? []
+			: [
+				this.db.prepare(`SELECT id FROM principals WHERE id = ? ${this.#shareLock}`).bind(invitation.invited_by),
+				this.db.prepare(`SELECT revision FROM app_schema_revisions WHERE app = ? ${this.#shareLock}`).bind(invitation.app),
+			]
+		const sql = `EXISTS (SELECT 1 FROM principals WHERE id = ? AND disabled_at IS NULL)
+			AND COALESCE((SELECT revision FROM app_schema_revisions WHERE app = ?), 0) = ?
+			AND EXISTS (
+				SELECT 1 FROM grants
+				WHERE app = ? AND principal_id = ? AND ${ASSIGNING_GRANT} AND role_key IN (${inviter.assigners.map(() => '?').join(', ')})
+					AND (expires_at IS NULL OR expires_at > ?)
+				${this.#shareLock})`
+		const binds = [
+			invitation.invited_by,
+			invitation.app,
+			inviter.revision,
+			invitation.app,
+			invitation.invited_by,
+			invitation.scope_type,
+			invitation.scope_value,
+			...inviter.assigners,
+			now,
+		]
+		return { locks, sql, binds }
 	}
 
 	/** Whether `principalId` may not hold the invitation's role now (ADR-0051). */

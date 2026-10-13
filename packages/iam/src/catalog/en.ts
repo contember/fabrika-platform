@@ -97,6 +97,10 @@ export const en: Catalog = {
 			createTitle: 'Choose your password',
 			createText: (address) => `Your account signs in with ${address} and the password you choose here. Choosing it accepts the invitation.`,
 			createSubmit: 'Set password and accept',
+			otherAccountTitle: 'Signed in with another account',
+			otherAccountText: (address) =>
+				`This invitation creates a new account for ${address}, and this browser is signed in with another account. Sign out first, or open the invitation link in another browser profile.`,
+			signOut: 'Sign out',
 			signInFirstTitle: 'Sign in first',
 			signInFirstText: 'Sign in with the invited address, then open the invitation link again.',
 			signIn: 'Sign in',

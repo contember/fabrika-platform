@@ -53,6 +53,7 @@ import {
 	auditLabelOf,
 	type DelegatedEndpointRow,
 	type InvitationRow,
+	type InviterCheck,
 	type PrincipalRow,
 	principalStatus,
 	type RoleRow,
@@ -731,14 +732,14 @@ export async function acceptInvitation(
 	if ((await externalGrantProblem(services.repositories.appSchema, principal, invitation.app, { roleKey: invitation.role_key })) !== null) {
 		return { ok: false, reason: 'not_eligible' }
 	}
-	const assigners = await inviterAssigners(services, invitation)
-	if (assigners === null) {
+	const inviter = await inviterAssigners(services, invitation)
+	if (inviter === null) {
 		return { ok: false, reason: 'not_allowed' }
 	}
 	const accepted = await services.repositories.membership.acceptInvitation(
 		invitation,
 		principal.id,
-		assigners,
+		inviter,
 		acceptanceEvent(invitation, principal.id, requestId),
 	)
 	if (accepted === 'not_eligible') {
@@ -760,10 +761,12 @@ async function openInvitationOf(services: Services, token: string): Promise<Invi
 }
 
 /**
- * The roles that make the inviter an assigner of the invitation's role, when it could still give that role there
- * against its permissions now; null when it could not. The repository checks the same roles again inside its write.
+ * The authority that lets the inviter give the invitation's role there against its permissions now: the roles that make
+ * it an assigner, and the schema revision read before anything else, so the acceptance's write requires the
+ * declarations this check read (`InviterCheck`). Null when it could not give the role.
  */
-async function inviterAssigners(services: Services, invitation: InvitationRow): Promise<string[] | null> {
+async function inviterAssigners(services: Services, invitation: InvitationRow): Promise<InviterCheck | null> {
+	const revision = await services.repositories.appSchema.getSchemaRevision(invitation.app)
 	const inviter = await services.repositories.principals.getPrincipalById(invitation.invited_by)
 	const role = await services.repositories.appSchema.getRole(invitation.app, invitation.role_key)
 	if (inviter === null || principalStatus(inviter) === 'disabled' || role === null) {
@@ -775,7 +778,7 @@ async function inviterAssigners(services: Services, invitation: InvitationRow): 
 	if (!manage.ok || (await roleAuthorityProblem(services, actor, scope, role)) !== null) {
 		return null
 	}
-	return role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
+	return { assigners: role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by), revision }
 }
 
 /** The record of an acceptance, by the principal that accepted. A user's audit label is its id. */
@@ -847,11 +850,11 @@ export async function acceptCreatingPrincipal(
 	if (!(await createsPrincipal(services, invitation))) {
 		return { ok: false, reason: 'sign_in' }
 	}
-	const assigners = await inviterAssigners(services, invitation)
-	if (assigners === null) {
+	const inviter = await inviterAssigners(services, invitation)
+	if (inviter === null) {
 		return { ok: false, reason: 'not_allowed' }
 	}
-	const accepted = await services.repositories.membership.acceptAsNewPrincipal({ invitation, assigners, password }, (principalId) => ({
+	const accepted = await services.repositories.membership.acceptAsNewPrincipal({ invitation, inviter, password }, (principalId) => ({
 		principal: {
 			requestId,
 			principalId,

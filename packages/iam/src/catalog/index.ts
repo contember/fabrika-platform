@@ -59,6 +59,10 @@ export interface PageText {
 		readonly createTitle: string
 		readonly createText: (address: string) => string
 		readonly createSubmit: string
+		/** A browser signed in here as someone else opened an invitation that creates a new account for `address`. */
+		readonly otherAccountTitle: string
+		readonly otherAccountText: (address: string) => string
+		readonly signOut: string
 		readonly signInFirstTitle: string
 		readonly signInFirstText: string
 		readonly signIn: string
