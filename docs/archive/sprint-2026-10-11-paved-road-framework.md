@@ -1019,3 +1019,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   (`daa918fa`): the CRM pipeline is `aggregate` over `company` with no declared deviation, a task's default assignee is
   `ctx.principal`, and a create's omissible field is `.optional()`. `classifyAccess` of the round-3 opus-b and
   round-4 gpt-b deals against the new reference lists no pipeline change. The group B copy starts green (111 tests).
+- **After close — WU26.** The last extra tsc and checker runs of trial rounds 3–5 (gpt-b: check, a failing tsc in its
+  own test setup, tsc, check). `kit.scope(dimension, value)` (`53ec19f4`) answers a `TestScope` that keeps its dimension
+  in a variable, where round 5's stored literal widened `type` to `string`; `tests.md` and the CRM's tests use it. The
+  loop runs tsc first and the checker once tsc is green. The checker reads the tests too (casts, skipped or
+  assertion-free tests, the generated tests' hashes), so a test-only change still needs it; the skill says so.

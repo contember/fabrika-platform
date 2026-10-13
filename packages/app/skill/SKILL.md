@@ -250,7 +250,9 @@ they are declared. A query or an export declares only `'read'`.
 Run from the application's root (setup: `references/app-setup.md`). A schema change (a new migration) runs every step. A
 handler-only change needs no migration or codegen: it runs `test-scaffold` when an endpoint, its access or a table
 policy changed, then `tsc` and `fabrika-check` once the slice is written, then the tests. The application you are handed
-is green: a tsc or checker run before you have written anything proves nothing.
+is green: a tsc or checker run before you have written anything proves nothing. Run `tsc` first and `fabrika-check` once
+tsc is green, and after a fix run both again in that order: the checker reads the tests too (a cast, a skipped or
+assertion-free test, a generated test's hash), so a change to a test file alone still needs it.
 
 ```bash
 bunx fabrika db new <slug>                                  # a new migration file
@@ -275,7 +277,7 @@ change an uncommitted migration, migrate into a fresh schema with another `FABRI
 Read the one you need before you write that part. Together they are one application to copy from: `app-setup.md`
 (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`, `endpoint.md`
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
-downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a caller's label, confirming a file ran),
+downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `jobs.md` (which dimension `ctx.within` names, the UTC
 day), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating

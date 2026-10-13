@@ -72,8 +72,9 @@ const postgres = await testDatabase({
 if (postgres !== null) {
 	afterAll(() => postgres.close())
 	const kit = testKit(app, { database: postgres.database })
+	const acme = kit.scope('org', 'acme')
 	const inAcme = (role: 'owner' | 'member') =>
-		kit.testCaller([{ role, scope: { type: 'org', value: 'acme' } }])
+		kit.testCaller([{ role, scope: acme }])
 	const owner = inAcme('owner')
 	const member = inAcme('member')
 	const ownerApi = createClient(contract, 'api', { fetch: kit.browser(owner) })
@@ -179,6 +180,8 @@ if (postgres !== null) {
   membership role is granted in one value of its scope; an action without `scope` is a global grant, for which
   `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`
   key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- Build a scope you reuse with `kit.scope('org', 'acme')` (`acme` above). An object literal stored in a variable
+  widens its `type` to `string`, which tsc refuses as a grant's `scope`; a dimension the contract lacks is a type error.
 - A caller's `id` is `<kind>-<n>` and its `label` `<kind>-<n>@<app>.test`, `n` counting the kit's callers; pass
   `{ id, label }` to fix either (`kit.testCaller(grants, { label: 'Ann' })`). The label is a `string`, only a link
   holder's (`kind: 'link'`) is `null`; it is `ctx.principal.label`, and the directory's label where it shows labels.
