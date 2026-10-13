@@ -4,7 +4,7 @@ import type { JsonValue, ProviderCodec, ProviderEnvironment } from '@fabrika/pro
 import { proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
-import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
+import { assertOwnRunWhenExtending, executionZeropsDocument, parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
 import {
 	assertScanMemory,
 	CONTRACT_DIGEST_PATTERN,
@@ -490,14 +490,24 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (!serviceHostnames.includes(deployService)) {
 		throw new Error('invalid fabrika manifest Zerops deploy service')
 	}
+	const selectedSetup = selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
+	if (contract !== undefined) {
+		// Refused first: a contract application's setup may not extend another, so its executed setup is the selected one alone.
+		const entries = parsedDescriptor.document['zerops']
+		const entry = Array.isArray(entries) ? entries.find((candidate) => isDescriptorSetup(candidate, selectedSetup)) : undefined
+		if (entry !== undefined) lockedAuthoredBuild(entry, selectedSetup)
+	} else {
+		assertOwnRunWhenExtending(parsedDescriptor, selectedSetup)
+	}
+	// Only the selected setup and what it extends reach this app's service, so a sibling setup for another
+	// placement may reference services this app does not own.
 	const foreignInDescriptor = foreignReferenceInValue(
-		parsedDescriptor.document,
+		executionZeropsDocument(parsedDescriptor, selectedSetup),
 		allowedReferenceHosts(serviceHostnames),
 	)
 	if (foreignInDescriptor !== null) {
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
-	const selectedSetup = selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
 	if (contract === undefined && (proxy !== undefined || schema?.contract === true)) {
 		// An endpoint table without the contract would deploy a contract application with an authored run section.
 		throw new Error('invalid fabrika manifest: a contract application carries its contract (`target.contract`), which locks its setup down')
@@ -512,9 +522,6 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		applicationDatabaseUrl(importDocument.services, namespaceResources)
 		applicationStorageHostname(importDocument.services)
 		assertScanMemory(importDocument.services, deployService, contract)
-		const entries = parsedDescriptor.document['zerops']
-		const entry = Array.isArray(entries) ? entries.find((candidate) => isDescriptorSetup(candidate, selectedSetup)) : undefined
-		if (entry !== undefined) lockedAuthoredBuild(entry, selectedSetup)
 	} else if (runtimePackages !== undefined) {
 		throw new Error('invalid fabrika manifest: runtime packages are generated for a contract application only')
 	}

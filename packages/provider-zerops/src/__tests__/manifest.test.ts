@@ -1,6 +1,7 @@
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { prepareZeropsDescriptor } from '../descriptor'
 import { zeropsContractRun } from '../execution'
 import { assertAuthoredManagedDocument, overlayRelease } from '../managed-env'
 import {
@@ -514,21 +515,31 @@ describe('release overlay', () => {
 	const TWO_SETUPS =
 		'zerops:\n  - setup: api\n    run:\n      envVariables:\n        OWN: kept\n  - setup: worker\n    run:\n      start: bun worker.ts\n'
 
-	test('writes FABRIKA_RELEASE as a literal into the selected setup only', () => {
+	test('writes FABRIKA_RELEASE as a literal into the selected setup, the only one executed', () => {
 		const execution = overlayRelease(TWO_SETUPS, 'worker', 'release-1')
 		expect(execution.setup).toBe('worker')
 		expect(Bun.YAML.parse(execution.contents)).toEqual({
-			zerops: [
-				{ setup: 'api', run: { envVariables: { OWN: 'kept' } } },
-				{ setup: 'worker', run: { start: 'bun worker.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } },
-			],
+			zerops: [{ setup: 'worker', run: { start: 'bun worker.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } }],
 		})
 	})
 
 	test('omits the key when the release is null', () => {
 		const execution = overlayRelease(TWO_SETUPS, 'api', null)
 		expect(execution.contents).not.toContain('FABRIKA_RELEASE')
-		expect(Bun.YAML.parse(execution.contents)).toEqual(Bun.YAML.parse(TWO_SETUPS))
+		expect(Bun.YAML.parse(execution.contents)).toEqual({ zerops: [{ setup: 'api', run: { envVariables: { OWN: 'kept' } } }] })
+	})
+
+	test('keeps an extended parent and refuses to replace the run section a setup inherits', () => {
+		const extending =
+			'zerops:\n  - setup: base\n    run:\n      start: bun server.ts\n  - setup: shared\n    extends: base\n    run:\n      start: bun shared.ts\n'
+		expect(Bun.YAML.parse(overlayRelease(extending, 'shared', 'release-1').contents)).toEqual({
+			zerops: [
+				{ setup: 'shared', extends: 'base', run: { start: 'bun shared.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } },
+				{ setup: 'base', run: { start: 'bun server.ts' } },
+			],
+		})
+		const inheriting = 'zerops:\n  - setup: base\n    run:\n      start: bun server.ts\n  - setup: shared\n    extends: base\n'
+		expect(() => overlayRelease(inheriting, 'shared', 'release-1')).toThrow('must declare its own run section')
 	})
 
 	test('refuses a release that Zerops would read as a reference', () => {
@@ -542,13 +553,41 @@ describe('release overlay', () => {
 })
 
 describe('cross-service variable references', () => {
-	test('checks decoded keys and unknown leaves in unselected setups', async () => {
+	test('checks decoded keys and unknown leaves in the selected setup and every setup it extends', async () => {
 		for (const extra of ['{"\\x24{proxy_FABRIKA_IAM_KEY}": safe}', '{future: ["\\x24{proxy_FABRIKA_IAM_KEY}"]}']) {
-			const descriptor = await createZeropsArtifactSourceDescriptor(`zerops: [{setup: notes}, {setup: unused, extra: ${extra}}]`)
-			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+			const selected = await createZeropsArtifactSourceDescriptor(`zerops: [{setup: notes, extra: ${extra}}]`)
+			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', selected)).toThrow(
+				'references service',
+			)
+			const inherited = await createZeropsArtifactSourceDescriptor(
+				`zerops: [{setup: notes, extends: base, run: {start: bun server.ts}}, {setup: base, extra: ${extra}}]`,
+			)
+			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', inherited)).toThrow(
 				'references service',
 			)
 		}
+	})
+	test('checks the whole executed document, not only its setups', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor(
+			'project: {envVariables: {X: "\\x24{proxy_FABRIKA_IAM_KEY}"}}\nzerops: [{setup: notes}]',
+		)
+		expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+			'references service `proxy`',
+		)
+	})
+	test('refuses at registration a selected setup that inherits run, which the deploy could not overlay', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor('zerops: [{setup: base, run: {start: bun server.ts}}, {setup: notes, extends: base}]')
+		expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+			'must declare its own run section',
+		)
+	})
+	test('accepts a sibling setup for another placement, which never reaches this app', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor(
+			'zerops: [{setup: notes}, {setup: other, run: {envVariables: {URL: "\\x24{proxy_FABRIKA_IAM_KEY}"}}}]',
+		)
+		const manifest = compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)
+		expect(manifest.target.sourceDescriptor).toEqual(descriptor)
+		expect(prepareZeropsDescriptor(descriptor.contents, 'notes').contents).not.toContain('proxy_FABRIKA_IAM_KEY')
 	})
 	test('validates the selector at the manifest boundary while preserving original identity', async () => {
 		const descriptor = await createZeropsArtifactSourceDescriptor('# original\r\nzerops: [{setup: notes}, {setup: worker}]\r\n')

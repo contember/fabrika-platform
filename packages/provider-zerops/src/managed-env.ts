@@ -10,7 +10,13 @@ import {
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { renderYaml } from './compile'
-import { parseZeropsDescriptor, type PreparedZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
+import {
+	assertOwnRunWhenExtending,
+	executionZeropsDocument,
+	parseZeropsDescriptor,
+	type PreparedZeropsDescriptor,
+	selectZeropsDescriptorSetup,
+} from './descriptor'
 
 /** The framework-only names Control hands every Zerops deploy; the rest of the list is the provider's own. */
 export type ManagedKey = Extract<
@@ -181,7 +187,9 @@ export function overlayRelease(contents: string, setup: string | undefined, rele
 	const parsed = parseZeropsDescriptor(contents)
 	assertAuthoredManagedDocument(parsed.document)
 	const selected = selectZeropsDescriptorSetup(parsed, setup)
-	const entries = parsed.document['zerops']
+	assertOwnRunWhenExtending(parsed, selected)
+	const execution = executionZeropsDocument(parsed, selected)
+	const entries = execution['zerops']
 	if (!Array.isArray(entries)) throw new Error('zerops: descriptor requires setup entries')
 	const overlaid = release === null ? entries : entries.map((entry) => {
 		if (!isMapping(entry) || entry['setup'] !== selected) return entry
@@ -189,5 +197,5 @@ export function overlayRelease(contents: string, setup: string | undefined, rele
 		const env = isMapping(run['envVariables']) ? run['envVariables'] : {}
 		return { ...entry, run: { ...run, envVariables: { ...env, FABRIKA_RELEASE: release } } }
 	})
-	return { contents: renderYaml({ ...parsed.document, zerops: overlaid }), setup: selected }
+	return { contents: renderYaml({ ...execution, zerops: overlaid }), setup: selected }
 }

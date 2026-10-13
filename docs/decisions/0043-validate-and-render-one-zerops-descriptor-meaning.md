@@ -33,10 +33,20 @@ Reject explicit tags, anchors, aliases, merge keys, duplicate or non-string keys
 parser warnings, ambiguous plain scalars, inexact numbers and unsupported raw Unicode characters.
 Ordinary mappings, sequences, comments, block/flow syntax and quoted strings remain supported.
 
-Check decoded keys and string values in every setup for foreign-service references. Select a single
-setup deterministically: the sole setup may be implicit; multiple setups require an explicit selector.
-Send the validated document through the shared YAML emitter and pass the selected setup explicitly
-on both initial builds and recovered builds.
+Select a single setup deterministically: the sole setup may be implicit; multiple setups require an
+explicit selector. The executed setups are the selected one and, transitively, every setup it
+`extends`; an unknown parent is refused. Check decoded keys and string values in the executed setups
+for foreign-service references, and send Zerops a document holding only those setups, through the
+shared YAML emitter, with the selected setup passed explicitly on both initial builds and recovered
+builds. A sibling setup for another placement or another app in the same file may therefore name
+services this app does not own: it is never checked against this app and never reaches Zerops for it.
+A selected setup that extends another must declare its own `run`, because Zerops merges `extends` per
+whole section and the deploy writes `FABRIKA_RELEASE` into `run`; registration refuses it. A
+contract application's setup may not `extends` at all (below), so its executed setup is the selected one alone.
+
+One path still builds a setup this check never read: an app's import service that carries
+`buildFromGit` with `zeropsSetup` makes Zerops build that repository's own `zerops.yaml` at import.
+It predates this rule and bypasses the registered descriptor entirely.
 
 **Invariant:** the persisted source descriptor and its SHA-256 remain the exact original source bytes.
 Source resolution and archive verification use that identity, never the canonical execution document.
@@ -147,7 +157,9 @@ the provider's own version and recorded in the run log. Not built yet:
 
 ## Consequences
 
-The execution document has the same decoded meaning that passed ownership checks. A descriptor using
+The execution document has the same decoded meaning that passed ownership checks, and holds nothing else.
+One `zerops.yaml` can carry a setup per placement (an app's cheap and dedicated tiers) or per app in a
+monorepo. A descriptor using
 unsupported syntax must be rewritten into the accepted subset, usually by quoting ambiguous values
 or expanding aliases. This is an intentional input-contract restriction, approved before implementation.
 

@@ -214,6 +214,17 @@ describe('a contract application is refused at compile time', () => {
 		expect(() => zeropsArtifactCodec.decode(payload)).toThrow('sets `run.start`')
 	})
 
+	test('when its setup extends another, by the locked form rather than an authored run section', async () => {
+		const extending = 'zerops:\n  - setup: base\n    build:\n      base: alpine/bun@1.3\n  - setup: notesapi\n    extends: base\n'
+		await expect(compile(contractApp({ zeropsSetup: 'notesapi' }), extending)).rejects.toThrow('zerops.yaml setup `notesapi` sets `extends`')
+	})
+
+	test('but not for a sibling setup of another placement, which never reaches it', async () => {
+		const sibling = `${SPA_DESCRIPTOR}  - setup: other\n    run:\n      envVariables:\n        URL: \${proxy_FABRIKA_IAM_KEY}\n`
+		const manifest = await compile(contractApp({ zeropsSetup: 'notesapi' }), sibling)
+		expect(render(manifest)['setup']).toBe('notesapi')
+	})
+
 	test('without a health endpoint for the readiness check', () => {
 		const withoutHealth: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.filter((row) => row.kind !== 'health') }
 		expect(() => zeropsContractRun(withoutHealth)).toThrow("c.health('/healthz')")

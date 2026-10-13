@@ -16,14 +16,21 @@ describe('supported Zerops descriptor subset', () => {
 			expect(() => parseZeropsDescriptor(source)).toThrow('zerops.yaml')
 		})
 	}
-	test('selects one setup explicitly without dropping other setups', () => {
-		const source = 'zerops: [{setup: api}, {setup: worker, extra: retained}]'
+	test('selects one setup explicitly and executes only it and what it extends', () => {
+		const source = 'zerops: [{setup: base, build: {base: bun}}, {setup: api}, {setup: worker, extends: base, extra: retained}]'
 		expect(() => prepareZeropsDescriptor(source)).toThrow('explicit setup selector')
 		expect(() => prepareZeropsDescriptor(source, 'missing')).toThrow('selected setup')
 		const prepared = prepareZeropsDescriptor(source, 'worker')
 		expect(prepared.setup).toBe('worker')
-		expect(parseZeropsDescriptor(prepared.contents).setups).toEqual(['api', 'worker'])
+		expect(parseZeropsDescriptor(prepared.contents).setups).toEqual(['worker', 'base'])
 		expect(prepared.contents).toContain('extra: retained')
+		expect(parseZeropsDescriptor(prepareZeropsDescriptor(source, 'api').contents).setups).toEqual(['api'])
+	})
+	test('follows extends transitively and refuses an unknown parent', () => {
+		const source = 'zerops: [{setup: a, extends: [b]}, {setup: b, extends: c}, {setup: c}, {setup: other}]'
+		expect(parseZeropsDescriptor(prepareZeropsDescriptor(source, 'a').contents).setups).toEqual(['a', 'b', 'c'])
+		expect(() => prepareZeropsDescriptor('zerops: [{setup: a, extends: missing}]', 'a')).toThrow('extends unknown setup `missing`')
+		expect(() => prepareZeropsDescriptor('zerops: [{setup: a, extends: b}, {setup: b, extends: a}]', 'a')).not.toThrow()
 	})
 	test('quoted ambiguous scalars remain strings in keys and values', () => {
 		for (const value of ['012', 'yes', 'y', 'n', 'ON', '1:20', '2026-09-23']) {

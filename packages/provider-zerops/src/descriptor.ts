@@ -128,8 +128,52 @@ export const selectZeropsDescriptorSetup = (parsed: ZeropsDescriptor, setup?: st
 	return selected
 }
 
+const inheritanceSchema = z.object({
+	zerops: z.array(z.intersection(
+		descriptorMappingSchema,
+		z.object({ setup: z.string(), extends: z.union([z.string(), z.array(z.string())]).optional() }),
+	)),
+})
+
+/**
+ * The setup entries a deploy of `selected` applies: the selected one and, transitively, every setup it
+ * `extends`. Only these reach the running service; the other setups in the file never do.
+ */
+export const appliedZeropsSetups = (parsed: ZeropsDescriptor, selected: string): JsonValue[] => {
+	const document = inheritanceSchema.safeParse(parsed.document)
+	if (!document.success) return invalid('requires extends to name setups')
+	const applied: JsonValue[] = []
+	const visit = (name: string): void => {
+		const entry = document.data.zerops.find((candidate) => candidate.setup === name)
+		if (entry === undefined) return invalid(`extends unknown setup \`${name}\``)
+		if (applied.includes(entry)) return
+		applied.push(entry)
+		for (const parent of typeof entry.extends === 'string' ? [entry.extends] : entry.extends ?? []) visit(parent)
+	}
+	visit(selected)
+	return applied
+}
+
+/**
+ * Refuse a selected setup that `extends` another without its own `run`: Zerops merges `extends` per
+ * whole section, and the deploy writes `FABRIKA_RELEASE` into `run`, which would replace the inherited one.
+ */
+export const assertOwnRunWhenExtending = (parsed: ZeropsDescriptor, selected: string): void => {
+	const [entry] = appliedZeropsSetups(parsed, selected)
+	if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return
+	if (entry['extends'] !== undefined && entry['run'] === undefined) {
+		invalid(`setup \`${selected}\` extends another setup, so it must declare its own run section — the deploy writes FABRIKA_RELEASE into it`)
+	}
+}
+
+/** The document Zerops executes: the selected setup and what it extends, which is exactly what the ownership check read. */
+export const executionZeropsDocument = (parsed: ZeropsDescriptor, selected: string): { readonly [key: string]: JsonValue } => ({
+	...parsed.document,
+	zerops: appliedZeropsSetups(parsed, selected),
+})
+
 export const prepareZeropsDescriptor = (contents: string, setup?: string): PreparedZeropsDescriptor => {
 	const parsed = parseZeropsDescriptor(contents)
 	const selected = selectZeropsDescriptorSetup(parsed, setup)
-	return { contents: renderYaml(parsed.document), setup: selected }
+	return { contents: renderYaml(executionZeropsDocument(parsed, selected)), setup: selected }
 }
