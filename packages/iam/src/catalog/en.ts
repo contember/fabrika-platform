@@ -1,5 +1,6 @@
 import { escapeHtml } from '../html'
 import type { Catalog, RenderedMessage } from './index'
+import { quotedNote } from './quoted-note'
 
 export const en: Catalog = {
 	pages: {
@@ -91,8 +92,11 @@ export const en: Catalog = {
 		},
 		invitation: {
 			title: 'Accept invitation',
-			text: 'Accept the invitation with the account you are signed in to here. It must use the invited address.',
+			text: 'Accept the invitation. With an account here, sign in with the invited address first. Without one, you choose its password next.',
 			submit: 'Accept invitation',
+			createTitle: 'Choose your password',
+			createText: (address) => `Your account signs in with ${address} and the password you choose here. Choosing it accepts the invitation.`,
+			createSubmit: 'Set password and accept',
 			signInFirstTitle: 'Sign in first',
 			signInFirstText: 'Sign in with the invited address, then open the invitation link again.',
 			signIn: 'Sign in',
@@ -109,17 +113,18 @@ export const en: Catalog = {
 		},
 	},
 	messages: {
-		invitation: ({ appName, role, scope, actionUrl }) => {
-			const what = `${scope} of ${appName} as ${role}`
+		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl }) => {
+			const what = `${scope} of ${appName} as ${role}${companyLabel === '' ? '' : `, for ${companyLabel}`}`
+			const note = message === '' ? null : { intro: `${inviterLabel} writes:`, message }
+			const accept = 'Open this one-time link to accept. With an account here, sign in with this address first; without one, you choose a password.'
 			return {
 				subject: `You are invited to ${appName}`,
-				text:
-					`You are invited to join a ${what}.\n\nSign in with this address, then open this one-time link to accept:\n\n${actionUrl}\n\nIf you did not expect this, you can ignore this email.`,
-				html: `<p>You are invited to join a ${
-					escapeHtml(what)
-				}.</p><p>Sign in with this address, then open this one-time link to accept:</p><p><a href="${
+				text: [`You are invited to join a ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join(
+					'\n\n',
+				),
+				html: `<p>You are invited to join a ${escapeHtml(what)}.</p>${quotedNote(note)}<p>${escapeHtml(accept)}</p><p><a href="${
 					escapeHtml(actionUrl)
-				}">Accept the invitation</a></p><p>If you did not expect this, you can ignore this email.</p>`,
+				}">Accept the invitation</a></p><p>${escapeHtml(IGNORE_INVITATION)}</p>`,
 			}
 		},
 		enrollment: ({ appName, actionUrl }) =>
@@ -140,6 +145,8 @@ export const en: Catalog = {
 		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
 	},
 }
+
+const IGNORE_INVITATION = 'If you did not expect this, you can ignore this email.'
 
 const expiryFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
 

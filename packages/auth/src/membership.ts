@@ -3,6 +3,7 @@ import type {
 	CreateScopeResult,
 	FindMemberResult,
 	IamMembershipRpc,
+	InvitationOptions,
 	IssueLinkResult,
 	ListMembersResult,
 	MemberTarget,
@@ -51,8 +52,16 @@ export class IamMembership {
 		return this.binding.createScope({ ...this.caller(caller), delegation, dimension })
 	}
 
-	assignMember(caller: MembershipRequestCaller, delegation: string, scope: Scope, role: string, member: MemberTarget): Promise<AssignMemberResult> {
-		return this.binding.assignMember({ ...this.caller(caller), delegation, scope, role, member })
+	/** `invitation` goes with an address only: its label, message and resend (`InvitationOptions`). */
+	assignMember(
+		caller: MembershipRequestCaller,
+		delegation: string,
+		scope: Scope,
+		role: string,
+		member: MemberTarget,
+		invitation?: InvitationOptions,
+	): Promise<AssignMemberResult> {
+		return this.binding.assignMember({ ...this.caller(caller), delegation, scope, role, member, ...(invitation === undefined ? {} : { invitation }) })
 	}
 
 	revokeMember(caller: MembershipRequestCaller, delegation: string, scope: Scope, member: RevokeMemberInput['member']): Promise<RevokeMemberResult> {

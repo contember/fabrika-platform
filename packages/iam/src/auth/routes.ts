@@ -60,7 +60,7 @@ export async function handleAuth(
 		return handlePasswordAction(request, services, ctx, 'reset', requestId)
 	}
 	if (url.pathname === INVITATION_ACCEPT_PATH) {
-		return handleInvitation(request, services, requestId)
+		return handleInvitation(request, services, ctx, requestId)
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

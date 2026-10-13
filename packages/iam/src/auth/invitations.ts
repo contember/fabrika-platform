@@ -1,11 +1,13 @@
 import { z } from 'zod'
-import { landingUrl, presentationFor } from '../app-presentation'
-import { principalStatus } from '../db'
-import { acceptInvitation, INVITATION_ACCEPT_PATH } from '../membership'
-import { authFailurePage, invitationOutcomePage, invitationPage } from '../password-pages'
+import { type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
+import { type InvitationRow, principalStatus } from '../db'
+import { type RequestContext } from '../env'
+import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
+import { authFailurePage, invitationOutcomePage, invitationPage, invitationPasswordPage } from '../password-pages'
+import { validatePassword } from '../password-policy'
 import type { Services } from '../services'
 import { methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
-import { currentSession } from './sessions'
+import { currentSession, issueSession } from './sessions'
 
 const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
 
@@ -14,10 +16,14 @@ const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
  * one-time token, which never reaches a server log. Accepting is a POST from that page, same-origin
  * only, by the principal signed in HERE, on IAM's host — the mailbox's owner, proven by the token.
  *
+ * An invitation that creates its principal (`invitationOffer`) answers that POST with a set-password form instead;
+ * its POST, with the password, creates the external principal and accepts in one transaction, then signs the browser
+ * in on IAM. Neither the GET nor the POST without a password changes anything, so a mail scanner spends nothing.
+ *
  * The link's `?app=` picks the page's language; an accepted invitation lands on its own application's
  * registered origin, where the application's proxy signs the browser in through the normal handoff.
  */
-export async function handleInvitation(request: Request, services: Services, requestId: string): Promise<Response> {
+export async function handleInvitation(request: Request, services: Services, ctx: RequestContext, requestId: string): Promise<Response> {
 	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
 	if (request.method === 'GET') {
 		return invitationPage(linked)
@@ -33,6 +39,23 @@ export async function handleInvitation(request: Request, services: Services, req
 	const invalid = () => invitationOutcomePage({ presentation: linked, title: (t) => t.invalidTitle, text: (t) => t.invalidText, status: 400 })
 	if (!token.success) {
 		return invalid()
+	}
+	const offer = await invitationOffer(services, token.data)
+	if (offer.kind === 'invalid') {
+		return invalid()
+	}
+	if (offer.kind === 'not_allowed') {
+		return invitationOutcomePage({ presentation: linked, title: (t) => t.unavailableTitle, text: (t) => t.inviterCannotGrant, status: 403 })
+	}
+	if (offer.kind === 'create') {
+		const password = stringValue(form?.get('password') ?? null)
+		return password === null
+			? invitationPasswordPage({
+				presentation: await presentationFor(services, offer.invitation.app),
+				token: token.data,
+				address: offer.invitation.email,
+			})
+			: createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId })
 	}
 	const session = await currentSession(request, services)
 	if (session === null) {
@@ -77,6 +100,59 @@ export async function handleInvitation(request: Request, services: Services, req
 			t.acceptedText({ role: role?.name ?? invitation.role_key, scope: invitation.scope_type, appName: presentation.displayName ?? invitation.app }),
 		status: 200,
 	})
+}
+
+/**
+ * The set-password form's POST: the password policy, then the external principal, its password and the acceptance in
+ * one transaction, then the IAM session, and the browser lands on the application, whose proxy hands the session off.
+ */
+async function createAndAccept(
+	request: Request,
+	services: Services,
+	ctx: RequestContext,
+	input: { readonly invitation: InvitationRow; readonly token: string; readonly password: string; readonly requestId: string },
+): Promise<Response> {
+	const { invitation } = input
+	const presentation = await presentationFor(services, invitation.app)
+	const policy = validatePassword(input.password, { email: invitation.email, label: invitation.email })
+	if (!policy.ok) {
+		return invitationPasswordPage({ presentation, token: input.token, address: invitation.email, problem: policy.problem })
+	}
+	const outcome = await acceptCreatingPrincipal(services, invitation, await services.passwordHasher.hash(policy.password), input.requestId)
+	if (!outcome.ok) {
+		return creationRefused(services, presentation, outcome.reason)
+	}
+	return issueSession(request, services, ctx, {
+		principalId: outcome.principal.id,
+		email: outcome.principal.email,
+		authenticationMethod: 'password',
+		redirect: landingUrl(presentation) ?? services.config.issuer,
+		reason: 'invitation_enrollment',
+		requestId: input.requestId,
+	})
+}
+
+function creationRefused(
+	services: Services,
+	presentation: AppPresentation,
+	reason: 'invalid' | 'not_allowed' | 'not_eligible' | 'sign_in',
+): Response {
+	switch (reason) {
+		case 'invalid':
+			return invitationOutcomePage({ presentation, title: (t) => t.invalidTitle, text: (t) => t.invalidText, status: 400 })
+		case 'not_allowed':
+			return invitationOutcomePage({ presentation, title: (t) => t.unavailableTitle, text: (t) => t.inviterCannotGrant, status: 403 })
+		case 'not_eligible':
+			return invitationOutcomePage({ presentation, title: (t) => t.unavailableTitle, text: (t) => t.roleNotEligible, status: 403 })
+		case 'sign_in':
+			return invitationOutcomePage({
+				presentation,
+				title: (t) => t.signInFirstTitle,
+				text: (t) => t.signInFirstText,
+				status: 401,
+				signIn: landingUrl(presentation) ?? ownSignIn(services, presentation.app),
+			})
+	}
 }
 
 /** IAM's own sign-in, back to this page: the browser opens the invitation link again there. */

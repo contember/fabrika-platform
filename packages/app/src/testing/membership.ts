@@ -20,6 +20,7 @@ import {
 	type FindMemberInput,
 	type FindMemberResult,
 	type IamMembershipRpc,
+	invitationOptionsProblem,
 	invitedAddress,
 	type IssueLinkInput,
 	type IssueLinkResult,
@@ -383,6 +384,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const problem = manageProblem(caller, input.scope) ?? roleProblem(caller, input.scope, input.role)
 		if (problem !== null) return problem
 		if ('principalId' in input.member) {
+			if (input.invitation !== undefined) return invalid('a label, a message and a resend go with an invitation by address')
 			const { principalId } = input.member
 			const target = callers.all().find(({ caller: candidate }) => candidate.id === principalId && candidate.kind === 'human')?.caller
 			if (target === undefined) return NOT_FOUND
@@ -394,6 +396,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		}
 		const email = invitedAddress(input.member.email)
 		if (email === null) return invalid('the member email is not an address')
+		const wording = invitationOptionsProblem(input.invitation ?? {})
+		if (wording !== null) return invalid(wording)
 		const invitationId = `invitation-${randomId()}`
 		asked.push({ operation: 'assignMember', principalId: caller.id, scope: input.scope, role: input.role, member: { email }, invitationId })
 		return { ok: true, invited: { invitationId, role: input.role, expiresAt: now() + INVITATION_TTL_SECONDS } }

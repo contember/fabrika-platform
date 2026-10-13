@@ -63,6 +63,7 @@ export const assignMemberSchema = z.object({
 	scope: memberScopeSchema,
 	role: z.string(),
 	member: z.union([z.object({ principalId: z.string() }).strict(), z.object({ email: z.string() }).strict()]),
+	invitation: z.object({ label: z.string().optional(), message: z.string().optional(), resend: z.boolean().optional() }).strict().optional(),
 }).catch(rejectRpcInput)
 export const revokeMemberSchema = z.object({
 	...caller,

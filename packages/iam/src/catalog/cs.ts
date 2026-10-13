@@ -1,5 +1,6 @@
 import { escapeHtml } from '../html'
 import type { Catalog, RenderedMessage } from './index'
+import { quotedNote } from './quoted-note'
 
 export const cs: Catalog = {
 	pages: {
@@ -91,8 +92,11 @@ export const cs: Catalog = {
 		},
 		invitation: {
 			title: 'Přijetí pozvánky',
-			text: 'Přijměte pozvánku účtem, kterým jste zde přihlášeni. Musí používat pozvanou adresu.',
+			text: 'Přijměte pozvánku. Máte-li zde účet, nejprve se přihlaste pozvanou adresou. Pokud ho nemáte, v dalším kroku si zvolíte heslo.',
 			submit: 'Přijmout pozvánku',
+			createTitle: 'Zvolte si heslo',
+			createText: (address) => `Váš účet se přihlašuje adresou ${address} a heslem, které si zde zvolíte. Zvolením hesla pozvánku přijmete.`,
+			createSubmit: 'Nastavit heslo a přijmout',
 			signInFirstTitle: 'Nejprve se přihlaste',
 			signInFirstText: 'Přihlaste se pozvanou adresou a potom znovu otevřete odkaz z pozvánky.',
 			signIn: 'Přihlásit se',
@@ -109,17 +113,19 @@ export const cs: Catalog = {
 		},
 	},
 	messages: {
-		invitation: ({ appName, role, scope, actionUrl }) => {
-			const what = `do aplikace ${appName} s rolí ${role} (${scope})`
+		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl }) => {
+			const what = `do aplikace ${appName} s rolí ${role} (${scope})${companyLabel === '' ? '' : ` za ${companyLabel}`}`
+			const note = message === '' ? null : { intro: `${inviterLabel} píše:`, message }
+			const accept =
+				'Pozvánku přijmete tímto jednorázovým odkazem. Máte-li zde účet, nejprve se přihlaste touto adresou; pokud ho nemáte, zvolíte si heslo.'
 			return {
 				subject: `Pozvánka do aplikace ${appName}`,
-				text:
-					`Dostali jste pozvánku ${what}.\n\nPřihlaste se touto adresou a potom pozvánku přijměte tímto jednorázovým odkazem:\n\n${actionUrl}\n\nPokud jste pozvánku nečekali, můžete tento e-mail ignorovat.`,
-				html: `<p>Dostali jste pozvánku ${
-					escapeHtml(what)
-				}.</p><p>Přihlaste se touto adresou a potom pozvánku přijměte tímto jednorázovým odkazem:</p><p><a href="${
+				text: [`Dostali jste pozvánku ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join(
+					'\n\n',
+				),
+				html: `<p>Dostali jste pozvánku ${escapeHtml(what)}.</p>${quotedNote(note)}<p>${escapeHtml(accept)}</p><p><a href="${
 					escapeHtml(actionUrl)
-				}">Přijmout pozvánku</a></p><p>Pokud jste pozvánku nečekali, můžete tento e-mail ignorovat.</p>`,
+				}">Přijmout pozvánku</a></p><p>${escapeHtml(IGNORE_INVITATION)}</p>`,
 			}
 		},
 		enrollment: ({ appName, actionUrl }) =>
@@ -140,6 +146,8 @@ export const cs: Catalog = {
 		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
 	},
 }
+
+const IGNORE_INVITATION = 'Pokud jste pozvánku nečekali, můžete tento e-mail ignorovat.'
 
 const expiryFormat = new Intl.DateTimeFormat('cs', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
 

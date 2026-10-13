@@ -169,6 +169,38 @@ export function invitationPage(presentation: AppPresentation): Response {
 	})
 }
 
+/**
+ * The answer to accepting an invitation that creates its principal: choose the password of the new account. The token
+ * rides in the form as on `setPasswordPage`, and the form posts back to the invitation with the application's `?app=`;
+ * the accepted invitation lands on the application's registered origin, which `form-action` therefore admits.
+ */
+export function invitationPasswordPage(input: {
+	readonly presentation: AppPresentation
+	readonly token: string
+	/** The invited mailbox, which the new account signs in with. */
+	readonly address: string
+	readonly problem?: PasswordProblem
+}): Response {
+	const { presentation } = input
+	const text = catalogFor(presentation.locale).pages
+	const problem = input.problem === undefined ? undefined : text.setPassword.problem(input.problem, PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS)
+	return htmlPage({
+		locale: presentation.locale,
+		title: text.invitation.createTitle,
+		content: `<h1>${escapeHtml(text.invitation.createTitle)}</h1>${message(problem)}<p>${escapeHtml(text.invitation.createText(input.address))}</p><p>${
+			escapeHtml(text.setPassword.rule(PASSWORD_MIN_CODE_POINTS, PASSWORD_MAX_CODE_POINTS))
+		}</p><p>${escapeHtml(text.setPassword.shared(presentation.displayName))}</p>
+		<form method="post" action="${escapeHtml(`/auth/invitations/accept${appQuery(presentation)}`)}">
+			<input id="action-token" type="hidden" name="token" value="${escapeHtml(input.token)}">
+			<input type="email" name="username" value="${escapeHtml(input.address)}" autocomplete="username" readonly hidden>
+			${passwordInput(text, 'password', text.setPassword.newPassword, 'new-password')}
+			<button type="submit">${escapeHtml(text.invitation.createSubmit)}</button>
+		</form>`,
+		status: input.problem === undefined ? 200 : 400,
+		formActionOrigin: presentation.landing ?? undefined,
+	})
+}
+
 /** An outcome of accepting an invitation. `signIn` adds the way back for a browser with no session here. */
 export function invitationOutcomePage(
 	input: {

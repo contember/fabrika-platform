@@ -55,6 +55,10 @@ export interface PageText {
 		readonly title: string
 		readonly text: string
 		readonly submit: string
+		/** The set-password form of an invitation that creates its principal; `address` is the invited mailbox. */
+		readonly createTitle: string
+		readonly createText: (address: string) => string
+		readonly createSubmit: string
 		readonly signInFirstTitle: string
 		readonly signInFirstText: string
 		readonly signIn: string
@@ -90,9 +94,9 @@ export interface MessageValues {
 		readonly scope: string
 		readonly recipient: string
 		readonly inviterLabel: string
-		/** The invited person's company, as the inviting application names it; empty until an invitation carries one. */
+		/** The invited person's company, as the inviting application names it; empty when the invitation names none. */
 		readonly companyLabel: string
-		/** The inviter's personal message; empty until an invitation carries one. */
+		/** The inviter's personal message; empty when the invitation carries none. */
 		readonly message: string
 		readonly actionUrl: string
 		readonly expiresAt: number

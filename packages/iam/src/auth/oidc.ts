@@ -1,9 +1,9 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
-import { normalizeEmailIdentity } from '../email-identity'
 import { type RequestContext } from '../env'
+import { admitted } from '../human-admission'
 import { generatePkce, randomToken } from '../oidc'
 import { resolveUserPrincipal } from '../resolve'
-import { type Config, type Services } from '../services'
+import { type Services } from '../services'
 
 import { presentationFor } from '../app-presentation'
 import { authFailurePage } from '../password-pages'
@@ -146,35 +146,4 @@ export async function handleCallback(
 		clearOidc: true,
 		handoff: handoffOf(reading),
 	})
-}
-
-/**
- * The human-admission allowlist for self-provisioning a brand-new identity. propustka owns this
- * centrally (the deploy vars `FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` / `FABRIKA_IAM_HUMAN_EMAILS`):
- *   - a `*` entry in EITHER list = admit anyone (allow-all);
- *   - an exact email match in `emails`;
- *   - the email's domain in `emailDomains` (case-insensitive);
- *   - a bootstrap admin.
- * Returns false otherwise — an empty allowlist with no `*` means only known/invited principals and
- * bootstrap admins may log in (fail-closed). Matching uses ONLY the IdP-verified email.
- *
- * Both sides of every comparison are normalized. Entra and Okta both preserve directory casing, so a
- * `FABRIKA_IAM_HUMAN_EMAILS` entry spelled `Vip@Example.com` used to be a control that simply never
- * matched, with nothing said about it either way.
- */
-function admitted(email: string, config: Config): boolean {
-	const { emailDomains, emails } = config.human
-	if (emailDomains.includes('*') || emails.includes('*')) {
-		return true
-	}
-	const mailbox = normalizeEmailIdentity(email)
-	if (emails.some((allowed) => normalizeEmailIdentity(allowed) === mailbox)) {
-		return true
-	}
-	const at = mailbox.lastIndexOf('@')
-	const domain = at === -1 ? '' : mailbox.slice(at + 1)
-	if (domain !== '' && emailDomains.some((d) => d.toLowerCase() === domain)) {
-		return true
-	}
-	return config.bootstrapAdmins.has(mailbox)
 }

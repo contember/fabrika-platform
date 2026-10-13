@@ -47,6 +47,8 @@ export {
 	type MemberGrantRow,
 	MembershipRepository,
 	type MembershipRepositoryOptions,
+	type NewPrincipalAcceptance,
+	type NewPrincipalEvents,
 } from './repositories/membership'
 export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from './repositories/membership-transport'
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'

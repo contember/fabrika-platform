@@ -1,7 +1,9 @@
 import type { PrincipalAffiliation, Scope } from '@fabrika/auth-core'
-import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlQueryResult, type SqlStatement, uuidv7 } from '@fabrika/platform'
+import type { StoredPasswordHash } from '../password-crypto'
 import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange, type SqlDialect } from './audit'
 import { eligibleGrantBinds, eligibleGrantSql, type GrantRow } from './grants'
+import type { PrincipalRow } from './principals'
 import { unixNow } from './sql'
 
 /** A single-use delegation grant (`delegation_grants`). Only its hash is stored. */
@@ -33,6 +35,10 @@ export interface InvitationRow {
 	acceptance_id: string | null
 	revoked_at: number | null
 	created_at: number
+	/** The invited person's company as the inviting application names it (plain text), or NULL. */
+	company_label: string | null
+	/** The inviter's personal message (plain text), or NULL. */
+	message: string | null
 }
 
 /** One membership-role grant in a value, with the principal it belongs to. */
@@ -74,6 +80,22 @@ const ASSIGNING_GRANT = `((grants.scope_type = ? AND grants.scope_value = ?)
 
 export type InvitationAcceptance = 'accepted' | 'not_allowed' | 'not_eligible' | 'not_open'
 
+/**
+ * How an acceptance that creates its principal ended: accepted with the new principal; refused as `acceptInvitation`
+ * refuses; or `account_exists`, because another writer gave the mailbox a principal first, which then signs in and
+ * accepts as any existing principal does.
+ */
+export type NewPrincipalAcceptance =
+	| { readonly outcome: 'accepted'; readonly principal: PrincipalRow }
+	| { readonly outcome: Exclude<InvitationAcceptance, 'accepted'> | 'account_exists' }
+
+/** The records of an acceptance that creates its principal, each written exactly when its change was. */
+export interface NewPrincipalEvents {
+	readonly principal: AuditEventInput
+	readonly acceptance: AuditEventInput
+	readonly password: AuditEventInput
+}
+
 export interface MembershipRepositoryOptions {
 	/**
 	 * The dialect of `db`. On Postgres an acceptance locks the inviter's assigning grant while it commits (`FOR SHARE`),
@@ -84,7 +106,8 @@ export interface MembershipRepositoryOptions {
 }
 
 export class MembershipRepository {
-	readonly #inviterLock: string
+	/** `FOR SHARE` on Postgres: an acceptance holds the inviter's assigning grant and the role row to its commit. */
+	readonly #shareLock: string
 	/** `eligibleGrantSql` of the dialect: on Postgres it holds the role row for the transaction. */
 	readonly #eligible: string
 	protected readonly writer: AuditWriter
@@ -94,7 +117,7 @@ export class MembershipRepository {
 		options: MembershipRepositoryOptions = {},
 	) {
 		const dialect = options.dialect ?? 'sqlite'
-		this.#inviterLock = dialect === 'postgres' ? 'FOR SHARE' : ''
+		this.#shareLock = dialect === 'postgres' ? 'FOR SHARE' : ''
 		this.#eligible = eligibleGrantSql(dialect)
 		this.writer = new AuditWriter(db, dialect)
 	}
@@ -344,17 +367,19 @@ export class MembershipRepository {
 		email: string
 		invitedBy: string
 		expiresAt: number
+		companyLabel?: string | null
+		message?: string | null
 	}, audit?: (invitationId: string) => AuditEventInput): Promise<{ invitation: InvitationRow; created: boolean }> {
 		const now = unixNow()
 		const id = uuidv7()
 		const key = [input.app, input.scope.type, input.scope.value, input.roleKey, input.email]
 		const opened = this.writer.changed([{
 			sql: `INSERT INTO membership_invitations
-					(id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					(id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at, company_label, message)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (app, scope_type, scope_value, role_key, email) WHERE accepted_at IS NULL AND revoked_at IS NULL DO NOTHING
 				RETURNING *`,
-			binds: [id, input.tokenHash, ...key, input.invitedBy, input.expiresAt, now],
+			binds: [id, input.tokenHash, ...key, input.invitedBy, input.expiresAt, now, input.companyLabel ?? null, input.message ?? null],
 		}], audit?.(id))
 		const results = await this.db.batch<InvitationRow>([
 			this.db
@@ -377,6 +402,27 @@ export class MembershipRepository {
 			throw new Error('an open invitation conflicted and then vanished')
 		}
 		return { invitation: open, created: false }
+	}
+
+	/**
+	 * Give an open invitation a new link and a new lifetime (a resend): the old token's hash is replaced, so its link
+	 * stops working. A label or message the call names replaces the stored one; NULL keeps it. Answers the invitation
+	 * when it was still open, and `audit` is written exactly then.
+	 */
+	async rotateInvitation(
+		input: { id: string; tokenHash: string; expiresAt: number; companyLabel: string | null; message: string | null },
+		audit?: AuditEventInput,
+	): Promise<InvitationRow | null> {
+		const now = unixNow()
+		const rotate: SqlChange = {
+			sql: `UPDATE membership_invitations
+				SET token_hash = ?, expires_at = ?, company_label = COALESCE(?, company_label), message = COALESCE(?, message)
+				WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+				RETURNING *`,
+			binds: [input.tokenHash, input.expiresAt, input.companyLabel, input.message, input.id, now],
+		}
+		const [rotated] = await this.writer.run<InvitationRow>([rotate], audit)
+		return rotated ?? null
 	}
 
 	async getInvitationByHash(tokenHash: string): Promise<InvitationRow | null> {
@@ -423,15 +469,10 @@ export class MembershipRepository {
 		}
 		const now = unixNow()
 		const acceptanceId = uuidv7()
-		const placeholders = assigners.map(() => '?').join(', ')
 		const accept = this.writer.changed([{
 			sql: `UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
-				WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
-					AND EXISTS (
-						SELECT 1 FROM grants
-						WHERE app = ? AND principal_id = ? AND ${ASSIGNING_GRANT} AND role_key IN (${placeholders})
-							AND (expires_at IS NULL OR expires_at > ?)
-						${this.#inviterLock})
+				WHERE id = ? AND token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+					AND ${this.inviterAuthority(assigners)}
 					AND ${this.#eligible}
 				RETURNING id`,
 			binds: [
@@ -439,13 +480,9 @@ export class MembershipRepository {
 				principalId,
 				acceptanceId,
 				invitation.id,
+				invitation.token_hash,
 				now,
-				invitation.app,
-				invitation.invited_by,
-				invitation.scope_type,
-				invitation.scope_value,
-				...assigners,
-				now,
+				...this.inviterAuthorityBinds(invitation, assigners, now),
 				...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }),
 			],
 		}], audit)
@@ -505,6 +542,163 @@ export class MembershipRepository {
 		const open = current !== null && current.accepted_at === null && current.revoked_at === null && current.expires_at > now
 		if (!open) return 'not_open'
 		return (await this.ineligible(invitation, principalId)) ? 'not_eligible' : 'not_allowed'
+	}
+
+	/**
+	 * Accept an invitation to a role declared external for a mailbox no principal holds, creating its principal, in ONE
+	 * transaction: an `external` user labelled with the invited address, active, with its mailbox claimed; the
+	 * acceptance and its grant as `acceptInvitation` writes them; an enabled password account holding `password`; and the
+	 * three records. The principal row comes first, so this transaction starts at it as every writer of a principal's
+	 * rows does (`principalLockStatements`); nobody else sees it before the commit.
+	 *
+	 * The principal is inserted only while the invitation is open under this token, the inviter still holds one of
+	 * `assigners` there (`FOR SHARE` on Postgres) and the role is still external (`FOR SHARE`), so a refusal writes
+	 * nothing. The acceptance repeats the inviter and eligibility conditions, and a guard rolls the whole batch back if
+	 * a change in between (the invitation cancelled or rotated) left the principal without its grant. A mailbox another
+	 * writer claimed first fails the principal's unique mailbox, which rolls the batch back: `account_exists`.
+	 */
+	async acceptAsNewPrincipal(
+		input: { readonly invitation: InvitationRow; readonly assigners: readonly string[]; readonly password: StoredPasswordHash },
+		events: (principalId: string) => NewPrincipalEvents,
+	): Promise<NewPrincipalAcceptance> {
+		const { invitation, assigners, password } = input
+		if (assigners.length === 0) {
+			return { outcome: 'not_allowed' }
+		}
+		const now = unixNow()
+		const principalId = uuidv7()
+		const acceptanceId = uuidv7()
+		const recorded = events(principalId)
+		const inviter = this.inviterAuthority(assigners)
+		const inviterBinds = this.inviterAuthorityBinds(invitation, assigners, now)
+		const eligible = eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key })
+		const accepted = `EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)`
+		const create = this.writer.changed([{
+			sql: `INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at, affiliation)
+				SELECT ?, 'user', NULL, ?, ?, ?, ?, 'external'
+				WHERE EXISTS (
+						SELECT 1 FROM membership_invitations
+						WHERE id = ? AND token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?)
+					AND ${inviter}
+					AND EXISTS (SELECT 1 FROM roles WHERE app = ? AND role_key = ? AND external = 1 ${this.#shareLock})
+				RETURNING id`,
+			binds: [
+				principalId,
+				invitation.email,
+				invitation.email,
+				now,
+				now,
+				invitation.id,
+				invitation.token_hash,
+				now,
+				...inviterBinds,
+				invitation.app,
+				invitation.role_key,
+			],
+		}], recorded.principal)
+		const claim = this.db
+			.prepare('INSERT INTO principal_email_claims (normalized_email, principal_id) SELECT email, id FROM principals WHERE id = ?')
+			.bind(principalId)
+		const accept = this.writer.changed([{
+			sql: `UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
+				WHERE id = ? AND token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+					AND EXISTS (SELECT 1 FROM principals WHERE id = ?)
+					AND ${inviter}
+					AND ${this.#eligible}
+				RETURNING id`,
+			binds: [now, principalId, acceptanceId, invitation.id, invitation.token_hash, now, principalId, ...inviterBinds, ...eligible],
+		}], recorded.acceptance)
+		const grant = this.db
+			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
+				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${accepted} AND ${this.#eligible}`)
+			.bind(
+				uuidv7(),
+				principalId,
+				invitation.app,
+				invitation.role_key,
+				invitation.scope_type,
+				invitation.scope_value,
+				invitation.invited_by,
+				now,
+				invitation.id,
+				acceptanceId,
+				...eligible,
+			)
+		const account = this.db
+			.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at) SELECT ?, 'enabled', ?, ? WHERE ${accepted}`)
+			.bind(principalId, now, now, invitation.id, acceptanceId)
+		const credential = this.writer.changed([{
+			sql: `INSERT INTO password_credentials (principal_id, algorithm, parameters, salt, password_hash, created_at, updated_at)
+				SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${accepted}
+				RETURNING principal_id`,
+			binds: [principalId, password.algorithm, password.parameters, password.salt, password.passwordHash, now, now, invitation.id, acceptanceId],
+		}], recorded.password)
+		// No principal without the grant it was created for: this NOT NULL violation rolls the batch back, principal included.
+		const guard = this.db
+			.prepare(`INSERT INTO contract_apps (app, created_at) SELECT ?, NULL
+				WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)
+					AND NOT EXISTS (
+						SELECT 1 FROM grants
+						WHERE principal_id = ? AND app = ? AND role_key = ? AND scope_type = ? AND scope_value = ?)`)
+			.bind(
+				`${invitation.app}#principal-without-grant`,
+				principalId,
+				principalId,
+				invitation.app,
+				invitation.role_key,
+				invitation.scope_type,
+				invitation.scope_value,
+			)
+		const statements = [...create.statements, claim, ...accept.statements, grant, account, ...credential.statements, guard]
+		let results: SqlQueryResult<{ id: string }>[]
+		try {
+			results = await this.db.batch<{ id: string }>(statements)
+		} catch (cause) {
+			if (await this.mailboxHeld(invitation.email)) return { outcome: 'account_exists' }
+			const refused = await this.newPrincipalRefusal(invitation)
+			if (refused !== null) return { outcome: refused }
+			throw cause
+		}
+		if (accept.rows(results, create.statements.length + 1).length === 0) {
+			if (await this.mailboxHeld(invitation.email)) return { outcome: 'account_exists' }
+			return { outcome: (await this.newPrincipalRefusal(invitation)) ?? 'not_allowed' }
+		}
+		const principal = await this.db.prepare('SELECT * FROM principals WHERE id = ?').bind(principalId).first<PrincipalRow>()
+		if (principal === null) {
+			throw new Error('an accepted invitation created no principal')
+		}
+		return { outcome: 'accepted', principal }
+	}
+
+	/** Whether a user principal holds `mailbox`, a normalized address. */
+	private async mailboxHeld(mailbox: string): Promise<boolean> {
+		return (await this.db.prepare(`SELECT id FROM principals WHERE type = 'user' AND email = ?`).bind(mailbox).first()) !== null
+	}
+
+	/** Why an acceptance that would create its principal wrote nothing: the invitation closed, or its role is no longer external. */
+	private async newPrincipalRefusal(invitation: InvitationRow): Promise<'not_open' | 'not_eligible' | null> {
+		const current = await this.getInvitationById(invitation.id)
+		const open = current !== null && current.token_hash === invitation.token_hash && current.accepted_at === null
+			&& current.revoked_at === null && current.expires_at > unixNow()
+		if (!open) return 'not_open'
+		const external = await this.db
+			.prepare('SELECT 1 AS external FROM roles WHERE app = ? AND role_key = ? AND external = 1')
+			.bind(invitation.app, invitation.role_key)
+			.first()
+		return external === null ? 'not_eligible' : null
+	}
+
+	/** The SQL condition that the inviter still holds one of `assigners` in the value, or an application-wide one globally. */
+	private inviterAuthority(assigners: readonly string[]): string {
+		return `EXISTS (
+			SELECT 1 FROM grants
+			WHERE app = ? AND principal_id = ? AND ${ASSIGNING_GRANT} AND role_key IN (${assigners.map(() => '?').join(', ')})
+				AND (expires_at IS NULL OR expires_at > ?)
+			${this.#shareLock})`
+	}
+
+	private inviterAuthorityBinds(invitation: InvitationRow, assigners: readonly string[], now: number): (string | number)[] {
+		return [invitation.app, invitation.invited_by, invitation.scope_type, invitation.scope_value, ...assigners, now]
 	}
 
 	/** Whether `principalId` may not hold the invitation's role now (ADR-0051). */

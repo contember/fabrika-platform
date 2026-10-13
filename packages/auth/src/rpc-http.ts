@@ -469,6 +469,7 @@ const MEMBERSHIP_REASONS = [
 	'last_creator',
 	'invitations_disabled',
 	'delivery_failed',
+	'internal_mailbox',
 ] as const
 
 /** A membership refusal off the wire. An unknown reason degrades to `not_allowed`, never to an allow. */

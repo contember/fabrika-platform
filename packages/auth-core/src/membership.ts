@@ -106,6 +106,11 @@ export type MembershipFailure =
 	| { ok: false; reason: 'last_creator' }
 	/** The installation sends no email, so it cannot verify an invited address. */
 	| { ok: false; reason: 'invitations_disabled' | 'delivery_failed' }
+	/**
+	 * An invitation to a role declared external for an address the organization names (a bootstrap admin, or one the
+	 * OIDC allowlist names by address or domain): IAM never creates such a mailbox as an external person (ADR-0051).
+	 */
+	| { ok: false; reason: 'internal_mailbox' }
 	| { ok: false; reason: 'invalid_request'; message: string }
 
 export type MembershipFailureReason = MembershipFailure['reason']
@@ -140,6 +145,36 @@ export function invitedAddress(address: string): string | null {
 	return email.length > MAX_INVITATION_EMAIL_LENGTH || !/^[^\s@]+@[^\s@]+$/.test(email) ? null : email
 }
 
+/** The longest company label an invitation carries: display text the inviting application names. */
+export const MAX_INVITATION_LABEL_LENGTH = 200
+
+/** The longest personal message an invitation carries. */
+export const MAX_INVITATION_MESSAGE_LENGTH = 1000
+
+/**
+ * What an invitation by address carries besides its role. `label` is the invited person's company as the application
+ * names it, `message` the inviter's personal note; both are plain text IAM escapes wherever it inserts them. `resend`
+ * rotates the open invitation's link, restarts its lifetime and sends it again; without it, repeating an invitation
+ * answers the open one and sends nothing.
+ */
+export interface InvitationOptions {
+	readonly label?: string
+	readonly message?: string
+	readonly resend?: boolean
+}
+
+/** Why IAM refuses an invitation's label or message, or `null`. A message may break lines; nothing else is a control character. */
+export function invitationOptionsProblem(options: InvitationOptions): string | null {
+	const { label, message } = options
+	if (label !== undefined && (label.length > MAX_INVITATION_LABEL_LENGTH || /\p{Cc}/u.test(label))) {
+		return `an invitation label is at most ${MAX_INVITATION_LABEL_LENGTH} characters on one line`
+	}
+	if (message !== undefined && (message.length > MAX_INVITATION_MESSAGE_LENGTH || /[^\P{Cc}\n\r\t]/u.test(message))) {
+		return `an invitation message is at most ${MAX_INVITATION_MESSAGE_LENGTH} characters of plain text`
+	}
+	return null
+}
+
 /** How long a delegation grant may be held before it is spent. One request, so seconds. */
 export const DELEGATION_GRANT_TTL_SECONDS = 120
 
@@ -169,8 +204,9 @@ export type MemberTarget = { principalId: string } | { email: string }
 /**
  * Give `role` in `scope`. The caller holds the dimension's `members.manage` there, holds a role there
  * that may assign `role`, and holds every action `role` grants there. An existing principal receives the
- * grant; an address receives an invitation that only its verified owner can accept. Repeating the call
- * answers the same result.
+ * grant; an address receives an invitation that only its verified owner can accept, and for a role declared
+ * external that IAM creates as an external principal at acceptance when no principal holds it. Repeating the
+ * call answers the same result.
  */
 export interface AssignMemberInput extends MembershipCaller {
 	/** A grant for an endpoint whose purpose is `members` for `scope.type`. */
@@ -178,6 +214,8 @@ export interface AssignMemberInput extends MembershipCaller {
 	scope: Scope
 	role: string
 	member: MemberTarget
+	/** Only with an address: the invitation's label, message and resend (`InvitationOptions`). */
+	invitation?: InvitationOptions
 }
 
 export type AssignMemberResult =

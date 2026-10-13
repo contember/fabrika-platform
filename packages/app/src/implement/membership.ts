@@ -4,7 +4,15 @@
 // The framework writes no grant and mints no credential.
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
-import type { InvitationItem, IssueLinkResult, MemberItem, MembershipFailure, PrincipalAffiliation, Scope } from '@fabrika/auth-core'
+import type {
+	InvitationItem,
+	InvitationOptions,
+	IssueLinkResult,
+	MemberItem,
+	MembershipFailure,
+	PrincipalAffiliation,
+	Scope,
+} from '@fabrika/auth-core'
 import type { CapabilityAuthority, RefGrant } from '@fabrika/db/capability'
 import { joinPath } from '../contract/defaults'
 import { ConflictError, ForbiddenError, HttpError, NotFoundError, UnauthorizedError } from '../errors'
@@ -27,8 +35,13 @@ export interface MemberList {
 export interface MemberManagement<D extends string, A extends string, R extends string> {
 	/** The members of the value; IAM requires the dimension's `members.list` there. */
 	list(ref: Ref<D, A>): Promise<MemberList>
-	/** Gives `role` in the value: an existing principal gets the grant, an address an invitation. Repeating it answers the same. */
-	assign(ref: Ref<D, A>, member: MemberTarget, role: R): Promise<AssignedMember>
+	/**
+	 * Gives `role` in the value: an existing principal gets the grant, an address an invitation. Repeating it answers the
+	 * same and sends nothing. For an address, `options` names the company (`label`, at most 200 characters on one line)
+	 * and a personal `message` (at most 1000 characters of plain text) the e-mail carries, and `resend` gives an open
+	 * invitation a new link and a new 7 days and sends it again; the old link stops working.
+	 */
+	assign(ref: Ref<D, A>, member: MemberTarget, role: R, options?: InvitationOptions): Promise<AssignedMember>
 	/** Removes the member's roles there (only `role` when given), or cancels an invitation. Repeating it answers the same. */
 	revoke(ref: Ref<D, A>, member: { readonly principalId: string; readonly role?: R } | { readonly invitationId: string }): Promise<void>
 }
@@ -120,6 +133,12 @@ function refusal(failure: MembershipFailure): Error {
 			return new HttpError(409, 'invitations_disabled', 'This installation sends no email, so it cannot invite an address; assign an existing principal')
 		case 'delivery_failed':
 			return new ServerFault('iam_unavailable', 'IAM could not deliver the invitation', 503)
+		case 'internal_mailbox':
+			return new HttpError(
+				409,
+				'internal_mailbox',
+				'The organization names this address, so IAM never creates it as an external person; it signs in through the organization first',
+			)
 		case 'invalid_request':
 			return new HttpError(400, 'invalid_request', failure.message)
 	}
@@ -174,10 +193,13 @@ export function memberManagement(request: MembershipRequest): MemberManagement<s
 			const listed = await ask(() => request.iam.listMembers(request.caller, scopeOf(refGrant(request, ref))), 'list members')
 			return Object.freeze({ members: listed.members, invitations: listed.invitations })
 		},
-		async assign(ref: unknown, member: MemberTarget, role: string): Promise<AssignedMember> {
+		async assign(ref: unknown, member: MemberTarget, role: string, options?: InvitationOptions): Promise<AssignedMember> {
 			const scope = scopeOf(refGrant(request, ref))
 			const target = 'email' in member ? { email: member.email } : { principalId: member.principalId }
-			const assigned = await ask(() => request.iam.assignMember(request.caller, delegationOf(request), scope, role, target), 'assign a member')
+			const assigned = await ask(
+				() => request.iam.assignMember(request.caller, delegationOf(request), scope, role, target, invitationOptionsOf(options)),
+				'assign a member',
+			)
 			return 'assigned' in assigned ? { assigned: assigned.assigned } : { invited: assigned.invited }
 		},
 		async revoke(ref: unknown, member: { readonly principalId: string; readonly role?: string } | { readonly invitationId: string }): Promise<void> {
@@ -186,6 +208,16 @@ export function memberManagement(request: MembershipRequest): MemberManagement<s
 			await ask(() => request.iam.revokeMember(request.caller, delegationOf(request), scope, target), 'revoke a member')
 		},
 	})
+}
+
+/** The invitation options as IAM takes them: only the fields given, each of its own type, so a handler's extra keys stay here. */
+function invitationOptionsOf(options: InvitationOptions | undefined): InvitationOptions | undefined {
+	if (options === undefined) return undefined
+	return {
+		...(options.label === undefined ? {} : { label: options.label }),
+		...(options.message === undefined ? {} : { message: options.message }),
+		...(options.resend === undefined ? {} : { resend: options.resend }),
+	}
 }
 
 /** The directory an endpoint reads: the dimension that declares it, and whether the endpoint may list it. */

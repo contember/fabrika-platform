@@ -17,6 +17,8 @@ import {
 	DELEGATION_GRANT_TTL_SECONDS,
 	type FindMemberInput,
 	type FindMemberResult,
+	type InvitationOptions,
+	invitationOptionsProblem,
 	invitedAddress,
 	type IssueLinkInput,
 	type IssueLinkResult,
@@ -40,6 +42,7 @@ import {
 	type RevokeMemberResult,
 	type Scope,
 } from '@fabrika/auth-core'
+import type { EmailMessage } from '@fabrika/email'
 import { uuidv7 } from '@fabrika/platform'
 import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
@@ -55,9 +58,11 @@ import {
 	type RoleRow,
 } from './db'
 import type { Env, RequestContext } from './env'
+import { organizationMailbox } from './human-admission'
 import { logError } from './log'
 import { renderEmail } from './messages'
 import { randomToken } from './oidc'
+import type { StoredPasswordHash } from './password-crypto'
 import { unixNow } from './repositories/sql'
 import { resolvePermissionsAt } from './resolve'
 import { BUILTIN_ROLES } from './roles'
@@ -368,6 +373,9 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 	if (authority !== null) return authority
 
 	if ('principalId' in input.member) {
+		if (input.invitation !== undefined) {
+			return invalid('a label, a message and a resend go with an invitation by address')
+		}
 		const target = await services.repositories.principals.getPrincipalById(input.member.principalId)
 		if (target === null || target.type !== 'user') {
 			return NOT_FOUND
@@ -391,15 +399,22 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 		return { ok: true, assigned: { principalId: target.id, role: role.role_key } }
 	}
 
-	return invite(services, caller, input, role, input.member.email)
+	return invite(services, caller, input, role, input.member.email, input.invitation ?? {})
 }
 
+/**
+ * Open an invitation and mail its link, or answer the open one. Repeating it sends nothing; `resend` gives the open
+ * invitation a new link and a new lifetime and sends that, so the earlier link stops working. A role declared external
+ * creates its principal at acceptance for a mailbox no principal holds, so IAM refuses one the organization names
+ * (`organizationMailbox`) before anything is written: it never becomes an external principal.
+ */
 async function invite(
 	services: Services,
 	caller: MemberCaller,
 	input: AssignMemberInput,
 	role: RoleRow,
 	address: string,
+	options: InvitationOptions,
 ): Promise<AssignMemberResult> {
 	if (services.email === null) {
 		return { ok: false, reason: 'invitations_disabled' }
@@ -408,50 +423,58 @@ async function invite(
 	if (email === null) {
 		return invalid('the member email is not an address')
 	}
+	const wording = invitationOptionsProblem(options)
+	if (wording !== null) {
+		return invalid(wording)
+	}
+	if (role.external === 1 && organizationMailbox(email, services.config)) {
+		return { ok: false, reason: 'internal_mailbox' }
+	}
+	const companyLabel = nonEmpty(options.label)
+	const message = nonEmpty(options.message)
 	const token = randomToken(32)
-	const { invitation, created } = await services.repositories.membership.openInvitation({
-		tokenHash: await hashToken(token),
+	const tokenHash = await hashToken(token)
+	const expiresAt = unixNow() + INVITATION_TTL_SECONDS
+	const event = (action: string, invitationId: string) =>
+		memberEvent(caller, input.requestId, {
+			action,
+			resourceType: 'scope',
+			resourceId: scopeId(input.scope),
+			metadata: { invitationId, role: role.role_key },
+		})
+	const opened = await services.repositories.membership.openInvitation({
+		tokenHash,
 		app: caller.app,
 		scope: input.scope,
 		roleKey: role.role_key,
 		email,
 		invitedBy: caller.principal.id,
-		expiresAt: unixNow() + INVITATION_TTL_SECONDS,
-	}, (invitationId) =>
-		memberEvent(caller, input.requestId, {
-			action: 'iam.member.invite',
-			resourceType: 'scope',
-			resourceId: scopeId(input.scope),
-			metadata: { invitationId, role: role.role_key },
-		}))
-	if (created) {
-		const presentation = await presentationFor(services, caller.app)
-		// The query names the application for the page's language; the fragment never reaches an access log, and the
-		// page copies it into its POST form in the browser.
-		const url = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
-		url.hash = new URLSearchParams({ token }).toString()
-		try {
-			await services.email.send(
-				await renderEmail(services, {
-					to: email,
-					presentation,
-					kind: 'invitation',
-					values: {
-						appName: presentation.displayName ?? caller.app,
-						role: role.name,
-						scope: input.scope.type,
-						recipient: email,
-						inviterLabel: caller.principal.label,
-						companyLabel: '',
-						message: '',
-						actionUrl: url.toString(),
-						expiresAt: invitation.expires_at,
-					},
-					idempotencyKey: `iam-invitation-${invitation.id}`,
-				}),
-			)
-		} catch (err) {
-			logError(`invitation email failed for request '${input.requestId}'`, err)
+		expiresAt,
+		companyLabel,
+		message,
+	}, (invitationId) => event('iam.member.invite', invitationId))
+	let invitation = opened.invitation
+	if (!opened.created) {
+		if (options.resend !== true) {
+			return invitedResult(invitation)
+		}
+		const rotated = await services.repositories.membership.rotateInvitation(
+			{ id: invitation.id, tokenHash, expiresAt, companyLabel, message },
+			event('iam.member.reinvite', invitation.id),
+		)
+		if (rotated === null) {
+			// Accepted or cancelled since it was read: nothing open is left to send again.
+			return NOT_FOUND
+		}
+		invitation = rotated
+	}
+	try {
+		// A resend is a new message with a new link: the sender must not take it for a retry of the first.
+		const idempotencyKey = opened.created ? `iam-invitation-${invitation.id}` : `iam-invitation-${invitation.id}-${uuidv7()}`
+		await services.email.send(await invitationEmail(services, caller, invitation, role, token, idempotencyKey))
+	} catch (err) {
+		logError(`invitation email failed for request '${input.requestId}'`, err)
+		if (opened.created) {
 			await services.repositories.membership.deleteInvitation(
 				invitation.id,
 				memberEvent(caller, input.requestId, {
@@ -461,10 +484,52 @@ async function invite(
 					metadata: { invitationId: invitation.id, role: role.role_key, reason: 'delivery_failed' },
 				}),
 			)
-			return { ok: false, reason: 'delivery_failed' }
 		}
+		// A resent invitation stays open under a link nobody received; resending again sends a new one.
+		return { ok: false, reason: 'delivery_failed' }
 	}
+	return invitedResult(invitation)
+}
+
+function invitedResult(invitation: InvitationRow): AssignMemberResult {
 	return { ok: true, invited: { invitationId: invitation.id, role: invitation.role_key, expiresAt: invitation.expires_at } }
+}
+
+function nonEmpty(value: string | undefined): string | null {
+	return value === undefined || value === '' ? null : value
+}
+
+/** The invitation's e-mail, with the link to `token`, in its application's language and wording. */
+async function invitationEmail(
+	services: Services,
+	caller: MemberCaller,
+	invitation: InvitationRow,
+	role: RoleRow,
+	token: string,
+	idempotencyKey: string,
+): Promise<EmailMessage> {
+	const presentation = await presentationFor(services, invitation.app)
+	// The query names the application for the page's language; the fragment never reaches an access log, and the
+	// page copies it into its POST form in the browser.
+	const url = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
+	url.hash = new URLSearchParams({ token }).toString()
+	return renderEmail(services, {
+		to: invitation.email,
+		presentation,
+		kind: 'invitation',
+		values: {
+			appName: presentation.displayName ?? invitation.app,
+			role: role.name,
+			scope: invitation.scope_type,
+			recipient: invitation.email,
+			inviterLabel: caller.principal.label,
+			companyLabel: invitation.company_label ?? '',
+			message: invitation.message ?? '',
+			actionUrl: url.toString(),
+			expiresAt: invitation.expires_at,
+		},
+		idempotencyKey,
+	})
 }
 
 /**
@@ -656,9 +721,8 @@ export async function acceptInvitation(
 	token: string,
 	requestId: string,
 ): Promise<AcceptInvitationOutcome> {
-	const invitation = await services.repositories.membership.getInvitationByHash(await hashToken(token))
-	const now = unixNow()
-	if (invitation === null || invitation.accepted_at !== null || invitation.revoked_at !== null || invitation.expires_at <= now) {
+	const invitation = await openInvitationOf(services, token)
+	if (invitation === null) {
 		return { ok: false, reason: 'invalid' }
 	}
 	if (principal.type !== 'user' || principal.email === null || principal.email !== invitation.email) {
@@ -667,28 +731,16 @@ export async function acceptInvitation(
 	if ((await externalGrantProblem(services.repositories.appSchema, principal, invitation.app, { roleKey: invitation.role_key })) !== null) {
 		return { ok: false, reason: 'not_eligible' }
 	}
-	const inviter = await services.repositories.principals.getPrincipalById(invitation.invited_by)
-	const role = await services.repositories.appSchema.getRole(invitation.app, invitation.role_key)
-	if (inviter === null || principalStatus(inviter) === 'disabled' || role === null) {
+	const assigners = await inviterAssigners(services, invitation)
+	if (assigners === null) {
 		return { ok: false, reason: 'not_allowed' }
 	}
-	const scope: Scope = { type: invitation.scope_type, value: invitation.scope_value }
-	const actor = { app: invitation.app, principalId: inviter.id, permissions: await resolvePermissionsAt(services, inviter, invitation.app) }
-	const manage = await manageAuthority(services, actor, scope)
-	if (!manage.ok || (await roleAuthorityProblem(services, actor, scope, role)) !== null) {
-		return { ok: false, reason: 'not_allowed' }
-	}
-	const assigners = role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
-	const accepted = await services.repositories.membership.acceptInvitation(invitation, principal.id, assigners, {
-		requestId,
-		principalId: principal.id,
-		principalLabel: auditLabelOf(principal),
-		app: invitation.app,
-		action: 'iam.member.accept',
-		resourceType: 'scope',
-		resourceId: scopeId(scope),
-		metadata: { invitationId: invitation.id, role: invitation.role_key },
-	})
+	const accepted = await services.repositories.membership.acceptInvitation(
+		invitation,
+		principal.id,
+		assigners,
+		acceptanceEvent(invitation, principal.id, requestId),
+	)
 	if (accepted === 'not_eligible') {
 		return { ok: false, reason: 'not_eligible' }
 	}
@@ -696,6 +748,144 @@ export async function acceptInvitation(
 		return { ok: false, reason: accepted === 'not_allowed' ? 'not_allowed' : 'invalid' }
 	}
 	return { ok: true, invitation }
+}
+
+/** The open invitation of a link's one-time token, or null for an unknown, used, cancelled, rotated or expired one. */
+async function openInvitationOf(services: Services, token: string): Promise<InvitationRow | null> {
+	const invitation = await services.repositories.membership.getInvitationByHash(await hashToken(token))
+	if (invitation === null || invitation.accepted_at !== null || invitation.revoked_at !== null || invitation.expires_at <= unixNow()) {
+		return null
+	}
+	return invitation
+}
+
+/**
+ * The roles that make the inviter an assigner of the invitation's role, when it could still give that role there
+ * against its permissions now; null when it could not. The repository checks the same roles again inside its write.
+ */
+async function inviterAssigners(services: Services, invitation: InvitationRow): Promise<string[] | null> {
+	const inviter = await services.repositories.principals.getPrincipalById(invitation.invited_by)
+	const role = await services.repositories.appSchema.getRole(invitation.app, invitation.role_key)
+	if (inviter === null || principalStatus(inviter) === 'disabled' || role === null) {
+		return null
+	}
+	const scope: Scope = { type: invitation.scope_type, value: invitation.scope_value }
+	const actor = { app: invitation.app, principalId: inviter.id, permissions: await resolvePermissionsAt(services, inviter, invitation.app) }
+	const manage = await manageAuthority(services, actor, scope)
+	if (!manage.ok || (await roleAuthorityProblem(services, actor, scope, role)) !== null) {
+		return null
+	}
+	return role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
+}
+
+/** The record of an acceptance, by the principal that accepted. A user's audit label is its id. */
+function acceptanceEvent(invitation: InvitationRow, principalId: string, requestId: string): AuditEventInput {
+	return {
+		requestId,
+		principalId,
+		principalLabel: principalId,
+		app: invitation.app,
+		action: 'iam.member.accept',
+		resourceType: 'scope',
+		resourceId: scopeId({ type: invitation.scope_type, value: invitation.scope_value }),
+		metadata: { invitationId: invitation.id, role: invitation.role_key },
+	}
+}
+
+/**
+ * What an invitation link offers the browser that submits it. `create`: the role is declared external, the
+ * installation enables password authentication and e-mail, no principal holds the invited mailbox, the organization
+ * does not name it (`organizationMailbox`), and the inviter could still give the role — so accepting creates the
+ * external principal with a password the person chooses (ADR-0020). `sign_in`: every other open invitation, accepted
+ * by the mailbox's principal signed in here. Reading the offer changes nothing.
+ */
+export type InvitationOffer =
+	| { readonly kind: 'invalid' }
+	| { readonly kind: 'not_allowed' }
+	| { readonly kind: 'sign_in' }
+	| { readonly kind: 'create'; readonly invitation: InvitationRow }
+
+export async function invitationOffer(services: Services, token: string): Promise<InvitationOffer> {
+	const invitation = await openInvitationOf(services, token)
+	if (invitation === null) {
+		return { kind: 'invalid' }
+	}
+	if (!(await createsPrincipal(services, invitation))) {
+		return { kind: 'sign_in' }
+	}
+	return (await inviterAssigners(services, invitation)) === null ? { kind: 'not_allowed' } : { kind: 'create', invitation }
+}
+
+async function createsPrincipal(services: Services, invitation: InvitationRow): Promise<boolean> {
+	if (!services.config.authentication.password.enabled || services.email === null || organizationMailbox(invitation.email, services.config)) {
+		return false
+	}
+	const role = await services.repositories.appSchema.getRole(invitation.app, invitation.role_key)
+	return role?.external === 1 && (await services.repositories.principals.getUserByEmail(invitation.email)) === null
+}
+
+export type AcceptCreatingOutcome =
+	| { ok: true; invitation: InvitationRow; principal: PrincipalRow }
+	| { ok: false; reason: 'invalid' | 'not_allowed' | 'not_eligible' }
+	/**
+	 * The invitation creates no principal now: another acceptance or sign-in gave the mailbox one first, or the
+	 * installation or the organization's addresses changed. Whoever holds the mailbox signs in and accepts.
+	 */
+	| { ok: false; reason: 'sign_in' }
+
+/**
+ * Accept an `InvitationOffer` of kind `create` with the password the person chose (already checked by the password
+ * policy and hashed): the external principal, its password, the grant, the consumed invitation and their records in
+ * one transaction (`MembershipRepository.acceptAsNewPrincipal`). Everything the offer checked is checked again.
+ */
+export async function acceptCreatingPrincipal(
+	services: Services,
+	invitation: InvitationRow,
+	password: StoredPasswordHash,
+	requestId: string,
+): Promise<AcceptCreatingOutcome> {
+	if (!(await createsPrincipal(services, invitation))) {
+		return { ok: false, reason: 'sign_in' }
+	}
+	const assigners = await inviterAssigners(services, invitation)
+	if (assigners === null) {
+		return { ok: false, reason: 'not_allowed' }
+	}
+	const accepted = await services.repositories.membership.acceptAsNewPrincipal({ invitation, assigners, password }, (principalId) => ({
+		principal: {
+			requestId,
+			principalId,
+			principalLabel: principalId,
+			app: 'propustka',
+			action: 'iam.principal.create',
+			resourceType: 'principal',
+			resourceId: principalId,
+			metadata: { affiliation: 'external', invitationId: invitation.id },
+		},
+		acceptance: acceptanceEvent(invitation, principalId, requestId),
+		password: {
+			requestId,
+			principalId,
+			principalLabel: principalId,
+			app: 'propustka',
+			action: 'iam.password.enrollment.complete',
+			resourceType: 'principal',
+			resourceId: principalId,
+			metadata: { invitationId: invitation.id },
+		},
+	}))
+	switch (accepted.outcome) {
+		case 'accepted':
+			return { ok: true, invitation, principal: accepted.principal }
+		case 'account_exists':
+			return { ok: false, reason: 'sign_in' }
+		case 'not_eligible':
+			return { ok: false, reason: 'not_eligible' }
+		case 'not_allowed':
+			return { ok: false, reason: 'not_allowed' }
+		case 'not_open':
+			return { ok: false, reason: 'invalid' }
+	}
 }
 
 // ── Share links ───────────────────────────────────────────────────────────────

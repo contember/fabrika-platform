@@ -20,7 +20,7 @@ import { generateToken, hashToken } from '../../secret'
 import type { Services } from '../../services'
 import { getSigner } from '../../signing'
 import { mintFromKey } from '../../tokens'
-import { adminTokenFor, makeServicesFor, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './harness'
+import { adminTokenFor, makeServicesFor, type MakeServicesOptions, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './harness'
 
 // A multi-tenant application for the membership witnesses (ADR-0012 §6), reconciled
 // through the real admin PUT so its declarations pass the same validation a deploy's do.
@@ -149,8 +149,11 @@ export interface MembershipFixture {
 	putSchema(schema: AppSchema): Promise<Response>
 }
 
-export async function membershipFixture(repositories: IamRepositories, options: { email?: EmailSender | null } = {}): Promise<MembershipFixture> {
-	const services = makeServicesFor(repositories, { environment: 'stage', issuer: ORIGIN, email: options.email ?? null })
+export async function membershipFixture(
+	repositories: IamRepositories,
+	options: { email?: EmailSender | null; services?: Omit<MakeServicesOptions, 'environment' | 'issuer' | 'email'> } = {},
+): Promise<MembershipFixture> {
+	const services = makeServicesFor(repositories, { ...options.services, environment: 'stage', issuer: ORIGIN, email: options.email ?? null })
 	const ctx = new PendingWork()
 	// Unique per fixture, so several fixtures can share one Postgres schema.
 	const tag = crypto.randomUUID()
