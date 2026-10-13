@@ -3046,9 +3046,10 @@ if (postgres !== null) {
   `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`
   key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
 - A caller's `id` is `<kind>-<n>` and its `label` `<kind>-<n>@<app>.test`, `n` counting the kit's callers; pass
-  `{ id, label }` to fix either (`kit.testCaller(grants, { label: 'Ann' })`). The label is `ctx.principal.label`,
-  and the directory's label where it shows labels. Assert a stored label against `caller.label` or the directory's
-  answer (`members.list` above), never against a literal of the default form.
+  `{ id, label }` to fix either (`kit.testCaller(grants, { label: 'Ann' })`). The label is a `string`, only a link
+  holder's (`kind: 'link'`) is `null`; it is `ctx.principal.label`, and the directory's label where it shows labels.
+  Assert a stored label against `caller.label` or the directory's answer (`members.list` above), never against a
+  literal of the default form.
 - `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
   path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
 - A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`

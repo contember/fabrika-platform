@@ -38,21 +38,35 @@ export interface TestLink {
 	readonly chain: readonly TestScope[]
 }
 
-export interface TestCaller {
-	readonly kind: TestCallerKind
-	/** The consuming application of an `app` caller, `null` for every other kind. */
-	readonly app: string | null
-	/** The link mount and chain a `link` caller's key is bound to; `null` for every other kind. */
-	readonly link: TestLink | null
+interface TestCallerCredential {
 	/** The principal id, or the share key's credential id for a link. */
 	readonly id: string
-	readonly label: string | null
 	readonly perms: readonly PermissionEntry[]
 	/** The `px_` key a key caller presents as a bearer; `null` for a session. */
 	readonly key: string | null
 	/** The `Cookie` header a signed-in browser sends; `null` for a key caller. */
 	readonly cookie: string | null
 }
+
+/** A person, a script or another application's connector: a principal with a label. */
+export interface LabelledTestCaller extends TestCallerCredential {
+	readonly kind: Exclude<TestCallerKind, 'link'>
+	/** The consuming application of an `app` caller, `null` for every other kind. */
+	readonly app: string | null
+	readonly link: null
+	readonly label: string
+}
+
+/** The holder of a share link: an anonymous key, which carries no label. */
+export interface LinkTestCaller extends TestCallerCredential {
+	readonly kind: 'link'
+	readonly app: null
+	/** The link mount and chain the key is bound to; `null` for a key bound to nothing. */
+	readonly link: TestLink | null
+	readonly label: null
+}
+
+export type TestCaller = LabelledTestCaller | LinkTestCaller
 
 /** The permissions `grants` resolve to: a role becomes each of its actions in the role's scope. */
 export function resolveGrants<C extends AnyContract>(contract: C, grants: readonly TestGrant<C>[]): PermissionEntry[] {

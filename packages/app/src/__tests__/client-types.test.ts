@@ -14,6 +14,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'06-test-grant-action-typo.ts': `Type '"notes.raed"' is not assignable to type`,
 	'07-call-an-attachment-procedure.ts': "Type 'AttachmentProcedure<ZodObject<{ orgId: ZodString; }, $strict>>' has no call signatures.",
 	'08-download-input-of-another-shape.ts': "'org' does not exist in type '{ orgId: string; }'",
+	'09-link-caller-label.ts': "Type 'null' is not assignable to type 'string'.",
 }
 
 describe('client and test kit mistakes are type errors', () => {

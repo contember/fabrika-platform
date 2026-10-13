@@ -38,7 +38,7 @@ import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
-import { resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
+import { type LabelledTestCaller, type LinkTestCaller, resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
 import { kitDirectory, type TestMembership, writesThroughIam } from './directory'
 import { endpointProxy } from './proxy'
 
@@ -85,7 +85,9 @@ export interface TestKit<C extends AnyContract> {
 	readonly appId: string
 	/** The contract as compiled for `boot`. */
 	readonly artifact: ContractArtifact
-	/** A new principal of the test IAM holding `grants`, with a fresh credential. */
+	/** A new principal of the test IAM holding `grants`, with a fresh credential; only a link holder has no label. */
+	testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
+	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] }): LabelledTestCaller
 	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
 	/** A request as it reaches the proxy, credentials as written: a script, a `px_` key, or another site. */
 	readonly fetch: RpcFetch
@@ -226,6 +228,12 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 
 	let issued = 0
 
+	function testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
+	function testCaller(
+		grants: readonly TestGrant<C>[],
+		options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] },
+	): LabelledTestCaller
+	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
 	function testCaller(grants: readonly TestGrant<C>[], callerOptions: TestCallerOptions = {}): TestCaller {
 		const kind = callerOptions.kind ?? 'human'
 		const via = kind === 'human' ? (callerOptions.via ?? 'session') : 'key'
@@ -238,18 +246,24 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		if (callerOptions.link !== undefined && kind !== 'link') {
 			throw new Error("only a link holder's key is bound to an object: testCaller(grants, { kind: 'link', link: { mount, chain } })")
 		}
-		const caller: TestCaller = Object.freeze({
-			kind,
-			app: consumer,
+		const credentials = {
 			id: callerOptions.id ?? `${kind}-${issued}`,
-			label: kind === 'link' ? null : (callerOptions.label ?? `${kind}-${issued}@${name}.test`),
-			link: callerOptions.link === undefined
-				? null
-				: Object.freeze({ mount: callerOptions.link.mount, chain: Object.freeze(callerOptions.link.chain.map((scope) => Object.freeze({ ...scope }))) }),
 			perms: Object.freeze(resolveGrants(app.contract, grants)),
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,
-		})
+		}
+		const link = callerOptions.link
+		const caller: TestCaller = kind === 'link'
+			? Object.freeze({
+				...credentials,
+				kind,
+				app: null,
+				label: null,
+				link: link === undefined
+					? null
+					: Object.freeze({ mount: link.mount, chain: Object.freeze(link.chain.map((scope) => Object.freeze({ ...scope }))) }),
+			})
+			: Object.freeze({ ...credentials, kind, app: consumer, label: callerOptions.label ?? `${kind}-${issued}@${name}.test`, link: null })
 		memberships.set(
 			caller,
 			grants.flatMap((grant) => ('role' in grant && grant.scope !== undefined ? [{ role: grant.role, scope: grant.scope }] : [])),
