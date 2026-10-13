@@ -14,7 +14,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `db/migrations/*.sql`      | plain SQL, one new file per change (`bunx fabrika db new <slug>`)                        |
 | `src/db/tables.ts`         | `defineTables(vocabulary, columns)({ … })`: the scope and the actions of each table      |
 | `src/app-kit.ts`           | `export const app = defineApp(vocabulary, tables)`                                       |
-| `src/schemas.ts`           | the `zod/v4` inputs and outputs that the shell and the SPA share                         |
+| `src/schemas.ts`           | the `zod/v4` schemas several slices, or a slice and the SPA, share                       |
 | `src/<slice>/endpoints.ts` | `app.group(…)`, a `.handle(…)` beside each endpoint, and the slice's jobs and webhooks   |
 | `src/<slice>/logic.ts`     | business rules as pure functions: no `ctx`, no data access                               |
 | `src/<slice>/queries.ts`   | data access that the slice's handlers share, over a handle they pass in                  |
@@ -26,20 +26,49 @@ below. When it does not reach far enough, declare the step off it. A declared st
 
 ```ts src/tasks/endpoints.ts
 import { BadRequestError, ConflictError, fromRow } from '@fabrika/app'
+import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import {
-	AssignTask,
-	ById,
-	EditTask,
-	ListTasks,
-	MyTasks,
-	NewTask,
-	Saved,
-	Task,
-	TaskPage,
-	Versioned,
-} from '../schemas'
+import { ById, Cursor, Saved, TaskStatus, Versioned } from '../schemas'
 import { canClose } from './logic'
+
+const Task = z.strictObject({
+	id: z.uuid(),
+	projectId: z.uuid(),
+	title: z.string(),
+	status: TaskStatus,
+	assignee: z.nullable(z.string()),
+	assigneeLabel: z.nullable(z.string()),
+	dueOn: z.nullable(z.iso.date()),
+	overdue: z.boolean(),
+	version: z.int(),
+})
+const TaskPage = z.strictObject({
+	items: z.array(Task),
+	next: z.nullable(z.string()),
+})
+const ListTasks = z.strictObject({
+	projectId: z.uuid(),
+	status: TaskStatus.optional(),
+	title: z.string().min(1).max(200).optional(),
+	after: Cursor.optional(),
+})
+const MyTasks = z.strictObject({ after: Cursor.optional() })
+const NewTask = z.strictObject({
+	projectId: z.uuid(),
+	title: z.string().min(1).max(200),
+	dueOn: z.iso.date().optional(),
+})
+const EditTask = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	title: z.string().min(1).max(200),
+	dueOn: z.nullable(z.iso.date()),
+})
+const AssignTask = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	assignee: z.nullable(z.string().max(100)),
+})
 
 export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -210,7 +239,10 @@ they are declared. A query or an export declares only `'read'`.
 
 ## The loop
 
-Run from the application's root after every change (setup: `references/app-setup.md`):
+Run from the application's root (setup: `references/app-setup.md`). A schema change (a new migration) runs every step. A
+handler-only change needs no migration or codegen: it runs `test-scaffold` when an endpoint, its access or a table
+policy changed, then `tsc` and `fabrika-check` once the slice is written, then the tests. The application you are handed
+is green: a tsc or checker run before you have written anything proves nothing.
 
 ```bash
 bunx fabrika db new <slug>                                  # a new migration file
@@ -546,54 +578,16 @@ export const Versioned = z.strictObject({
 	expectVersion: z.int().positive(),
 })
 export const Cursor = z.string().max(500)
-
-export const Task = z.strictObject({
-	id: z.uuid(),
-	projectId: z.uuid(),
-	title: z.string(),
-	status: TaskStatus,
-	assignee: z.nullable(z.string()),
-	assigneeLabel: z.nullable(z.string()),
-	dueOn: z.nullable(z.iso.date()),
-	overdue: z.boolean(),
-	version: z.int(),
-})
-export const TaskPage = z.strictObject({
-	items: z.array(Task),
-	next: z.nullable(z.string()),
-})
-export const ListTasks = z.strictObject({
-	projectId: z.uuid(),
-	status: TaskStatus.optional(),
-	title: z.string().min(1).max(200).optional(),
-	after: Cursor.optional(),
-})
-export const MyTasks = z.strictObject({ after: Cursor.optional() })
-export const NewTask = z.strictObject({
-	projectId: z.uuid(),
-	title: z.string().min(1).max(200),
-	dueOn: z.iso.date().optional(),
-})
-export const EditTask = z.strictObject({
-	id: z.uuid(),
-	expectVersion: z.int().positive(),
-	title: z.string().min(1).max(200),
-	dueOn: z.nullable(z.iso.date()),
-})
-export const AssignTask = z.strictObject({
-	id: z.uuid(),
-	expectVersion: z.int().positive(),
-	assignee: z.nullable(z.string().max(100)),
-})
 export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 ```
 
 - `z` comes from `zod/v4`. Objects are `z.strictObject`, never `z.object`. No `transform`, `refine`, `pipe`,
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
-- A schema module holds literal consts only. An endpoint module may declare its own consts too.
+- `src/schemas.ts` holds what several slices, or a slice and the SPA, share, as literal consts only. A slice declares
+  its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
-- Optional or nullable: on a create, a field the caller may leave out is `.optional()` and the handler writes
-  `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
+- Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
+  `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
   `z.nullable(…)` (`EditTask.dueOn`). An update that sets no column is a 500, and the generated cases send no optional
   field and `null` for a nullable one (`references/tests.md`).
 - A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
@@ -613,11 +607,15 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
   for a `human` caller) and `ctx.requestId`.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
-  shows), or the id when the token carries none. For the caller's own name (a task one creates for oneself) store it; a
-  `ctx.members.get(ctx.principal.id)` lookup adds a directory read the approver sees.
+  shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
+  assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
+  `ctx.members.get(ctx.principal.id)` lookup: it adds a directory read the approver sees. A picked person is
+  `ctx.members.get` (Members below).
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
 - Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
   together: the second one finds the version moved.
+- A delete is the exception: of two deletes of one row with the same `expectVersion`, the second finds the row gone and
+  answers 404, not 409. So does any write that loses to a delete. A test of the race expects `[200, 404]`.
 - A capability reads its own target, whatever its action: `tasks.assign` reads the task it assigns. A column with
   its own read action is left out for every other action.
 - Never use `{ member: true }` for application data. `callers` is `['human']`, `['machine']` or both; every group of
@@ -1173,7 +1171,7 @@ check (`{ status: 'ok' }`) and the SPA's browser configuration answer without on
 | 400    | the input does not match its schema; `BadRequestError`                                                                                                                                                                  |
 | 401    | no valid credential. In a test, the caller is missing                                                                                                                                                                   |
 | 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself; a path no endpoint declares |
-| 404    | `on`: the object does not exist or is not the caller's; `NotFoundError`                                                                                                                                                 |
+| 404    | `on`: the object does not exist or is not the caller's, also when a concurrent delete removed it first; `NotFoundError`                                                                                                 |
 | 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                                                    |
 | 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`)                         |
 | 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                                           |
@@ -2924,8 +2922,8 @@ Test the rules of `logic.ts` as plain functions. Test a handler through `testKit
 allowed call beside its refused twin:
 
 ```ts src/tasks/__tests__/tasks.test.ts
-import { createClient, RpcError } from '@fabrika/app/client'
-import { testKit } from '@fabrika/app/testing'
+import { createClient } from '@fabrika/app/client'
+import { statusOf, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { contract } from '../../../fabrika.contract'
@@ -2935,17 +2933,6 @@ const postgres = await testDatabase({
 	migrations: new URL('../../../db/migrations/', import.meta.url),
 	label: 'tasks.test.ts',
 })
-
-const statusOf = async (
-	call: Promise<unknown>,
-): Promise<number | undefined> => {
-	try {
-		await call
-		return 200
-	} catch (error) {
-		return error instanceof RpcError ? error.httpStatus : undefined
-	}
-}
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
@@ -3051,6 +3038,8 @@ if (postgres !== null) {
   `<label> skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests`, and the file registers no test.
   A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
+- `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
+  failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
   membership role is granted in one value of its scope; an action without `scope` is a global grant, for which
   `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`

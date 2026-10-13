@@ -18,54 +18,16 @@ export const Versioned = z.strictObject({
 	expectVersion: z.int().positive(),
 })
 export const Cursor = z.string().max(500)
-
-export const Task = z.strictObject({
-	id: z.uuid(),
-	projectId: z.uuid(),
-	title: z.string(),
-	status: TaskStatus,
-	assignee: z.nullable(z.string()),
-	assigneeLabel: z.nullable(z.string()),
-	dueOn: z.nullable(z.iso.date()),
-	overdue: z.boolean(),
-	version: z.int(),
-})
-export const TaskPage = z.strictObject({
-	items: z.array(Task),
-	next: z.nullable(z.string()),
-})
-export const ListTasks = z.strictObject({
-	projectId: z.uuid(),
-	status: TaskStatus.optional(),
-	title: z.string().min(1).max(200).optional(),
-	after: Cursor.optional(),
-})
-export const MyTasks = z.strictObject({ after: Cursor.optional() })
-export const NewTask = z.strictObject({
-	projectId: z.uuid(),
-	title: z.string().min(1).max(200),
-	dueOn: z.iso.date().optional(),
-})
-export const EditTask = z.strictObject({
-	id: z.uuid(),
-	expectVersion: z.int().positive(),
-	title: z.string().min(1).max(200),
-	dueOn: z.nullable(z.iso.date()),
-})
-export const AssignTask = z.strictObject({
-	id: z.uuid(),
-	expectVersion: z.int().positive(),
-	assignee: z.nullable(z.string().max(100)),
-})
 export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 ```
 
 - `z` comes from `zod/v4`. Objects are `z.strictObject`, never `z.object`. No `transform`, `refine`, `pipe`,
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
-- A schema module holds literal consts only. An endpoint module may declare its own consts too.
+- `src/schemas.ts` holds what several slices, or a slice and the SPA, share, as literal consts only. A slice declares
+  its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
-- Optional or nullable: on a create, a field the caller may leave out is `.optional()` and the handler writes
-  `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
+- Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
+  `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
   `z.nullable(…)` (`EditTask.dueOn`). An update that sets no column is a 500, and the generated cases send no optional
   field and `null` for a nullable one (`references/tests.md`).
 - A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
@@ -85,11 +47,15 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
   for a `human` caller) and `ctx.requestId`.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
-  shows), or the id when the token carries none. For the caller's own name (a task one creates for oneself) store it; a
-  `ctx.members.get(ctx.principal.id)` lookup adds a directory read the approver sees.
+  shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
+  assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
+  `ctx.members.get(ctx.principal.id)` lookup: it adds a directory read the approver sees. A picked person is
+  `ctx.members.get` (Members below).
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
 - Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
   together: the second one finds the version moved.
+- A delete is the exception: of two deletes of one row with the same `expectVersion`, the second finds the row gone and
+  answers 404, not 409. So does any write that loses to a delete. A test of the race expects `[200, 404]`.
 - A capability reads its own target, whatever its action: `tasks.assign` reads the task it assigns. A column with
   its own read action is left out for every other action.
 - Never use `{ member: true }` for application data. `callers` is `['human']`, `['machine']` or both; every group of

@@ -22,7 +22,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `db/migrations/*.sql`      | plain SQL, one new file per change (`bunx fabrika db new <slug>`)                        |
 | `src/db/tables.ts`         | `defineTables(vocabulary, columns)({ … })`: the scope and the actions of each table      |
 | `src/app-kit.ts`           | `export const app = defineApp(vocabulary, tables)`                                       |
-| `src/schemas.ts`           | the `zod/v4` inputs and outputs that the shell and the SPA share                         |
+| `src/schemas.ts`           | the `zod/v4` schemas several slices, or a slice and the SPA, share                       |
 | `src/<slice>/endpoints.ts` | `app.group(…)`, a `.handle(…)` beside each endpoint, and the slice's jobs and webhooks   |
 | `src/<slice>/logic.ts`     | business rules as pure functions: no `ctx`, no data access                               |
 | `src/<slice>/queries.ts`   | data access that the slice's handlers share, over a handle they pass in                  |
@@ -34,20 +34,49 @@ below. When it does not reach far enough, declare the step off it. A declared st
 
 ```ts src/tasks/endpoints.ts
 import { BadRequestError, ConflictError, fromRow } from '@fabrika/app'
+import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import {
-	AssignTask,
-	ById,
-	EditTask,
-	ListTasks,
-	MyTasks,
-	NewTask,
-	Saved,
-	Task,
-	TaskPage,
-	Versioned,
-} from '../schemas'
+import { ById, Cursor, Saved, TaskStatus, Versioned } from '../schemas'
 import { canClose } from './logic'
+
+const Task = z.strictObject({
+	id: z.uuid(),
+	projectId: z.uuid(),
+	title: z.string(),
+	status: TaskStatus,
+	assignee: z.nullable(z.string()),
+	assigneeLabel: z.nullable(z.string()),
+	dueOn: z.nullable(z.iso.date()),
+	overdue: z.boolean(),
+	version: z.int(),
+})
+const TaskPage = z.strictObject({
+	items: z.array(Task),
+	next: z.nullable(z.string()),
+})
+const ListTasks = z.strictObject({
+	projectId: z.uuid(),
+	status: TaskStatus.optional(),
+	title: z.string().min(1).max(200).optional(),
+	after: Cursor.optional(),
+})
+const MyTasks = z.strictObject({ after: Cursor.optional() })
+const NewTask = z.strictObject({
+	projectId: z.uuid(),
+	title: z.string().min(1).max(200),
+	dueOn: z.iso.date().optional(),
+})
+const EditTask = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	title: z.string().min(1).max(200),
+	dueOn: z.nullable(z.iso.date()),
+})
+const AssignTask = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	assignee: z.nullable(z.string().max(100)),
+})
 
 export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -218,7 +247,10 @@ they are declared. A query or an export declares only `'read'`.
 
 ## The loop
 
-Run from the application's root after every change (setup: `references/app-setup.md`):
+Run from the application's root (setup: `references/app-setup.md`). A schema change (a new migration) runs every step. A
+handler-only change needs no migration or codegen: it runs `test-scaffold` when an endpoint, its access or a table
+policy changed, then `tsc` and `fabrika-check` once the slice is written, then the tests. The application you are handed
+is green: a tsc or checker run before you have written anything proves nothing.
 
 ```bash
 bunx fabrika db new <slug>                                  # a new migration file

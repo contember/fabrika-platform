@@ -87,21 +87,21 @@ handler. A slice that outgrows one `endpoints.ts` becomes two slices.
 
 ## What each file holds
 
-| File                         | Holds                                                                                                                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/vocabulary.ts`          | `export const vocabulary = defineVocabulary({ app, dimensions, actions, roles })`. A literal.                                                |
-| `src/db/tables.ts`           | `export const tables = defineTables(vocabulary, columns)({ <table>: { scope, actions, insert, update } })`. A literal.                       |
-| `src/db/schema.generated.ts` | the `DB` interfaces and `columns`, written by `fabrika db codegen`. Never edited.                                                            |
-| `src/app-kit.ts`             | `export const app = defineApp(vocabulary, tables)`.                                                                                          |
-| `src/schemas.ts`             | the zod schemas of inputs and outputs, in the checker's literal subset. `src/schemas/<name>.ts` once it grows.                               |
-| `src/<slice>/endpoints.ts`   | `export const <slice> = app.group({ callers }, (r) => ({ … }))`, each procedure followed by `.handle(…)`.                                    |
-| `src/<slice>/logic.ts`       | `export const canReopen = (stage: string): boolean => …`                                                                                     |
-| `src/<slice>/queries.ts`     | `export const lockedStage = async (deal: DbHandle<typeof app, 'on', 'deal', 'deals.write', 'mutation'>) => …`                                |
-| `fabrika.contract.ts`        | `export const contract = app.contract((c) => ({ api: c.rpc('/api', { companies, deals }), … }))`: mounts, `jobs`, `files`, `imports`, `csp`. |
-| `src/app.ts`                 | `export default serve(contract, { database: scoped(tables), deps })`. Nothing else.                                                          |
-| `fabrika.config.ts`          | the provider's `defineApp(…)`: services, `compileContract(contract, tables)`, the proxy table, the schema.                                   |
-| `db/migrations/*.sql`        | `YYYYMMDDHHMMSS_slug.sql`, plain SQL, applied in file order.                                                                                 |
-| `web/**`                     | the SPA.                                                                                                                                     |
+| File                         | Holds                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/vocabulary.ts`          | `export const vocabulary = defineVocabulary({ app, dimensions, actions, roles })`. A literal.                                                                                       |
+| `src/db/tables.ts`           | `export const tables = defineTables(vocabulary, columns)({ <table>: { scope, actions, insert, update } })`. A literal.                                                              |
+| `src/db/schema.generated.ts` | the `DB` interfaces and `columns`, written by `fabrika db codegen`. Never edited.                                                                                                   |
+| `src/app-kit.ts`             | `export const app = defineApp(vocabulary, tables)`.                                                                                                                                 |
+| `src/schemas.ts`             | the zod schemas several slices, or a slice and the SPA, share, in the checker's literal subset; a slice keeps its own in its `endpoints.ts`. `src/schemas/<name>.ts` once it grows. |
+| `src/<slice>/endpoints.ts`   | `export const <slice> = app.group({ callers }, (r) => ({ … }))`, each procedure followed by `.handle(…)`.                                                                           |
+| `src/<slice>/logic.ts`       | `export const canReopen = (stage: string): boolean => …`                                                                                                                            |
+| `src/<slice>/queries.ts`     | `export const lockedStage = async (deal: DbHandle<typeof app, 'on', 'deal', 'deals.write', 'mutation'>) => …`                                                                       |
+| `fabrika.contract.ts`        | `export const contract = app.contract((c) => ({ api: c.rpc('/api', { companies, deals }), … }))`: mounts, `jobs`, `files`, `imports`, `csp`.                                        |
+| `src/app.ts`                 | `export default serve(contract, { database: scoped(tables), deps })`. Nothing else.                                                                                                 |
+| `fabrika.config.ts`          | the provider's `defineApp(…)`: services, `compileContract(contract, tables)`, the proxy table, the schema.                                                                          |
+| `db/migrations/*.sql`        | `YYYYMMDDHHMMSS_slug.sql`, plain SQL, applied in file order.                                                                                                                        |
+| `web/**`                     | the SPA.                                                                                                                                                                            |
 
 A slice in code:
 

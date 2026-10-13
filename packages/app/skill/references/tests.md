@@ -57,8 +57,8 @@ Test the rules of `logic.ts` as plain functions. Test a handler through `testKit
 allowed call beside its refused twin:
 
 ```ts src/tasks/__tests__/tasks.test.ts
-import { createClient, RpcError } from '@fabrika/app/client'
-import { testKit } from '@fabrika/app/testing'
+import { createClient } from '@fabrika/app/client'
+import { statusOf, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { contract } from '../../../fabrika.contract'
@@ -68,17 +68,6 @@ const postgres = await testDatabase({
 	migrations: new URL('../../../db/migrations/', import.meta.url),
 	label: 'tasks.test.ts',
 })
-
-const statusOf = async (
-	call: Promise<unknown>,
-): Promise<number | undefined> => {
-	try {
-		await call
-		return 200
-	} catch (error) {
-		return error instanceof RpcError ? error.httpStatus : undefined
-	}
-}
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
@@ -184,6 +173,8 @@ if (postgres !== null) {
   `<label> skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests`, and the file registers no test.
   A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
+- `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
+  failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
   membership role is granted in one value of its scope; an action without `scope` is a global grant, for which
   `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`

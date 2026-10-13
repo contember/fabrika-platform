@@ -2,8 +2,8 @@
 // refused twin: another workspace, a missing action, no credential. Runs with `bun test --isolate`, because the
 // generated endpoint access test boots the same application, and its data layer binds once per process.
 
-import { createClient, RpcError } from '@fabrika/app/client'
-import { type TestCaller, testKit } from '@fabrika/app/testing'
+import { createClient } from '@fabrika/app/client'
+import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -14,15 +14,6 @@ import app from '../app'
 const postgres = await testDatabase({ migrations: new URL('../../db/migrations/', import.meta.url), label: 'notes.test.ts' })
 
 const Uploaded = z.strictObject({ result: z.strictObject({ id: z.string() }) })
-
-const statusOf = async (call: Promise<unknown>): Promise<number | undefined> => {
-	try {
-		await call
-		return 200
-	} catch (error) {
-		return error instanceof RpcError ? error.httpStatus : undefined
-	}
-}
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
