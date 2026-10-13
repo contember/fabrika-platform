@@ -332,7 +332,8 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 
 		// The proxy honours its cached token without asking IAM: a revoked link works for the rest of that token's life.
 		expect((await s.visit('/p/api/me', { key: superseded, body: {} })).status).toBe(200)
-		s.clock += 300 - TOKEN_REFRESH_SKEW_SECONDS
+		// IAM stamps the token from the real clock, so the proxy's clock moves from now: a slow run must not leave it short.
+		s.clock = Math.floor(Date.now() / 1000) + 300 - TOKEN_REFRESH_SKEW_SECONDS
 		expect(await s.visit('/p/api/me', { key: superseded, body: {} })).toMatchObject({ status: 401 })
 		expect((await s.visit('/p/api/me', { key: current, body: {} })).status).toBe(200)
 	})
