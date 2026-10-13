@@ -72,6 +72,7 @@ const fakeIam = (options: FakeOptions = {}): FakeIam => {
 
 	const detail = (found: FakePrincipal): PrincipalDetail => ({
 		...found.item,
+		bootstrapMailbox: false,
 		grants: found.grants,
 		permissions: [],
 		authentication: { oidc: { state: 'unavailable' }, password: { state: found.password } },

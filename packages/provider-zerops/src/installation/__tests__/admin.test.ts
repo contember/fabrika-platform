@@ -85,6 +85,7 @@ const fakeApi = (options: FakeOptions = {}): { api: FirstAdministratorApi; calls
 					refuse('get')
 					return {
 						...created,
+						bootstrapMailbox: false,
 						grants: options.grants ?? [],
 						permissions: [],
 						authentication: { oidc: { state: 'unavailable' }, password: { state: options.password ?? 'disabled' } },
