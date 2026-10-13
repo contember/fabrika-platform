@@ -3,7 +3,7 @@ import type { PrincipalStatus as Lifecycle } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { api } from '../../../access/lib/api'
 import { Icon } from '../../../components/Icon'
-import { PrincipalStatus } from '../../../components/Status'
+import { Chip, PrincipalStatus } from '../../../components/Status'
 import { EmptyState, Table } from '../../../components/Table'
 import { fmtAgo, fmtDate } from '../../../lib/format'
 
@@ -96,6 +96,7 @@ export default createPage()
 						<tr key={user.id}>
 							<td>
 								<Link to="access/users/detail" params={{ id: user.id }}>{user.label}</Link>
+								{user.affiliation === 'external' && <Chip title="A person from outside the organization">external</Chip>}
 								{user.email && <div className="muted small">{user.email}</div>}
 							</td>
 							<td>{user.externalId ?? <span className="muted">—</span>}</td>

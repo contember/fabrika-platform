@@ -21,6 +21,7 @@ export default createPage()
 	.render(({ data }) => {
 		const navigate = useNavigate()
 		const [email, setEmail] = useState('')
+		const [external, setExternal] = useState(false)
 		const [withGrant, setWithGrant] = useState(false)
 		const composer = useGrantComposerState()
 		const [expiry, setExpiry] = useState('')
@@ -43,7 +44,7 @@ export default createPage()
 
 			setBusy(true)
 			try {
-				const invited = await api.principals.invite({ email } satisfies InviteRequest)
+				const invited = await api.principals.invite({ email, affiliation: external ? 'external' : 'internal' } satisfies InviteRequest)
 				if (authorization !== null) {
 					const body: CreateGrantRequest = {
 						principalId: invited.id,
@@ -86,6 +87,15 @@ export default createPage()
 						/>
 						<span className="hint">Used for OIDC identity matching and password enrollment. Inviting does not enable password login.</span>
 					</label>
+					<label className="checkbox">
+						<input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
+						External person, from outside the organization
+					</label>
+					{external && (
+						<p className="hint">
+							An external user signs in by password only and holds only roles an application declares external. OIDC never claims the account.
+						</p>
+					)}
 					<label className="checkbox">
 						<input type="checkbox" checked={withGrant} onChange={(e) => setWithGrant(e.target.checked)} />
 						Also grant a role now

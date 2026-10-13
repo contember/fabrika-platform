@@ -36,6 +36,7 @@ export default createPage()
 						<PrincipalStatus status={principal.status} />
 						{/* Every row on this page is a user; a `service` here was reached by id, so say so. */}
 						{principal.type !== 'user' && <Chip>{principal.type}</Chip>}
+						{principal.affiliation === 'external' && <Chip title="A person from outside the organization">external</Chip>}
 					</div>
 					<div className="subtitle">
 						<span>{identity[0] ?? principal.id}</span>
@@ -112,6 +113,8 @@ export default createPage()
 						{principal.grants.map((grant) => <GrantRow key={grant.id} grant={grant} onDone={invalidate} />)}
 					</Table>
 				</section>
+
+				{principal.affiliation === 'external' && <PromoteToInternal principal={principal} onDone={invalidate} />}
 
 				<DisableToggle principal={principal} onDone={invalidate} />
 			</>
@@ -374,6 +377,40 @@ function SourceBadge({ source }: { source: PermissionEntry['source'] }) {
 	if (source === 'bootstrap') return <Badge tone="warn" title="From IAM_BOOTSTRAP_ADMINS">bootstrap</Badge>
 	if (source === 'grant') return <Badge tone="neutral">grant</Badge>
 	return <Badge tone="muted" title="From an IdP group mapping">{source}</Badge>
+}
+
+function PromoteToInternal({ principal, onDone }: { principal: PrincipalDetail; onDone: () => void }) {
+	const [confirming, setConfirming] = useState(false)
+
+	async function promote() {
+		await api.principals.promote({ principalId: principal.id })
+		onDone()
+	}
+
+	return (
+		<div className="danger-zone">
+			<div className="danger-zone-copy">
+				<strong>Make this user internal</strong>
+				An external user holds only roles an application declares external, and signs in by password only.
+			</div>
+			<span className="spacer" />
+			<button type="button" className="danger" onClick={() => setConfirming(true)}>Make internal</button>
+			{confirming && (
+				<ConfirmDialog
+					title="Make user internal"
+					confirmLabel="Make internal"
+					body={
+						<p>
+							Make <strong>{principal.label}</strong>{' '}
+							internal? They may then hold any role, and an OIDC login with their address may claim the account. This cannot be undone.
+						</p>
+					}
+					onConfirm={promote}
+					onClose={() => setConfirming(false)}
+				/>
+			)}
+		</div>
+	)
 }
 
 function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDone: () => void }) {
