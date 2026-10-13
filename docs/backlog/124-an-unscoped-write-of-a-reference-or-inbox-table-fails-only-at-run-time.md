@@ -25,10 +25,9 @@ But `ctx.sql` under `sql: 'write'` does write one, so the agent declared that in
 - The types refuse `'write'` for a reference or inbox table: an `Unavailable` that says the table is read-only and
   where its rows come from (a migration for a reference table, a form for an inbox). The contract compile refuses the
   same, so the checker reports it.
-- Whether a reference table may be written through declared SQL is part of
-  [125](125-application-wide-data-has-no-access-form-of-its-own.md): a code list that an administrator edits is
-  application data, not a reference table. Until that lands, the skill says that a reference table changes by
-  migration only.
+- A code list that an administrator edits is application data: an application table (`scope: { app }`, written by
+  an `app` endpoint; the paved-road sprint's WU23a), not a reference table. The skill says that a reference table
+  changes by migration only.
 - Witness: a `kit-mistakes` case for `unscoped: { <reference>: 'write' }` and a checker test for the finding.
 
 ## Touch points

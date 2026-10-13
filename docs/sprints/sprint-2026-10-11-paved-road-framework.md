@@ -442,8 +442,8 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   table it has `actions` (`read`, `insert`, `update`, `delete`), `insert`/`update` lists, `version`, `createdBy`,
   column actions and a `key` (default `id`, generated as a UUIDv7 on insert); it has no container and no chain. A
   reference table stays migration-managed and read-only, so a code list an administrator edits is an application table.
-- **Decision: the handle `ctx.db.app`, option (i).** An `app` endpoint gets `ctx.db.app.<table>` with a capability of
-  its action held application-wide. An application table: `list`, `count` and `aggregate` with its read action;
+- **Decision: the handle `ctx.db.app`, option (i).** An `app` endpoint gets `ctx.app`, the capability of its action
+  held application-wide (as `ctx.target` and `ctx.within` are the other forms'), and `ctx.db.app.<table>` built from it. An application table: `list`, `count` and `aggregate` with its read action;
   `get(id)` and, in a mutation, `getForUpdate(id)` with any action the table names (the columns of that action, as a
   `Ref` reads its own target); `insert`, `update(id, …, { expectVersion })` and `remove(id, …)` with that operation's
   action. **Every dimension and child table whose read action is the endpoint's action** is there too, read-only
@@ -1055,5 +1055,19 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   group: public 27/6, hr 6/4, consent 4/3, roles 8/3. About 10 more tsc probes ran outside the wrapper. No checker run
   exited 0, because the tarball install's `package-replacement` refusals were always present. 123 tests pass: 86
   generated and 37 authored. Not built: the audited export of every record, which is blocked on the access-form
-  question (125). Setup findings fixed by WU10b, which are already above: the tableless start, the first test, the
+  question (125, → WU23a). Setup findings fixed by WU10b, which are already above: the tableless start, the first test, the
   skill install, and the optional SPA. Filed → backlog 121–131.
+- **WU23a — `ctx.app` is on `ctx`.** The decision named only `ctx.db.app`; the policy probe's `implement` handlers
+  need the capability itself, so it is `ctx.app` (`AppCapability`), beside `ctx.target` and `ctx.within`, and
+  `ctx.sql.scope(ctx.app, table)` is every row.
+- **WU23a — what the generated cases count.** The global case answers `{ answered: true }` unless a 401, a 403 or a
+  5xx: the app form refuses with 403 alone, so a 404 is the handler's own answer to a sampled id. The scoped case
+  grants the action in the vocabulary's first dimension, or in a scope type `scope` when there is none: any scoped
+  grant is refused, so a single-tenant vocabulary without dimensions is covered too.
+- **WU23a — scope kept small.** An SPA takes `{ action, app: true }` too (an admin page for global holders); a link
+  procedure and an export do not. A job gets no `ctx.db.app`: it reaches application tables through `sql` or
+  `unscoped` as before. A membership role that grants an application table's action builds and is harmless (its
+  scoped grant never meets the form); no checker hint warns about it.
+- **WU23a — fixtures.** `packages/app/src/__tests__/app-wide-fixture/` (positions, the export log, the counts and the
+  export of every candidate) with its generated tests committed and excluded from dprint; `app-access.test.ts` runs it
+  through the production proxy decision on Postgres. The recipe materialized: tsc, `fabrika-check` 0/0, 69 tests.

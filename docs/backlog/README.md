@@ -61,7 +61,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [122](122-the-generated-tests-cannot-seed-a-foreign-key-outside-the-chain-or-name-a-child-row.md) — The seed marks a nullable text foreign key, and no fixture names a seeded child row.
 - [123](123-a-form-field-that-is-no-inbox-column-passes-tsc-and-the-checker.md) — A form field that no inbox column matches fails only at boot.
 - [124](124-an-unscoped-write-of-a-reference-or-inbox-table-fails-only-at-run-time.md) — `unscoped: 'write'` on a reference or inbox table type-checks and answers 500.
-- [125](125-application-wide-data-has-no-access-form-of-its-own.md) — **Most consequential.** No access form or writable table for application-wide data; single-tenant apps meet it first.
 - [126](126-a-global-grant-application-has-no-people-of-its-own.md) — Global roles give no member directory and no in-app role management.
 - [127](127-a-form-records-no-request-evidence.md) — A form cannot record a client address or user agent as consent evidence.
 - [128](128-a-public-page-cannot-read-a-public-configuration-value.md) — A public page has no per-environment public value, such as a challenge site key.
