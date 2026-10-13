@@ -3,6 +3,7 @@
 // translation fails the typecheck.
 
 import type { Locale } from '@fabrika/auth-core'
+import type { AuthFailure } from '../auth/failure'
 import type { PasswordProblem } from '../password-policy'
 import { cs } from './cs'
 import { en } from './en'
@@ -35,6 +36,10 @@ export interface PageText {
 		readonly shared: (appName: string | null) => string
 		readonly newPassword: string
 		readonly problem: (problem: PasswordProblem, min: number, max: number) => string
+	}
+	readonly failure: {
+		readonly title: string
+		readonly text: (failure: AuthFailure) => string
 	}
 	readonly invalidLink: {
 		readonly title: string

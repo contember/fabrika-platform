@@ -1,5 +1,6 @@
 import { DEFAULT_LOCALE, type Locale } from '@fabrika/auth-core'
 import { type AppPresentation, appQuery, landingUrl } from './app-presentation'
+import type { AuthFailure } from './auth/failure'
 import { catalogFor, type PageText } from './catalog'
 import { escapeHtml } from './html'
 import { PASSWORD_MAX_CODE_POINTS, PASSWORD_MIN_CODE_POINTS, type PasswordProblem } from './password-policy'
@@ -59,8 +60,8 @@ export function loginPage(input: {
 }
 
 /**
- * The recovery form, and the page its POST answers. The form carries `app` so the action it may issue keeps the
- * application; the way back is the application's address when it has one, otherwise IAM's sign-in.
+ * The recovery form, and the page its POST answers. The form posts back with the link's `?app=`, so the action it may
+ * issue keeps the application; the way back is the application's address when it has one, otherwise IAM's sign-in.
  */
 export function forgotPasswordPage(input: { readonly presentation: AppPresentation; readonly sent?: boolean }): Response {
 	const { presentation } = input
@@ -71,8 +72,7 @@ export function forgotPasswordPage(input: { readonly presentation: AppPresentati
 			escapeHtml(text.forgot.back)
 		}</a></p>`
 		: `<h1>${escapeHtml(text.forgot.title)}</h1><p>${escapeHtml(text.forgot.intro(presentation.displayName))}</p>
-		<form method="post" action="/auth/forgot-password">
-			${presentation.app === null ? '' : `<input type="hidden" name="app" value="${escapeHtml(presentation.app)}">`}
+		<form method="post" action="${escapeHtml(`/auth/forgot-password${appQuery(presentation)}`)}">
 			<label>${escapeHtml(text.email)}<input name="email" type="email" autocomplete="username" inputmode="email" required></label>
 			<button type="submit">${escapeHtml(text.forgot.submit)}</button>
 		</form>`
@@ -124,6 +124,17 @@ export function logoutPage(redirect: string): Response {
 		<form method="post" action="/auth/logout?redirect=${encodeURIComponent(redirect)}">
 			<button type="submit">${escapeHtml(text.logout.submit)}</button>
 		</form>`,
+	})
+}
+
+/** A refused browser-facing auth request, in the request's language and with its status. */
+export function authFailurePage(presentation: AppPresentation, failure: AuthFailure, status: number): Response {
+	const text = catalogFor(presentation.locale).pages.failure
+	return htmlPage({
+		locale: presentation.locale,
+		title: text.title,
+		content: `<h1>${escapeHtml(text.title)}</h1><p>${escapeHtml(text.text(failure))}</p>`,
+		status,
 	})
 }
 
@@ -194,8 +205,8 @@ function message(value: string | undefined): string {
 /**
  * `formActionOrigin` widens `form-action` by exactly one origin: the login page's handoff destination, or the
  * registered origin an action or an invitation page lands on. It must already be an origin (scheme + host + optional
- * port, no spaces, no `;`) — `normalizeOrigin` produces exactly that and the registry stores only its output — so it
- * cannot inject a second directive.
+ * port) that `normalizeOrigin` admitted, which refuses every character that would end or widen the directive; the
+ * registry stores only its output, and `presentationFor` checks a stored origin again.
  */
 export function htmlPage(page: {
 	readonly locale: Locale

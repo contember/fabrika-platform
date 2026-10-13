@@ -44,6 +44,41 @@ export const cs: Catalog = {
 				}
 			},
 		},
+		failure: {
+			title: 'Chyba přihlášení',
+			text: (failure) => {
+				switch (failure.kind) {
+					case 'no_return_address':
+						return 'Pro tuto aplikaci nebyla zadána návratová adresa.'
+					case 'no_handoff_proof':
+						return 'Pro tuto aplikaci chybí platný doklad předání z prohlížeče.'
+					case 'unregistered_origin':
+						return `${failure.origin} není registrovaná návratová adresa této aplikace.`
+					case 'password_disabled':
+						return 'Přihlášení heslem je vypnuté.'
+					case 'oidc_disabled':
+						return 'Jednotné přihlášení je vypnuté.'
+					case 'cross_origin':
+						return 'Neplatný původ požadavku.'
+					case 'malformed_form':
+						return 'Neplatný formulář.'
+					case 'login_unavailable':
+						return 'Přihlášení teď není k dispozici. Zkuste to později.'
+					case 'logout_unavailable':
+						return 'Odhlášení teď není k dispozici. Zkuste to později.'
+					case 'oidc_invalid_state':
+						return 'Pokus o jednotné přihlášení je neplatný nebo vypršel. Přihlaste se znovu.'
+					case 'oidc_exchange_failed':
+						return 'Poskytovatel identity přihlášení nedokončil.'
+					case 'oidc_invalid_id_token':
+						return 'Poskytovatel identity vrátil neplatnou identitu.'
+					case 'not_admitted':
+						return 'Tento účet se zde nemůže přihlásit.'
+					case 'login_refused':
+						return `Přihlášení bylo odmítnuto (${failure.reason}).`
+				}
+			},
+		},
 		invalidLink: {
 			title: 'Odkaz není k dispozici',
 			text: 'Tento odkaz je neplatný, vypršel, nebo už byl použit.',

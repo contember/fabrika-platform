@@ -101,15 +101,7 @@ export function redirectHeaders(location: string): Headers {
 	return new Headers({ location, 'cache-control': 'no-store' })
 }
 
-/** A minimal error page for the browser-facing auth flow (the happy path always redirects). */
-export function authError(message: string, status: number): Response {
-	return new Response(`Authentication error: ${message}`, {
-		status,
-		headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-	})
-}
-
-/** Keep an untrusted value fit for a plain-text error body: printable ASCII, bounded. */
+/** Keep an untrusted value fit for an error page: printable ASCII, bounded. */
 export function printable(value: string): string {
 	return value.replace(/[^\x20-\x7e]/g, '').slice(0, 120)
 }

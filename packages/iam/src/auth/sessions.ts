@@ -1,5 +1,6 @@
 import { permits, SESSION_COOKIE } from '@fabrika/auth-core'
 import { ADMIN_ACTION, IAM_APP } from '../admin/router'
+import { INSTALLATION_PRESENTATION } from '../app-presentation'
 import { sessionUsable } from '../auth'
 import { type AuthenticationMethod } from '../db'
 import { type RequestContext } from '../env'
@@ -11,7 +12,8 @@ import { type Services } from '../services'
 import { clearCookie, readCookie, serializeCookie } from './cookies'
 import { type Handoff, handoffLocation } from './handoff'
 
-import { authError, redirectHeaders, safeRedirect, sameOrigin } from './http'
+import { authFailurePage } from '../password-pages'
+import { redirectHeaders, safeRedirect, sameOrigin } from './http'
 
 import { OIDC_COOKIE } from './oidc-flight'
 
@@ -81,7 +83,7 @@ export async function issueSession(
 		})
 	} catch (err) {
 		logError(`login could not be recorded for request '${input.requestId}'`, err)
-		return authError('login is unavailable', 503)
+		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
 	}
 
 	// The IAM cookie is set either way: it is what makes the NEXT handoff, to this or any other app,
@@ -130,7 +132,7 @@ export async function refuseLogin(
 		})
 	} catch (err) {
 		logError(`a refused login could not be recorded for request '${entry.requestId}'`, err)
-		return authError('login is unavailable', 503)
+		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
 	}
 	return answer()
 }
@@ -149,14 +151,15 @@ async function isInstallationAdmin(services: Services, principalId: string): Pro
  * and leaves the session as it was.
  */
 export async function handleLogout(request: Request, services: Services, requestId: string): Promise<Response> {
-	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	// Logout names no application, like its confirmation page: these answers speak the installation's language.
+	if (!sameOrigin(request, services.config)) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'cross_origin' }, 403)
 	const cookie = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
 	if (cookie) {
 		try {
 			await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie), { requestId, app: IAM_APP, reason: 'logout' })
 		} catch (err) {
 			logError(`logout could not be recorded for request '${requestId}'`, err)
-			return authError('logout is unavailable', 503)
+			return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'logout_unavailable' }, 503)
 		}
 	}
 	const url = new URL(request.url)

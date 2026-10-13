@@ -1,18 +1,19 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
+import { type AppPresentation, INSTALLATION_PRESENTATION, landingUrl, presentationFor } from '../app-presentation'
 import { type AuditEventInput } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 
 import { type RequestContext } from '../env'
 import { type PasswordActionPurpose } from '../password-db'
-import { forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
+import { authFailurePage, forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
 import { PASSWORD_MAX_CODE_POINTS, validatePassword } from '../password-policy'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { hashToken } from '../secret'
 import { type Config, type Services } from '../services'
+import type { AuthFailure } from './failure'
 import { handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
-import { authError, methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
+import { methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
 import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 const LOGIN_WINDOW_SECONDS = 15 * 60
@@ -82,12 +83,13 @@ export async function handlePasswordLogin(
 	clientAddress: string | null,
 	requestId: string,
 ): Promise<Response> {
-	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
-	const refused = (reason: LoginRefusal, message: string, status: number) =>
-		refuseLogin(services, { requestId, principalId: null, reason }, () => authError(message, status))
-	if (!sameOrigin(request, services.config)) return refused('login_cross_origin', 'invalid request origin', 403)
+	if (!services.config.authentication.password.enabled) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'password_disabled' }, 404)
+	// Before the form is read no application is known, so these refusals speak the installation's language.
+	const refused = (reason: LoginRefusal, failure: AuthFailure, status: number) =>
+		refuseLogin(services, { requestId, principalId: null, reason }, () => authFailurePage(INSTALLATION_PRESENTATION, failure, status))
+	if (!sameOrigin(request, services.config)) return refused('login_cross_origin', { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
-	if (form === null) return refused('password_malformed', 'invalid form', 400)
+	if (form === null) return refused('password_malformed', { kind: 'malformed_form' }, 400)
 	const login = loginFormSchema.safeParse({ email: form.get('email'), password: form.get('password') })
 	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
 	// has registered, so a hand-edited field buys nothing.
@@ -99,7 +101,8 @@ export async function handlePasswordLogin(
 		stringValue(form.get(AUTH_HANDOFF_CHALLENGE_PARAM)),
 	)
 	if (reading.kind === 'refused') {
-		return refuseLogin(services, { requestId, principalId: null, reason: 'handoff_refused' }, () => authError(reading.message, 400))
+		const presentation = await presentationFor(services, stringValue(form.get('app')))
+		return refuseLogin(services, { requestId, principalId: null, reason: 'handoff_refused' }, () => authFailurePage(presentation, reading.failure, 400))
 	}
 	const handoff = handoffOf(reading)
 	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
@@ -200,17 +203,15 @@ export async function handleForgotPassword(
 	clientAddress: string | null,
 	requestId: string,
 ): Promise<Response> {
-	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
-	if (request.method === 'GET') {
-		return forgotPasswordPage({ presentation: await presentationFor(services, new URL(request.url).searchParams.get('app')) })
-	}
+	// The application the sign-in came from, named by the link and the form's `?app=`: the action keeps it, so the mail
+	// and the pages speak its language and the completed reset lands in it.
+	const presentation = await presentationFor(services, new URL(request.url).searchParams.get('app'))
+	if (!services.config.authentication.password.enabled) return authFailurePage(presentation, { kind: 'password_disabled' }, 404)
+	if (request.method === 'GET') return forgotPasswordPage({ presentation })
 	if (request.method !== 'POST') return methodNotAllowed()
-	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	if (!sameOrigin(request, services.config)) return authFailurePage(presentation, { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
-	if (form === null) return authError('invalid form', 400)
-	// The application the sign-in came from: the action keeps it, so the mail and the pages speak its language and the
-	// completed reset lands in it.
-	const presentation = await presentationFor(services, stringValue(form.get('app')))
+	if (form === null) return authFailurePage(presentation, { kind: 'malformed_form' }, 400)
 	const sent = forgotPasswordPage({ presentation, sent: true })
 	const parsedEmail = emailSchema.safeParse(form.get('email'))
 	if (services.email === null || !parsedEmail.success) return sent
@@ -290,14 +291,14 @@ export async function handlePasswordAction(
 	purpose: PasswordActionPurpose,
 	requestId: string,
 ): Promise<Response> {
-	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
 	// The link's `?app=` is a hint for the page's words and its `form-action`; the stored action decides where it lands.
 	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
+	if (!services.config.authentication.password.enabled) return authFailurePage(linked, { kind: 'password_disabled' }, 404)
 	if (request.method === 'GET') return setPasswordPage({ presentation: linked, purpose })
 	if (request.method !== 'POST') return methodNotAllowed()
-	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	if (!sameOrigin(request, services.config)) return authFailurePage(linked, { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
-	if (form === null) return authError('invalid form', 400)
+	if (form === null) return authFailurePage(linked, { kind: 'malformed_form' }, 400)
 	const submitted = passwordActionFormSchema.safeParse({ token: form.get('token'), password: form.get('password') })
 	if (!submitted.success) return invalidActionPage(linked)
 	const { token: submittedToken, password } = submitted.data

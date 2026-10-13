@@ -5,15 +5,19 @@ import { generatePkce, randomToken } from '../oidc'
 import { resolveUserPrincipal } from '../resolve'
 import { type Config, type Services } from '../services'
 
+import { presentationFor } from '../app-presentation'
+import { authFailurePage } from '../password-pages'
 import { readCookie, serializeCookie } from './cookies'
+import type { AuthFailure } from './failure'
 import { type Handoff, handoffOf, handoffRedirectOr, readHandoff } from './handoff'
-import { authError, redirectHeaders, safeRedirect } from './http'
-import { type AuthEnv, authErrorEndingFlight, decodeFlight, encodeFlight, OIDC_COOKIE, OIDC_TTL_SECONDS } from './oidc-flight'
+import { redirectHeaders, safeRedirect } from './http'
+import { type AuthEnv, authFailureEndingFlight, decodeFlight, encodeFlight, OIDC_COOKIE, OIDC_TTL_SECONDS } from './oidc-flight'
 import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
 export async function handleOidcStart(request: Request, services: Services, env: AuthEnv): Promise<Response> {
-	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
+	const linked = await presentationFor(services, url.searchParams.get('app'))
+	if (!services.config.authentication.oidc.enabled) return authFailurePage(linked, { kind: 'oidc_disabled' }, 404)
 	const reading = await readHandoff(
 		services,
 		url.searchParams.get('app'),
@@ -22,7 +26,7 @@ export async function handleOidcStart(request: Request, services: Services, env:
 		url.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM),
 	)
 	if (reading.kind === 'refused') {
-		return authError(reading.message, 400)
+		return authFailurePage(linked, reading.failure, 400)
 	}
 	const handoff = handoffOf(reading)
 	return startOidc(services, env, handoffRedirectOr(handoff, url.searchParams.get('redirect'), services), handoff)
@@ -34,7 +38,9 @@ export async function startOidc(
 	redirect: string,
 	handoff: Handoff | null = null,
 ): Promise<Response> {
-	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
+	if (!services.config.authentication.oidc.enabled || services.oidc === null) {
+		return authFailurePage(await presentationFor(services, handoff?.app ?? null), { kind: 'oidc_disabled' }, 404)
+	}
 	const { verifier, challenge } = await generatePkce()
 	const state = randomToken(16)
 	const location = await services.oidc.authorizationUrl({ state, codeChallenge: challenge })
@@ -64,29 +70,31 @@ export async function handleCallback(
 	ctx: RequestContext,
 	requestId: string,
 ): Promise<Response> {
-	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
 	const code = url.searchParams.get('code')
 	const state = url.searchParams.get('state')
 	const flight = await decodeFlight(env, readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
+	// The flight we signed names the application the login started from; its refusals speak that language.
+	const presentation = await presentationFor(services, flight?.app ?? null)
+	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authFailurePage(presentation, { kind: 'oidc_disabled' }, 404)
 	// EVERY terminal outcome below consumes the flight. The cookie holds a live PKCE verifier and the
 	// state nonce; leaving it behind on a failure kept both replayable for the rest of their 600s.
 	// Every refusal is a refused login, logged before the answer.
-	const refuse = (reason: LoginRefusal, message: string, status: number): Promise<Response> =>
-		refuseLogin(services, { requestId, principalId: null, reason }, () => authErrorEndingFlight(message, status))
+	const refuse = (reason: LoginRefusal, failure: AuthFailure, status: number): Promise<Response> =>
+		refuseLogin(services, { requestId, principalId: null, reason }, () => authFailureEndingFlight(presentation, failure, status))
 
 	// CSRF: the state echoed by the IdP must match the one in the flight WE signed.
 	if (!code || !state || !flight || flight.state !== state) {
-		return refuse('oidc_invalid_state', 'invalid OIDC state', 400)
+		return refuse('oidc_invalid_state', { kind: 'oidc_invalid_state' }, 400)
 	}
 
 	const idToken = await services.oidc.exchangeCode(code, flight.verifier)
 	if (!idToken) {
-		return refuse('oidc_code_exchange_failed', 'code exchange failed', 502)
+		return refuse('oidc_code_exchange_failed', { kind: 'oidc_exchange_failed' }, 502)
 	}
 	const identity = await services.oidc.verifyIdToken(idToken)
 	if (!identity) {
-		return refuse('oidc_invalid_id_token', 'invalid id_token', 401)
+		return refuse('oidc_invalid_id_token', { kind: 'oidc_invalid_id_token' }, 401)
 	}
 
 	// Admission: who may log in as a human. The central allowlist (`HUMAN_EMAIL_DOMAINS`/
@@ -97,7 +105,7 @@ export async function handleCallback(
 		const known = (await services.repositories.principals.getUserByExternalId(identity.sub))
 			?? (await services.repositories.principals.getUserByEmail(identity.email))
 		if (!known) {
-			return refuse('oidc_not_admitted', 'login refused (not allowed)', 403)
+			return refuse('oidc_not_admitted', { kind: 'not_admitted' }, 403)
 		}
 	}
 
@@ -105,7 +113,7 @@ export async function handleCallback(
 	// keyed on the IdP `sub` and verified email.
 	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email, requestId)
 	if (!resolved.ok) {
-		return refuse(`oidc_${resolved.reason}`, `login refused (${resolved.reason})`, 403)
+		return refuse(`oidc_${resolved.reason}`, { kind: 'login_refused', reason: resolved.reason }, 403)
 	}
 
 	// Re-validate the handoff on the way back: the flight is ours (signature-checked), but the registry
@@ -120,7 +128,7 @@ export async function handleCallback(
 			flight.handoffChallenge ?? null,
 		)
 	if (reading.kind === 'refused') {
-		return refuse('handoff_refused', reading.message, 400)
+		return refuse('handoff_refused', reading.failure, 400)
 	}
 
 	return issueSession(request, services, ctx, {

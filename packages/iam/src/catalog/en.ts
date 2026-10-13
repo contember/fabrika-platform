@@ -44,6 +44,41 @@ export const en: Catalog = {
 				}
 			},
 		},
+		failure: {
+			title: 'Authentication error',
+			text: (failure) => {
+				switch (failure.kind) {
+					case 'no_return_address':
+						return 'No return address was given for this app.'
+					case 'no_handoff_proof':
+						return 'No valid browser handoff proof was given for this app.'
+					case 'unregistered_origin':
+						return `${failure.origin} is not a registered return origin for this app.`
+					case 'password_disabled':
+						return 'Password sign-in is disabled.'
+					case 'oidc_disabled':
+						return 'Single sign-on is disabled.'
+					case 'cross_origin':
+						return 'Invalid request origin.'
+					case 'malformed_form':
+						return 'Invalid form.'
+					case 'login_unavailable':
+						return 'Sign-in is unavailable. Try again later.'
+					case 'logout_unavailable':
+						return 'Sign-out is unavailable. Try again later.'
+					case 'oidc_invalid_state':
+						return 'The single sign-on attempt is invalid or expired. Sign in again.'
+					case 'oidc_exchange_failed':
+						return 'The identity provider did not complete the sign-in.'
+					case 'oidc_invalid_id_token':
+						return 'The identity provider answered with an invalid identity.'
+					case 'not_admitted':
+						return 'This account may not sign in here.'
+					case 'login_refused':
+						return `Sign-in was refused (${failure.reason}).`
+				}
+			},
+		},
 		invalidLink: {
 			title: 'Link unavailable',
 			text: 'This link is invalid, expired, or already used.',

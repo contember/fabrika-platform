@@ -353,7 +353,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   that origin comes from the REGISTERED return URL, so widening the CSP can never widen where a
   browser may be sent. A page rendered for no handoff stays at `'self'`. The set-password and
   invitation pages widen it the same way, by the one registered origin their application lands on
-  (`AppPresentation.landing`), and stay at `'self'` without one.
+  (`AppPresentation.landing`), and stay at `'self'` without one. Every widening origin is one `normalizeOrigin`
+  admitted, and it refuses a host carrying `;`, `,`, a quote or `*` — the URL parser keeps them in a host, and each
+  would end or widen the directive. `presentationFor` checks a stored origin again.
 - **IAM SPEAKS THE APPLICATION'S LANGUAGE, AND THE APPLICATION CHOOSES ONLY THE LANGUAGE AND THE NAME**
   (`src/app-presentation.ts`, `src/catalog/`). The contract's `locale` and `displayName` are reconciled into
   `app_presentation`; every page and IAM e-mail takes its words from the catalog of that locale, so a missing
@@ -363,7 +365,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   registered return origin) and answers the installation's (`DEFAULT_LOCALE`, no name) otherwise, a stored locale
   IAM no longer speaks included. A hint picks words and a registered landing, never authority. There is no
   `principals.locale`: an app-less action (IAM's own forgot-password, an administrator's) speaks the default.
-  `messageTemplatesFor` is the one place a message's templates are chosen.
+  `messageTemplatesFor` is the one place a message's templates are chosen. A refused browser-facing request answers
+  `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
+  refusal; a failure before any application is known, and logout, speak the default.
 - **A PASSWORD ACTION AND AN INVITATION THAT KEEP AN APPLICATION END IN IT.** A forgot-password request carries the
   sign-in's app; the issued action stores it, its link names it, and the completed action's 302 goes to the app's
   first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the

@@ -2,9 +2,9 @@ import { z } from 'zod'
 import { landingUrl, presentationFor } from '../app-presentation'
 import { principalStatus } from '../db'
 import { acceptInvitation, INVITATION_ACCEPT_PATH } from '../membership'
-import { invitationOutcomePage, invitationPage } from '../password-pages'
+import { authFailurePage, invitationOutcomePage, invitationPage } from '../password-pages'
 import type { Services } from '../services'
-import { authError, methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
+import { methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { currentSession } from './sessions'
 
 const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
@@ -26,7 +26,7 @@ export async function handleInvitation(request: Request, services: Services, req
 		return methodNotAllowed()
 	}
 	if (!sameOrigin(request, services.config)) {
-		return authError('invalid request origin', 403)
+		return authFailurePage(linked, { kind: 'cross_origin' }, 403)
 	}
 	const form = await readForm(request)
 	const token = tokenSchema.safeParse(stringValue(form?.get('token') ?? null))

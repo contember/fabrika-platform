@@ -1,13 +1,13 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
-import { presentationFor } from '../app-presentation'
+import { type AppPresentation, presentationFor } from '../app-presentation'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 
 import { type RequestContext } from '../env'
-import { loginPage } from '../password-pages'
+import { authFailurePage, loginPage } from '../password-pages'
 import { resolveUserPrincipal } from '../resolve'
 import { type Services } from '../services'
 import { type Handoff, handoffLocation, handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
-import { authError, redirectHeaders } from './http'
+import { redirectHeaders } from './http'
 
 import { startOidc } from './oidc'
 import { type AuthEnv } from './oidc-flight'
@@ -29,9 +29,10 @@ export async function handleLogin(
 		url.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM),
 	)
 	if (reading.kind === 'refused') {
-		return authError(reading.message, 400)
+		return authFailurePage(await presentationFor(services, url.searchParams.get('app')), reading.failure, 400)
 	}
 	const handoff = handoffOf(reading)
+	const presentation = await presentationFor(services, handoff?.app ?? null)
 	// A handoff's destination is already validated against the app's registry, so `safeRedirect` must
 	// not get a say: it admits IAM's own origin only, which by definition excludes the app host this
 	// exists for. Passing its fallback to the form would strand the login on IAM.
@@ -47,11 +48,11 @@ export async function handleLogin(
 	}
 
 	if (services.config.localDevLogin) {
-		return handleLocalLogin(request, services, ctx, requestId, redirect, handoff)
+		return handleLocalLogin(request, services, ctx, requestId, redirect, handoff, presentation)
 	}
 	if (services.config.authentication.password.enabled) {
 		return loginPage({
-			presentation: await presentationFor(services, handoff?.app ?? null),
+			presentation,
 			redirect,
 			oidcEnabled: services.config.authentication.oidc.enabled,
 			forgotEnabled: services.email !== null,
@@ -67,14 +68,15 @@ async function handleLocalLogin(
 	ctx: RequestContext,
 	requestId: string,
 	redirect: string,
-	handoff: Handoff | null = null,
+	handoff: Handoff | null,
+	presentation: AppPresentation,
 ): Promise<Response> {
 	const resolved = await resolveUserPrincipal(services.repositories.principals, LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_EMAIL, requestId)
 	if (!resolved.ok) {
 		return refuseLogin(
 			services,
 			{ requestId, principalId: null, reason: 'local_login_refused' },
-			() => authError(`local login refused (${resolved.reason})`, 403),
+			() => authFailurePage(presentation, { kind: 'login_refused', reason: `local ${resolved.reason}` }, 403),
 		)
 	}
 	return issueSession(request, services, ctx, {

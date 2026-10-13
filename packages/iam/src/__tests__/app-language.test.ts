@@ -133,10 +133,10 @@ describe('a cs application', () => {
 		const forgotHtml = await forgot.text()
 		expect(forgotHtml).toContain('<html lang="cs">')
 		expect(forgotHtml).toContain('Zadejte adresu, kterou se přihlašujete do aplikace Partnerský portál.')
-		expect(forgotHtml).toContain(`<input type="hidden" name="app" value="${PORTAL}">`)
+		expect(forgotHtml).toContain('action="/auth/forgot-password?app=portal%40prod"')
 		expect(formAction(forgot)).toBe(`'self'`)
 
-		const requested = await p.send(post('/auth/forgot-password', { app: PORTAL, email: 'partner@example.test' }))
+		const requested = await p.send(post(`/auth/forgot-password?app=${encodeURIComponent(PORTAL)}`, { email: 'partner@example.test' }))
 		const requestedHtml = await requested.text()
 		expect(requestedHtml).toContain('Žádost přijata')
 		expect(requestedHtml).toContain(`href="${PORTAL_ORIGIN}/">Zpět na přihlášení</a>`)
@@ -195,6 +195,67 @@ describe('a cs application', () => {
 	})
 })
 
+describe("a cs application's refusals", () => {
+	test('a handoff without its proof, or to an unregistered address, is refused in Czech and names the address', async () => {
+		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' })
+		const unproven = new URL(handoffLogin().url)
+		unproven.searchParams.delete(AUTH_HANDOFF_CHALLENGE_PARAM)
+		const refused = await p.send(new Request(unproven))
+		expect(refused.status).toBe(400)
+		const html = await refused.text()
+		expect(html).toContain('<html lang="cs">')
+		expect(html).toContain('Pro tuto aplikaci chybí platný doklad předání z prohlížeče.')
+
+		const elsewhere = new URL(handoffLogin().url)
+		elsewhere.searchParams.set('redirect', 'https://evil.test/x')
+		const unregistered = await p.send(new Request(elsewhere))
+		expect(unregistered.status).toBe(400)
+		expect(await unregistered.text()).toContain('https://evil.test není registrovaná návratová adresa této aplikace.')
+	})
+
+	test('a refused password sign-in keeps its status and its auth-log reason', async () => {
+		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' })
+		const refused = await p.send(post('/auth/login', {
+			app: PORTAL,
+			redirect: 'https://evil.test/x',
+			state: HANDOFF_STATE,
+			code_challenge: HANDOFF_CHALLENGE,
+			email: 'partner@example.test',
+			password: PASSWORD,
+		}))
+		expect(refused.status).toBe(400)
+		expect(await refused.text()).toContain('není registrovaná návratová adresa této aplikace.')
+		const rows = p.h.sqlite.query<{ reason: string }, []>("SELECT reason FROM auth_log WHERE decision = 'deny'").all()
+		expect(rows.map((row) => row.reason)).toEqual(['handoff_refused'])
+	})
+
+	test('a cross-site recovery, set-password or invitation post is refused in Czech, with 403', async () => {
+		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' })
+		const query = `?app=${encodeURIComponent(PORTAL)}`
+		for (const path of ['/auth/forgot-password', '/auth/password/reset', '/auth/invitations/accept']) {
+			const response = await p.send(
+				post(`${path}${query}`, { token: 'x'.repeat(43), email: 'partner@example.test' }, { 'Sec-Fetch-Site': 'cross-site' }),
+			)
+			expect(response.status).toBe(403)
+			const html = await response.text()
+			expect(html).toContain('<html lang="cs">')
+			expect(html).toContain('Neplatný původ požadavku.')
+		}
+		expect(p.email.messages).toEqual([])
+	})
+
+	test('an unknown application is refused in English', async () => {
+		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' })
+		const url = new URL(handoffLogin().url)
+		url.searchParams.set('app', 'nowhere@prod')
+		const refused = await p.send(new Request(url))
+		expect(refused.status).toBe(400)
+		const html = await refused.text()
+		expect(html).toContain('<html lang="en">')
+		expect(html).toContain('is not a registered return origin for this app.')
+	})
+})
+
 describe('the language falls back to the installation default', () => {
 	test('an application without a locale is English, under its own name', async () => {
 		const p = await portal({ locale: null, displayName: 'Partner portal' })
@@ -216,9 +277,9 @@ describe('the language falls back to the installation default', () => {
 		const forgot = await p.send(new Request(`${ISSUER}/auth/forgot-password?app=nowhere%40prod`))
 		const forgotHtml = await forgot.text()
 		expect(forgotHtml).toContain('<html lang="en">')
-		expect(forgotHtml).not.toContain('name="app"')
+		expect(forgotHtml).toContain('action="/auth/forgot-password"')
 
-		await p.send(post('/auth/forgot-password', { app: 'nowhere@prod', email: 'partner@example.test' }))
+		await p.send(post('/auth/forgot-password?app=nowhere%40prod', { email: 'partner@example.test' }))
 		await p.ctx.settle()
 		const mail = lastMail(p.email)
 		expect(mail.subject).toBe('Reset your Fabrika password')
@@ -242,7 +303,7 @@ describe('the language falls back to the installation default', () => {
 	test('an application with a name but no registered origin keeps its words and lands on IAM', async () => {
 		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' }, [])
 		await partner(p)
-		await p.send(post('/auth/forgot-password', { app: PORTAL, email: 'partner@example.test' }))
+		await p.send(post(`/auth/forgot-password?app=${encodeURIComponent(PORTAL)}`, { email: 'partner@example.test' }))
 		await p.ctx.settle()
 		const { url, token } = linkOf(lastMail(p.email))
 		expect(lastMail(p.email).subject).toBe('Obnovení hesla pro aplikaci Partnerský portál')
@@ -265,7 +326,7 @@ describe('the display name is escaped', () => {
 		expect(forgot).toContain(escaped)
 		expect(forgot).not.toContain(name)
 
-		await p.send(post('/auth/forgot-password', { app: PORTAL, email: 'partner@example.test' }))
+		await p.send(post(`/auth/forgot-password?app=${encodeURIComponent(PORTAL)}`, { email: 'partner@example.test' }))
 		await p.ctx.settle()
 		const mail = lastMail(p.email)
 		expect(mail.html).toContain(escaped)

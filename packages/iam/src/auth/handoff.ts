@@ -2,6 +2,7 @@ import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@
 
 import { issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
 import { type Services } from '../services'
+import type { AuthFailure } from './failure'
 import { printable, safeRedirect } from './http'
 
 /**
@@ -18,12 +19,12 @@ export interface Handoff {
 
 /**
  * What `?app=` + `?redirect=` turned out to be. `none` is a login with no app at all; `refused`
- * carries the message of a hard 400.
+ * carries the failure of a hard 400.
  */
 type HandoffReading =
 	| { kind: 'none' }
 	| { kind: 'handoff'; handoff: Handoff }
-	| { kind: 'refused'; message: string }
+	| { kind: 'refused'; failure: AuthFailure }
 
 /**
  * Read `?app=` + `?redirect=` as a handoff, validating the return URL against what that app has
@@ -49,17 +50,17 @@ export async function readHandoff(
 		return { kind: 'none' }
 	}
 	if (redirect === null || redirect === '') {
-		return { kind: 'refused', message: 'no return address was given for this app' }
+		return { kind: 'refused', failure: { kind: 'no_return_address' } }
 	}
 	if (!validHandoffState(state) || !validHandoffChallenge(challenge)) {
-		return { kind: 'refused', message: 'no valid browser handoff proof was given for this app' }
+		return { kind: 'refused', failure: { kind: 'no_handoff_proof' } }
 	}
 	const returnUrl = await resolveReturnUrl(services, app, redirect)
 	if (returnUrl !== null) {
 		return { kind: 'handoff', handoff: { app, returnUrl, state, challenge } }
 	}
 	const origin = normalizeOrigin(redirect) ?? 'that address'
-	return { kind: 'refused', message: `${printable(origin)} is not a registered return origin for this app` }
+	return { kind: 'refused', failure: { kind: 'unregistered_origin', origin: printable(origin) } }
 }
 
 /** The handoff a reading carries, or null — after the caller has already answered a `refused`. */

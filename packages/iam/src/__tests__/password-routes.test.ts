@@ -160,7 +160,7 @@ describe('password credential login', () => {
 			expect(hasher.verifyCalls).toBe(1)
 			const refused = await handleAuth(post('/auth/login', { email: 'invalid', app: 'example' }), services, AUTH_ENV, ctx)
 			expect(refused.status).toBe(400)
-			expect(await refused.text()).toContain('no return address was given for this app')
+			expect(await refused.text()).toContain('No return address was given for this app.')
 			expect(hasher.verifyCalls).toBe(1)
 		} finally {
 			await ctx.drain()

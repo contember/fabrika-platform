@@ -1,8 +1,11 @@
 import { z } from 'zod'
+import type { AppPresentation } from '../app-presentation'
 import { type Env } from '../env'
+import { authFailurePage } from '../password-pages'
 import { getSigner, verifyInternal } from '../signing'
 
 import { clearCookie } from './cookies'
+import type { AuthFailure } from './failure'
 
 /** In-flight OIDC cookie: a SIGNED token carrying state + PKCE verifier + redirect; /auth, 10 min. */
 export const OIDC_COOKIE = 'px_oidc'
@@ -66,14 +69,9 @@ export async function decodeFlight(env: AuthEnv, raw: string | null): Promise<Fl
 	return parsed.success ? parsed.data : null
 }
 
-/** `authError` that also spends the OIDC flight — every terminal callback outcome goes through here. */
-export function authErrorEndingFlight(message: string, status: number): Response {
-	return new Response(`Authentication error: ${message}`, {
-		status,
-		headers: {
-			'content-type': 'text/plain; charset=utf-8',
-			'cache-control': 'no-store',
-			'set-cookie': clearCookie(OIDC_COOKIE, { path: '/auth' }),
-		},
-	})
+/** A refusal page that also spends the OIDC flight — every terminal callback outcome goes through here. */
+export function authFailureEndingFlight(presentation: AppPresentation, failure: AuthFailure, status: number): Response {
+	const response = authFailurePage(presentation, failure, status)
+	response.headers.append('set-cookie', clearCookie(OIDC_COOKIE, { path: '/auth' }))
+	return response
 }
