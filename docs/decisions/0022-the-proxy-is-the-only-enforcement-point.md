@@ -495,7 +495,7 @@ still refuses any `Authorization` header, as authorization.
   role its application declares `external`, a membership role. IAM refuses every other grant for it on every write
   path, in the statement that writes; refuses a reconcile that declares a role not external while an external holds
   it; and resolves such a grant to no permission. Neither a cross-app grant nor the bootstrap `admin` reaches an
-  external principal, at any audience.
+  external principal, at any audience, and it issues only a key bound to itself.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
   limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
   into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
