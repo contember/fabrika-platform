@@ -48,13 +48,27 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'34-unscoped-write-of-a-reference-table.ts':
 		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
 	'35-unscoped-write-of-an-inbox.ts': "registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
+	'36-widened-honeypot/contract.ts': "honeypot names the field the page hides as a literal: honeypot: '<field>'",
+	'37-widened-inbox-name.ts': "appendTo names the form's inbox table as a literal: appendTo: '<inbox table>'",
+	'38-append-to-a-table-that-is-no-inbox.ts': 'candidates is not an inbox table of src/db/tables.ts (inboxes: ',
+	'39-unscoped-union-mode-of-a-reference-table.ts':
+		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
+	'40-unscoped-optional-mode-of-an-inbox.ts':
+		"registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
 }
 
 /**
  * The compiler elaborates these through the declaration's own types, so each is held to its line and text only: an
- * optional field an annotation allows, and a form's `then`, which only the whole surface can check.
+ * optional field an annotation allows, a form's `then`, which only the whole surface can check, and an options or
+ * `unscoped` object typed apart from its call, whose whole type the compiler prints.
  */
-const ELABORATED = ['11-declaration-only-in-a-type.ts', '32-form-kicks-an-unknown-job.ts']
+const ELABORATED = [
+	'11-declaration-only-in-a-type.ts',
+	'32-form-kicks-an-unknown-job.ts',
+	'36-widened-honeypot/contract.ts',
+	'39-unscoped-union-mode-of-a-reference-table.ts',
+	'40-unscoped-optional-mode-of-an-inbox.ts',
+]
 
 describe('the staged kit', () => {
 	test('the kit fixture and its API matrix compile clean', () => {

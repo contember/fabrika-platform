@@ -292,10 +292,13 @@ vocabulary (`packages/db/CLAUDE.md`).
   `Unavailable` that says so, never a union of every form.
 - **A declaration exists only if the object carries it**: each off-road field is inferred from its optional field and
   then required (`DeclaredFields`), and an `unscoped` key that is no table is refused at its line, and so is
-  `'write'` of a reference table or a form inbox (`ReadOnlyUnscoped`), which no site writes.
-- **The kit's `c.form` types its input by its inbox** (`ContractKit.form`): where `appendTo` names an inbox table of
-  the kit, an input field that is no column of it, other than the honeypot and, with a challenge, `challengeToken`, is
-  an `Unavailable` at `appendTo` that names the inbox's columns. `defineContract`'s `c.form` knows no tables.
+  a mode that may be `'write'` (a union or an optional one included) of a reference table or a form inbox
+  (`ReadOnlyUnscoped`), which no site writes.
+- **The kit's `c.form` types its input by its inbox** (`ContractKit.form`): `appendTo` names one inbox table of the
+  kit as a literal, and an input field that is no column of it, other than the honeypot and, with a challenge,
+  `challengeToken`, is an `Unavailable` at `appendTo` that names the inbox's columns. A widened or union `appendTo` or
+  `honeypot` is refused, since it would skip the check or exempt every field. `defineContract`'s `c.form` knows no
+  tables.
 - **`connect` is a literal list and `issues` one literal**: a widened `string[]` or a union declares nothing, so the
   site refuses it with a message that shows the literal form.
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,

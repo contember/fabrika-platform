@@ -407,9 +407,12 @@ export type UnscopedMode = 'read' | 'write'
 /** `unscoped: { <table>: 'read' | 'write' }` as a site may declare it: only tables of `src/db/tables.ts`. */
 export type UnscopedDeclaration<Table extends string, Mode extends UnscopedMode> = { readonly [T in Table]?: Mode }
 
-/** The tables of `U` declared `'write'` that no site writes: a reference table and a form's inbox. */
+/**
+ * The tables of `U` whose mode may be `'write'` that no site writes: a reference table and a form's inbox. A union or
+ * optional mode that admits `'write'` counts, because the declaration it types may hold it.
+ */
 type ReadOnlyWritten<Ix extends AnyDbIndex, U> = {
-	[T in keyof U & TableName<Ix>]: U[T] extends 'write' ? Ix['tables'][T]['mode'] extends 'reference' | 'inbox' ? T : never : never
+	[T in keyof U & TableName<Ix>]: 'write' extends U[T] ? Ix['tables'][T]['mode'] extends 'reference' | 'inbox' ? T : never : never
 }[keyof U & TableName<Ix>]
 
 type ReadOnlyMessage<T extends string, Mode> = Mode extends 'reference'

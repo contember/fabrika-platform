@@ -212,7 +212,11 @@ export type OffRoadFields = [
 			}
 		>
 	>,
+	// A mode that may be 'write', a union or an optional one, is refused too; an optional 'read' stands.
+	Expect<Equal<keyof ReadOnlyUnscoped<K['index'], { readonly countries: 'read' | 'write' }>, 'countries'>>,
+	Expect<Equal<keyof ReadOnlyUnscoped<K['index'], { readonly countries?: 'read' | 'write' }>, 'countries'>>,
 	Expect<Equal<ReadOnlyUnscoped<K['index'], { readonly countries: 'read' }>, unknown>>,
+	Expect<Equal<ReadOnlyUnscoped<K['index'], { readonly countries?: 'read' }>, unknown>>,
 	Expect<
 		Equal<
 			Returned<OffRoad['connect']['catalog']['get']>,

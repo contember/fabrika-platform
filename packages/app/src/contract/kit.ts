@@ -148,15 +148,31 @@ type MountPrefix<G> = [PendingOf<G>] extends [never]
 	? true extends IsUnion<CallersOf<G>> ? Unavailable<'every group of one RPC mount names the same callers, in the same order'> : Path
 	: Unavailable<`add .handle(…) to ${ListOf<PendingOf<G>>}: every endpoint takes its handler beside it`>
 
+/** The inbox tables of the kit: each a form's own table (`scope: { inbox, read }`). */
+type InboxTables<Ix extends AnyDbIndex> = {
+	[T in keyof Ix['tables'] & string]: Ix['tables'][T]['mode'] extends 'inbox' ? T : never
+}[keyof Ix['tables'] & string]
+
+/** `unknown` for one literal name; a widened or union name would let the check below pass for any other. */
+type OneName<N, Message extends string> = string extends N ? Unavailable<Message> : true extends IsUnion<N> ? Unavailable<Message> : unknown
+
+type LiteralInbox = "appendTo names the form's inbox table as a literal: appendTo: '<inbox table>'"
+type LiteralHoneypot = "honeypot names the field the page hides as a literal: honeypot: '<field>'"
+
 /**
- * The input fields of a form that appends to inbox `T` and are no column of it, the honeypot and the challenge token
- * exempt: the form writes each field to the column of its name.
+ * `appendTo` names one inbox table, and the form's input fields are its columns, the honeypot `H` and the challenge
+ * token `Ch` exempt: the form writes each field to the column of its name. A widened honeypot is refused here too,
+ * since it would exempt every field.
  */
-type InboxFields<Ix extends AnyDbIndex, T, Fields, Exempt> = T extends keyof Ix['tables'] & string
-	? Ix['tables'][T]['mode'] extends 'inbox'
-		? ExtraFields<T, Exclude<Fields & string, keyof Ix['tables'][T]['row'] | Exempt>, keyof Ix['tables'][T]['row'] & string>
-	: unknown
-	: unknown
+type InboxTarget<Ix extends AnyDbIndex, T, Fields, H, Ch> = unknown extends OneName<T, LiteralInbox>
+	? T extends InboxTables<Ix> & string
+		? unknown extends OneName<H, LiteralHoneypot>
+			? ExtraFields<T, Exclude<Fields & string, keyof Ix['tables'][T]['row'] | H | Ch>, keyof Ix['tables'][T]['row'] & string>
+		: OneName<H, LiteralHoneypot>
+	: [InboxTables<Ix>] extends [never]
+		? Unavailable<"no table of src/db/tables.ts is a form's inbox: declare one with scope: { inbox: '<form>', read }">
+	: Unavailable<`${T & string} is not an inbox table of src/db/tables.ts (inboxes: ${ListOf<InboxTables<Ix> & string>})`>
+	: OneName<T, LiteralInbox>
 
 type ExtraFields<T extends string, Extra extends string, Columns extends string> = [Extra] extends [never] ? unknown
 	: Unavailable<`the inbox ${T} has no column ${ListOf<Extra>}: each input field is named like its column (columns: ${ListOf<Columns>})`>
@@ -176,8 +192,8 @@ export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K
 	>(
 		path: Path,
 		options: FormOptions<I, Then> & {
-			readonly appendTo: T & NoInfer<InboxFields<K['index'], T, keyof z.output<I>, H | ChallengeField<Ch>>>
-			readonly honeypot?: H
+			readonly appendTo: T & NoInfer<InboxTarget<K['index'], T, keyof z.output<I>, H, ChallengeField<Ch>>>
+			readonly honeypot?: H & NoInfer<OneName<H, LiteralHoneypot>>
 			readonly challenge?: Ch
 		},
 	): FormMount<I, NoInfer<Then>>

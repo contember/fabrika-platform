@@ -127,7 +127,8 @@ and the target `Ref`, so no handler can call it.
   (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The row type omits
   the hidden column (`Omit<DealsTable, "margin">`, which a diagnostic names), so a read of it is TypeScript's plain
   "does not exist" error; reference and unscoped rows read through the table's read action. An `unscoped` declaration's
-  `'write'` of a reference or inbox table is an `Unavailable` at its key (`ReadOnlyUnscoped`): no site writes either, and
+  mode that may be `'write'` (a union or an optional one too) of a reference or inbox table is an `Unavailable` at its
+  key (`ReadOnlyUnscoped`): no site writes either, and
   `insertUnscoped` still refuses it at run time. `RowOf<typeof tables, T, A>`
   (`@fabrika/db/tables`) is that row for an application's mapper; `A` defaults to the table's read action. A job's handles outside
   its transaction read only: every write is an `Unavailable` that names `ctx.transaction((tx) => …)` and `tx.db`. The static reader reads
