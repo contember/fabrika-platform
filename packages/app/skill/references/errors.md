@@ -65,9 +65,10 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
-Every JSON answer is an envelope: a 200 is `{ result: <output> }` (a procedure's output, a form's `{ received: true }`,
-a file list's `{ items, next }`), any other status `{ error: { type, message } }`. The typed client unwraps it; a plain
-`fetch` (a form, a test) reads `result`.
+A procedure, a form, a webhook and a file collection answer JSON in an envelope: a 200 is `{ result: <output> }` (a
+procedure's output, a form's `{ received: true }`, a file list's `{ items, next }`), any other status
+`{ error: { type, message } }`. The typed client unwraps it; a plain `fetch` (a form, a test) reads `result`. A health
+check (`{ status: 'ok' }`) and the SPA's browser configuration answer without one.
 
 | Answer | Comes from                                                                                                                                                                                                              |
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
