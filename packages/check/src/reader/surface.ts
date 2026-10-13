@@ -32,7 +32,19 @@ import {
 	unknownOptions,
 	type Vocabulary,
 } from '@fabrika/app/contract'
-import { type CspSource, isLocale, type Locale, LOCALES, type RpcCaller } from '@fabrika/auth-core'
+import {
+	type CspSource,
+	isLocale,
+	isMessageKind,
+	type Locale,
+	LOCALES,
+	type MailTemplate,
+	mailTemplateProblems,
+	type MailTemplates,
+	MESSAGE_KINDS,
+	type MessageKind,
+	type RpcCaller,
+} from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import type { Located } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
@@ -51,6 +63,8 @@ class Refused {
 		this.allowed = allowed
 	}
 }
+
+const MAIL_ALLOWED = "a one-line subject and a text with {{actionUrl}}, naming only the message's placeholders"
 
 const MOUNT_BUILDERS = ['rpc', 'link', 'spa', 'health', 'form', 'webhook'] as const
 const MOUNT_ALLOWED = `one of c.${MOUNT_BUILDERS.join(', c.')}(…)`
@@ -178,17 +192,41 @@ class SurfaceReader {
 	// ── Vocabulary ──────────────────────────────────────────────────────────────────────────────
 
 	#vocabulary(value: LiteralValue): Vocabulary<string, string, string> {
-		const fields = strictFields(value, 'the vocabulary', ['app', 'dimensions', 'actions', 'roles'], ['locale', 'displayName'])
+		const fields = strictFields(value, 'the vocabulary', ['app', 'dimensions', 'actions', 'roles'], ['locale', 'displayName', 'mail'])
 		const locale = fields.get('locale')
 		const displayName = fields.get('displayName')
+		const mail = fields.get('mail')
 		return {
 			app: text(fields.get('app'), value, 'app'),
 			...(locale === undefined ? {} : { locale: localeOf(locale, value) }),
 			...(displayName === undefined ? {} : { displayName: text(displayName, value, 'displayName') }),
+			...(mail === undefined ? {} : { mail: this.#mail(mail) }),
 			dimensions: this.#each(entries(fields.get('dimensions'), value, 'dimensions'), (name, dimension) => this.#dimension(name, dimension)),
 			actions: this.#each(entries(fields.get('actions'), value, 'actions'), (_, description) => text(description, description, 'an action description')),
 			roles: this.#each(entries(fields.get('roles'), value, 'roles'), (name, role) => this.#role(name, role)),
 		}
+	}
+
+	/** The vocabulary's `mail`: message → language → `{ subject, text }`, each refused at the string it is wrong in. */
+	#mail(value: LiteralValue): MailTemplates {
+		const templates: { [K in MessageKind]?: { [L in Locale]?: MailTemplate } } = {}
+		for (const [kind, byLocale] of strictFields(value, 'mail', [], MESSAGE_KINDS)) {
+			if (!isMessageKind(kind)) continue
+			const declared: { [L in Locale]?: MailTemplate } = {}
+			for (const [locale, entry] of strictFields(byLocale, `mail.${kind}`, [], LOCALES)) {
+				if (!isLocale(locale)) continue
+				const fields = strictFields(entry, `mail.${kind}.${locale}`, ['subject', 'text'], [])
+				const template = { subject: text(fields.get('subject'), entry, 'subject'), text: text(fields.get('text'), entry, 'text') }
+				for (const problem of mailTemplateProblems(kind, template)) {
+					const at = problem.startsWith('the subject') ? fields.get('subject') : fields.get('text')
+					this.#problems.add(at?.at ?? entry.at, `mail.${kind}.${locale}: ${problem}`, MAIL_ALLOWED)
+					this.#complete = false
+				}
+				declared[locale] = template
+			}
+			templates[kind] = declared
+		}
+		return templates
 	}
 
 	#dimension(name: string, value: LiteralValue): DimensionDef<string, string, string> {

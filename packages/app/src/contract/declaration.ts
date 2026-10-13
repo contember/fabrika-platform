@@ -2,7 +2,7 @@
 // once described. `buildArtifact` reads only this shape, so a reader that produces it from source (B1) and
 // `compileContract` normalize through the same code.
 
-import type { ChallengeProvider, CspSource, RpcCaller } from '@fabrika/auth-core'
+import type { ChallengeProvider, CspSource, MailTemplate, RpcCaller } from '@fabrika/auth-core'
 
 export interface ContractDeclaration<S> {
 	readonly app: string
@@ -18,6 +18,8 @@ export interface ContractDeclaration<S> {
 	/** A language IAM speaks; `buildArtifact` refuses another value. */
 	readonly locale?: string
 	readonly displayName?: string
+	/** Message kind → locale → template; `buildArtifact` refuses an unknown kind or locale and a bad template. */
+	readonly mail?: Readonly<Record<string, Readonly<Record<string, MailTemplate>>>>
 }
 
 /**

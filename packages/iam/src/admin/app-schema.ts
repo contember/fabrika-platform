@@ -187,6 +187,9 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			delegations: Object.entries(schema.delegations ?? {}).map(([endpoint, delegation]) => ({ endpoint, ...delegation })),
 			workloads: schema.workloads ?? [],
 			presentation: { locale: schema.locale ?? null, displayName: schema.displayName ?? null },
+			mail: Object.entries(schema.mail ?? {}).flatMap(([kind, byLocale]) =>
+				Object.entries(byLocale ?? {}).flatMap(([locale, template]) => (template === undefined ? [] : [{ kind, locale, ...template }]))
+			),
 		},
 		adminEvent(c, {
 			action: 'iam.app.schema.reconcile',
@@ -202,6 +205,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				workloads: (schema.workloads ?? []).map((workload) => `${workload.kind}:${workload.name}`),
 				locale: schema.locale ?? null,
 				displayName: schema.displayName ?? null,
+				mail: Object.entries(schema.mail ?? {}).flatMap(([kind, byLocale]) => Object.keys(byLocale ?? {}).map((locale) => `${kind}.${locale}`)),
 			},
 		}),
 	)

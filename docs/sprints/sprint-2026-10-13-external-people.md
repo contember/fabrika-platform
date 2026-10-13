@@ -163,3 +163,11 @@ WU1, WU2 and WU4.
   Review round: promotion revokes the principal's sessions and pending password actions, because it widens what
   the principal reaches (a bootstrap mailbox becomes an installation admin). The checker's hint is
   `member-admits-external`. `resolveUserPrincipal`'s label-refresh warning no longer names the IdP mailbox.
+- WU4 (MVP, owner's scope cut): `mail` beside `locale` in the vocabulary holds a subject and a plain text per message
+  and language, inline strings (8 KiB text, 200-character one-line subject), with `{{name}}` placeholders from
+  `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`); `companyLabel` and `message` are empty until WU5 passes them. The build,
+  the checker and IAM's reconcile refuse an unknown placeholder and a text without `{{actionUrl}}` with one rule
+  (`mailTemplateProblems`). IAM stores them in `app_mail_templates` (migration 0013, both dialects, after WU1's 0012), renders the text as is and writes the HTML part itself (escaped paragraphs and its own button). A change is one
+  widening approval line: the diff has no generic contract-change line, so without it a template change read
+  `unchanged`. **Deferred:** application-authored HTML templates (the sanitizer, link rules against registered return
+  origins, and files beside the contract).

@@ -430,13 +430,25 @@ async function invite(
 		const url = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
 		url.hash = new URLSearchParams({ token }).toString()
 		try {
-			await services.email.send(renderEmail({
-				to: email,
-				presentation,
-				kind: 'invitation',
-				values: { appName: presentation.displayName ?? caller.app, role: role.name, scope: input.scope.type, actionUrl: url.toString() },
-				idempotencyKey: `iam-invitation-${invitation.id}`,
-			}))
+			await services.email.send(
+				await renderEmail(services, {
+					to: email,
+					presentation,
+					kind: 'invitation',
+					values: {
+						appName: presentation.displayName ?? caller.app,
+						role: role.name,
+						scope: input.scope.type,
+						recipient: email,
+						inviterLabel: caller.principal.label,
+						companyLabel: '',
+						message: '',
+						actionUrl: url.toString(),
+						expiresAt: invitation.expires_at,
+					},
+					idempotencyKey: `iam-invitation-${invitation.id}`,
+				}),
+			)
 		} catch (err) {
 			logError(`invitation email failed for request '${input.requestId}'`, err)
 			await services.repositories.membership.deleteInvitation(

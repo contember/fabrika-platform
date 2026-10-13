@@ -135,7 +135,13 @@ export const cs: Catalog = {
 				actionUrl,
 			),
 	},
+	applicationMail: {
+		button: { invitation: 'Přijmout pozvánku', enrollment: 'Nastavit heslo', reset: 'Obnovit heslo' },
+		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
+	},
 }
+
+const expiryFormat = new Intl.DateTimeFormat('cs', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
 
 function passwordMessage(subject: string, action: string, actionUrl: string): RenderedMessage {
 	return {

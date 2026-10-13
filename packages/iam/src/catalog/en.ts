@@ -135,7 +135,13 @@ export const en: Catalog = {
 				actionUrl,
 			),
 	},
+	applicationMail: {
+		button: { invitation: 'Accept the invitation', enrollment: 'Set your password', reset: 'Reset your password' },
+		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
+	},
 }
+
+const expiryFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
 
 function passwordMessage(subject: string, action: string, actionUrl: string): RenderedMessage {
 	return {

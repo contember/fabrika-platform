@@ -134,7 +134,12 @@ describe('schemaFromContract', () => {
 		expect([schema.locale, schema.displayName]).toEqual(['cs', 'Fronta úloh'])
 		expect(appSchemaSchema.parse(schema)).toEqual(schema)
 		const unnamed = schemaFromContract(compileContract(defineContract(mixedVocabulary, () => ({})), {}))
-		expect('locale' in unnamed || 'displayName' in unnamed).toBe(false)
+		expect('locale' in unnamed || 'displayName' in unnamed || 'mail' in unnamed).toBe(false)
+		const mail = { reset: { cs: { subject: 'Nové heslo', text: 'Heslo si nastavíte zde: {{actionUrl}}' } } }
+		const worded = schemaFromContract(compileContract(defineContract({ ...mixedVocabulary, mail }, () => ({})), {}))
+		expect(worded.mail).toEqual(mail)
+		expect(appSchemaSchema.parse(worded)).toEqual(worded)
+		expect('mail' in compileContract(defineContract({ ...mixedVocabulary, mail: {} }, () => ({})), {})).toBe(false)
 	})
 
 	test('a contract without link mounts or delegations says so, so IAM drops what an earlier schema had', () => {

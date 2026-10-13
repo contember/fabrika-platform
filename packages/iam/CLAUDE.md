@@ -385,9 +385,17 @@ fails if that stops being true — it is the guard, not documentation of one.
   registered return origin) and answers the installation's (`DEFAULT_LOCALE`, no name) otherwise, a stored locale
   IAM no longer speaks included. A hint picks words and a registered landing, never authority. There is no
   `principals.locale`: an app-less action (IAM's own forgot-password, an administrator's) speaks the default.
-  `messageTemplatesFor` is the one place a message's templates are chosen. A refused browser-facing request answers
+  `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers
   `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
   refusal; a failure before any application is known, and logout, speak the default.
+- **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, AND IAM PUTS IN THE LINK AND WRITES THE HTML** (`app_mail_templates`,
+  `src/messages.ts`). The contract's `mail` is a subject and a text per message and language, with placeholders from the
+  closed set `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`); `mailTemplateProblems` refuses another one, a text without
+  `{{actionUrl}}` and a subject that is not one line, at the build, in the checker and at IAM's reconcile, and
+  `messageTemplateFor` checks a stored row again and falls back to the catalog for one it refuses. IAM builds the action
+  URL; the text carries every value as is, the subject with control characters collapsed, and the HTML part is IAM's:
+  the escaped text as paragraphs and the catalog's button. Never let an application author HTML here, and never log a
+  template's body. A message or a language without a row is the catalog's.
 - **A PASSWORD ACTION AND AN INVITATION THAT KEEP AN APPLICATION END IN IT.** A forgot-password request carries the
   sign-in's app; the issued action stores it, its link names it, and the completed action's 302 goes to the app's
   first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the

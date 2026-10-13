@@ -9,6 +9,8 @@ import {
 	displayNameProblem,
 	type EndpointRow,
 	LOCALES,
+	mailTemplateProblems,
+	type MessageKind,
 	type NumberShape,
 	type OutputShape,
 	type RecordShape,
@@ -286,7 +288,16 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	directories: record(z.strictObject({ dimension: name, lists: z.boolean() })).optional(),
 	locale: z.enum(LOCALES).optional(),
 	displayName: z.string().refine((value) => displayNameProblem(value) === null, 'not a display name').optional(),
+	mail: z.strictObject({ invitation: mailLocales('invitation'), enrollment: mailLocales('enrollment'), reset: mailLocales('reset') }).partial()
+		.optional(),
 })
+
+function mailLocales(kind: MessageKind) {
+	const template = z.strictObject({ subject: z.string(), text: z.string() }).superRefine((value, context) => {
+		for (const message of mailTemplateProblems(kind, value)) context.addIssue({ code: 'custom', message })
+	})
+	return z.partialRecord(z.enum(LOCALES), template)
+}
 
 /** Parses JSON that should be a contract artifact; throws a `ZodError` naming every mismatch. */
 export function parseContractArtifact(value: unknown): ContractArtifact {

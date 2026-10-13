@@ -1,4 +1,12 @@
-import { type AppSchema, BUILTIN_ROLE_KEYS, displayNameProblem, isActionAllowed, LOCALES } from '@fabrika/auth-core'
+import {
+	type AppSchema,
+	BUILTIN_ROLE_KEYS,
+	displayNameProblem,
+	isActionAllowed,
+	LOCALES,
+	mailTemplateProblems,
+	type MessageKind,
+} from '@fabrika/auth-core'
 import { z } from 'zod'
 
 /** Quote an untrusted fragment for an error message a run log may carry. */
@@ -184,7 +192,21 @@ const appSchemaShape = z.object({
 		const problem = displayNameProblem(value)
 		if (problem !== null) ctx.addIssue({ code: 'custom', message: `the display name ${problem}` })
 	}).optional(),
+	mail: z.object({ invitation: mailLocales('invitation'), enrollment: mailLocales('enrollment'), reset: mailLocales('reset') }).strict().partial()
+		.optional(),
 })
+
+/** One message's templates by language, each refused with the same rule the contract build applies. */
+function mailLocales(kind: MessageKind) {
+	const template = z.object({ subject: z.string(), text: z.string() }).strict()
+	return z.record(z.enum(LOCALES), template).superRefine((templates, ctx) => {
+		for (const [locale, value] of Object.entries(templates)) {
+			for (const problem of mailTemplateProblems(kind, value)) {
+				ctx.addIssue({ code: 'custom', path: [locale], message: `mail.${kind}.${locale}: ${problem}` })
+			}
+		}
+	})
+}
 
 /**
  * An app's authz vocabulary, as an app declares it and IAM reconciles it. Every role permission must

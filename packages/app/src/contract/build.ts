@@ -27,10 +27,16 @@ import {
 	type FormRate,
 	type ImportArtifact,
 	isLocale,
+	isMessageKind,
 	JOB_SITE_PREFIX,
 	type JobArtifact,
 	type Locale,
 	LOCALES,
+	type MailTemplate,
+	mailTemplateProblems,
+	type MailTemplates,
+	MESSAGE_KINDS,
+	type MessageKind,
 	type MountArtifact,
 	type OutputShape,
 	type RoleArtifact,
@@ -247,6 +253,7 @@ class ArtifactBuilder {
 		const directories = this.#directories(dimensions)
 		const locale = this.#locale()
 		const displayName = this.#displayName()
+		const mail = this.#mail()
 		const artifact: ContractArtifact = {
 			app: contract.app,
 			dimensions,
@@ -265,6 +272,7 @@ class ArtifactBuilder {
 			...(Object.keys(directories).length === 0 ? {} : { directories }),
 			...(locale === null ? {} : { locale }),
 			...(displayName === null ? {} : { displayName }),
+			...(mail === null ? {} : { mail }),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -302,6 +310,31 @@ class ArtifactBuilder {
 		const problem = displayNameProblem(displayName)
 		if (problem !== null) this.#problem('displayName', problem)
 		return displayName
+	}
+
+	/** The declared e-mail templates; an empty declaration is none, so the digest stays. */
+	#mail(): MailTemplates | null {
+		const mail = this.#contract.mail
+		if (mail === undefined) return null
+		const templates: { [K in MessageKind]?: { [L in Locale]?: MailTemplate } } = {}
+		for (const [kind, byLocale] of Object.entries(mail)) {
+			if (!isMessageKind(kind)) {
+				this.#problem(`mail '${kind}'`, `is not a message IAM sends (allowed: ${MESSAGE_KINDS.map((value) => `'${value}'`).join(', ')})`)
+				continue
+			}
+			const declared: { [L in Locale]?: MailTemplate } = {}
+			for (const [locale, template] of Object.entries(byLocale)) {
+				const where = `mail.${kind}.${locale}`
+				if (!isLocale(locale)) {
+					this.#problem(where, `'${locale}' is not a language IAM speaks (allowed: ${LOCALES.map((value) => `'${value}'`).join(', ')})`)
+					continue
+				}
+				for (const problem of mailTemplateProblems(kind, template)) this.#problem(where, problem)
+				declared[locale] = { subject: template.subject, text: template.text }
+			}
+			if (Object.keys(declared).length > 0) templates[kind] = declared
+		}
+		return Object.keys(templates).length === 0 ? null : templates
 	}
 
 	#actions(): Record<string, string> {

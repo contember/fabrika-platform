@@ -2,6 +2,7 @@
 // own schema, as gate rules are parsed today.
 
 import type { Locale } from './locale'
+import type { MailTemplates } from './mail'
 
 /**
  * An application's whole access surface as plain JSON. `compileContract` produces it from the evaluated contract and
@@ -38,6 +39,8 @@ export interface ContractArtifact extends EndpointTable {
 	readonly locale?: Locale
 	/** The name IAM shows on its pages and e-mails for this application. Absent unless declared, so the digest stays. */
 	readonly displayName?: string
+	/** The application's wording of IAM's e-mails. Absent unless declared, so the digest stays. */
+	readonly mail?: MailTemplates
 }
 
 // ── The endpoint table ──────────────────────────────────────────────────────────────────────────

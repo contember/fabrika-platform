@@ -339,6 +339,24 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(build({ ...base, displayName: 'Notes\u0007' })).toEqual(['displayName: contains a control character'])
 	})
 
+	test('an e-mail template with an unknown placeholder, without {{actionUrl}}, or of a message IAM does not send', () => {
+		expect(build({
+			...base,
+			mail: {
+				invitation: { cs: { subject: 'Pozvánka od {{inviter}}', text: 'Přijměte ji: {{actionUrl}}' } },
+				reset: { en: { subject: 'Reset\nBcc: x', text: 'No link here.' } },
+				welcome: { en: { subject: 'Hi', text: '{{actionUrl}}' } },
+			},
+		})).toEqual([
+			'mail.invitation.cs: the subject names {{inviter}}, which the invitation message does not fill (allowed: {{displayName}}, {{recipient}}, {{inviterLabel}}, {{companyLabel}}, {{message}}, {{actionUrl}}, {{expiry}})',
+			'mail.reset.en: the subject is not one line: it contains a line break or a control character',
+			'mail.reset.en: the text has no {{actionUrl}}: IAM puts the one-time link there',
+			"mail 'welcome': is not a message IAM sends (allowed: 'invitation', 'enrollment', 'reset')",
+		])
+		const reset = { subject: 'Nové heslo do {{displayName}}', text: 'Odkaz: {{actionUrl}} (platí do {{expiry}})' }
+		expect(buildArtifact({ ...base, mail: { reset: { cs: reset } } }, notesArtifact.tables).mail).toEqual({ reset: { cs: reset } })
+	})
+
 	test("a directory other than 'labels', or one on a dimension that declares no members", () => {
 		const problems = build({
 			...base,

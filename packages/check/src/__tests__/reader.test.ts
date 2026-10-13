@@ -120,6 +120,20 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		])
 	})
 
+	test('an e-mail template is refused at the string it is wrong in, and read when it is right', () => {
+		const mail = (text: string) =>
+			edited("app: 'notes',", `app: 'notes',\n\tmail: { reset: { cs: {\n\t\tsubject: 'Heslo pro {{displayName}}',\n\t\ttext: '${text}',\n\t} } },`)
+		expect(refusal(application(mail('Nové heslo: {{link}}')))).toEqual([
+			'fabrika.contract.ts:9:9 contract mail.reset.cs: the text names {{link}}, which the reset message does not fill (allowed: {{displayName}}, {{recipient}}, {{actionUrl}}, {{expiry}})',
+			'fabrika.contract.ts:9:9 contract mail.reset.cs: the text has no {{actionUrl}}: IAM puts the one-time link there',
+		])
+		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\tmail: { welcome: {} },")))).toEqual([
+			"fabrika.contract.ts:7:19 contract 'welcome' is not a field of mail",
+		])
+		const artifact = readContractSource(application(mail('Nové heslo: {{actionUrl}}')))
+		expect(artifact.mail).toEqual({ reset: { cs: { subject: 'Heslo pro {{displayName}}', text: 'Nové heslo: {{actionUrl}}' } } })
+	})
+
 	test('callers outside the RPC callers, an empty caller list, and an access that mixes two forms', () => {
 		expect(refusal(application(edited("callers: ['human']", "callers: ['human', 'link']")))).toEqual([
 			"fabrika.contract.ts:11:32 contract 'link' is not a caller of an RPC mount",
@@ -283,6 +297,19 @@ describe('the checker reports what the reader refuses', () => {
 			rule: 'contract',
 			message: "mount 'api' procedure 'get' output.title: the pattern /^[a-z]+$/ has flags",
 			allowed: 'a pattern without flags',
+		}])
+	})
+
+	test('an e-mail template without {{actionUrl}} is a contract finding at its text', async () => {
+		const contract = edited("app: 'notes',", "app: 'notes',\n\tmail: { invitation: { en: { subject: 'Join {{displayName}}', text: 'Join us.' } } },")
+		expect(await check({ 'fabrika.contract.ts': contract, 'src/schemas.ts': SCHEMAS })).toEqual([{
+			file: 'fabrika.contract.ts',
+			line: 7,
+			column: 69,
+			severity: 'refusal',
+			rule: 'contract',
+			message: 'mail.invitation.en: the text has no {{actionUrl}}: IAM puts the one-time link there',
+			allowed: "a one-line subject and a text with {{actionUrl}}, naming only the message's placeholders",
 		}])
 	})
 

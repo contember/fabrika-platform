@@ -135,6 +135,15 @@ forgot-password page also use the default. A link's `?app=` only picks words;
 where a completed action or invitation lands is decided by the stored
 application and its registered return origin.
 
+An application may also word IAM's e-mails itself with `mail` in its vocabulary:
+per message (`invitation`, `enrollment`, `reset`) and language, a one-line
+subject and a plain text with `{{name}}` placeholders from a closed set per
+message. The text must place `{{actionUrl}}`, the link IAM builds. IAM fills the
+placeholders, sends the text as filled, and builds the HTML part itself: the
+escaped text as paragraphs and its own button to the link. The checker refuses
+an unknown placeholder or a text without the link, and so does the reconcile. A
+message or a language without a template gets IAM's catalog wording.
+
 ## Membership invitations
 
 An application invites an address to a membership role through IAM's

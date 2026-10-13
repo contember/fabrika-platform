@@ -69,6 +69,15 @@ export interface AppPresentationRow {
 	display_name: string | null
 }
 
+/** An application's wording of one IAM e-mail in one language (the `app_mail_templates` table), parsed at render. */
+export interface AppMailTemplateRow {
+	app: string
+	kind: string
+	locale: string
+	subject: string
+	body: string
+}
+
 /** An action-catalog row (the `app_actions` table). */
 export interface AppActionRow {
 	app: string
@@ -100,6 +109,14 @@ export class AppSchemaRepository {
 	/** The app's declared locale and display name, or null when it declares neither. */
 	async getPresentation(app: string): Promise<AppPresentationRow | null> {
 		return this.db.prepare('SELECT * FROM app_presentation WHERE app = ?').bind(app).first<AppPresentationRow>()
+	}
+
+	/** The app's template of one message in one language, or null when it declares none. */
+	async getMailTemplate(app: string, kind: string, locale: string): Promise<AppMailTemplateRow | null> {
+		return this.db
+			.prepare('SELECT * FROM app_mail_templates WHERE app = ? AND kind = ? AND locale = ?')
+			.bind(app, kind, locale)
+			.first<AppMailTemplateRow>()
 	}
 
 	/** True when the app's schema was compiled from a contract (ADR-0022 rule 6). */
@@ -276,6 +293,8 @@ export class AppSchemaRepository {
 		workloads?: { kind: WorkloadKind; name: string; actions: string[]; issues?: string }[]
 		/** How IAM names the app; a field left out is "not declared", and both left out remove the row. */
 		presentation?: { locale: string | null; displayName: string | null }
+		/** The app's e-mail templates; every row of the app is replaced, and none left out removes them all. */
+		mail?: { kind: string; locale: string; subject: string; text: string }[]
 	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -287,7 +306,15 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM app_delegated_endpoints WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_workloads WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_presentation WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_mail_templates WHERE app = ?').bind(app),
 		]
+		for (const template of input.mail ?? []) {
+			statements.push(
+				this.db
+					.prepare('INSERT INTO app_mail_templates (app, kind, locale, subject, body) VALUES (?, ?, ?, ?, ?)')
+					.bind(app, template.kind, template.locale, template.subject, template.text),
+			)
+		}
 		const presentation = input.presentation
 		if (presentation !== undefined && (presentation.locale !== null || presentation.displayName !== null)) {
 			statements.push(

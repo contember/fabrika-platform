@@ -47,11 +47,11 @@ export async function issuePasswordAction(
 	url.hash = new URLSearchParams({ token }).toString()
 	const message = input.principal.email === null
 		? null
-		: renderEmail({
+		: await renderEmail(services, {
 			to: input.principal.email,
 			presentation: input.presentation,
 			kind: input.purpose,
-			values: { appName: input.presentation.displayName, actionUrl: url.toString() },
+			values: { appName: input.presentation.displayName, recipient: input.principal.email, actionUrl: url.toString(), expiresAt },
 			idempotencyKey: `iam-password-${id}`,
 		})
 	return { id, url: url.toString(), expiresAt, message }

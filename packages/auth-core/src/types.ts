@@ -1,4 +1,5 @@
 import type { Locale } from './locale'
+import type { MailTemplates } from './mail'
 
 export type PrincipalType = 'user' | 'service'
 
@@ -165,6 +166,8 @@ export interface AppSchema {
 	locale?: Locale
 	/** The name IAM shows on its pages and e-mails for the app; absent, a wording without a name. */
 	displayName?: string
+	/** The app's wording of IAM's e-mails, by message and language; absent, IAM's own. */
+	mail?: MailTemplates
 }
 
 /**

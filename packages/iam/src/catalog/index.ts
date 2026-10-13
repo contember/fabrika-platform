@@ -2,7 +2,7 @@
 // or the template that inserts it escapes it. `catalogs` must name every locale and each one every key, so a missing
 // translation fails the typecheck.
 
-import type { Locale } from '@fabrika/auth-core'
+import type { Locale, MessageKind } from '@fabrika/auth-core'
 import type { AuthFailure } from '../auth/failure'
 import type { PasswordProblem } from '../password-policy'
 import { cs } from './cs'
@@ -81,14 +81,21 @@ export interface RenderedMessage {
 
 /**
  * The closed set of values each IAM message is rendered from. Every value is plain text; a template escapes it. IAM
- * builds the action URL itself, and a template places it.
+ * builds the action URL itself, and a template places it. `expiresAt` is the link's expiry in seconds since the epoch.
  */
 export interface MessageValues {
 	readonly invitation: {
 		readonly appName: string
 		readonly role: string
 		readonly scope: string
+		readonly recipient: string
+		readonly inviterLabel: string
+		/** The invited person's company, as the inviting application names it; empty until an invitation carries one. */
+		readonly companyLabel: string
+		/** The inviter's personal message; empty until an invitation carries one. */
+		readonly message: string
 		readonly actionUrl: string
+		readonly expiresAt: number
 	}
 	readonly enrollment: PasswordActionValues
 	readonly reset: PasswordActionValues
@@ -97,17 +104,25 @@ export interface MessageValues {
 export interface PasswordActionValues {
 	/** The application the action returns to; `null` for an action on the installation itself. */
 	readonly appName: string | null
+	readonly recipient: string
 	readonly actionUrl: string
+	readonly expiresAt: number
 }
-
-export type MessageKind = keyof MessageValues
 
 /** One template per message. IAM's catalog supplies a default set per language. */
 export type MessageTemplates = { readonly [K in MessageKind]: (values: MessageValues[K]) => RenderedMessage }
 
+/** IAM's words around an application's own wording of a message: the HTML part's button and the expiry. */
+export interface ApplicationMailText {
+	readonly button: { readonly [K in MessageKind]: string }
+	/** `expiresAt` in seconds since the epoch, as the `{{expiry}}` placeholder shows it. */
+	readonly expiry: (expiresAt: number) => string
+}
+
 export interface Catalog {
 	readonly pages: PageText
 	readonly messages: MessageTemplates
+	readonly applicationMail: ApplicationMailText
 }
 
 const catalogs: { readonly [L in Locale]: Catalog } = { en, cs }

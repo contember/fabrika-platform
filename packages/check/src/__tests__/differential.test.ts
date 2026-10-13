@@ -203,6 +203,7 @@ describe('the static reader and the evaluated contract agree', () => {
 		expect(artifact.dimensions['project']?.directory).toBe('labels')
 		expect([artifact.locale, artifact.displayName]).toEqual(['cs', 'Úkoly'])
 		expect(artifact.roles['contributor']?.external).toBe(true)
+		expect(artifact.mail?.reset?.cs?.text).toBe('Heslo si nastavíte zde:\n{{actionUrl}}')
 	})
 })
 

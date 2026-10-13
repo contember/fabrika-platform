@@ -50,6 +50,13 @@ export const vocabulary = defineVocabulary({
   application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks its default
   language, `en`. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
   names it by its id (`tasks@prod`). The approver sees each change.
+- `mail` beside them words IAM's e-mails in the application's own way: per message (`invitation`, `enrollment`,
+  `reset`) and language, a one-line `subject` and a plain `text` with `{{name}}` placeholders, for example
+  `mail: { reset: { cs: { subject: 'Nové heslo do {{displayName}}', text: 'Heslo si nastavíte zde:\n{{actionUrl}}' } } }`.
+  The text must hold `{{actionUrl}}`, the one-time link IAM builds; IAM writes the HTML part itself. Every message fills
+  `{{displayName}}`, `{{recipient}}`, `{{actionUrl}}` and `{{expiry}}`; an invitation also `{{inviterLabel}}`,
+  `{{companyLabel}}` and `{{message}}`. Another placeholder is refused. A message or language without a template is IAM's
+  own wording.
 - `creator: '<role>'` on a top-level dimension lets an endpoint with `creates: '<dimension>'` make a new value and
   grant the caller that role there.
 

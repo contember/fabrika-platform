@@ -1,7 +1,7 @@
 // `defineContract`: the application's whole access surface as data. Browser-safe: it builds plain objects and
 // holds zod schemas; it validates nothing at runtime, `compileContract` does.
 
-import type { BuiltinRoleKey, ChallengeProvider, Locale, RpcCaller } from '@fabrika/auth-core'
+import type { BuiltinRoleKey, ChallengeProvider, Locale, MailTemplates, RpcCaller } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
 import {
 	type CronDeclaration,
@@ -97,6 +97,8 @@ export interface Presentation {
 	readonly locale?: Locale
 	/** The application's name there, plain text of one short line; absent, a wording without a name. */
 	readonly displayName?: string
+	/** The application's subject and text of IAM's e-mails, by message and language; absent, IAM's own wording. */
+	readonly mail?: MailTemplates
 }
 
 /** A vocabulary's presentation fields, copied one by one: each exists only when declared. */
@@ -104,6 +106,7 @@ export function presentationOf(vocabulary: Presentation): Presentation {
 	return {
 		...(vocabulary.locale === undefined ? {} : { locale: vocabulary.locale }),
 		...(vocabulary.displayName === undefined ? {} : { displayName: vocabulary.displayName }),
+		...(vocabulary.mail === undefined ? {} : { mail: vocabulary.mail }),
 	}
 }
 

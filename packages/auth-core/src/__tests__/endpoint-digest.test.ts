@@ -166,6 +166,16 @@ describe('contractDigest', () => {
 		expect(contractDigest({ ...notesArtifact, displayName: 'Notes' })).not.toBe(digest)
 		expect(contractDigest({ ...notesArtifact, displayName: 'Notes' })).not.toBe(contractDigest({ ...notesArtifact, displayName: 'Poznámky' }))
 	})
+
+	test('covers the e-mail templates only when the artifact carries them', () => {
+		const digest = contractDigest(notesArtifact)
+		const reset = { subject: 'Nové heslo', text: 'Heslo si nastavíte zde: {{actionUrl}}' }
+		expect(contractDigest({ ...notesArtifact, mail: undefined })).toBe(digest)
+		expect(contractDigest({ ...notesArtifact, mail: { reset: { cs: reset } } })).not.toBe(digest)
+		expect(contractDigest({ ...notesArtifact, mail: { reset: { cs: reset } } })).not.toBe(
+			contractDigest({ ...notesArtifact, mail: { reset: { cs: { ...reset, subject: 'Heslo' } } } }),
+		)
+	})
 })
 
 describe('the endpoint header', () => {

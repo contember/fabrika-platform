@@ -50,6 +50,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		...(artifact.directories === undefined ? {} : { directories: artifact.directories }),
 		...(artifact.locale === undefined ? {} : { locale: artifact.locale }),
 		...(artifact.displayName === undefined ? {} : { displayName: artifact.displayName }),
+		...(artifact.mail === undefined ? {} : { mail: artifact.mail }),
 	}
 }
 

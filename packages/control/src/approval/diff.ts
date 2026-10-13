@@ -16,6 +16,8 @@ import {
 	type FileCollectionArtifact,
 	isAttachmentShape,
 	JOB_SITE_PREFIX,
+	LOCALES,
+	MESSAGE_KINDS,
 	type MountArtifact,
 	type NumberShape,
 	type OutputShape,
@@ -802,8 +804,8 @@ function setChanges(subject: string, before: readonly string[], after: readonly 
 }
 
 /**
- * The words IAM shows a person signing in, setting a password or accepting an invitation of this application. They
- * grant nothing, but they stand beside a password field, so the approver reads every change.
+ * The words IAM shows a person signing in, setting a password or accepting an invitation of this application, and the
+ * wording of its e-mails, which carry IAM's one-time links. They grant nothing, but the approver reads every change.
  */
 function presentationChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
 	const changes: AccessChange[] = []
@@ -819,6 +821,11 @@ function presentationChanges(baseline: ContractArtifact, candidate: ContractArti
 			widening(`IAM speaks \`${candidate.locale ?? 'its default language'}\` on the application's sign-in, password and invitation pages and e-mails`),
 		)
 	}
+	const changed = MESSAGE_KINDS.flatMap((kind) =>
+		LOCALES.filter((locale) => canonicalJson(baseline.mail?.[kind]?.[locale] ?? null) !== canonicalJson(candidate.mail?.[kind]?.[locale] ?? null))
+			.map((locale) => `\`${kind}\` in \`${locale}\``)
+	)
+	if (changed.length > 0) changes.push(widening(`The application's wording of IAM's e-mails changes: ${changed.join(', ')}`))
 	return changes
 }
 
