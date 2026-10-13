@@ -232,14 +232,15 @@ change an uncommitted migration, migrate into a fresh schema with another `FABRI
 
 ## References
 
-Read the one you need before you write that part. Together they are one application to copy from:
-`app-setup.md` (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`,
-`endpoint.md` (access forms, which `over`, the caller's scopes, handles, lists, `fromRow`, `ctx.sql`, audited CSV
-downloads, members), `tests.md` (generated tests, seeds, `testKit`), `errors.md` (checker findings, type errors, runtime
-answers), `jobs.md`, `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of
-their own: `start.md`, a new application before its first table (its first test, adding the first table, installing
-and updating this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a
-link holder's files, HR's review with its history.
+Read the one you need before you write that part. Together they are one application to copy from: `app-setup.md`
+(`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`, `endpoint.md`
+(access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
+downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a caller's label, confirming a file ran),
+`errors.md` (checker findings, type errors, runtime answers), `jobs.md` (which dimension `ctx.within` names, the UTC
+day), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+`start.md`, a new application before its first table (its first test, adding the first table, installing and updating
+this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's
+files, HR's review with its history.
 
 ## Not built yet
 
@@ -611,6 +612,9 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
   for a `human` caller) and `ctx.requestId`.
+- `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
+  shows), or the id when the token carries none. For the caller's own name (a task one creates for oneself) store it; a
+  `ctx.members.get(ctx.principal.id)` lookup adds a directory read the approver sees.
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
 - Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
   together: the second one finds the version moved.
@@ -686,11 +690,14 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
   and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
   `min_<column>`, `max_<column>` per listed column. Over a `deals` table, `{ groupBy: ['stage'], count: true, sum:
   ['value'] }` answers `{ stage, count, sum_value }` per stage.
-  `sum_<column>` is text for an integer or `numeric` column, a number for a floating-point one, and `null` over no
-  rows; `min_`/`max_` are `null` over no rows too.
-- Convert such text with a checked conversion, never a bare `Number(…)` on a sum: past 2^53 − 1 a number rounds
-  silently. `exactInteger` in `logic.ts` below refuses instead; a count is far from that limit, so `Number(…)` is
-  fine there. Or keep the sum a string in the output (`z.string().regex(/^-?[0-9]+$/)`).
+  `sum_<column>` is typed `string | number | null` for every column: at runtime text for an integer or `numeric`
+  column, a number for a floating-point one. It is `null` when no row of the group has a value: over no rows (no
+  `groupBy`), or a nullable column that is null in every row of the group. `min_`/`max_` are `null` the same way. A
+  caller whose capability reaches no value gets no row at all (`[]`).
+- Convert a sum with a checked conversion, never a bare `Number(…)`: past 2^53 − 1 a number rounds silently.
+  `exactInteger` in `logic.ts` below takes what the type gives without `null` and refuses instead; a missing sum is
+  a total of zero (`exactInteger(row.sum_value ?? 0)`). A count is far from that limit, so `Number(…)` is fine
+  there. Or keep the sum a string in the output (`z.string().regex(/^-?[0-9]+$/)`).
 
 ## Business rules: `logic.ts`
 
@@ -698,9 +705,9 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 export const canClose = (status: 'open' | 'doing' | 'done'): boolean =>
 	status === 'doing'
 
-/** A `bigint` sum Postgres answers as text; one past 2^53 - 1 is refused, never rounded. */
-export const exactInteger = (text: string): number => {
-	const value = Number(text)
+/** An aggregate's sum, text or a number; one past 2^53 - 1 is refused, never rounded. */
+export const exactInteger = (sum: string | number): number => {
+	const value = Number(sum)
 	if (!Number.isSafeInteger(value)) {
 		throw new RangeError('the total is beyond the safe integer range')
 	}
@@ -1038,6 +1045,9 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   itself too.
 - `label` is `null` unless the caller also holds `members.manage` there, or the dimension opts in with
   `directory: 'labels'`, which widens like any other access change: then every endpoint below it reads labels too.
+- Under `directory: 'labels'` IAM answers a label for every member, but the type stays `string | null`: it does not
+  read the dimension's `directory` yet. Where a stored column or an output needs text, write `member.label ?? member.principalId`
+  (never `!` or a cast); that fallback is a branch no test reaches.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
 - Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
@@ -1433,6 +1443,14 @@ export const contract = app.contract((c) => ({
 - A job holds exactly its `actions`. `ctx.within(action, dimension)` is a `Within` of every value;
   `ctx.ref(action, dimension, id)` locates one object (404 when it is gone). Bind them with `ctx.db.over(within)`,
   `ctx.db.in(ref)` and `ctx.db.on(ref)`.
+- `ctx.within` names the dimension an endpoint's `over` would: the nearest of the rows' chain (tasks lie in a
+  project: `'project'`; `references/endpoint.md`). A job holds every value, so a farther one reaches the same rows;
+  the rule keeps a job's capability the same as the list endpoint's. `ctx.ref` names the row's own dimension (`'task'`).
+- "Today" is the UTC day (`new Date().toISOString().slice(0, 10)`), so a task turns overdue at the first run after its
+  due day ends in UTC, hours off an org's own midnight. When the product needs the org's day, ask the human: the
+  zone is a new column (an IANA name). The decision under the lock then takes the org's day, computed in `logic.ts`
+  with `new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(now)`, and the list filters with the UTC day plus
+  one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
 - An attempt that fails or outlives `timeout` (default 15 minutes) is retried up to `retries` times, so every write is
@@ -1446,7 +1464,7 @@ export const contract = app.contract((c) => ({
 
   ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
 
-  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
+  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'project')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
@@ -3019,12 +3037,18 @@ if (postgres !== null) {
 }
 ```
 
-- `testDatabase` migrates a throwaway schema; without `FABRIKA_TEST_POSTGRES_URL` it answers `null` and the file
-  registers no test. A skip proves nothing: run with the variable set.
+- `testDatabase` migrates a throwaway schema; without `FABRIKA_TEST_POSTGRES_URL` it answers `null`, prints
+  `<label> skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests`, and the file registers no test.
+  A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
+  count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
   membership role is granted in one value of its scope; an action without `scope` is a global grant, for which
   `ctx.within.values` is `'all'` (`kit.testCaller([{ action: 'tasks.read' }])`). `kind: 'machine'` presents a `px_`
   key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
+- A caller's `id` is `<kind>-<n>` and its `label` `<kind>-<n>@<app>.test`, `n` counting the kit's callers; pass
+  `{ id, label }` to fix either (`kit.testCaller(grants, { label: 'Ann' })`). The label is `ctx.principal.label`,
+  and the directory's label where it shows labels. Assert a stored label against `caller.label` or the directory's
+  answer (`members.list` above), never against a literal of the default form.
 - `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
   path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
 - A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`

@@ -105,6 +105,14 @@ export const contract = app.contract((c) => ({
 - A job holds exactly its `actions`. `ctx.within(action, dimension)` is a `Within` of every value;
   `ctx.ref(action, dimension, id)` locates one object (404 when it is gone). Bind them with `ctx.db.over(within)`,
   `ctx.db.in(ref)` and `ctx.db.on(ref)`.
+- `ctx.within` names the dimension an endpoint's `over` would: the nearest of the rows' chain (tasks lie in a
+  project: `'project'`; `references/endpoint.md`). A job holds every value, so a farther one reaches the same rows;
+  the rule keeps a job's capability the same as the list endpoint's. `ctx.ref` names the row's own dimension (`'task'`).
+- "Today" is the UTC day (`new Date().toISOString().slice(0, 10)`), so a task turns overdue at the first run after its
+  due day ends in UTC, hours off an org's own midnight. When the product needs the org's day, ask the human: the
+  zone is a new column (an IANA name). The decision under the lock then takes the org's day, computed in `logic.ts`
+  with `new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(now)`, and the list filters with the UTC day plus
+  one, since no zone is a day further ahead.
 - **Reads run outside the transaction; every write runs inside `ctx.transaction((tx) => …)`**, through `tx.db`, fenced
   by the attempt's lease. A write outside it is a type error that names `tx.db`.
 - An attempt that fails or outlives `timeout` (default 15 minutes) is retried up to `retries` times, so every write is
@@ -118,7 +126,7 @@ export const contract = app.contract((c) => ({
 
   ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
 
-  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'org')`). The version bump is yours to write.
+  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'project')`). The version bump is yours to write.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share

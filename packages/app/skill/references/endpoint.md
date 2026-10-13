@@ -84,6 +84,9 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
   for a `human` caller) and `ctx.requestId`.
+- `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
+  shows), or the id when the token carries none. For the caller's own name (a task one creates for oneself) store it; a
+  `ctx.members.get(ctx.principal.id)` lookup adds a directory read the approver sees.
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
 - Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
   together: the second one finds the version moved.
@@ -159,11 +162,14 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
   and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
   `min_<column>`, `max_<column>` per listed column. Over a `deals` table, `{ groupBy: ['stage'], count: true, sum:
   ['value'] }` answers `{ stage, count, sum_value }` per stage.
-  `sum_<column>` is text for an integer or `numeric` column, a number for a floating-point one, and `null` over no
-  rows; `min_`/`max_` are `null` over no rows too.
-- Convert such text with a checked conversion, never a bare `Number(…)` on a sum: past 2^53 − 1 a number rounds
-  silently. `exactInteger` in `logic.ts` below refuses instead; a count is far from that limit, so `Number(…)` is
-  fine there. Or keep the sum a string in the output (`z.string().regex(/^-?[0-9]+$/)`).
+  `sum_<column>` is typed `string | number | null` for every column: at runtime text for an integer or `numeric`
+  column, a number for a floating-point one. It is `null` when no row of the group has a value: over no rows (no
+  `groupBy`), or a nullable column that is null in every row of the group. `min_`/`max_` are `null` the same way. A
+  caller whose capability reaches no value gets no row at all (`[]`).
+- Convert a sum with a checked conversion, never a bare `Number(…)`: past 2^53 − 1 a number rounds silently.
+  `exactInteger` in `logic.ts` below takes what the type gives without `null` and refuses instead; a missing sum is
+  a total of zero (`exactInteger(row.sum_value ?? 0)`). A count is far from that limit, so `Number(…)` is fine
+  there. Or keep the sum a string in the output (`z.string().regex(/^-?[0-9]+$/)`).
 
 ## Business rules: `logic.ts`
 
@@ -171,9 +177,9 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 export const canClose = (status: 'open' | 'doing' | 'done'): boolean =>
 	status === 'doing'
 
-/** A `bigint` sum Postgres answers as text; one past 2^53 - 1 is refused, never rounded. */
-export const exactInteger = (text: string): number => {
-	const value = Number(text)
+/** An aggregate's sum, text or a number; one past 2^53 - 1 is refused, never rounded. */
+export const exactInteger = (sum: string | number): number => {
+	const value = Number(sum)
 	if (!Number.isSafeInteger(value)) {
 		throw new RangeError('the total is beyond the safe integer range')
 	}
@@ -511,6 +517,9 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   itself too.
 - `label` is `null` unless the caller also holds `members.manage` there, or the dimension opts in with
   `directory: 'labels'`, which widens like any other access change: then every endpoint below it reads labels too.
+- Under `directory: 'labels'` IAM answers a label for every member, but the type stays `string | null`: it does not
+  read the dimension's `directory` yet. Where a stored column or an output needs text, write `member.label ?? member.principalId`
+  (never `!` or a cast); that fallback is a branch no test reaches.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
 - Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
