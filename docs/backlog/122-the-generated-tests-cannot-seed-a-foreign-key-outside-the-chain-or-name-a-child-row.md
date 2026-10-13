@@ -33,8 +33,8 @@ endpoint that addresses a child row by id gets a sample id and a 404. Effort: Sâ
   `export const rows = { '<endpoint id>': { childId: '<child table>' } }`. The kit then seeds one row of that table
   under each world's target and sends its key. The leak case sends the other world's key.
 - Witness: the isolation fixture (`packages/cli/src/__tests__/fixtures/isolation-app/`) gains a nullable text
-  foreign key to a reference table and an `on` endpoint with a child id field, and its regenerated tests pass. The
-  advice at `references/tests.md:41` is then correct ([121](121-the-skills-gaps-found-by-the-private-dogfood.md)).
+  foreign key to a reference table and an `on` endpoint with a child id field, and its regenerated tests pass.
+  `references/tests.md` ("Fixtures and seeds") then drops "and not text" from its advice on such a key.
 
 ## Touch points
 

@@ -13,8 +13,7 @@ address or user agent as evidence. Effort: S–M, after one question to the huma
 
 A form runs no handler. It appends one row of its declared input fields to its inbox (`appendToInbox`, with the field
 check of `inboxProblems`, `packages/db/src/store.ts:1230`–`:1243`). The time of the submission is available through an
-inbox column with `DEFAULT now()` (a documentation gap, in
-[121](121-the-skills-gaps-found-by-the-private-dogfood.md)). The client address and the user agent never reach the
+inbox column with `DEFAULT now()`, which the skill's recipe shows (`received_at`). The client address and the user agent never reach the
 application. The private dogfood's intake records a consent's purpose, text version, method and time. Evidence of
 consent is often expected to include the client address or user agent as well, and the form cannot provide either.
 

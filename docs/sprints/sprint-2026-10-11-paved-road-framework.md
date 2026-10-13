@@ -491,6 +491,22 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   deleted on merge. WU23b (backlog 121, 123, 124) edits `packages/check/` and the skill's checklist in parallel; the
   second to merge rebases.
 
+### WU23b — The dogfood's cheap fixes (S)
+
+- **Problem.** WU21's agent met three gaps it could find only by probing tsc or the runtime: a form field named unlike
+  its inbox column passed tsc and the checker and first failed at boot; `unscoped: { <reference or inbox>: 'write' }`
+  passed both and answered 500; and fifteen points where the skill was silent or wrong (backlog 121, 123, 124).
+- **Scope.** The kit's `c.form` types its input by its inbox's columns (the honeypot and the challenge token exempt);
+  `compileContract` given `defineTables`' result checks the same (`inboxColumns`), and the static reader compiles
+  against the parsed policies, so `fabrika-check` reports it. `ReadOnlyUnscoped` refuses `'write'` of a reference or
+  inbox table at its key, and `buildArtifact` refuses it too; `insertUnscoped`'s refusal stays. `@fabrika/app/testing`
+  re-exports `IamMembershipRpc`, `ChallengeFetch` and `FileScanner`. Each skill entry is fixed in its reference file.
+- **Acceptance / witness.** Kit mistakes 33–35 (`kit-types.test.ts`), the matrix rows of `ReadOnlyUnscoped`,
+  `contract-refusals.test.ts` and `packages/check/src/__tests__/read-only-tables.test.ts`; `testing-exports.ts` pins
+  the three types; `skill-code.test.ts` compiles every block and migrates both catalogs.
+- **Touch points.** `packages/{app,db,check}`, `packages/app/skill/`, `examples/zerops-app/AGENTS.md`, the
+  local-stack source pin.
+
 ### Design review of the gap units (binding)
 
 A design review of WU14–WU21 at `77683fa2` added these requirements; each unit's acceptance includes them:
@@ -1071,3 +1087,15 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU23a — fixtures.** `packages/app/src/__tests__/app-wide-fixture/` (positions, the export log, the counts and the
   export of every candidate) with its generated tests committed and excluded from dprint; `app-access.test.ts` runs it
   through the production proxy decision on Postgres. The recipe materialized: tsc, `fabrika-check` 0/0, 69 tests.
+- **WU23b — the form's check sits at `appendTo`.** An `Unavailable` on `input` printed the whole zod type; at
+  `appendTo` the diagnostic is two short lines. Only `defineTables`' result carries an inbox's columns: the artifact
+  form compiles without the check (the runtime's `compileContract` over `scoped(tables).tables`), and `boot`'s
+  `inboxProblems` still covers it there; Control's `readContractSource(files)` parses the policies and checks it.
+  The artifact itself is unchanged, so no digest moves.
+- **WU23b — the skill's applications materialized again.** Base: tsc, `fabrika-check` 0/0, 76 tests, and a probe of the
+  two optional filters and the `priorities` lookup (404 for an unknown code). Intake (`full_name`, `received_at`): tsc,
+  `fabrika-check` 0/0, 44 tests, and a probe: `{ result: { received: true } }`, a replayed token 400, a camelCase
+  field 400, the job drains `full_name` into the candidate's name. The deps entry stays documentation: `testKit` gets
+  no `deps` override. Not fixed here: an unscoped `get(id)` of a reference or inbox table still fails at run time
+  (`row_address`), and `sql: 'write'` still writes a reference table (a code list an administrator edits is an application table,
+  WU23a).
