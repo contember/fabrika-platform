@@ -1131,13 +1131,17 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		})
 
 		const h = handler()
+		const before = now()
 		const res = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, verifier, requestId: 'req-exchange-1' }))
+		const after = now()
 		expect(res.status).toBe(200)
 		const body: unknown = await res.json()
 		// The four fields `HttpIamGateway.exchangeAuthCode` reads; an empty or absent one is a 503 there.
 		expect(prop(body, 'ok')).toBe(true)
 		expect(prop(body, 'returnUrl')).toBe('https://opice.test/private?page=2')
-		expect(prop(body, 'expiresAt')).toBe(now() + 3600)
+		// The session expires an hour after the exchange; a run that crosses a second boundary sees either second.
+		const expiresAt = prop(body, 'expiresAt')
+		expect(typeof expiresAt === 'number' && expiresAt >= before + 3600 && expiresAt <= after + 3600).toBe(true)
 		const session = prop(body, 'session')
 		expect(typeof session).toBe('string')
 
