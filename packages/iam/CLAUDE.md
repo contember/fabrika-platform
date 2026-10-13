@@ -228,9 +228,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   grant for an external (on Postgres the condition holds the role row `FOR SHARE` to commit, which a reconcile's
   rewrite of the row waits for, and an acceptance rolls back if its grant writes nothing); an external issues only a
   self-bound key (`issueKey`, `credentialStatements`' guard, device approval and claim); a reconcile that declares a
-  role not external while an external holds it is a 409 naming the
-  grants, plus a guard statement in the batch; and `computePermissions` drops such a grant, and gives an external no
-  bootstrap `admin` and no cross-app grant. OIDC never claims or creates an external principal: `resolveUserPrincipal`
+  role not external while an external holds it is a 409 naming the grants, plus a guard statement in the batch; and
+  `computePermissions` drops such a grant, and gives an external no bootstrap `admin` and no cross-app grant. OIDC never claims or creates an external principal: `resolveUserPrincipal`
   refuses it (`oidc_external_principal`), `claimInvitedUser` matches only an internal row, and the allowlist's
   known-principal bypass admits only an internal one. Only `principals.promote` (installation admin, audited) makes one
   internal, and it revokes the principal's sessions and spends its pending password actions in the same statement
