@@ -154,10 +154,11 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		sql: 'read',
 	})
 		.handle(async ({ ctx }) => ({
-			rows: await ctx.sql(
-				PipelineRow,
-			)`select d.stage, count(*)::int as deals from deals d
-				join companies c on c.id = d.company_id where c.org_id = ${ctx.target.value} group by d.stage`,
+			rows: await ctx.sql(PipelineRow)`
+				select d.stage, count(*)::int as deals
+				from deals d
+				where ${ctx.sql.scope(ctx.target, 'deals', 'd')}
+				group by d.stage`,
 		})),
 }))
 ```
