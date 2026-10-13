@@ -13,7 +13,7 @@ import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } 
 import { linksPredicate, linkValues } from './links'
 import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
-import { modelOf, type TableModel, type TableModels, updatableBy } from './policy'
+import { modelOf, namesAction, type TableModel, type TableModels, updatableBy } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	aggregateRows,
@@ -171,21 +171,6 @@ function writing<A extends unknown[], R>(
 	return refusal === undefined ? bound(site, method) : refused(site, 'read_only', refusal)
 }
 
-/** Whether the table names `action`: one of its table actions, or a column's own write action. */
-function names(model: TableModel, action: string): boolean {
-	const { read, insert, update, delete: remove } = model.actions
-	if (action === read || action === insert || action === update || action === remove) {
-		return true
-	}
-	const columns = ownKeys(model.columnWrites)
-	for (let index = 0; index < columns.length; index++) {
-		if (model.columnWrites[columns[index] ?? ''] === action) {
-			return true
-		}
-	}
-	return false
-}
-
 /**
  * The columns a capability of `action` reads: every one that declares no read action of its own, or exactly this
  * one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
@@ -210,7 +195,7 @@ function namedRef(context: TableContext, capability: unknown, dimension: string)
 	if (grant.kind !== 'ref' || grant.dimension !== dimension) {
 		throw new CapabilityError(`a read of ${table} here needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
-	if (!names(context.model, grant.action)) {
+	if (!namesAction(context.model, grant.action)) {
 		throw new CapabilityError(
 			`${table} does not name the action '${grant.action}': read it from an endpoint whose action ${table} names, or declare unscoped`,
 		)
@@ -446,7 +431,7 @@ function namedApp(context: TableContext, capability: unknown): string {
 	if (grant.kind !== 'app') {
 		throw new CapabilityError(`a read of ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
-	if (!names(context.model, grant.action)) {
+	if (!namesAction(context.model, grant.action)) {
 		throw new CapabilityError(`${table} does not name the action '${grant.action}': read it from an app endpoint whose action ${table} names`)
 	}
 	return grant.action

@@ -559,6 +559,21 @@ export function updatableBy(model: TableModel, action: string): NameSet {
 	return nameSet(columns)
 }
 
+/** Whether the table names `action`: one of its table actions, or a column's own write action. */
+export function namesAction(model: TableModel, action: string): boolean {
+	const { read, insert, update, delete: remove } = model.actions
+	if (action === read || action === insert || action === update || action === remove) {
+		return true
+	}
+	const columns = ownKeys(model.columnWrites)
+	for (let index = 0; index < columns.length; index++) {
+		if (model.columnWrites[columns[index] ?? ''] === action) {
+			return true
+		}
+	}
+	return false
+}
+
 /** Every action that updates a column of `model`: its update action and each column's own write action. */
 export function updateActions(model: TableModel): readonly string[] {
 	const actions: string[] = model.actions.update === undefined ? [] : [model.actions.update]

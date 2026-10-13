@@ -18,6 +18,8 @@ export const vocabulary = {
 		'workspaces.admin': 'Administer workspaces',
 		'secrets.admin': 'Administer secrets',
 		'contact.read': 'Read the contact inbox',
+		'settings.read': 'Read the settings',
+		'settings.edit': 'Edit the settings',
 	},
 	roles: {},
 } as const
@@ -60,6 +62,12 @@ export const tables = defineTables(vocabulary, columns)({
 	secrets: {
 		scope: { dimension: 'secret' },
 		actions: { read: 'secrets.admin' },
+	},
+	settings: {
+		scope: { app: 'settings an administrator edits' },
+		actions: { read: 'settings.read', insert: 'settings.edit', update: 'settings.edit' },
+		insert: ['value'],
+		update: ['value'],
 	},
 	countries: { scope: { reference: 'read-only lookup data' }, actions: { read: 'notes.read' } },
 	contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },

@@ -375,7 +375,8 @@ names the same fix at runtime.
 - **Application-wide data is the `app` form's.** An application table (`scope: { app: '<why>' }`, key `id` unless
   `key` names another, generated on insert) belongs to no dimension: no chain, no container, every other policy field
   as a dimension table's. Only an `app` endpoint reaches it on the road, because the proxy admits that endpoint only
-  for a global grant of its action; `ctx.app` is that capability, and `ctx.sql.scope(ctx.app, table)` is every row.
+  for a global grant of its action; `ctx.app` is that capability, and `ctx.sql.scope(ctx.app, table)` is every row of
+  a table `ctx.db.app` lists for that action, refused for any other.
   The same handle reads every dimension and child table whose read action is the endpoint's, so an audited export of
   every record is one `app` mutation that lists the records and inserts its log row into an application table whose
   insert action is the export's. A reference table stays read-only and migration-managed.
@@ -423,8 +424,8 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
 - **`` ctx.sql(Row)`…` ``** exists only on a site that declares `sql` (a job: `tx.sql`, inside `ctx.transaction`).
   `ctx.sql` has no scope predicate of its own: `${ctx.sql.scope(capability, table, alias?)}` interpolates the
   capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
-  a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty — with each
-  value a bound parameter. A table the capability does not reach is refused, and a fragment of another site is refused.
+  a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty, an `app`
+  capability's every row — with each value a bound parameter. A table the capability does not reach is refused, and a fragment of another site is refused.
   The fragment must be a conjunct: alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
   level holds no OR (`where (<filter>) and ${…}`); any interpolation inside a literal, a quoted name, a dollar body or a
   comment is refused, a fragment with no value included. A reference table needs no fragment.

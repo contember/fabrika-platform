@@ -235,6 +235,12 @@ function policiesOf(): unknown {
 			insert: ['reason'],
 		},
 		secrets: { scope: { dimension: 'secret' }, actions: { read: 'secrets.admin' } },
+		settings: {
+			scope: { app: 'settings an administrator edits' },
+			actions: { read: 'settings.read', insert: 'settings.edit', update: 'settings.edit' },
+			insert: ['value'],
+			update: ['value'],
+		},
 		countries: { scope: { reference: 'read-only lookup data' }, actions: { read: 'notes.read' } },
 		contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },
 	}

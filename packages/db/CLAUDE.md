@@ -67,7 +67,8 @@ applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before t
 each staged-kit site's `ctx.db`, which read `reference` tables too. An application table (`scope: { app: '<why>' }`,
 `ApplicationPolicy`) belongs to no dimension: its key is generated on insert, it has no chain, and only an `app`
 capability (`AppGrant`, the action held as a global grant) reaches it, through `ctx.db.app` (`applicationTables` in
-`orm.ts`; `appGrant`, `appListPredicate`, `appRowPredicate`, `updatingApp` and `insertIntoApplication` in `store.ts`),
+`orm.ts`; `appGrant`, `checkAppReach`, `appListPredicate`, `appRowPredicate`, `updatingApp` and `insertIntoApplication`
+in `store.ts`, which address a row and write in an application table only),
 which also lists every dimension and child table whose read action is the capability's, with the predicate `true`.
 Not built yet: reading an inbox on the road (an `unscoped` declaration reads it).
 
@@ -282,8 +283,10 @@ and the target `Ref`, so no handler can call it.
   SQL, a builder or an unguarded node.
 - **`ctx.sql.scope(capability, table, alias?)` is the one interpolation that is not a single parameter.** It renders
   `scopeTerms` (`store.ts`): a `Ref`'s object column and every link of its chain (`linkValues`), a `Within`'s values
-  and container grants as `ctx.db.within` matches them, `(true)` for `all`, `(false)` when empty; a table the
-  capability does not reach is refused as the handles refuse it. A fragment is a frozen object without a prototype;
+  and container grants as `ctx.db.within` matches them, `(true)` for `all`, `(false)` when empty, and `(true)` for an
+  `app` capability on a table `ctx.db.app` lists for it (`checkAppReach`: an application table under any action it
+  names, a dimension or child table under its read action only); a table the capability does not reach is refused as
+  the handles refuse it. A fragment is a frozen object without a prototype;
   what it holds lives in a module-private `WeakMap` read through methods bound at load, so no object an application
   builds or patches passes for one, and the tag refuses a fragment of another site. Before it splices anything, the
   tag checks every interpolation's place in the original text (code level, not a literal, a quoted name, a dollar

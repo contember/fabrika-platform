@@ -9,13 +9,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
-import { type InvocationTransaction, runApplicationStatement, type Session } from '../database'
-import { DatabaseError, QueryRefusedError, SqlRowError } from '../errors'
+import { Database, type InvocationTransaction, runApplicationStatement, type Session } from '../database'
+import { CapabilityError, DatabaseError, QueryRefusedError, SqlRowError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
 import { classifySql, type ScopeTerms, type SqlMode, type SqlTag, sqlTag } from '../sql'
 import { scoped } from '../store'
 import { type TestDatabase, testDatabase } from '../testing'
 import { TestAuthority } from './fixtures/authority'
+import { RecordingDialect } from './fixtures/recording-dialect'
 import { migration } from './fixtures/schema'
 import { tables } from './fixtures/tables'
 
@@ -295,6 +296,57 @@ describe('the tag, before anything is sent', () => {
 	})
 })
 
+describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', () => {
+	const dialect = new RecordingDialect()
+	const authority = new TestAuthority('user:alice')
+	const layer = scoped(tables)
+	bindScopedDatabase(layer, { database: Database.fromDialect(dialect), capabilities: authority })
+	const access = dataAccessOf(layer)
+	const session = access.direct()
+	const sql = access.sql({ mode: 'read', check() {}, session: async () => session, fail: () => session.fail() })
+
+	test('a dimension or child table by its read action: every row', async () => {
+		dialect.log.length = 0
+		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.read'), 'notes', 'n')}`
+		await sql(z.object({}))`select c.id from note_comments c where ${sql.scope(authority.app('notes.read'), 'note_comments', 'c')}`
+		await sql(z.object({}))`select f.id from note_flags f where ${sql.scope(authority.app('notes.delete'), 'note_flags', 'f')}`
+		expect(dialect.log.map((statement) => statement.sql)).toEqual([
+			'select n.id from notes n where (true)',
+			'select c.id from note_comments c where (true)',
+			'select f.id from note_flags f where (true)',
+		])
+	})
+
+	test('a dimension or child table by any other action is refused, as ctx.db.app does not list it', () => {
+		expect(() => sql.scope(authority.app('secrets.admin'), 'notes')).toThrow(
+			'an app capability of secrets.admin does not reach notes: ctx.db.app lists it for its read action notes.read only',
+		)
+		expect(() => sql.scope(authority.app('notes.write'), 'notes')).toThrow('ctx.db.app lists it for its read action notes.read only')
+		expect(() => sql.scope(authority.app('notes.read'), 'note_flags')).toThrow('ctx.db.app lists it for its read action notes.delete only')
+		expect(() => sql.scope(authority.app('notes.read'), 'secrets')).toThrow(CapabilityError)
+	})
+
+	test('an application table by any action its policy names, and by no other', async () => {
+		dialect.log.length = 0
+		await sql(z.object({}))`select s.id from settings s where ${sql.scope(authority.app('settings.read'), 'settings', 's')}`
+		await sql(z.object({}))`select s.id from settings s where ${sql.scope(authority.app('settings.edit'), 'settings', 's')}`
+		expect(dialect.log.map((statement) => statement.sql)).toEqual([
+			'select s.id from settings s where (true)',
+			'select s.id from settings s where (true)',
+		])
+		expect(() => sql.scope(authority.app('notes.read'), 'settings')).toThrow(
+			'an app capability of notes.read does not reach settings: settings does not name the action',
+		)
+	})
+
+	test('a reference or inbox table is refused, whatever its read action', () => {
+		expect(() => sql.scope(authority.app('notes.read'), 'countries')).toThrow(
+			'an app capability does not reach countries: ctx.db.app lists application, dimension and child tables only',
+		)
+		expect(() => sql.scope(authority.app('contact.read'), 'contact_messages')).toThrow('an app capability does not reach contact_messages')
+	})
+})
+
 const label = 'raw-sql.test.ts'
 const migrations = mkdtempSync(join(tmpdir(), 'fabrika-db-raw-sql-'))
 writeFileSync(join(migrations, '20261012120000_init.sql'), migration)
@@ -547,6 +599,25 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 		expect(await ids((sql) => sql.scope(mixed, 'notes', 'n'))).toEqual(['scope-2', 'scope-3'])
 		expect(await ids((sql) => sql.scope(alice.within('organization', 'notes.read', 'all'), 'notes', 'n'))).toEqual(['scope-1', 'scope-2', 'scope-3'])
 		expect(await ids((sql) => sql.scope(alice.within('workspace', 'notes.read', []), 'notes', 'n'))).toEqual([])
+	})
+
+	test('an app capability matches every row of a table ctx.db.app lists for its action, and is refused any other', async () => {
+		expect(await ids((sql) => sql.scope(alice.app('notes.read'), 'notes', 'n'))).toEqual(['scope-1', 'scope-2', 'scope-3'])
+		const writer = invocation('write')
+		await writer.sql(z.object({}))`insert into settings (id, value) values ('setting-1', 'a'), ('setting-2', 'b')`
+		await writer.transaction.commit()
+		const work = invocation('read', true)
+		try {
+			const settings = async (action: string) =>
+				(await work.sql(Id)`select s.id from settings s where ${work.sql.scope(alice.app(action), 'settings', 's')} order by s.id`).map((row) => row.id)
+			expect(await settings('settings.read')).toEqual(['setting-1', 'setting-2'])
+			expect(await settings('settings.edit')).toEqual(['setting-1', 'setting-2'])
+			expect(() => work.sql.scope(alice.app('notes.read'), 'settings')).toThrow('settings does not name the action')
+			expect(() => work.sql.scope(alice.app('secrets.admin'), 'notes')).toThrow('ctx.db.app lists it for its read action notes.read only')
+			expect(() => work.sql.scope(alice.app('notes.read'), 'countries')).toThrow('an app capability does not reach countries')
+		} finally {
+			await work.transaction.rollback()
+		}
 	})
 
 	test('the values are parameters: a value that would be SQL matches nothing', async () => {

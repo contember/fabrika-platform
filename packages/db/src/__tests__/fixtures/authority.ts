@@ -1,4 +1,15 @@
-import type { CapabilityAuthority, CapabilityGrant, ContainerGrant, LeaseFence, Ref, RefGrant, Within, WithinGrant } from '../../capability'
+import type {
+	AppCapability,
+	AppGrant,
+	CapabilityAuthority,
+	CapabilityGrant,
+	ContainerGrant,
+	LeaseFence,
+	Ref,
+	RefGrant,
+	Within,
+	WithinGrant,
+} from '../../capability'
 import { CapabilityError } from '../../errors'
 
 class TestRef<D extends string, A extends string> implements Ref<D, A> {
@@ -31,6 +42,21 @@ class TestWithin<D extends string, A extends string> implements Within<D, A> {
 	}
 }
 
+class TestApp<A extends string> implements AppCapability<A> {
+	declare readonly '~capability': { readonly kind: 'app'; readonly action: A }
+	readonly #grant: AppGrant
+	readonly #issuer: TestAuthority
+
+	constructor(grant: AppGrant, issuer: TestAuthority) {
+		this.#grant = grant
+		this.#issuer = issuer
+	}
+
+	static read(value: unknown, issuer: TestAuthority): AppGrant | undefined {
+		return typeof value === 'object' && value !== null && #grant in value && value.#issuer === issuer ? value.#grant : undefined
+	}
+}
+
 /** Stands in for the framework: mints capabilities and resolves only its own. Request binding is not modelled. */
 export class TestAuthority implements CapabilityAuthority {
 	readonly #principal: string
@@ -58,8 +84,13 @@ export class TestAuthority implements CapabilityAuthority {
 		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers }, this)
 	}
 
+	/** The capability of an `app` endpoint: `action` held as a global grant. */
+	app<const A extends string>(action: A): AppCapability<A> {
+		return new TestApp({ kind: 'app', action, principal: this.#principal }, this)
+	}
+
 	resolve(capability: unknown): CapabilityGrant {
-		const grant = TestRef.read(capability, this) ?? TestWithin.read(capability, this)
+		const grant = TestRef.read(capability, this) ?? TestWithin.read(capability, this) ?? TestApp.read(capability, this)
 		if (grant === undefined) {
 			throw new CapabilityError('not a capability of this request')
 		}

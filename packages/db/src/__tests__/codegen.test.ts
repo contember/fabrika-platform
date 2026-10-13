@@ -217,6 +217,7 @@ export const tables = defineTables(vocabulary, columns)({
 	notes: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	organizations: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	secrets: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	settings: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	workspaces: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 })
 `

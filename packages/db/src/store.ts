@@ -80,6 +80,7 @@ import {
 	type ListDimensionOf,
 	modelOf,
 	type MoveAcknowledgement,
+	namesAction,
 	type Operation,
 	type ParentOf,
 	type PolicyRow,
@@ -329,8 +330,9 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 /**
  * `ctx.sql.scope`'s predicate: what the handles of `capability` match in the table, as column tests. A `Ref` matches
  * its object's column and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values,
- * each container grant on its own column, or every row for `all`). A capability whose dimension the table does not
- * carry is refused, as the handles refuse it.
+ * each container grant on its own column, or every row for `all`); an `app` capability matches every row of a table
+ * `ctx.db.app` lists for it. A capability whose dimension the table does not carry, or a table `ctx.db.app` does not
+ * list, is refused, as the handles refuse it.
  */
 export function scopeTerms(context: TableContext, capability: unknown): ScopeTerms {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
@@ -347,7 +349,8 @@ export function scopeTerms(context: TableContext, capability: unknown): ScopeTer
 		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
 	}
 	if (grant.kind === 'app') {
-		// The action is held as a global grant, so its scope is every row.
+		// The action is held as a global grant, so its scope is every row of a table it reaches.
+		checkAppReach(context, grant)
 		return 'all'
 	}
 	const column = reachColumn(model, grant.dimension)
@@ -407,6 +410,37 @@ export function updatingRef(context: TableContext, capability: unknown, dimensio
 }
 
 /**
+ * Refuses a table `ctx.db.app` does not list for the capability (`applicationTables` in `orm.ts`): it lists an
+ * application table under any action the table names, and a dimension or child table under its read action only.
+ */
+function checkAppReach(context: TableContext, grant: AppGrant): void {
+	const model = context.model
+	const mode = model.scope.mode
+	if (mode === 'app') {
+		if (!namesAction(model, grant.action)) {
+			throw new CapabilityError(`an app capability of ${grant.action} does not reach ${model.name}: ${model.name} does not name the action`)
+		}
+		return
+	}
+	if (mode !== 'dimension' && mode !== 'child') {
+		throw new CapabilityError(`an app capability does not reach ${model.name}: ctx.db.app lists application, dimension and child tables only`)
+	}
+	const action = requiredAction(context, 'read')
+	if (grant.action !== action) {
+		throw new CapabilityError(
+			`an app capability of ${grant.action} does not reach ${model.name}: ctx.db.app lists it for its read action ${action} only`,
+		)
+	}
+}
+
+/** An `app` capability addresses a row by its key, and writes, only in an application table. */
+function checkApplicationTable(context: TableContext, operation: Operation): void {
+	if (context.model.scope.mode !== 'app') {
+		throw new CapabilityError(`${operation} of a ${context.model.name} row needs a Ref: an app capability addresses and writes application tables only`)
+	}
+}
+
+/**
  * The capability of an `app` endpoint for `operation` on `table`: its action is that operation's. An application table
  * is written with it, and a dimension or child table read with it.
  */
@@ -416,6 +450,10 @@ function appGrant(context: TableContext, capability: unknown, operation: Operati
 	if (grant.kind !== 'app') {
 		throw new CapabilityError(`${operation} on ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
+	if (operation !== 'read') {
+		checkApplicationTable(context, operation)
+	}
+	checkAppReach(context, grant)
 	const action = requiredAction(context, operation)
 	if (grant.action !== action) {
 		throw new CapabilityError(`${operation} on ${table} requires ${action}; the capability holds ${grant.action}`)
@@ -431,6 +469,7 @@ export function appListPredicate(context: TableContext, capability: unknown): Op
 
 /** One row of an application table by its key, for an `app` capability of `operation`'s action. */
 export function appRowPredicate(context: TableContext, capability: unknown, key: unknown, operation: Operation): OperationNode {
+	checkApplicationTable(context, operation)
 	appGrant(context, capability, operation)
 	return appKeyPredicate(context.model, key)
 }
@@ -453,6 +492,7 @@ export function updatingApp(context: TableContext, capability: unknown): AppGran
 	if (grant.kind !== 'app') {
 		throw new CapabilityError(`update on ${table} needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
+	checkApplicationTable(context, 'update')
 	const actions = updateActions(context.model)
 	if (actions.length === 0) {
 		throw new CapabilityError(`${table} allows no update; its policy declares no update action`)

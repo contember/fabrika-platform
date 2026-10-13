@@ -53,6 +53,11 @@ export interface SecretsTable {
 	value: string
 }
 
+export interface SettingsTable {
+	id: string
+	value: string
+}
+
 export interface WorkspacesTable {
 	id: string
 	organization_id: string
@@ -68,6 +73,7 @@ export interface DB {
 	notes: NotesTable
 	organizations: OrganizationsTable
 	secrets: SecretsTable
+	settings: SettingsTable
 	workspaces: WorkspacesTable
 }
 
@@ -149,6 +155,13 @@ export const columns: TypedColumnList<DB> = {
 		foreignKeys: [],
 	},
 	'secrets': {
+		columns: [
+			'id',
+			'value',
+		],
+		foreignKeys: [],
+	},
+	'settings': {
 		columns: [
 			'id',
 			'value',

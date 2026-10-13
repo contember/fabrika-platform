@@ -45,6 +45,7 @@ create table note_flags (
 	foreign key (note_id, workspace_id, organization_id) references notes (id, workspace_id, organization_id) on update cascade on delete cascade
 );
 create table secrets (id text primary key, value text not null);
+create table settings (id text primary key, value text not null);
 create table countries (code text primary key, name text not null);
 create table contact_messages (id text primary key, email text not null, body text not null);
 `
