@@ -30,8 +30,8 @@ For the group under trial, from the root of a fabrika-platform checkout that sti
    the `jobs: { overdue }` section. Leave the
    `attachments` collection, the SPA mount and the health check.
 4. Delete `src/__tests__/endpoint-access.test.ts` (the agent regenerates it with `fabrika db test-scaffold`) and the
-   authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` for A
-   and B. Keep them for the judge.
+   authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` and
+   `src/tasks/__tests__/overdue.test.ts` (it creates a company and a deal) for A and B. Keep them for the judge.
 5. In `src/__tests__/endpoint-access.fixtures.ts`, delete every `seeds` and `members` entry of a removed endpoint, and
    keep the others (the checker refuses an entry of an endpoint that does not exist): for B the two `api.deals.*` seeds
    and `members['api.deals.assign']`, for C `members['api.tasks.create']`. A, D and E change nothing there.
