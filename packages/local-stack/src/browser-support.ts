@@ -29,6 +29,7 @@ export {
 	waitForNotesDeploy,
 } from './notes-agent-change'
 export { followNotesDeploy } from './notes-follow'
+export { createPasswordPerson, issuePasswordLink, type PasswordPerson } from './password-person'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'

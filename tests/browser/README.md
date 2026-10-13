@@ -65,6 +65,11 @@ invalidates every IAM session. Always use `OPICE_AUTH_REFRESH=1` after a reset.
 - The `notes-agent-change` seed deploys Notes at its pinned commit and parks the
   agent change commit for approval. Its scenario approves that run, so it runs once
   per stack: rerun it after `browser:reset`.
+- The Notes password scenario creates its own reader through IAM's admin surface
+  (`createPasswordPerson`). The stack has no e-mail sender, so IAM hands the
+  administrator each enrollment and reset link (manual delivery) and offers no
+  forgot-password or invitation; no e-mail is ever seen. Notes declares
+  `locale: 'cs'`, so its sign-in page is Czech.
 - `Hidden sibling / secret` is the negative access-control witness. Never expose
   its identifiers, release, health data, DSN, or alert target in output.
 
