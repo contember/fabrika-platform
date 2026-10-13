@@ -1471,8 +1471,8 @@ visitor do. The visitor never reaches a handler without a credential:
 
 1. **A public page** (`c.spa('/', { access: { public: true } })`) holds the form. It reads no data.
 2. **A form** appends one row to its inbox table and answers `{ result: { received: true } }`, for a new and a known
-   address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
-   a known address would tell a stranger who registered.
+   address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different
+   answer for a known address would tell a stranger who registered.
 3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
    Each form kicks it (`then: 'intake'`), so it runs within seconds of a submission; its schedule is the recovery.
 4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
@@ -2391,9 +2391,8 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
 - The job asks IAM to issue and revoke links, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an
   `IamMembershipRpc` of your own that answers `issueLink` and `revokeLink`. A test of a form passes `env: {
   TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
-  `challengeToken` with each submission: a token is single use. Test each stop of a
-  delivery (a refused e-mail, IAM down, a crash after each step): the next run must leave exactly one live, e-mailed
-  link.
+  `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
+  down, a crash after each step): the next run must leave exactly one live, e-mailed link.
 - A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
   submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
 - The e-mail provider is a stand-in too: `testKit(app, { env: { MAIL_API_URL, MAIL_API_KEY: 'test', INTAKE_ORIGIN:
