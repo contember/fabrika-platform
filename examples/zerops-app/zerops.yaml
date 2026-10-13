@@ -1,12 +1,14 @@
 # The build/run descriptor at this app repository's root.
 #
-# This directory is mirrored unchanged to `contember/fabrika-example-zerops` with `git subtree split`.
+# This directory is mirrored unchanged to `contember/fabrika-example-zerops` (see README.md).
 # It remains a workspace fixture here, but it is the complete root tree in the standalone repository.
 # All paths below are therefore relative to this directory in both locations.
 #
-# `setup` must match the service hostname (`notesapi`), which is also what `zeropsSetup` in
-# `fabrika.config.ts` selects. One setup here, because one service in this repo carries code; the
-# `notesdb` PostgreSQL service is provisioned by the import document and has nothing to build.
+# Two setups for the one service that carries code, one per placement. `zeropsSetup` in the app config
+# selects one, and only that setup reaches Zerops: `notesapi` (`fabrika.config.ts`) reads the app's own
+# `notesdb`, and `notesapi-shared-postgres` (`fabrika.cheap.config.ts`) reads the namespace-owned
+# `postgres`. The second setup repeats the first in full rather than using `extends`: Zerops merges
+# `extends` per whole section, so the `run` holding the database reference would be repeated anyway.
 #
 # Hand-written, unlike fabrika-platform's generated descriptor. Its test suite validates this file
 # against Zerops' published `zerops.yaml` JSON schema.
@@ -132,4 +134,47 @@ zerops:
         # `require` is the strongest mode there is.
         NOTES_DATABASE_URL: ${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require
         # Must equal `id` in fabrika.config.ts and the `aud` of every token minted for this app.
+        NOTES_APP_ID: notes
+
+  # The cheap tier: identical but for the database, which is the namespace's shared `postgres`.
+  - setup: notesapi-shared-postgres
+    build:
+      base:
+        - alpine/bun@1.3
+      buildCommands:
+        - bun install --frozen-lockfile
+      deployFiles:
+        - package.json
+        - bun.lock
+        - node_modules
+        - src
+      cache:
+        - node_modules
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: /healthz
+        retryPeriod: 10s
+        failureTimeout: 180s
+    run:
+      base: alpine/bun@1.3
+      initCommands:
+        - bun src/migrate.ts
+      start: bun src/server.ts
+      ports:
+        - port: 3000
+          httpSupport: true
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /healthz
+        execPeriod: 10s
+        disconnectTimeout: 30s
+        recoveryTimeout: 10s
+        failureTimeout: 120s
+      envVariables:
+        PORT: "3000"
+        # Must match `useSharedPostgres()` exactly — a test asserts it.
+        NOTES_DATABASE_URL: ${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require
         NOTES_APP_ID: notes

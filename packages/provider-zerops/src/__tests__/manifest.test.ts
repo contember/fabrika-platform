@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { prepareZeropsDescriptor } from '../descriptor'
 import { assertAuthoredManagedDocument, overlayRelease } from '../managed-env'
 import {
 	assertFabrikaManifestCoordinates,
@@ -340,21 +341,31 @@ describe('release overlay', () => {
 	const TWO_SETUPS =
 		'zerops:\n  - setup: api\n    run:\n      envVariables:\n        OWN: kept\n  - setup: worker\n    run:\n      start: bun worker.ts\n'
 
-	test('writes FABRIKA_RELEASE as a literal into the selected setup only', () => {
+	test('writes FABRIKA_RELEASE as a literal into the selected setup, the only one executed', () => {
 		const execution = overlayRelease(TWO_SETUPS, 'worker', 'release-1')
 		expect(execution.setup).toBe('worker')
 		expect(Bun.YAML.parse(execution.contents)).toEqual({
-			zerops: [
-				{ setup: 'api', run: { envVariables: { OWN: 'kept' } } },
-				{ setup: 'worker', run: { start: 'bun worker.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } },
-			],
+			zerops: [{ setup: 'worker', run: { start: 'bun worker.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } }],
 		})
 	})
 
 	test('omits the key when the release is null', () => {
 		const execution = overlayRelease(TWO_SETUPS, 'api', null)
 		expect(execution.contents).not.toContain('FABRIKA_RELEASE')
-		expect(Bun.YAML.parse(execution.contents)).toEqual(Bun.YAML.parse(TWO_SETUPS))
+		expect(Bun.YAML.parse(execution.contents)).toEqual({ zerops: [{ setup: 'api', run: { envVariables: { OWN: 'kept' } } }] })
+	})
+
+	test('keeps an extended parent and refuses to replace the run section a setup inherits', () => {
+		const extending =
+			'zerops:\n  - setup: base\n    run:\n      start: bun server.ts\n  - setup: shared\n    extends: base\n    run:\n      start: bun shared.ts\n'
+		expect(Bun.YAML.parse(overlayRelease(extending, 'shared', 'release-1').contents)).toEqual({
+			zerops: [
+				{ setup: 'shared', extends: 'base', run: { start: 'bun shared.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } },
+				{ setup: 'base', run: { start: 'bun server.ts' } },
+			],
+		})
+		const inheriting = 'zerops:\n  - setup: base\n    run:\n      start: bun server.ts\n  - setup: shared\n    extends: base\n'
+		expect(() => overlayRelease(inheriting, 'shared', 'release-1')).toThrow('must declare its own run section')
 	})
 
 	test('refuses a release that Zerops would read as a reference', () => {
@@ -368,13 +379,41 @@ describe('release overlay', () => {
 })
 
 describe('cross-service variable references', () => {
-	test('checks decoded keys and unknown leaves in unselected setups', async () => {
+	test('checks decoded keys and unknown leaves in the selected setup and every setup it extends', async () => {
 		for (const extra of ['{"\\x24{proxy_FABRIKA_IAM_KEY}": safe}', '{future: ["\\x24{proxy_FABRIKA_IAM_KEY}"]}']) {
-			const descriptor = await createZeropsArtifactSourceDescriptor(`zerops: [{setup: notes}, {setup: unused, extra: ${extra}}]`)
-			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+			const selected = await createZeropsArtifactSourceDescriptor(`zerops: [{setup: notes, extra: ${extra}}]`)
+			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', selected)).toThrow(
+				'references service',
+			)
+			const inherited = await createZeropsArtifactSourceDescriptor(
+				`zerops: [{setup: notes, extends: base, run: {start: bun server.ts}}, {setup: base, extra: ${extra}}]`,
+			)
+			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', inherited)).toThrow(
 				'references service',
 			)
 		}
+	})
+	test('checks the whole executed document, not only its setups', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor(
+			'project: {envVariables: {X: "\\x24{proxy_FABRIKA_IAM_KEY}"}}\nzerops: [{setup: notes}]',
+		)
+		expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+			'references service `proxy`',
+		)
+	})
+	test('refuses at registration a selected setup that inherits run, which the deploy could not overlay', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor('zerops: [{setup: base, run: {start: bun server.ts}}, {setup: notes, extends: base}]')
+		expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+			'must declare its own run section',
+		)
+	})
+	test('accepts a sibling setup for another placement, which never reaches this app', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor(
+			'zerops: [{setup: notes}, {setup: other, run: {envVariables: {URL: "\\x24{proxy_FABRIKA_IAM_KEY}"}}}]',
+		)
+		const manifest = compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)
+		expect(manifest.target.sourceDescriptor).toEqual(descriptor)
+		expect(prepareZeropsDescriptor(descriptor.contents, 'notes').contents).not.toContain('proxy_FABRIKA_IAM_KEY')
 	})
 	test('validates the selector at the manifest boundary while preserving original identity', async () => {
 		const descriptor = await createZeropsArtifactSourceDescriptor('# original\r\nzerops: [{setup: notes}, {setup: worker}]\r\n')
@@ -432,12 +471,20 @@ describe('cross-service variable references', () => {
 		await expect(compileNotes('zerops:\n  - setup: notesapi\n   bad: [1,\n')).rejects.toThrow('zerops.yaml is not parseable YAML')
 	})
 
-	test('accepts both committed example descriptors unchanged', async () => {
-		const own = await compileNotes(await exampleDescriptor('zerops.yaml'))
-		const shared = await compileNotes(await exampleDescriptor('zerops.shared-postgres.yaml'), sharedPostgresConfig)
-		expect(own.target.sourceDescriptor.contents).toContain('${notesdb_connectionTlsString}')
-		expect(shared.target.sourceDescriptor.contents).toContain('${postgres_connectionTlsString}')
+	test('accepts the committed example descriptor for both placements, each executing only its own setup', async () => {
+		const contents = await exampleDescriptor('zerops.yaml')
+		const own = await compileNotes(contents, { ...notesConfig, target: { ...notesConfig.target, zeropsSetup: 'notesapi' } })
+		const shared = await compileNotes(contents, {
+			...sharedPostgresConfig,
+			target: { ...sharedPostgresConfig.target, zeropsSetup: 'notesapi-shared-postgres' },
+		})
+		expect(own.target.sourceDescriptor.contents).toBe(contents)
+		expect(shared.target.sourceDescriptor.contents).toBe(contents)
+		expect(prepareZeropsDescriptor(contents, 'notesapi').contents).not.toContain('postgres_')
+		expect(prepareZeropsDescriptor(contents, 'notesapi-shared-postgres').contents).not.toContain('notesdb_')
 		expect(manifestServiceHostnames(own)).toEqual(['notesdb', 'notesapi'])
 		expect(manifestServiceHostnames(shared)).toEqual(['notesapi'])
+		await expect(compileNotes(contents, { ...sharedPostgresConfig, target: { ...sharedPostgresConfig.target, zeropsSetup: 'notesapi' } }))
+			.rejects.toThrow('references service `notesdb`')
 	})
 })

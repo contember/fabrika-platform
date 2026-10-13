@@ -49,11 +49,6 @@ const apps = compiled.find((entry) => entry.topology.id === 'apps-prod')
 
 const importArtifacts = (): Artifact[] => generatedArtifacts().filter((artifact) => artifact.path.endsWith('.zerops-import.yaml'))
 const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
-// The cheap tier consumes the namespace's postgres, so its descriptor must not reference the full tier's own database.
-const SHARED_POSTGRES_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(
-	readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.shared-postgres.yaml'), 'utf8'),
-)
-
 describe('every generated import document validates against the supported installation schema', () => {
 	for (const artifact of importArtifacts()) {
 		test(`${artifact.path} — zero errors`, () => {
@@ -448,7 +443,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'cheap', projectName: 'cheap-prod' }),
 			'prod',
 		)
-		const app = compileFabrikaManifest(cheapNotesConfig, 'prod', SHARED_POSTGRES_DESCRIPTOR)
+		const app = compileFabrikaManifest(cheapNotesConfig, 'prod', SOURCE_DESCRIPTOR)
 
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
 		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')

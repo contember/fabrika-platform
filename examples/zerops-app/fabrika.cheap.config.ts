@@ -28,6 +28,6 @@ export default defineApp({
 		},
 		namespaceResources: [sharedPostgres()],
 		deployService: NOTES_SERVICE,
-		zeropsSetup: NOTES_SERVICE,
+		zeropsSetup: 'notesapi-shared-postgres',
 	},
 })

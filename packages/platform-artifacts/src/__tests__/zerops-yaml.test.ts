@@ -2,6 +2,7 @@
 // The generated repository-root file owns fabrika's three setups; the example app owns its fixture.
 
 import notesConfig from '@fabrika/example-zerops-app'
+import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
 import { useSharedPostgres } from '@fabrika/provider-zerops'
 import { compileTopology, fabrikaTopologies, generatedArtifacts, parseYaml, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'
@@ -31,10 +32,6 @@ describe('the live files are valid against the supported installation contract',
 
 	test("the example app's zerops.yaml — zero errors", () => {
 		expect(errorsIn('examples/zerops-app/zerops.yaml')).toEqual([])
-	})
-
-	test("the example app's shared-Postgres variant — zero errors", () => {
-		expect(errorsIn('examples/zerops-app/zerops.shared-postgres.yaml')).toEqual([])
 	})
 })
 
@@ -166,9 +163,10 @@ describe('one root file, several named setups — the merged-file decision, chec
 		}
 	})
 
-	test("the example app's single setup matches the service its config deploys to", () => {
-		expect(setupNames('examples/zerops-app/zerops.yaml')).toEqual([notesConfig.target.deployService ?? ''])
+	test("the example app's setups are exactly the ones its two placements select", () => {
+		expect(setupNames('examples/zerops-app/zerops.yaml')).toEqual([notesConfig.target.zeropsSetup ?? '', cheapNotesConfig.target.zeropsSetup ?? ''])
 		expect(notesConfig.target.zeropsSetup).toBe(notesConfig.target.deployService)
+		expect(cheapNotesConfig.target.deployService).toBe(notesConfig.target.deployService)
 	})
 })
 
@@ -177,7 +175,7 @@ describe('nothing committed carries a secret VALUE', () => {
 	// first belongs in a committed file (ADR-0004). Scanned over the PARSED document rather than the raw
 	// text, because comments never reach the platform and prose is allowed to talk about a reference.
 	const REFERENCE = /^\$\{([a-z][a-z0-9]*_[A-Za-z][A-Za-z0-9]*|[A-Z][A-Z0-9_]*)\}$/
-	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']
+	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml']
 
 	const stringsIn = (value: unknown): string[] => {
 		if (typeof value === 'string') {
@@ -216,7 +214,7 @@ describe('every deploy is gated, and every duration says what it means', () => {
 	// container out of the balancer while it is live, the other decides whether a new version may take
 	// traffic at all. Live-verified: a build whose readiness path answered 503 ended `DEPLOY_FAILED` and
 	// never activated, while the previously active version kept serving.
-	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']
+	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml']
 
 	/** Every duration field the platform parses as a Go `time.Duration`. */
 	const DURATION_KEYS = new Set(['failureTimeout', 'retryPeriod', 'execPeriod', 'disconnectTimeout', 'recoveryTimeout'])
@@ -271,7 +269,7 @@ describe('a PostgreSQL URL names its port, its database and its TLS mode', () =>
 	// database path — so without `/${x_dbName}` the driver falls back to the user name. The TLS port is
 	// named rather than the direct one because `postgresql:ha@18` offers TLS on no other, and it keeps
 	// the session state the migration lock needs. All verified live; none may be left to a driver default.
-	for (const file of ['examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']) {
+	for (const file of ['examples/zerops-app/zerops.yaml']) {
 		test(`${file}: every connection reference names the TLS port, a database and an sslmode`, () => {
 			const matches = [...read(file).matchAll(/\$\{[a-z0-9]+_connection(?:Tls)?String\}\S*/g)].map((match) => match[0])
 			expect(matches.length).toBeGreaterThan(0)
@@ -282,7 +280,7 @@ describe('a PostgreSQL URL names its port, its database and its TLS mode', () =>
 	}
 
 	test('the shared-Postgres example writes exactly what `useSharedPostgres()` declares', () => {
-		expect(read('examples/zerops-app/zerops.shared-postgres.yaml')).toContain(`NOTES_DATABASE_URL: ${useSharedPostgres().connectionString}`)
+		expect(read('examples/zerops-app/zerops.yaml')).toContain(`NOTES_DATABASE_URL: ${useSharedPostgres().connectionString}`)
 	})
 
 	test('the committed root file still names no data service at all', () => {

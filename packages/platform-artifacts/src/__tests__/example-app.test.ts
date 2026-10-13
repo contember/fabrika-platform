@@ -254,6 +254,16 @@ beforeEach(() => {
 	rec = fresh()
 })
 
+const sourceSetup = (name: string) => {
+	const entries = parseZeropsDescriptor(SOURCE_CONTENTS).document['zerops']
+	if (!Array.isArray(entries)) throw new Error('the example descriptor has no setups')
+	const entry = entries.find((candidate) =>
+		typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate) && candidate['setup'] === name
+	)
+	if (entry === undefined) throw new Error(`the example descriptor has no \`${name}\` setup`)
+	return entry
+}
+
 const assertSubmittedDescriptor = (recorded: Recorded): void => {
 	expect(recorded.builds.map(({ zeropsYaml, ...coordinates }) => ({
 		...coordinates,
@@ -261,7 +271,8 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 	}))).toEqual([{
 		appVersionId: 'ver-1',
 		zeropsYamlSetup: NOTES_SERVICE,
-		document: parseZeropsDescriptor(SOURCE_CONTENTS).document,
+		// Only the selected setup is executed; the cheap tier's sibling setup never reaches Zerops.
+		document: { zerops: [sourceSetup(NOTES_SERVICE)] },
 	}])
 	expect(MANIFEST.target.sourceDescriptor).toEqual({
 		path: 'zerops.yaml',

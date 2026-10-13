@@ -4,7 +4,7 @@ import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { normalizeGateRule, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
-import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
+import { assertOwnRunWhenExtending, executionZeropsDocument, parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
 import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-env'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
@@ -288,14 +288,17 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (!serviceHostnames.includes(deployService)) {
 		throw new Error('invalid fabrika manifest Zerops deploy service')
 	}
+	// Only the selected setup and what it extends reach this app's service, so a sibling setup for another
+	// placement may reference services this app does not own.
+	const selectedSetup = selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
+	assertOwnRunWhenExtending(parsedDescriptor, selectedSetup)
 	const foreignInDescriptor = foreignReferenceInValue(
-		parsedDescriptor.document,
+		executionZeropsDocument(parsedDescriptor, selectedSetup),
 		allowedReferenceHosts(serviceHostnames),
 	)
 	if (foreignInDescriptor !== null) {
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
-	selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
 	if (proxy !== undefined) {
 		const separator = proxy.upstream.indexOf(':')
 		const upstreamHostname = separator === -1 ? proxy.upstream : proxy.upstream.slice(0, separator)

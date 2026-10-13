@@ -36,7 +36,8 @@ application's Git repository.**
 - Fabrika does not need to synthesize, persist, or reconcile an inline descriptor for application
   deploys.
 - The local `examples/zerops-app` workspace fixture is mirrored unchanged into the standalone
-  `contember/fabrika-example-zerops` repository with `git subtree split`. This is how this monorepo
+  `contember/fabrika-example-zerops` repository as one curated commit per update (`git read-tree`,
+  described in the example's README). This is how this monorepo
   keeps one tested source tree; it is not a required repository-management model for other apps.
 
 ## Alternatives considered
