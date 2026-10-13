@@ -17,14 +17,18 @@ import {
 	DELEGATION_GRANT_TTL_SECONDS,
 	type FindMemberInput,
 	type FindMemberResult,
+	invitedAddress,
 	type IssueLinkInput,
 	type IssueLinkResult,
 	type ListMembersInput,
 	type ListMembersResult,
 	matchAction,
+	MAX_LINK_CHAIN_LENGTH,
+	MAX_MEMBERSHIP_SCOPE_PART_LENGTH,
 	type MemberItem,
 	type MembershipCaller,
 	type MembershipFailure,
+	membershipScopeProblem,
 	parseJsonStringArray,
 	type PermissionEntry,
 	permits,
@@ -49,7 +53,6 @@ import {
 	principalStatus,
 	type RoleRow,
 } from './db'
-import { normalizeEmailIdentity } from './email-identity'
 import type { Env, RequestContext } from './env'
 import { invitationEmail } from './invitation-email'
 import { logError } from './log'
@@ -68,9 +71,6 @@ export const INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60
 /** The path of IAM's page that accepts an invitation; the one-time token rides in the fragment. */
 export const INVITATION_ACCEPT_PATH = '/auth/invitations/accept'
 
-/** The longest containment chain a link may name, and the longest scope coordinate part. */
-const MAX_CHAIN_LENGTH = 8
-const MAX_SCOPE_PART_LENGTH = 200
 const DAY_SECONDS = 24 * 60 * 60
 
 type CallerEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>
@@ -178,15 +178,6 @@ async function resolveLinkOperationCaller(services: Services, env: CallerEnv, in
 		caller: { principal, permissions, app: verifiedApp },
 		job: { name: workload.name, issues: declaration.issues, actions: declaration.actions },
 	}
-}
-
-function scopeProblem(scope: Scope): string | null {
-	for (const part of [scope.type, scope.value]) {
-		if (part === '' || part.length > MAX_SCOPE_PART_LENGTH) {
-			return `a scope type and value are 1 to ${MAX_SCOPE_PART_LENGTH} characters`
-		}
-	}
-	return null
 }
 
 /**
@@ -357,7 +348,7 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 	const { caller } = resolved
 	const spent = await spendDelegation(services, caller, input, 'members', input.scope.type)
 	if (!spent.ok) return spent
-	const problem = scopeProblem(input.scope)
+	const problem = membershipScopeProblem(input.scope)
 	if (problem !== null) return invalid(problem)
 	const manage = await manageAuthority(services, caller, input.scope)
 	if (!manage.ok) return manage
@@ -398,8 +389,8 @@ async function invite(
 	if (services.email === null) {
 		return { ok: false, reason: 'invitations_disabled' }
 	}
-	const email = normalizeEmailIdentity(address)
-	if (email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)) {
+	const email = invitedAddress(address)
+	if (email === null) {
 		return invalid('the member email is not an address')
 	}
 	const token = randomToken(32)
@@ -459,7 +450,7 @@ export async function revokeMember(services: Services, env: CallerEnv, ctx: Requ
 	const { caller } = resolved
 	const spent = await spendDelegation(services, caller, input, 'members', input.scope.type)
 	if (!spent.ok) return spent
-	const problem = scopeProblem(input.scope)
+	const problem = membershipScopeProblem(input.scope)
 	if (problem !== null) return invalid(problem)
 	const manage = await manageAuthority(services, caller, input.scope)
 	if (!manage.ok) return manage
@@ -534,7 +525,7 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 	const resolved = await resolveMemberCaller(services, env, input, false)
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
-	const problem = scopeProblem(input.scope)
+	const problem = membershipScopeProblem(input.scope)
 	if (problem !== null) return invalid(problem)
 	const dimension = await services.repositories.appSchema.getScope(caller.app, input.scope.type)
 	if (dimension === null || dimension.members_list === null) {
@@ -582,7 +573,7 @@ export async function findMember(services: Services, env: CallerEnv, ctx: Reques
 	const resolved = await resolveMemberCaller(services, env, input, false)
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
-	const problem = scopeProblem(input.scope)
+	const problem = membershipScopeProblem(input.scope)
 	if (problem !== null) return invalid(problem)
 	const dimension = await services.repositories.appSchema.getScope(caller.app, input.scope.type)
 	if (dimension === null || dimension.members_list === null) {
@@ -592,7 +583,7 @@ export async function findMember(services: Services, env: CallerEnv, ctx: Reques
 	if (!lookups.includes(input.action) || !permits(caller.permissions, input.action, input.scope)) {
 		return NOT_ALLOWED
 	}
-	if (input.principalId === '' || input.principalId.length > MAX_SCOPE_PART_LENGTH) {
+	if (input.principalId === '' || input.principalId.length > MAX_MEMBERSHIP_SCOPE_PART_LENGTH) {
 		return { ok: true, member: null }
 	}
 	const [grant] = await services.repositories.membership.listMemberGrantsOf(caller.app, input.scope, input.principalId)
@@ -673,12 +664,12 @@ export async function acceptInvitation(
 
 /** Why `chain` is not a containment chain of `dimension` in the app's schema, or null. */
 async function chainProblem(services: Services, app: string, dimension: string, chain: Scope[]): Promise<string | null> {
-	if (chain.length === 0 || chain.length > MAX_CHAIN_LENGTH) {
-		return `a link chain names 1 to ${MAX_CHAIN_LENGTH} values`
+	if (chain.length === 0 || chain.length > MAX_LINK_CHAIN_LENGTH) {
+		return `a link chain names 1 to ${MAX_LINK_CHAIN_LENGTH} values`
 	}
 	let expected: string | null = dimension
 	for (const scope of chain) {
-		const problem = scopeProblem(scope)
+		const problem = membershipScopeProblem(scope)
 		if (problem !== null) return problem
 		if (scope.type !== expected) {
 			return `the link chain names '${scope.type}' where the schema contains '${expected ?? 'nothing'}'`

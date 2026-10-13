@@ -110,6 +110,36 @@ export type MembershipFailure =
 
 export type MembershipFailureReason = MembershipFailure['reason']
 
+/** The longest scope type or value a membership operation takes; a lookup of a longer principal id finds no member. */
+export const MAX_MEMBERSHIP_SCOPE_PART_LENGTH = 200
+
+/** The most values a share link's chain names: its object and each value containing it. */
+export const MAX_LINK_CHAIN_LENGTH = 8
+
+/** The longest address IAM invites, after `normalizeEmailIdentity`. */
+export const MAX_INVITATION_EMAIL_LENGTH = 254
+
+/** Why IAM refuses `scope` as a membership operation's coordinate, or `null`. */
+export function membershipScopeProblem(scope: Scope): string | null {
+	for (const part of [scope.type, scope.value]) {
+		if (part === '' || part.length > MAX_MEMBERSHIP_SCOPE_PART_LENGTH) {
+			return `a scope type and value are 1 to ${MAX_MEMBERSHIP_SCOPE_PART_LENGTH} characters`
+		}
+	}
+	return null
+}
+
+/** Normalize an email identity for case-insensitive exact-mailbox comparisons. */
+export function normalizeEmailIdentity(value: string): string {
+	return value.normalize('NFC').trim().toLocaleLowerCase('en-US')
+}
+
+/** The normalized address IAM invites for `address`, or `null` for one it refuses as no address. */
+export function invitedAddress(address: string): string | null {
+	const email = normalizeEmailIdentity(address)
+	return email.length > MAX_INVITATION_EMAIL_LENGTH || !/^[^\s@]+@[^\s@]+$/.test(email) ? null : email
+}
+
 /** How long a delegation grant may be held before it is spent. One request, so seconds. */
 export const DELEGATION_GRANT_TTL_SECONDS = 120
 

@@ -1,4 +1,2 @@
-/** Normalize an email identity for case-insensitive exact-mailbox comparisons. */
-export function normalizeEmailIdentity(value: string): string {
-	return value.normalize('NFC').trim().toLocaleLowerCase('en-US')
-}
+// IAM's mailbox normalization is the membership contract's, so the application test kit's stand-in agrees with it.
+export { normalizeEmailIdentity } from '@fabrika/auth-core'
