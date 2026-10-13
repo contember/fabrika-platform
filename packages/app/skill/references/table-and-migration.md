@@ -44,8 +44,9 @@ export const vocabulary = defineVocabulary({
   member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.
 - `locale: 'cs'` (or `'en'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for the
-  application on its sign-in, password and invitation pages and e-mails. Without them IAM speaks its default language
-  and names no application. The approver sees each change.
+  application on its sign-in, password and invitation pages and e-mails. Without `locale` IAM speaks its default
+  language, `en`. Without `displayName` the sign-in and password pages and mails name no application, and an invitation
+  names it by its id (`tasks@prod`). The approver sees each change.
 - `creator: '<role>'` on a top-level dimension lets an endpoint with `creates: '<dimension>'` make a new value and
   grant the caller that role there.
 

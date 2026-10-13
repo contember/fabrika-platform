@@ -128,7 +128,9 @@ The application of a request is:
   came from.
 
 An application IAM does not know, or one without a `locale`, gets the
-installation's default language, `en`. An administrator's action and IAM's own
+installation's default language, `en`. Without a `displayName`, the sign-in and
+password pages and mails name no application, and an invitation names it by its
+id. An administrator's action and IAM's own
 forgot-password page also use the default. A link's `?app=` only picks words;
 where a completed action or invitation lands is decided by the stored
 application and its registered return origin.
@@ -140,7 +142,7 @@ An application invites an address to a membership role through IAM's
 
 1. IAM stores a random token's hash with the application, the value, the role
    and the normalized mailbox, and mails a one-time link to
-   `/auth/invitations/accept#token=…`. Repeating the invitation answers the open
+   `/auth/invitations/accept?app=<app>#token=…`. Repeating the invitation answers the open
    one and sends nothing. It expires after 7 days.
 2. Without an email sender there are no invitations (`invitations_disabled`).
    Assigning an existing principal by id still works.
