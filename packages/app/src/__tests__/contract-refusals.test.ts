@@ -1,8 +1,8 @@
 // What `compileContract` refuses that the types let through, and what `buildArtifact` refuses in a declaration a
 // reader of source could produce. Every refusal names where it is and the allowed form.
 
-import { canonicalArtifactJson, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { appSchemaSchema } from '@fabrika/auth'
+import { canonicalArtifactJson, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -390,7 +390,10 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		const loose = { ...notesArtifact, roles: { ...notesArtifact.roles, partner: { grants: ['notes.read'], member: null, external: true } } }
 		expect(() => parseContractArtifact(loose)).toThrow('only a membership role admits external principals')
 		// An artifact that skipped the parser still reaches IAM with the flag, and IAM's own parser refuses it.
-		const translated = schemaFromContract({ ...notesArtifact, roles: { ...notesArtifact.roles, partner: { grants: ['notes.read'], member: null, external: true } } })
+		const translated = schemaFromContract({
+			...notesArtifact,
+			roles: { ...notesArtifact.roles, partner: { grants: ['notes.read'], member: null, external: true } },
+		})
 		expect(translated.roles['partner']?.external).toBe(true)
 		expect(appSchemaSchema.safeParse(translated).success).toBe(false)
 	})
