@@ -491,6 +491,11 @@ still refuses any `Authorization` header, as authorization.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
   every write path. In every IAM schema, an installation service's included, IAM refuses a
   global grant of a role declared with `member.scope`, and such a grant resolves to no permission.
+- **Eligible grants.** An external principal ([ADR-0051](0051-external-principals.md)) holds only grants of a
+  role its application declares `external`, a membership role. IAM refuses every other grant for it on every write
+  path, in the statement that writes; refuses a reconcile that declares a role not external while an external holds
+  it; and resolves such a grant to no permission. Neither a cross-app grant nor the bootstrap `admin` reaches an
+  external principal, at any audience.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
   limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
   into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than

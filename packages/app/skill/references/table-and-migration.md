@@ -39,7 +39,10 @@ export const vocabulary = defineVocabulary({
   roles in; no table needs to own it.
 - An **action** is an exact name; a role lists actions and there is no `*`. Give an operation that only some roles
   may do its own action (`tasks.assign`).
-- A **membership role** (`member: { scope, assignableBy }`) is granted in one value of `scope`.
+- A **membership role** (`member: { scope, assignableBy }`) is granted in one value of `scope`. `external: true` on
+  one lets a person from outside the organization (a partner's account) hold it; IAM gives such a person no other
+  role. `{ member: true }` then admits them too, so a staff-only endpoint names an action only internal roles grant.
+  `ctx.members` answers each member's `affiliation`.
   `members: { manage, list }` on a dimension gives `ctx.members` to the endpoints on, in or below it: a lookup of one
   member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.

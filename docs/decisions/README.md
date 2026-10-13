@@ -18,8 +18,8 @@ a commit message suffices.
   installation; the provider owns its deploy; one public package per cloud.
 - **Authentication and authorization:** [0022](0022-the-proxy-is-the-only-enforcement-point.md) —
   the proxy is the only enforcement point; then [0023](0023-one-session-per-host.md) for the
-  browser-bound session handoff, and [0050](0050-approved-access.md) for how access changes are
-  approved and published.
+  browser-bound session handoff, [0050](0050-approved-access.md) for how access changes are
+  approved and published, and [0051](0051-external-principals.md) for people from outside the organization.
 - **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
   handlers beside their endpoints on a paved road, and every step off it (raw SQL, `unscoped`, connectors, link
   issuing, database code) declared; [0017](0017-service-owned-postgres-migrations.md) for migrations and the
@@ -71,3 +71,4 @@ a commit message suffices.
 | [0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)         | Bind Cloudflare delivery to the recorded application commit                             |
 | [0049](0049-author-applications-through-mcp-in-control.md)              | Author applications through an MCP endpoint in Control over Git workspaces              |
 | [0050](0050-approved-access.md)                                         | Publish only approved access; a human approves widenings, declared deviations included  |
+| [0051](0051-external-principals.md)                                     | External principals hold only roles declared external                                   |

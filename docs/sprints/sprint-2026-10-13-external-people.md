@@ -157,3 +157,8 @@ WU1, WU2 and WU4.
   the set-password and invitation pages widen `form-action` by that one origin, as the login page does for a handoff.
   WU4 replaces `messageTemplatesFor` (`packages/iam/src/messages.ts`) with the application's templates over the same
   `MessageValues`. A browser run of sign-in → forgot → reset → back in the application is still owed.
+- **WU1 (2026-10-13).** Shipped → [ADR-0051](../decisions/0051-external-principals.md). Deviations: the domain
+  allowlist's known-principal bypass now admits only an internal principal (an internal invited row keeps today's
+  bypass, so hybrid linking is unchanged), rather than applying the allowlist to every row with no `external_id`.
+  Promotion revokes no session: it widens nothing an external already holds. The checker's hint is
+  `member-admits-external`. `resolveUserPrincipal`'s label-refresh warning no longer names the IdP mailbox.

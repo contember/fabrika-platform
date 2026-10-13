@@ -30,7 +30,9 @@ Only hashes of action tokens are stored. Fetching an action page does not consum
 
 Principal activation becomes independent of OIDC linkage. Sessions record their authentication method. Replacing or disabling a password revokes password-origin sessions while preserving valid OIDC-origin sessions in a hybrid installation.
 
-The existing bootstrap-admin email list grants authorization only after identity is proven. When mail is available, control of a configured bootstrap address may complete the first password enrollment. Without mail, the existing provisioning bearer authorizes the first explicit enrollment; there is no persistent bootstrap password.
+An external principal ([ADR-0051](0051-external-principals.md)), a person from outside the organization, authenticates by password only. OIDC never claims an external principal's row and never creates one: an IdP that presents its mailbox is refused with the fixed reason `oidc_external_principal`, and the human-admission allowlist's bypass for an already-known principal admits only an internal one. Only an installation administrator's audited promotion makes it internal, after which OIDC may claim it. Hybrid linking of an internal principal is unchanged.
+
+The existing bootstrap-admin email list grants authorization only after identity is proven, and never to an external principal. When mail is available, control of a configured bootstrap address may complete the first password enrollment. Without mail, the existing provisioning bearer authorizes the first explicit enrollment; there is no persistent bootstrap password.
 
 **Invariant:** Enabling a human authentication method globally never provisions that credential for a principal, and disabling or resetting password authentication never revokes an independent OIDC session.
 

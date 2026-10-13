@@ -217,7 +217,8 @@ manifest that still declares `gates`.
   proxy selects one endpoint per request with `planEndpoint` and decides there
   (ADR-0022 rule 3); there is no fall-through to a broader path.
 - `schemaFromContract(artifact)` emits the dimensions as scopes (with `in`, `creator` and
-  `members`), the actions, the roles (a membership role with its scope and `assignableBy`),
+  `members`), the actions, the roles (a membership role with its scope, `assignableBy` and
+  `external`, which lets an external principal hold it, ADR-0051),
   the link mounts by name, the delegations, and `contract: true`, which makes IAM refuse
   every wildcard written for the application. A delegation is an endpoint that spends
   membership authority: a `creates` endpoint, or one whose action is the `members.manage`
@@ -607,7 +608,7 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   `Ref`'s chain holds: a deal endpoint reads its org's. The artifact records each endpoint's
   reach (`directories`, derived by `directoryReach` and read by `endpointDirectory` of
   `@fabrika/auth-core`). `ctx.members.get(principalId)` answers that member (`principalId`,
-  `label`, `disabled`) or `null`; IAM's `findMember` requires the endpoint's own action, one
+  `label`, `disabled`, `affiliation`) or `null`; IAM's `findMember` requires the endpoint's own action, one
   of the dimension's reconciled `lookups`, held on the org itself (a grant on a company does
   not count), so an assignment validates the person it stores without a second action.
   `ctx.members.list()` (with `roles`) exists only where the action is the directory's
