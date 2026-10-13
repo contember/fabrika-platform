@@ -328,11 +328,12 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (declared?.member === null || declared?.member === undefined || declared.member.scope !== scope.type) {
 			return invalid(`role '${role}' is not a membership role of scope '${scope.type}'`)
 		}
-		// IAM reads the assigner's live roles: the ones the test gave it, and those this stand-in assigned or created.
-		const assigning = membershipsOf(callers, caller.id).filter((held) =>
-			held.scope === null ? artifact.roles[held.role]?.member === null : sameScope(held.scope, scope)
+		// IAM reads the assigner's live roles: its membership roles there after this stand-in's own changes, and the
+		// application-wide roles the test gave it there or globally, which no membership write removes.
+		const appWide = membershipsOf(callers, caller.id).filter((held) =>
+			artifact.roles[held.role]?.member === null && (held.scope === null || sameScope(held.scope, scope))
 		)
-		const held = [...changes.rolesOf(caller.id, scope), ...assigning.map((grant) => grant.role)]
+		const held = [...changes.rolesOf(caller.id, scope), ...appWide.map((grant) => grant.role)]
 		if (!declared.member.assignableBy.some((assigner) => held.includes(assigner))) return NOT_ALLOWED
 		return declared.grants.every((action) => permits([...caller.perms], action, scope)) ? null : NOT_ALLOWED
 	}

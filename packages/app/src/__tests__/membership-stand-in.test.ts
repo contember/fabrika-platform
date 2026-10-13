@@ -224,6 +224,19 @@ describe('the stand-in keeps the last creator, as IAM does', () => {
 		expect(await revoke(membership, owner, 'owner')).toEqual({ ok: false, reason: 'last_creator' })
 	})
 
+	test('an owner it revoked assigns nothing more, as IAM reads the live grants', async () => {
+		const membership = standIn([{ caller: coOwner, memberships: [{ role: 'owner', scope: ACME }] }])
+		expect(await revoke(membership, owner, 'co-owner')).toEqual({ ok: true })
+		const invited = await membership.rpc.assignMember({
+			...as(coOwner),
+			delegation: await delegation(membership, coOwner, 'api.members.invite'),
+			scope: ACME,
+			role: 'editor',
+			member: { email: 'ann@example.test' },
+		})
+		expect(invited).toEqual({ ok: false, reason: 'not_allowed' })
+	})
+
 	test("a creator's own revoke in the value it just created is last_creator, and the directory shows nobody new", async () => {
 		const founder = person('founder', ['workspaces.create', 'notes.read', 'notes.write', 'notes.share', 'notes.admin'].map((action) => entry(action)))
 		const membership = standIn([{ caller: founder, memberships: [] }])
