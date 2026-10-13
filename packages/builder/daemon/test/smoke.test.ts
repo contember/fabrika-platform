@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { PHASES } from '../../shared/phases'
+import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { derivePhaseState } from '../src/phases'
 
@@ -17,7 +18,7 @@ let sessionsDir: string
 beforeAll(() => {
 	sessionsDir = mkdtempSync(join(tmpdir(), 'fabrika-daemon-sessions-'))
 	daemon = startDaemon({ port: 0, sessionsDir })
-	base = `http://localhost:${daemon.port}`
+	base = builderDaemonUrl(daemon.port)
 })
 
 afterAll(() => {
@@ -75,7 +76,7 @@ describe('daemon http endpoints', () => {
 		expect(body.ok).toBe(true)
 		expect(body.revision).toBe(1)
 		expect(body.gate).toBe('intake')
-		expect(body.browserUrl).toBe(`http://localhost:${daemon.port}/s/${sessionId}`)
+		expect(body.browserUrl).toBe(`${base}/s/${sessionId}`)
 		expect(body.canvasFiles).toContain('view.jsx')
 
 		const meta = await (await fetch(`${base}/api/session/${sessionId}/meta`)).json()

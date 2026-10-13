@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { HttpIamRpc } from '../../../../auth/src/rpc-http'
 import { startDaemon } from '../../../../builder/daemon/src/index'
 import { PlatformStorage } from '../../../../builder/daemon/src/platform-storage'
-import { parseBuilderPlatformStatus } from '../../../../builder/shared'
+import { builderDaemonUrl, parseBuilderPlatformStatus } from '../../../../builder/shared'
 import { createHarness as createIamHarness, seedInlineGrant, seedUser } from '../../../../iam/src/__tests__/helpers/harness'
 import { createIamApp } from '../../../../iam/src/app'
 import type { Env as IamEnv } from '../../../../iam/src/env'
@@ -50,9 +50,11 @@ export async function integrationFixture() {
 		writeFileSync(join(root, '.fabrika/config.json'), JSON.stringify({ profile: 'app', sessionId: id, createdAt: new Date().toISOString() }))
 		const rpcKey = crypto.randomUUID(), proxyKey = crypto.randomUUID()
 		const iamApp = createIamApp({ rpcKey, proxyKey })
+		// Bound to the IPv4 loopback the URLs below reach: `localhost` binds `::1` first on an IPv6-first
+		// host, where Bun's fetch to `localhost` still connects over IPv4.
 		const iamServer = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			fetch(request) {
 				paths.push(new URL(request.url).pathname)
 				return iamApp.fetch(request, iamEnv, exec)
@@ -123,7 +125,7 @@ export async function integrationFixture() {
 		}
 		const controlServer = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			async fetch(request) {
 				const headers = new Headers(request.headers)
 				headers.delete('X-Fabrika-Token')
@@ -168,7 +170,7 @@ export async function integrationFixture() {
 		const options = { stateDir: join(directory, 'state'), credentialDir: join(directory, 'keys'), dataDir: join(directory, 'data') }
 		const daemon = startDaemon({ port: 0, sessionsDir: join(directory, 'sessions'), platform: options })
 		cleanup.push(() => daemon.stop())
-		const localOrigin = `http://localhost:${daemon.port}`
+		const localOrigin = builderDaemonUrl(daemon.port)
 		async function local(action: string, input?: unknown) {
 			const response = await fetch(
 				`${localOrigin}/api/project/${id}/${action}`,

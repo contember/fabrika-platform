@@ -2,7 +2,7 @@
 
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
-import { activeDaemonSchema } from '../../shared'
+import { activeDaemonSchema, builderDaemonUrl } from '../../shared'
 import { startDaemon } from './index'
 import { PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
 
@@ -20,7 +20,7 @@ function parseActiveDaemon(value: unknown): ActiveDaemon | null {
 
 async function activeDaemon(): Promise<ActiveDaemon | null> {
 	try {
-		const res = await fetch(`http://localhost:${port}/health`, {
+		const res = await fetch(`${builderDaemonUrl(port)}/health`, {
 			signal: AbortSignal.timeout(1000),
 		})
 		const data: unknown = await res.json()
@@ -33,7 +33,7 @@ async function activeDaemon(): Promise<ActiveDaemon | null> {
 const active = await activeDaemon()
 if (active) {
 	if (resolve(active.sessionsDir) === resolve(SESSIONS_DIR)) {
-		console.log(`fabrika daemon already running on http://localhost:${port} — not starting a second.`)
+		console.log(`fabrika daemon already running on ${builderDaemonUrl(port)} — not starting a second.`)
 		process.exit(0)
 	}
 	console.error(
@@ -43,9 +43,9 @@ if (active) {
 	process.exit(1)
 }
 
-let server: ReturnType<typeof startDaemon>['server']
+let boundPort: number
 try {
-	;({ server } = startDaemon({ port }))
+	;({ port: boundPort } = startDaemon({ port }))
 } catch (error: unknown) {
 	console.error(`fabrika daemon failed to bind :${port}: ${error instanceof Error ? error.message : String(error)}`)
 	process.exit(1)
@@ -54,7 +54,7 @@ try {
 mkdirSync(TEMP_DIR, { recursive: true })
 writeFileSync(PID_FILE, String(process.pid))
 
-console.log(`fabrika daemon listening on http://localhost:${server.port}`)
+console.log(`fabrika daemon listening on ${builderDaemonUrl(boundPort)}`)
 
 function shutdown() {
 	try {

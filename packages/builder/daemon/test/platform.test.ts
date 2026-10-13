@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { parseBuilderPlatformStatus } from '../../shared'
+import { BUILDER_DAEMON_HOST, builderDaemonUrl, parseBuilderPlatformStatus } from '../../shared'
 import { startDaemon } from '../src/index'
 import { BuilderPlatform } from '../src/platform'
 import { verifySource } from '../src/platform-source'
@@ -23,7 +23,7 @@ describe('local project API and custody', () => {
 	test('registers before any canvas; metadata, phase, preview and artifacts work without a revision', async () => {
 		const f = setup()
 		const daemon = startDaemon({ port: 0, sessionsDir: join(f.directory, 'sessions'), platform: f.options })
-		const base = `http://localhost:${daemon.port}`
+		const base = builderDaemonUrl(daemon.port)
 		try {
 			const response = await fetch(`${base}/api/project/${f.id}/register`, { method: 'POST', body: JSON.stringify({ projectRoot: f.root }) })
 			expect(response.status).toBe(200)
@@ -191,14 +191,14 @@ describe('local project API and custody', () => {
 		let leakedRequests = 0
 		const sink = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: BUILDER_DAEMON_HOST,
 			fetch: () => {
 				leakedRequests++
 				return Response.json({})
 			},
 		})
 		try {
-			f.redirectTo = `http://localhost:${sink.port}/receive`
+			f.redirectTo = `http://${BUILDER_DAEMON_HOST}:${sink.port}/receive`
 			await f.platform.connect(f.id, f.origin)
 			f.tick()
 			await until(() => f.platform.status(f.id).pairing?.status === 'recovery_required')

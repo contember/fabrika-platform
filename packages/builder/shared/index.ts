@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { PHASE_IDS } from './phases'
 import { parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
 
-export { parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
+export { BUILDER_DAEMON_HOST, builderDaemonUrl, parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
 
 export interface BuilderProjectConnection {
 	controlOrigin: string

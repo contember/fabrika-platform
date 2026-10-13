@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -22,8 +23,8 @@ beforeAll(() => {
 	dataDir = mkdtempSync(join(tmpdir(), 'fabrika-gate-loop-'))
 	sessionsDir = join(dataDir, 'sessions')
 	daemon = startDaemon({ port: 0, sessionsDir })
-	base = `http://localhost:${daemon.port}`
-	wsBase = `ws://localhost:${daemon.port}`
+	base = builderDaemonUrl(daemon.port)
+	wsBase = builderDaemonUrl(daemon.port, 'ws')
 })
 
 afterAll(() => {

@@ -1,10 +1,11 @@
 import { createHash } from 'crypto'
 import { homedir, tmpdir } from 'os'
 import { join, resolve } from 'path'
+import { builderDaemonUrl } from '../../shared/urls'
 
 export const DAEMON_PORT = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
-export const BASE_URL = `http://localhost:${DAEMON_PORT}`
-export const WS_URL = `ws://localhost:${DAEMON_PORT}`
+export const BASE_URL = builderDaemonUrl(DAEMON_PORT)
+export const WS_URL = builderDaemonUrl(DAEMON_PORT, 'ws')
 
 export const TIMEOUT_MS = parseInt(process.env['FABRIKA_TIMEOUT'] || String(60 * 60 * 1000), 10)
 

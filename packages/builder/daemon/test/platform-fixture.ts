@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { BUILDER_DAEMON_HOST } from '../../shared/urls'
 import { BuilderPlatform, type BuilderPlatformOptions } from '../src/platform'
 
 const record = z.record(z.unknown()).parse
@@ -96,7 +97,7 @@ export function fixture() {
 	}
 	const server = Bun.serve({
 		port: 0,
-		hostname: 'localhost',
+		hostname: BUILDER_DAEMON_HOST,
 		async fetch(req): Promise<Response> {
 			const path = new URL(req.url).pathname
 			if (path === '/.well-known/fabrika-builder') return Response.json({ version: 1, controlOrigin: origin, iamIssuer: origin, provider })
@@ -170,7 +171,7 @@ export function fixture() {
 			return new Response(null, { status: 404 })
 		},
 	})
-	const origin: string = `http://localhost:${server.port}`
+	const origin: string = `http://${BUILDER_DAEMON_HOST}:${server.port}`
 	const options: BuilderPlatformOptions = {
 		stateDir: join(directory, 'state'),
 		credentialDir: join(directory, 'keys'),
