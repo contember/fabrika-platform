@@ -1,3 +1,4 @@
+import { describeArgument } from '@fabrika/installation-init'
 export interface ZeropsCliArgs {
 	command: string | undefined
 	subcommand: string | undefined
@@ -71,7 +72,7 @@ export const parseZeropsCliArgs = (argv: readonly string[]): ZeropsCliArgs => {
 		} else if (subcommand === undefined && command === 'namespace') {
 			subcommand = arg
 		} else {
-			throw new Error(`Unexpected argument: ${arg}`)
+			throw new Error(`Unexpected argument: ${describeArgument(arg)}`)
 		}
 	}
 

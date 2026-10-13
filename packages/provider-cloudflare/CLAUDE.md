@@ -84,13 +84,15 @@ runner/control pair (`--runner-config` + `--worker-config`) or one component (`-
 the two forms are mutually exclusive. Each component deploys through `deployCloudflareConfig`.
 
 - `installation.ts` — `installationCli`: init, plan, and deploy dispatch. `index.ts` — the subpath surface.
-- `init.ts` — the orchestrator: CF token → account/zones → smart-default prompts → vault key → provisioning
+- `init-options.ts` — `parseInitArgs`: every init input is a flag or the variable beside it (flag first; the
+  variables are the Environment's own names), credentials from the environment only, `--yes` for unattended.
+- `init.ts` — the orchestrator: CF token → account/zones → IAM and email config → vault key → provisioning
   key → runner key → scaffold repo → GitHub Environment → trigger. It creates no GitHub App: the operator
   connects GitHub from the console at **Settings → Source** after install (ADR-0029), as on Zerops.
 - `scaffold.ts` — which files `<org>/fabrika-platform` carries (`templates/`: `platform.yml`, `fabrika.ref`,
   `README.md`, `gitignore`) and the legacy two-ref migration that must stop a refresh.
 - `cloudflare.ts` — CF API helpers and response schemas. `envfile.ts` — env-file resume.
-- Prompts, console formatting, child processes, `gh`, the GitHub Environment write and the repository
+- Confirmations, console formatting, child processes, `gh`, the GitHub Environment write and the repository
   mechanics live in `@fabrika/installation-init`. This code decides only the Cloudflare-specific flow. The
   Cloudflare and Zerops inits are not mirror images (ADR-0027).
 
@@ -105,6 +107,13 @@ Invariants:
   `openEnvFile(account)` binds it, loads it into `process.env` (Bun no longer auto-loads it) and must run
   before any `persistEnv`. Never claim the file is gitignored. A `$PWD/.env` is warned about, because Bun
   loaded it first and its values outrank the per-account file.
+- **`init` prompts for nothing.** A missing value is an error naming its flag and variable; the only
+  questions are the confirmations (`Confirmations`), which `--yes` answers. The env file is opened BEFORE
+  the arguments are parsed, so a resumed run reads its earlier answers as environment variables. It saves
+  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, the two `FABRIKA_IAM_*_ENABLED` switches,
+  `FABRIKA_IAM_OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`, `FABRIKA_EMAIL_PROVIDER`/`_FROM`/`_RESEND_API_KEY`
+  and the generated keys. The hosts, the repository, the checkout and the admins are NOT saved; a re-run
+  names them again (the rerun command init prints on a declined step carries them).
 - **Idempotent + resumable.** Every captured value persists to that file; a re-run reuses generated
   values (vault key, provisioning, runner and signing keys) instead of rolling them.
 - **No GitHub credential in the Environment.** Every GitHub App key lives in Control's vault; the

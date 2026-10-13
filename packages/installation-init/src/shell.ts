@@ -22,9 +22,7 @@ export interface ShellStep {
  * What a streaming child gets on stdin.
  *
  * A TTY child may INHERIT it — `git` and `gh` prompt on their own, and a terminal is shared by turns.
- * A piped stdin may not: `prompt.ts` gives one reader the whole stream for the command's life, and a
- * child inheriting it between two questions consumes the answers nobody has read yet, so the next
- * prompt dies on a line the child ate. `capture` has always used `'ignore'` for the same reason.
+ * Without a terminal nobody can answer a child's question, so it gets none and fails instead of waiting.
  */
 export const childStdin = (step: ShellStep, isTty: boolean = process.stdin.isTTY === true): Uint8Array | 'inherit' | 'ignore' =>
 	step.stdin !== undefined ? new TextEncoder().encode(step.stdin) : isTty ? 'inherit' : 'ignore'

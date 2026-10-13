@@ -37,9 +37,16 @@ describe('platform admin options', () => {
 	})
 
 	test('the credential has no flag, so it cannot reach a shell history', () => {
-		expect(() => parsePlatformAdminArgs(['--email=operator@example.test', '--iam-host=iam.example.test', '--key=px_leak'], env)).toThrow(
-			'unexpected argument `--key=px_leak`',
-		)
+		const leaked = (() => {
+			try {
+				parsePlatformAdminArgs(['--email=operator@example.test', '--iam-host=iam.example.test', '--key=px_leak'], env)
+				return ''
+			} catch (error) {
+				return error instanceof Error ? error.message : ''
+			}
+		})()
+		expect(leaked).toContain('unexpected argument `--key`')
+		expect(leaked).not.toContain('px_leak')
 	})
 
 	test('refuses a host carrying a scheme or a port — the origin is composed from host and scheme', () => {

@@ -91,11 +91,6 @@ export async function scaffoldPlatformRepo(input: ScaffoldInput): Promise<Scaffo
 	})
 }
 
-/** The default local checkout dir for an account: `./fabrika-platform-<account>` under the cwd. */
-export function defaultCheckoutDir(account: string): string {
-	return resolve(process.cwd(), `fabrika-platform-${account}`)
-}
-
 /** Read the configured `fabrika.ref` (for display), or 'main' when absent. Used in the final summary. */
 export async function readFabrikaRef(dir: string): Promise<string> {
 	const file = Bun.file(resolve(dir, 'fabrika.ref'))

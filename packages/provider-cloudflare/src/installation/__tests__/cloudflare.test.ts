@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from 'bun:test'
-import { findZone, listAccounts, listZones, resolveAccountId, verifyToken } from '../cloudflare'
+import { findZone, listAccounts, selectAccount, verifyToken } from '../cloudflare'
 
 const fetchMock = spyOn(globalThis, 'fetch')
 afterEach(() => fetchMock.mockReset())
@@ -14,13 +14,9 @@ describe('Cloudflare response boundaries', () => {
 		expect(await listAccounts('token')).toEqual([{ id: '', name: ' padded ' }, { id: 'two', name: 'Second' }])
 	})
 
-	test('non-list results and malformed zone entries remain best effort', async () => {
+	test('a non-list account result is an empty list', async () => {
 		fetchMock.mockResolvedValueOnce(Response.json({ success: true, result: {} }))
 		expect(await listAccounts('token')).toEqual([])
-		fetchMock.mockResolvedValueOnce(Response.json({ success: true, result: [null, { id: 'z', name: 'example.com', ignored: true }] }))
-		expect(await listZones('token', 'account')).toEqual([{ id: 'z', name: 'example.com' }])
-		fetchMock.mockRejectedValueOnce(new Error('offline'))
-		expect(await listZones('token', 'account')).toEqual([])
 	})
 
 	test('zone lookup only considers the first result', async () => {
@@ -50,9 +46,25 @@ describe('Cloudflare response boundaries', () => {
 		fetchMock.mockRejectedValueOnce(new Error('offline'))
 		expect(await verifyToken('token')).toBe(false)
 	})
+})
 
-	test('explicit account selection survives an unreadable account response', async () => {
-		fetchMock.mockResolvedValueOnce(new Response('not json'))
-		expect(await resolveAccountId('token', 'preferred')).toEqual({ id: 'preferred', name: '(from CLOUDFLARE_ACCOUNT_ID)' })
+describe('Cloudflare account selection', () => {
+	const accounts = [{ id: 'one', name: 'First' }, { id: 'two', name: 'Second' }]
+
+	test('an explicit id wins, named from the list when it is listed', () => {
+		expect(selectAccount(accounts, 'two')).toEqual({ id: 'two', name: 'Second' })
+		expect(selectAccount([], 'unlisted')).toEqual({ id: 'unlisted', name: '(from --account-id / CLOUDFLARE_ACCOUNT_ID)' })
+	})
+
+	test('without an id, the only account is taken', () => {
+		expect(selectAccount([{ id: 'one', name: 'First' }], undefined)).toEqual({ id: 'one', name: 'First' })
+	})
+
+	test('several accounts are refused with every candidate and the flag that picks one', () => {
+		expect(() => selectAccount(accounts, undefined)).toThrow('pick one with --account-id=<id> or CLOUDFLARE_ACCOUNT_ID: First (one), Second (two)')
+	})
+
+	test('no listed account is refused with the flag and the variable', () => {
+		expect(() => selectAccount([], undefined)).toThrow('pass --account-id=<id> or set CLOUDFLARE_ACCOUNT_ID')
 	})
 })

@@ -8,7 +8,7 @@
 // The pin is checked BEFORE anything leaves this machine: `assertPinnedTag` refuses a branch or a SHA
 // (ADR-0025) without a network call, so `--to=main` fails on the spot rather than after a clone.
 
-import { readFlag } from './cli-options'
+import { describeArgument, readFlag } from '@fabrika/installation-init'
 import { assertPinnedTag, defaultCheckoutDir } from './sidecar'
 
 /** Where the sidecar repository this command edits is found. */
@@ -52,7 +52,7 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 		const name = arg.split('=')[0] ?? arg
 		if (!FLAGS.some((flag) => flag === name) || !arg.includes('=')) {
 			throw new Error(
-				`unexpected argument \`${arg}\`. Run \`fabrika platform upgrade --provider=zerops --help\` for the surface`,
+				`unexpected argument ${describeArgument(arg)}. Run \`fabrika platform upgrade --provider=zerops --help\` for the surface`,
 			)
 		}
 	}
@@ -62,7 +62,7 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 const readInstallation = (argv: readonly string[]): string | undefined => {
 	const positional = argv.filter((arg) => !arg.startsWith('-'))
 	if (positional.length > 1) {
-		throw new Error(`unexpected argument \`${positional[1]}\`: name ONE installation`)
+		throw new Error('unexpected second positional argument: name ONE installation')
 	}
 	const installation = positional[0]?.trim()
 	return installation === undefined || installation === '' ? undefined : installation

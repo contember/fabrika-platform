@@ -21,9 +21,15 @@ export const readEnv = (env: CommandEnv, name: string): string | undefined => {
 export const setting = (argv: readonly string[], env: CommandEnv, flag: string, variable: string): string | undefined =>
 	readFlag(argv, flag) ?? readEnv(env, variable)
 
-export const required = (value: string | undefined, flag: string, variable: string): string => {
+export const requiredSetting = (value: string | undefined, flag: string, variable: string): string => {
 	if (value === undefined) {
 		throw new Error(`${flag}=<value> or ${variable} is required`)
 	}
 	return value
 }
+
+/** How a refusal names an argument: a flag by its name only, never its value, which may be a pasted credential. */
+export const describeArgument = (arg: string): string => arg.startsWith('-') ? `\`${arg.split('=')[0]}\`` : 'a positional argument'
+
+/** One argument as a POSIX shell reads it back unchanged, for the rerun command a declined step prints. */
+export const shellWord = (arg: string): string => /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`

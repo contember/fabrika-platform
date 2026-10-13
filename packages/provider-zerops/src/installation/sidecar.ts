@@ -119,4 +119,7 @@ export const readPinnedTag = async (dir: string): Promise<string> => {
 export const defaultSidecarRepo = (installation: string): string => `contember/fabrika-zerops-${installation}`
 
 /** Where the sidecar is checked out locally: `./fabrika-zerops-<installation>` under the cwd. */
-export const defaultCheckoutDir = (installation: string): string => resolve(process.cwd(), `fabrika-zerops-${installation}`)
+/** The sidecar checkout's directory name when `--checkout` is not given; `init` creates it and `upgrade` reads it. */
+export const defaultCheckoutName = (installation: string): string => `fabrika-zerops-${installation}`
+
+export const defaultCheckoutDir = (installation: string): string => resolve(process.cwd(), defaultCheckoutName(installation))

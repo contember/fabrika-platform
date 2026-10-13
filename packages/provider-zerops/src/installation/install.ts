@@ -2,10 +2,16 @@
 // pass 2 writes the full environment and delegates the ordered deploy to `deployPlatform` (ADR-0027).
 // This is bring-up only: existing generated-secret keys and partial topologies are refused.
 
-import { action as consoleAction, info as consoleInfo, ok as consoleOk, step as consoleStep, warn as consoleWarn } from '@fabrika/installation-init'
+import {
+	action as consoleAction,
+	confirmations,
+	info as consoleInfo,
+	ok as consoleOk,
+	step as consoleStep,
+	warn as consoleWarn,
+} from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep, type ZeropsNamespaceProxySource } from '../index'
-import { confirmations } from './confirmations'
 import {
 	deployPlatformService,
 	deployPreparedPlatform,

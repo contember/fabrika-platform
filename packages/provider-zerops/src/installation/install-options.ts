@@ -8,10 +8,7 @@
 // operator's disk — but nothing here prompts: a missing required value is an error naming both the flag
 // and the variable that would supply it, so a mistyped install fails before it contacts anything.
 
-import { readEnv, readFlag, required, setting } from './cli-options'
-import { UNATTENDED_FLAG } from './confirmations'
-
-export { UNATTENDED_FLAG } from './confirmations'
+import { describeArgument, readEnv, readFlag, requiredSetting, setting, UNATTENDED_FLAG } from '@fabrika/installation-init'
 import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 
@@ -70,7 +67,7 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 		const name = arg.split('=')[0] ?? arg
 		if (!FLAGS.some((flag) => flag === name) || !arg.includes('=')) {
 			throw new Error(
-				`unexpected argument \`${arg}\`. Credentials are read from the environment and have no flag; run `
+				`unexpected argument ${describeArgument(arg)}. Credentials are read from the environment and have no flag; run `
 					+ '`fabrika platform install --provider=zerops --help` for the surface',
 			)
 		}
@@ -101,7 +98,7 @@ const readScheme = (argv: readonly string[], env: Record<string, string | undefi
 }
 
 const readEnvironment = (argv: readonly string[], env: Record<string, string | undefined>): string =>
-	required(setting(argv, env, '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'), '--env', 'FABRIKA_PLATFORM_ENVIRONMENT')
+	requiredSetting(setting(argv, env, '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'), '--env', 'FABRIKA_PLATFORM_ENVIRONMENT')
 
 /** The name a created project takes when the operator did not choose one: the installation's own. */
 const defaultProjectName = (environment: string): string => `fabrika-${environment}`
@@ -124,7 +121,7 @@ const readProjectSource = (argv: readonly string[], env: Record<string, string |
 					+ 'exists takes --project-id=<id>, which names it by id',
 			)
 		}
-		return { kind: 'existing', projectId: required(projectId, '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID') }
+		return { kind: 'existing', projectId: requiredSetting(projectId, '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID') }
 	}
 	if (projectId !== undefined) {
 		const source = readFlag(argv, '--project-id') === undefined ? 'FABRIKA_ZEROPS_PROJECT_ID' : '--project-id'
@@ -147,8 +144,8 @@ export const parsePlatformInstallArgs = (
 		project: readProjectSource(argv, env),
 		// Named even when the project id is known: `POST /client/{id}/integration-token` is addressed by
 		// CLIENT, and the project read does not hand one back.
-		clientId: required(setting(argv, env, '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'), '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'),
-		accessToken: required(readEnv(env, 'FABRIKA_ZEROPS_ACCESS_TOKEN'), '(no flag)', 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
+		clientId: requiredSetting(setting(argv, env, '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'), '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'),
+		accessToken: requiredSetting(readEnv(env, 'FABRIKA_ZEROPS_ACCESS_TOKEN'), '(no flag)', 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
 		environment: readEnvironment(argv, env),
 		scheme: readScheme(argv, env),
 		sourceDir,

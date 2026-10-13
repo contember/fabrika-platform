@@ -1,10 +1,13 @@
 /**
- * `fabrika platform init --provider=cloudflare <account>` — bring up a CF account's fabrika control-plane base from (ideally) just a
- * Cloudflare API token. Idempotent + resumable (every captured value lands in the per-account env file
- * `openEnvFile` binds and reloads). The REAL deploy runs in GitHub Actions (the scaffolded pipeline calls
- * `fabrika platform deploy`), so this laptop never needs the CF toolchain or docker.
+ * `fabrika platform init --provider=cloudflare <account>` — bring up a CF account's fabrika control-plane base.
+ * Idempotent + resumable (every captured value lands in the per-account env file `openEnvFile` binds and
+ * reloads). The REAL deploy runs in GitHub Actions (the scaffolded pipeline calls `fabrika platform deploy`),
+ * so this machine never needs the CF toolchain or docker.
  *
- * Order: CF token → account + zones → smart-default prompts → vault key → provisioning key → runner key →
+ * It prompts for nothing: every input is a flag or an environment variable (`init-options.ts`). What stays
+ * is one confirmation before each step that cannot be taken back, answered by `--yes` when nobody watches.
+ *
+ * Order: CF token → account + zones → IAM and email config → vault key → provisioning key → runner key →
  * scaffold the base repo → write the GitHub Environment → trigger. Secret VALUES flow only into the env
  * file, `gh` over stdin, and child env — never through `log.ts`. GitHub source connections are made later
  * from the console (ADR-0029); init creates no GitHub App.
@@ -14,25 +17,24 @@ import {
 	action,
 	branchProtectionCommand,
 	configureEnvironment,
-	confirm,
+	type Confirmations,
+	confirmations,
 	detail,
+	type EnvironmentConfig,
+	ghRepoExists,
 	info,
 	ok,
 	type ProtectionOutcome,
-	retry,
-	secret,
-	secretOrEnv,
-	select,
 	step,
-	text,
 	triggerPlatformWorkflow,
 	url,
 	warn,
 } from '@fabrika/installation-init'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
-import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
+import { type CfAccount, type CfZone, findZone, listAccounts, selectAccount, verifyToken } from './cloudflare'
 import { envPath, fromEnv, openEnvFile, persistEnv } from './envfile'
-import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
+import { type InitInput, parseInitAccount, parseInitArgs, PLACEHOLDER_OIDC_CLIENT_ID, rerunCommand } from './init-options'
+import { readFabrikaRef, type ScaffoldInput, scaffoldPlatformRepo, type ScaffoldResult } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
 export interface Collected {
@@ -58,14 +60,6 @@ export interface Collected {
 	bootstrapAdmins: string[]
 }
 
-/**
- * Placeholder OIDC — written when the operator brings the base up BEFORE wiring a real SSO provider.
- * IAM boots + machine auth (provisioning key) + the bootstrap-admin hatch all work; only human SSO
- * login is inert until real `FABRIKA_IAM_OIDC_CLIENT_ID`/`_SECRET` replace these. Issuer stays a real
- * discoverable host so IAM's OIDC discovery doesn't fail at boot.
- */
-const PLACEHOLDER_OIDC_CLIENT_ID = 'placeholder.apps.googleusercontent.com'
-const PLACEHOLDER_OIDC_CLIENT_SECRET = 'placeholder-oidc-client-secret-rotate-when-sso-wired'
 const ENVIRONMENT_SOURCE: Readonly<Record<string, string | undefined>> = process.env
 
 /** A resume read off an injectable source, with fromEnv's empty-string-is-absent semantics. */
@@ -74,71 +68,68 @@ export function readResumeValue(source: Readonly<Record<string, string | undefin
 	return value === undefined || value === '' ? undefined : value
 }
 
-export interface InstallerAuthMethods {
-	oidcEnabled: boolean
-	passwordEnabled: boolean
+/** Everything `runInit` does outside this machine. Each GitHub write is confirmed first. */
+export interface InitEffects {
+	/** Only decides how the scaffold confirmation is phrased; the scaffold itself re-reads it. */
+	repositoryExists(repo: string): Promise<boolean>
+	listAccounts(token: string): Promise<CfAccount[]>
+	/** Best effort: `false` means "could not confirm", never "invalid". */
+	verifyToken(token: string, accountId: string): Promise<boolean>
+	findZone(token: string, hostname: string): Promise<CfZone | null>
+	scaffold(input: ScaffoldInput): Promise<ScaffoldResult>
+	configureEnvironment(config: EnvironmentConfig): Promise<void>
+	triggerWorkflow(repo: string): Promise<void>
 }
 
-/** Read a complete, explicit auth-method selection from a resumed init environment. */
-export function readInstallerAuthMethods(source: Readonly<Record<string, string | undefined>>): InstallerAuthMethods | undefined {
-	const oidc = source['FABRIKA_IAM_OIDC_ENABLED']
-	const password = source['FABRIKA_IAM_PASSWORD_ENABLED']
-	if ((oidc === undefined || oidc === '') && (password === undefined || password === '')) return undefined
-	if (oidc === undefined || oidc === '' || password === undefined || password === '') {
-		throw new Error('FABRIKA_IAM_OIDC_ENABLED and FABRIKA_IAM_PASSWORD_ENABLED must be configured together')
-	}
-	const methods = {
-		oidcEnabled: parseBoolean(oidc, 'FABRIKA_IAM_OIDC_ENABLED'),
-		passwordEnabled: parseBoolean(password, 'FABRIKA_IAM_PASSWORD_ENABLED'),
-	}
-	if (!methods.oidcEnabled && !methods.passwordEnabled) {
-		throw new Error('At least one IAM authentication method must be enabled')
-	}
-	return methods
+export interface InitCollaborators {
+	readonly prompts: Confirmations
+	readonly effects: InitEffects
 }
 
-/** Read and validate the resumed email provider, if init has already selected one. */
-export function readInstallerEmailProvider(source: Readonly<Record<string, string | undefined>>): 'none' | 'resend' | undefined {
-	const provider = source['FABRIKA_EMAIL_PROVIDER']
-	if (provider === undefined || provider === '') return undefined
-	if (provider !== 'none' && provider !== 'resend') {
-		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
-	}
-	return provider
-}
-
-function parseBoolean(value: string, name: string): boolean {
-	if (value === 'true') return true
-	if (value === 'false') return false
-	throw new Error(`${name} must be true or false`)
-}
-
-/** Run the full bring-up for `<account>`. */
-export async function runInit(account: string): Promise<void> {
+/** `platform init` from its command line: open the account's env file, parse against it, run. */
+export async function initCommand(argv: readonly string[]): Promise<void> {
+	const account = parseInitAccount(argv)
 	console.log(`\nfabrika platform init — bring up the ${account} Cloudflare control-plane base\n`)
-
 	step('Open the installer env file')
 	info(`Every captured value is persisted here (0600, in a 0700 directory) so a re-run resumes: ${await openEnvFile(account)}`)
+	const input = parseInitArgs(argv, process.env)
+	await runInit(input, consoleInitCollaborators(input))
+}
 
-	const collected = await collect(account)
+/** Run the full bring-up. The installer env file must already be open (`openEnvFile`). */
+export async function runInit(input: InitInput, collaborators: InitCollaborators): Promise<void> {
+	const cfAccount = await verifiedAccount(input, collaborators)
+	if (cfAccount === undefined) {
+		return
+	}
+	const collected = await collect(input, cfAccount, collaborators.effects)
 	const vaultKey = await ensureVaultKey()
 	const provisioning = await ensureProvisioningKey()
 	const operationsSyncKey = await ensureOperationsSyncKey()
 	const signingKeys = await ensureSigningKeys()
-	const oidcClientSecret = collected.oidcEnabled
-		? await ensureOidcClientSecret(collected.oidcClientId === PLACEHOLDER_OIDC_CLIENT_ID)
-		: undefined
-	const emailApiKey = collected.emailProvider === 'resend' ? await ensureResendApiKey() : undefined
+	const oidcClientSecret = input.oidc === undefined ? undefined : await ensureOidcClientSecret(input.oidc.clientSecret)
+	const emailApiKey = input.email.provider === 'resend' ? await ensureResendApiKey(input.email.apiKey) : undefined
 	const runnerKey = await ensureRunnerKey()
 
-	const { dir, branchProtection } = await scaffoldPlatformRepo({
+	const { prompts, effects } = collaborators
+	const rerun = rerunCommand(input, collected.accountId)
+
+	step('Scaffold the platform repository')
+	const question = (await effects.repositoryExists(collected.platformRepo))
+		? `Refresh the platform pipeline on ${collected.platformRepo} and push?`
+		: `Create ${collected.platformRepo} (private) on GitHub and push the platform pipeline?`
+	if (!(await prompts.confirm(question, true))) {
+		action('OPERATOR ACTION — nothing was pushed to GitHub; run init again when ready', [rerun])
+		return
+	}
+	const { dir, branchProtection } = await effects.scaffold({
 		repo: collected.platformRepo,
 		account: collected.account,
-		dir: defaultCheckoutDir(collected.account),
+		dir: input.checkout,
 	})
-	let environmentPolicy: ProtectionOutcome | undefined
 
-	await configureEnvironment({
+	let environmentPolicy: ProtectionOutcome | undefined
+	const environment: EnvironmentConfig = {
 		repo: collected.platformRepo,
 		environment: collected.account,
 		onProtection: (outcome) => {
@@ -153,9 +144,19 @@ export async function runInit(account: string): Promise<void> {
 			...(oidcClientSecret === undefined ? {} : { oidcClientSecret }),
 			...(emailApiKey === undefined ? {} : { emailApiKey }),
 		}),
-	})
+	}
+	info(
+		`${Object.keys(environment.secrets).length} secret(s) and ${
+			Object.keys(environment.vars).length
+		} variable(s) for the ${collected.account} Environment.`,
+	)
+	if (!(await prompts.confirm(`Write them to the ${collected.account} Environment now (secret VALUES go to GitHub over \`gh\` stdin)?`, true))) {
+		action('OPERATOR ACTION — the pipeline cannot run until the Environment holds these; run init again when ready', [rerun])
+		return
+	}
+	await effects.configureEnvironment(environment)
 
-	await triggerDeploy(collected.platformRepo)
+	await triggerDeploy(collected.platformRepo, collaborators)
 	finalNotes({
 		repo: collected.platformRepo,
 		account: collected.account,
@@ -166,6 +167,28 @@ export async function runInit(account: string): Promise<void> {
 		...(branchProtection === undefined ? {} : { branchProtection }),
 		...(environmentPolicy === undefined ? {} : { environmentPolicy }),
 	})
+}
+
+/** The real collaborators: a TTY (or `--yes`), the Cloudflare API, `gh` and git. */
+export function consoleInitCollaborators(input: InitInput): InitCollaborators {
+	return {
+		// Before anything is contacted: a run nobody can confirm does not start.
+		prompts: confirmations(
+			input.unattended,
+			process.stdin,
+			(line) => info(line),
+			'creates or pushes the platform repository, writes its GitHub Environment secrets and triggers the platform workflow',
+		),
+		effects: {
+			repositoryExists: (repo) => ghRepoExists(repo),
+			listAccounts: (token) => listAccounts(token),
+			verifyToken: (token, accountId) => verifyToken(token, accountId),
+			findZone: (token, hostname) => findZone(token, hostname),
+			scaffold: (scaffoldInput) => scaffoldPlatformRepo(scaffoldInput),
+			configureEnvironment: (config) => configureEnvironment(config),
+			triggerWorkflow: (repo) => triggerPlatformWorkflow(repo),
+		},
+	}
 }
 
 /** Everything `init` generated or fetched, ready to be split into the Environment's two halves. */
@@ -225,132 +248,90 @@ export function environmentPayload(
 	}
 }
 
-/** Collect the CF token + account, then the smart-default prompts. */
-async function collect(account: string): Promise<Collected> {
+/**
+ * Resolve the account the token deploys into and check the token against it.
+ *
+ * Returns `undefined` when the operator declines an unverified token: nothing has been written then.
+ */
+async function verifiedAccount(input: InitInput, { prompts, effects }: InitCollaborators): Promise<CfAccount | undefined> {
 	step('Cloudflare API token')
-	info("Only hard input. It authenticates the deploy AND becomes the control plane's runtime CLOUDFLARE_API_TOKEN secret.")
-	const verified = await retry('Cloudflare API token', async () => {
-		const apiToken = await secretOrEnv('CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_TOKEN')
-		detail(`Resolving the Cloudflare account for this token (${apiToken.length} chars)…`)
-		const cfAccount = await resolveAccountId(apiToken)
-		if (await verifyToken(apiToken, cfAccount.id)) {
-			ok('Token verified (status active).')
-		} else {
-			warn('Could not pre-verify the token via the Cloudflare API.')
-			detail('Expected for some account-owned tokens (invisible to /user/tokens/verify); the deploy validates it for real.')
-			if (!(await confirm('Proceed anyway?', true))) {
-				throw new Error('Token not verified — re-enter it.')
-			}
+	info("Read from CLOUDFLARE_API_TOKEN. It authenticates the deploy AND becomes the control plane's runtime CLOUDFLARE_API_TOKEN secret.")
+	detail(`Resolving the Cloudflare account for this token (${input.apiToken.length} chars)…`)
+	// An unreadable list is not fatal: an account-owned token typically cannot list its own account.
+	const accounts = await effects.listAccounts(input.apiToken).catch((): CfAccount[] => [])
+	const cfAccount = selectAccount(accounts, input.accountId)
+	if (await effects.verifyToken(input.apiToken, cfAccount.id)) {
+		ok('Token verified (status active).')
+	} else {
+		warn('Could not pre-verify the token via the Cloudflare API.')
+		detail('Expected for some account-owned tokens (invisible to /user/tokens/verify); the deploy validates it for real.')
+		if (!(await prompts.confirm('Proceed anyway?', true))) {
+			action('OPERATOR ACTION — nothing was written; check CLOUDFLARE_API_TOKEN, then run init again', [rerunCommand(input, cfAccount.id)])
+			return undefined
 		}
-		return { apiToken, cfAccount }
-	})
-	const { apiToken, cfAccount } = verified
-	ok(`Account: ${cfAccount.name} (${cfAccount.id})`)
-	await persistEnv('CLOUDFLARE_API_TOKEN', apiToken)
-	await persistEnv('CLOUDFLARE_ACCOUNT_ID', cfAccount.id)
-
-	step('Account details (Enter accepts the default)')
-	const zones = await listZones(apiToken, cfAccount.id)
-	const primaryZone = zones[0]?.name
-	const controlPlaneDomain = await text('fabrika control-plane domain', primaryZone !== undefined ? `fabrika.${primaryZone}` : undefined)
-	if (controlPlaneDomain === '') {
-		throw new Error('A fabrika control-plane domain is required.')
 	}
-	const zone = await findZone(apiToken, controlPlaneDomain).catch(() => null)
+	ok(`Account: ${cfAccount.name} (${cfAccount.id})`)
+	await persistEnv('CLOUDFLARE_API_TOKEN', input.apiToken)
+	await persistEnv('CLOUDFLARE_ACCOUNT_ID', cfAccount.id)
+	return cfAccount
+}
+
+/** Warn — never fail — when no zone covers `hostname`: the operator may add it before the deploy. */
+async function checkZone(effects: InitEffects, token: string, hostname: string, consequence: string): Promise<void> {
+	const zone = await effects.findZone(token, hostname).catch(() => null)
 	if (zone === null) {
-		warn(`No Cloudflare zone found for ${controlPlaneDomain} — a custom-domain bind would fail. Add the zone before the deploy.`)
+		warn(`No Cloudflare zone found for ${hostname} — ${consequence}`)
 	} else {
 		ok(`Zone found: ${zone.name}`)
 	}
-	const operationsHostname = await text('Operations ingest domain', primaryZone !== undefined ? `errors.${primaryZone}` : undefined)
-	if (operationsHostname === '') {
-		throw new Error('An Operations ingest domain is required.')
-	}
-	const operationsZone = await findZone(apiToken, operationsHostname).catch(() => null)
-	if (operationsZone === null) {
-		warn(`No Cloudflare zone found for ${operationsHostname} — the Operations custom-domain bind would fail.`)
+}
+
+/** Check the hosts against the account's zones and persist the resumable selections. */
+async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffects): Promise<Collected> {
+	step('Account details')
+	ok(`Platform repo: ${input.repo}`)
+	ok(`fabrika control-plane domain: ${input.hosts.control}`)
+	await checkZone(effects, input.apiToken, input.hosts.control, 'a custom-domain bind would fail. Add the zone before the deploy.')
+	ok(`Operations ingest domain: ${input.hosts.operations}`)
+	await checkZone(effects, input.apiToken, input.hosts.operations, 'the Operations custom-domain bind would fail.')
+	if (input.bootstrapAdmins.length === 0) {
+		warn('No first admin (--admins / FABRIKA_CONTROL_BOOTSTRAP_ADMINS): nobody is admitted through the escape hatch.')
 	} else {
-		ok(`Zone found: ${operationsZone.name}`)
+		ok(`First admins: ${input.bootstrapAdmins.join(', ')}`)
 	}
-	const githubOrg = await text('GitHub org that owns the platform repo', account)
-	const platformRepo = await text('Platform repo (org/fabrika-platform)', `${githubOrg}/fabrika-platform`)
-	const iamUrl = await retry('IAM base URL', async () => {
-		const raw = (await text('IAM base URL', primaryZone !== undefined ? `https://iam.${primaryZone}` : undefined)).replace(/\/+$/, '')
-		if (!URL.canParse(raw)) {
-			throw new Error(`Not a valid URL: ${raw === '' ? '(empty)' : raw}`)
-		}
-		return raw
-	})
-	const adminsRaw = await text('First-admin email(s) for the escape hatch (comma-separated)')
-	const bootstrapAdmins = adminsRaw.split(',').map((s) => s.trim()).filter(Boolean)
 
-	// IAM Stage 1 config: select independent authentication methods, then ask only for the
-	// provider-specific values that the selection needs.
 	step('IAM auth config (Stage 1)')
-	const iamHostname = new URL(iamUrl).host
-	ok(`IAM hostname (from URL): ${iamHostname}`)
-	const resumedMethods = readInstallerAuthMethods(ENVIRONMENT_SOURCE)
-	const methods = resumedMethods
-		?? await select<InstallerAuthMethods>('IAM authentication methods', [
-			{ label: 'OIDC only', value: { oidcEnabled: true, passwordEnabled: false } },
-			{ label: 'Password only', value: { oidcEnabled: false, passwordEnabled: true } },
-			{ label: 'OIDC and password', value: { oidcEnabled: true, passwordEnabled: true } },
-		])
-	await persistEnv('FABRIKA_IAM_OIDC_ENABLED', String(methods.oidcEnabled))
-	await persistEnv('FABRIKA_IAM_PASSWORD_ENABLED', String(methods.passwordEnabled))
-	if (resumedMethods !== undefined) ok('Reusing IAM authentication methods from the installer env file (resume).')
-
-	let oidcIssuer = ''
-	let oidcClientId = ''
-	let humanEmailDomains: string[] = []
-	if (methods.oidcEnabled) {
-		oidcIssuer = fromEnv('FABRIKA_IAM_OIDC_ISSUER') ?? await text('IAM OIDC issuer URL', 'https://accounts.google.com')
-		await persistEnv('FABRIKA_IAM_OIDC_ISSUER', oidcIssuer)
-		const oidcClientIdRaw = fromEnv('FABRIKA_IAM_OIDC_CLIENT_ID') ?? await text('IAM OIDC client id (blank = placeholder OIDC for now)', '')
-		if (oidcClientIdRaw === '') {
+	ok(`IAM hostname: ${input.hosts.iam}`)
+	const oidc = input.oidc
+	await persistEnv('FABRIKA_IAM_OIDC_ENABLED', String(oidc !== undefined))
+	await persistEnv('FABRIKA_IAM_PASSWORD_ENABLED', String(input.passwordEnabled))
+	if (oidc !== undefined) {
+		await persistEnv('FABRIKA_IAM_OIDC_ISSUER', oidc.issuer)
+		if (oidc.clientId === PLACEHOLDER_OIDC_CLIENT_ID) {
 			warn('Placeholder OIDC — human SSO login is inert until you set real FABRIKA_IAM_OIDC_CLIENT_ID + _SECRET.')
 		}
-		oidcClientId = oidcClientIdRaw === '' ? PLACEHOLDER_OIDC_CLIENT_ID : oidcClientIdRaw
-		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_ID', oidcClientId)
-		const humanRaw = await text('IAM human email domains, comma-separated (who may self-provision at login)', '')
-		humanEmailDomains = humanRaw.split(',').map((s) => s.trim()).filter(Boolean)
+		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_ID', oidc.clientId)
 	}
-
-	const resumedEmailProvider = readInstallerEmailProvider(ENVIRONMENT_SOURCE)
-	const emailProvider = resumedEmailProvider
-		?? await select<'none' | 'resend'>('Email transport', [
-			{ label: 'None (password enrollment and reset stay admin-driven)', value: 'none' },
-			{ label: 'Resend', value: 'resend' },
-		])
-	await persistEnv('FABRIKA_EMAIL_PROVIDER', emailProvider)
-	if (resumedEmailProvider !== undefined) ok('Reusing email transport from the installer env file (resume).')
-	const emailFrom = emailProvider === 'resend'
-		? fromEnv('FABRIKA_EMAIL_FROM')
-			?? await retry('Email sender', async () => {
-				const value = await text('Email sender (for example Fabrika <auth@example.com>)')
-				if (value === '') throw new Error('An email sender is required when Resend is enabled.')
-				return value
-			})
-		: ''
-	if (emailProvider === 'resend') await persistEnv('FABRIKA_EMAIL_FROM', emailFrom)
+	await persistEnv('FABRIKA_EMAIL_PROVIDER', input.email.provider)
+	if (input.email.provider === 'resend') await persistEnv('FABRIKA_EMAIL_FROM', input.email.from)
 
 	return {
-		account,
+		account: input.account,
 		accountId: cfAccount.id,
-		apiToken,
-		controlPlaneDomain,
-		operationsHostname,
-		platformRepo,
-		iamUrl,
-		iamHostname,
-		oidcEnabled: methods.oidcEnabled,
-		passwordEnabled: methods.passwordEnabled,
-		oidcIssuer,
-		oidcClientId,
-		humanEmailDomains,
-		emailProvider,
-		emailFrom,
-		bootstrapAdmins,
+		apiToken: input.apiToken,
+		controlPlaneDomain: input.hosts.control,
+		operationsHostname: input.hosts.operations,
+		platformRepo: input.repo,
+		iamUrl: `https://${input.hosts.iam}`,
+		iamHostname: input.hosts.iam,
+		oidcEnabled: oidc !== undefined,
+		passwordEnabled: input.passwordEnabled,
+		oidcIssuer: oidc?.issuer ?? '',
+		oidcClientId: oidc?.clientId ?? '',
+		humanEmailDomains: oidc === undefined ? [] : [...oidc.humanEmailDomains],
+		emailProvider: input.email.provider,
+		emailFrom: input.email.provider === 'resend' ? input.email.from : '',
+		bootstrapAdmins: [...input.bootstrapAdmins],
 	}
 }
 
@@ -476,56 +457,37 @@ async function ensureSigningKeys(): Promise<string> {
 }
 
 /**
- * Resolve IAM's OIDC client secret (Stage 1). Reused from the installer env file on resume; otherwise a hidden
- * prompt for a real provider, or the placeholder when SSO was deferred (blank client id). Always persisted
- * so a re-run reuses it. NEVER logged.
+ * Persist IAM's OIDC client secret (Stage 1) — the real one from the environment, or the placeholder
+ * paired with the placeholder client id — so a re-run reuses it. NEVER logged.
  */
-async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
+async function ensureOidcClientSecret(value: string): Promise<string> {
 	step('IAM OIDC client secret (FABRIKA_IAM_OIDC_CLIENT_SECRET)')
-	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_OIDC_CLIENT_SECRET')
-	if (existing !== undefined) {
-		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', existing)
-		ok('Reusing FABRIKA_IAM_OIDC_CLIENT_SECRET from the installer env file (resume).')
-		return existing
-	}
-	const value = placeholder ? PLACEHOLDER_OIDC_CLIENT_SECRET : await secret('IAM OIDC client secret')
 	await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', value)
-	ok(placeholder ? 'Placeholder OIDC client secret saved to the installer env file.' : 'OIDC client secret saved to the installer env file.')
+	ok('OIDC client secret saved to the installer env file.')
 	return value
 }
 
-/** Resolve the Resend API key without ever writing it to user-facing output. */
-async function ensureResendApiKey(): Promise<string> {
+/** Persist the Resend API key without ever writing it to user-facing output. */
+async function ensureResendApiKey(value: string): Promise<string> {
 	step('Resend API key (FABRIKA_EMAIL_RESEND_API_KEY)')
-	const existing = fromEnv('FABRIKA_EMAIL_RESEND_API_KEY')
-	if (existing !== undefined) {
-		ok('Reusing FABRIKA_EMAIL_RESEND_API_KEY from the installer env file (resume).')
-		return existing
-	}
-	const value = await retry('Resend API key', async () => {
-		const entered = (await secret('Resend API key')).trim()
-		if (entered === '') throw new Error('A Resend API key is required when the provider is enabled.')
-		return entered
-	})
 	await persistEnv('FABRIKA_EMAIL_RESEND_API_KEY', value)
 	ok('Resend API key saved to the installer env file.')
 	return value
 }
 
 /** Trigger the platform workflow (each deploy builds the runner image into this account's registry). */
-async function triggerDeploy(repo: string): Promise<void> {
+async function triggerDeploy(repo: string, { prompts, effects }: InitCollaborators): Promise<void> {
 	step('Trigger the platform deploy (GitHub Actions)')
 	info('GitHub Actions runs the real deploy — fabrika runner then control plane. Each run builds the runner')
-	info('container image into this account (CI has docker); this laptop deploys nothing.')
-	const go = await confirm(`Run the platform workflow on ${repo} now?`, true)
-	if (!go) {
+	info('container image into this account (CI has docker); this machine deploys nothing.')
+	if (!(await prompts.confirm(`Run the platform workflow on ${repo} now?`, true))) {
 		action('OPERATOR ACTION — run it when ready', [
 			`gh workflow run platform.yml --repo ${repo}`,
 			`or: ${url(`https://github.com/${repo}/actions`)} → platform → Run workflow`,
 		])
 		return
 	}
-	await triggerPlatformWorkflow(repo)
+	await effects.triggerWorkflow(repo)
 	ok('Platform workflow triggered.')
 	detail(`Watch: ${url(`https://github.com/${repo}/actions`)}   (or: gh run watch --repo ${repo})`)
 }

@@ -45,7 +45,7 @@ describe('fabrika platform upgrade --provider=zerops (arguments)', () => {
 	})
 
 	test('refuses an unknown flag, a second installation and a repeated value rather than ignoring any of them', () => {
-		expect(() => parsePlatformUpgradeArgs(['--to=v0.1.0', '--token=nope', 'test'])).toThrow('unexpected argument `--token=nope`')
+		expect(() => parsePlatformUpgradeArgs(['--to=v0.1.0', '--token=nope', 'test'])).toThrow('unexpected argument `--token`.')
 		expect(() => parsePlatformUpgradeArgs(['--to=v0.1.0', '--sidecar', 'test'])).toThrow('unexpected argument `--sidecar`')
 		expect(() => parsePlatformUpgradeArgs(['--to=v0.1.0', 'one', 'two'])).toThrow('name ONE installation')
 		expect(() => parsePlatformUpgradeArgs(['--to=v0.1.0', '--to=v0.2.0', 'test'])).toThrow('--to was given more than once')

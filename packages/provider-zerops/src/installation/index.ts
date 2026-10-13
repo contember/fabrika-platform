@@ -1,5 +1,12 @@
 import { reconcileSchema } from '@fabrika/auth'
-import { info as consoleInfo, ok as consoleOk, step as consoleStep, warn as consoleWarn } from '@fabrika/installation-init'
+import {
+	describeArgument,
+	info as consoleInfo,
+	ok as consoleOk,
+	step as consoleStep,
+	UNATTENDED_FLAG,
+	warn as consoleWarn,
+} from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { createZeropsApi, defaultSleep } from '../index'
@@ -10,7 +17,7 @@ import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, runInit } from './init'
 import { parseInitArgs } from './init-options'
 import { consoleInstallCollaborators, runInstall } from './install'
-import { parsePlatformInstallArgs, UNATTENDED_FLAG } from './install-options'
+import { parsePlatformInstallArgs } from './install-options'
 import { prepareInstallationSource } from './installation-source'
 import { consoleDeployLog } from './log'
 import { generatedArtifacts } from './topology/artifacts'
@@ -135,6 +142,9 @@ file afterwards.
 Options (a flag beats the environment variable beside it):
 
   --repo=<owner>/<name>                                             a different sidecar repository
+  --checkout=<dir>                                                  the sidecar's local checkout, default
+                                                                    ./fabrika-zerops-<installation>; refused
+                                                                    inside another git repository
   --tag=<tag>                       FABRIKA_PLATFORM_TAG            required; the published fabrika tag to pin
   --project-id=<id>                 FABRIKA_ZEROPS_PROJECT_ID       required; the project holding the platform
   --env=<name>                      FABRIKA_PLATFORM_ENVIRONMENT    default <installation>
@@ -286,7 +296,7 @@ const neverAborted = (): AbortSignal => new AbortController().signal
 
 const runPlan = (argv: readonly string[]): void => {
 	if (argv.length > 0) {
-		throw new Error(`Unexpected Zerops plan arguments: ${argv.join(' ')}`)
+		throw new Error(`Unexpected Zerops plan arguments: ${argv.map(describeArgument).join(' ')}`)
 	}
 	const artifacts = generatedArtifacts()
 	for (const artifact of artifacts) {

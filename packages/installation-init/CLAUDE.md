@@ -1,7 +1,7 @@
 # @fabrika/installation-init
 
-The operator-side mechanics a provider's platform commands need, in one place: TTY
-prompts, console formatting, child processes, the `gh` CLI, the GitHub Environment
+The operator-side mechanics a provider's platform commands need, in one place: flag and
+environment reading, the outward-step confirmations, console formatting, child processes, the `gh` CLI, the GitHub Environment
 write, the sidecar-repository scaffold, and the first-administrator sequence over
 IAM's admin RPC.
 
@@ -16,9 +16,13 @@ Public because both provider packages are, and
 
 ## Layout
 
-- `prompt.ts` — `text` / `required` / `secret` / `secretOrEnv` / `confirm` / `select` / `retry`. A TTY
-  gets a fresh readline per question; a PIPED stdin gets ONE queued reader for the whole command,
-  because closing a readline discards what it has already buffered.
+- `options.ts` — `readFlag` / `readEnv` / `setting` / `requiredSetting`: a flag beats the environment
+  variable beside it, a blank value is absent, a flag given twice is refused.
+- `confirmations.ts` — `confirmations` and `UNATTENDED_FLAG`: confirm on a TTY, `--yes` answers every
+  confirmation, and no terminal without `--yes` is refused.
+- `prompt.ts` — `confirm`, the only interactive question; a TTY only, a fresh readline per question.
+- `checkout.ts` — `sidecarCheckoutDir` and `CHECKOUT_FLAG`: the sidecar checkout, refused inside
+  another git repository.
 - `log.ts` — the presentation layer. `step` / `info` / `detail` / `ok` / `warn` / `fail` / `action` / `url`.
 - `shell.ts` — `run` / `capture` / `probe` over `Bun.spawn`; argv verbatim, never a shell.
 - `gh.ts` — `hasGhCli` / `ghRepoExists`.
@@ -31,6 +35,10 @@ Public because both provider packages are, and
   enrollment. It returns the URL and never prints it.
 
 ## Invariants
+
+- **No command asks for a value.** Every input is a flag or an environment variable, credentials are
+  environment only, and the only question is a confirmation before an outward step — so a pipeline or an
+  agent drives every command with `--yes`.
 
 - **NEVER print a secret VALUE.** `log.ts` deliberately has no helper that accepts
   one, so a careless caller cannot route a token through formatting. Secret values

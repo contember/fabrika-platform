@@ -12,7 +12,7 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
-import { readEnv, required, setting } from './cli-options'
+import { describeArgument, readEnv, requiredSetting, setting } from '@fabrika/installation-init'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 
@@ -61,7 +61,7 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 		const name = arg.split('=')[0] ?? arg
 		if (!FLAGS.some((flag) => flag === name) || !arg.includes('=')) {
 			throw new Error(
-				`unexpected argument \`${arg}\`. Credentials are read from the environment and have no flag; run `
+				`unexpected argument ${describeArgument(arg)}. Credentials are read from the environment and have no flag; run `
 					+ '`fabrika platform deploy --provider=zerops --help` for the surface',
 			)
 		}
@@ -95,7 +95,7 @@ const readProject = (argv: readonly string[], env: Record<string, string | undef
 	if (name === undefined) {
 		throw new Error('--project-id=<id> or FABRIKA_ZEROPS_PROJECT_ID is required (or --project-name with --client-id)')
 	}
-	const clientId = required(setting(argv, env, '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'), '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID')
+	const clientId = requiredSetting(setting(argv, env, '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'), '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID')
 	return { kind: 'name', clientId, name }
 }
 
@@ -112,12 +112,12 @@ export const parsePlatformDeployArgs = (
 	return {
 		project: readProject(argv, env),
 		// A dry run reads, and reading still needs a token; it is the one credential it cannot do without.
-		accessToken: required(readEnv(env, 'FABRIKA_ZEROPS_ACCESS_TOKEN'), '(no flag)', 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
-		environment: required(setting(argv, env, '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'), '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'),
+		accessToken: requiredSetting(readEnv(env, 'FABRIKA_ZEROPS_ACCESS_TOKEN'), '(no flag)', 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
+		environment: requiredSetting(setting(argv, env, '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'), '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'),
 		// Not required for a dry run: it authenticates a write this mode never makes.
 		iamAdminKey: dryRun
 			? readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY') ?? ''
-			: required(readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY'), '(no flag)', 'FABRIKA_IAM_PROVISIONING_KEY'),
+			: requiredSetting(readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY'), '(no flag)', 'FABRIKA_IAM_PROVISIONING_KEY'),
 		scheme: readScheme(argv, env),
 		dryRun,
 		...(hosts === undefined ? {} : { hosts }),
