@@ -1,4 +1,5 @@
 import { DEFAULT_LOCALE, displayNameProblem, isLocale, type Locale } from '@fabrika/auth-core'
+import { normalizeOrigin } from './origin'
 import type { AppPresentationRow } from './repositories/app-schema'
 import type { Services } from './services'
 
@@ -33,7 +34,8 @@ export async function presentationFor(services: Services, app: string | null): P
 		services.repositories.appSchema.getPresentation(app),
 		services.repositories.handoff.listReturnOrigins(app),
 	])
-	const landing = origins[0] ?? null
+	// A stored origin is written into a CSP directive and a `Location`; one the rule no longer admits is no landing.
+	const landing = origins.find((origin) => normalizeOrigin(origin) === origin) ?? null
 	if (row === null && landing === null) {
 		return INSTALLATION_PRESENTATION
 	}

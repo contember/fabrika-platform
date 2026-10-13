@@ -82,6 +82,26 @@ describe('normalizeOrigin', () => {
 			expect(normalizeOrigin(value)).toBeNull()
 		}
 	})
+
+	// The URL parser keeps these in a host, and the origin is written into a CSP `form-action` source list.
+	test('refuses a host carrying a character that would end or widen a CSP directive', () => {
+		for (
+			const value of ['https://app.test;frame-src', 'https://a%3Bb.test', 'https://a,b.test', 'https://a"b.test', "https://a'b.test", 'https://*.test']
+		) {
+			expect(normalizeOrigin(value)).toBeNull()
+		}
+		expect(normalizeOrigin('https://bücher.example/x')).toBe('https://xn--bcher-kva.example')
+		expect(normalizeOrigin('http://[::1]:3000/')).toBe('http://[::1]:3000')
+	})
+
+	test('a login naming such an address is refused, and a stored one widens no form-action', async () => {
+		const { services } = await scenario({ origins: [`${APP_ORIGIN};script-src`] })
+		const refused = await handleAuth(new Request(handoffLoginUrl(`${APP_ORIGIN};script-src/private`)), services, AUTH_ENV, new TestContext())
+		expect(refused.status).toBe(400)
+		expect(refused.headers.get('content-security-policy')).toContain(`form-action 'self';`)
+		const page = await handleAuth(new Request(`${ISSUER}/auth/password/reset?app=notes`), services, AUTH_ENV, new TestContext())
+		expect(page.headers.get('content-security-policy')).toContain(`form-action 'self';`)
+	})
 })
 
 describe('resolveReturnUrl', () => {
@@ -486,7 +506,7 @@ describe('registering return origins', () => {
 	})
 
 	test('a value that is not an absolute http(s) origin is a 400, and NOTHING is written', async () => {
-		for (const bad of ['javascript:alert(1)', 'ftp://app.test', '/private', 'app.test', '']) {
+		for (const bad of ['javascript:alert(1)', 'ftp://app.test', '/private', 'app.test', '', 'https://app.test;frame-src']) {
 			const stack = await adminStack()
 			// A valid origin first, so a partial write would be visible: the whole call must be refused.
 			const response = await stack.call('apps.setReturnOrigins', { app: 'notes', origins: ['https://app.test', bad] })
