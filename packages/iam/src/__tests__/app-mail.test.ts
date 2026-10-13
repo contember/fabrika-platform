@@ -2,7 +2,7 @@
 // part itself, and falls back to its catalog where the application declares nothing for the message's language.
 
 import type { MailTemplates } from '@fabrika/auth-core'
-import type { EmailMessage } from '@fabrika/email'
+import { type EmailMessage, MAX_EMAIL_SUBJECT_LENGTH, validateEmailMessage } from '@fabrika/email'
 import { describe, expect, test } from 'bun:test'
 import { handleAuth } from '../auth/routes'
 import { messageTemplateFor } from '../messages'
@@ -152,6 +152,29 @@ describe("an application's e-mail template", () => {
 		const missing = await f.putSchema({ ...NOTES_SCHEMA, mail: { reset: { cs: { subject: 'Heslo', text: 'Bez odkazu.' } } } })
 		expect(missing.status).toBe(400)
 		expect(await missing.text()).toContain('mail.reset.cs: the text has no {{actionUrl}}')
+		const linked = await f.putSchema({ ...NOTES_SCHEMA, mail: { reset: { cs: { subject: 'Odkaz {{actionUrl}}', text: '{{actionUrl}}' } } } })
+		expect(linked.status).toBe(400)
+		expect(await linked.text()).toContain('mail.reset.cs: the subject names {{actionUrl}}: the one-time link belongs in the text, never in a header')
 		expect((await f.putSchema({ ...NOTES_SCHEMA, mail: CS_RESET })).status).toBe(200)
+	})
+
+	test("a subject that values expand past the sender's limit is cut to it, and the mail is still deliverable", async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, environment: 'stage', authentication: { oidc: false, password: true } })
+		const displayName = 'N'.repeat(80)
+		await services.repositories.appSchema.reconcileAppSchema({
+			app: PORTAL,
+			scopes: [],
+			actions: [],
+			roles: [],
+			presentation: { locale: 'en', displayName },
+			mail: [{ kind: 'reset', locale: 'en', subject: `R ${'{{displayName}}'.repeat(13)}`, text: '{{actionUrl}}' }],
+		})
+		const render = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName, landing: null }, 'reset')
+		const rendered = render({ appName: displayName, recipient: 'partner@example.test', actionUrl: 'https://iam.test/r#token=t', expiresAt: 0 })
+		expect(rendered.subject).toHaveLength(MAX_EMAIL_SUBJECT_LENGTH)
+		expect(rendered.subject).toStartWith(`R ${displayName}`)
+		expect(rendered.subject).toEndWith('N…')
+		expect(() => validateEmailMessage({ to: 'partner@example.test', ...rendered, idempotencyKey: 'k' })).not.toThrow()
 	})
 })

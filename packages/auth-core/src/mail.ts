@@ -39,11 +39,12 @@ export function isMessageKind(value: string): value is MessageKind {
 export function mailTemplateProblems(kind: MessageKind, template: MailTemplate): string[] {
 	const problems: string[] = []
 	const { subject, text } = template
-	if (subject.trim() === '') problems.push('the subject is empty')
+	if (subject.replaceAll(PLACEHOLDER, '').trim() === '') problems.push('the subject has no words of its own: a value may be empty')
 	if (Array.from(subject).length > MAX_MAIL_SUBJECT_LENGTH) problems.push(`the subject is longer than ${MAX_MAIL_SUBJECT_LENGTH} characters`)
 	if (/\p{Cc}/u.test(subject)) problems.push('the subject is not one line: it contains a line break or a control character')
 	if (new TextEncoder().encode(text).length > MAX_MAIL_TEXT_BYTES) problems.push(`the text is longer than ${MAX_MAIL_TEXT_BYTES} bytes`)
 	problems.push(...placeholderProblems(kind, 'the subject', subject), ...placeholderProblems(kind, 'the text', text))
+	if (subject.includes('{{actionUrl}}')) problems.push('the subject names {{actionUrl}}: the one-time link belongs in the text, never in a header')
 	if (!text.includes('{{actionUrl}}')) problems.push('the text has no {{actionUrl}}: IAM puts the one-time link there')
 	return problems
 }

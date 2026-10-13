@@ -391,9 +391,10 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, AND IAM PUTS IN THE LINK AND WRITES THE HTML** (`app_mail_templates`,
   `src/messages.ts`). The contract's `mail` is a subject and a text per message and language, with placeholders from the
   closed set `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`); `mailTemplateProblems` refuses another one, a text without
-  `{{actionUrl}}` and a subject that is not one line, at the build, in the checker and at IAM's reconcile, and
+  `{{actionUrl}}`, a subject that names `{{actionUrl}}` (the token never goes into a header), is not one line or has no
+  words besides placeholders, at the build, in the checker and at IAM's reconcile, and
   `messageTemplateFor` checks a stored row again and falls back to the catalog for one it refuses. IAM builds the action
-  URL; the text carries every value as is, the subject with control characters collapsed, and the HTML part is IAM's:
+  URL; the text carries every value as is, the subject with control characters collapsed and cut to the sender's `MAX_EMAIL_SUBJECT_LENGTH`, and the HTML part is IAM's:
   the escaped text as paragraphs and the catalog's button. Never let an application author HTML here, and never log a
   template's body. A message or a language without a row is the catalog's.
 - **A PASSWORD ACTION AND AN INVITATION THAT KEEP AN APPLICATION END IN IT.** A forgot-password request carries the

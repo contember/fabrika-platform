@@ -53,7 +53,8 @@ export const vocabulary = defineVocabulary({
 - `mail` beside them words IAM's e-mails in the application's own way: per message (`invitation`, `enrollment`,
   `reset`) and language, a one-line `subject` and a plain `text` with `{{name}}` placeholders, for example
   `mail: { reset: { cs: { subject: 'Nové heslo do {{displayName}}', text: 'Heslo si nastavíte zde:\n{{actionUrl}}' } } }`.
-  The text must hold `{{actionUrl}}`, the one-time link IAM builds; IAM writes the HTML part itself. Every message fills
+  The text must hold `{{actionUrl}}`, the one-time link IAM builds, and the subject must not; IAM writes the HTML part
+  itself. Every message fills
   `{{displayName}}`, `{{recipient}}`, `{{actionUrl}}` and `{{expiry}}`; an invitation also `{{inviterLabel}}`,
   `{{companyLabel}}` and `{{message}}`. Another placeholder is refused. A message or language without a template is IAM's
   own wording.

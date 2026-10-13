@@ -1,5 +1,8 @@
 import { EmailDeliveryError, type EmailMessage } from './email.js'
 
+/** The longest subject a message may have, in UTF-16 code units: RFC 5322's line limit. */
+export const MAX_EMAIL_SUBJECT_LENGTH = 998
+
 const DOT_ATOM_CHARACTER = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+$/
 const DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
 
@@ -32,7 +35,7 @@ export function isValidEmailFrom(value: string): boolean {
 
 export function validateEmailMessage(message: EmailMessage): void {
 	if (!isValidEmailAddress(message.to)) throw invalidMessage('Email recipient is invalid')
-	if (message.subject.length === 0 || message.subject.length > 998 || containsControlCharacter(message.subject)) {
+	if (message.subject.length === 0 || message.subject.length > MAX_EMAIL_SUBJECT_LENGTH || containsControlCharacter(message.subject)) {
 		throw invalidMessage('Email subject is invalid')
 	}
 	if (message.text.trim().length === 0) throw invalidMessage('Email text is empty')

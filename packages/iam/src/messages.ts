@@ -1,5 +1,5 @@
 import { fillMailTemplate, type MailPlaceholder, type MailTemplate, mailTemplateProblems, type MessageKind } from '@fabrika/auth-core'
-import type { EmailMessage } from '@fabrika/email'
+import { type EmailMessage, MAX_EMAIL_SUBJECT_LENGTH } from '@fabrika/email'
 import type { AppPresentation } from './app-presentation'
 import { catalogFor, type MessageValues, type RenderedMessage } from './catalog'
 import { escapeHtml } from './html'
@@ -62,7 +62,18 @@ function applicationMessage(
 		...paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph).replaceAll('\n', '<br>')}</p>`),
 		`<p><a href="${escapeHtml(actionUrl)}">${escapeHtml(button)}</a></p>`,
 	].join('')
-	return { subject: fillMailTemplate(template.subject, oneLine), text, html }
+	return { subject: boundedSubject(fillMailTemplate(template.subject, oneLine)), text, html }
+}
+
+/** A filled subject the sender accepts: values can expand a short template past its limit, so the end gives way. */
+function boundedSubject(subject: string): string {
+	if (subject.length <= MAX_EMAIL_SUBJECT_LENGTH) return subject
+	let bounded = ''
+	for (const character of subject) {
+		if (bounded.length + character.length > MAX_EMAIL_SUBJECT_LENGTH - 1) break
+		bounded += character
+	}
+	return `${bounded}…`
 }
 
 /** One IAM e-mail: the template of its kind rendered from the closed values, to one mailbox. */

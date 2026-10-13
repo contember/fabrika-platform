@@ -345,12 +345,15 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			mail: {
 				invitation: { cs: { subject: 'Pozvánka od {{inviter}}', text: 'Přijměte ji: {{actionUrl}}' } },
 				reset: { en: { subject: 'Reset\nBcc: x', text: 'No link here.' } },
+				enrollment: { cs: { subject: '{{displayName}} {{actionUrl}}', text: '{{actionUrl}}' } },
 				welcome: { en: { subject: 'Hi', text: '{{actionUrl}}' } },
 			},
 		})).toEqual([
 			'mail.invitation.cs: the subject names {{inviter}}, which the invitation message does not fill (allowed: {{displayName}}, {{recipient}}, {{inviterLabel}}, {{companyLabel}}, {{message}}, {{actionUrl}}, {{expiry}})',
 			'mail.reset.en: the subject is not one line: it contains a line break or a control character',
 			'mail.reset.en: the text has no {{actionUrl}}: IAM puts the one-time link there',
+			'mail.enrollment.cs: the subject has no words of its own: a value may be empty',
+			'mail.enrollment.cs: the subject names {{actionUrl}}: the one-time link belongs in the text, never in a header',
 			"mail 'welcome': is not a message IAM sends (allowed: 'invitation', 'enrollment', 'reset')",
 		])
 		const reset = { subject: 'Nové heslo do {{displayName}}', text: 'Odkaz: {{actionUrl}} (platí do {{expiry}})' }
