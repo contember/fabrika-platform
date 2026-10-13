@@ -1,6 +1,7 @@
 import { createWebSocketManager, SessionManager, unwatchAll, type WSData } from '@fabrika/canvas-kernel/server'
 import { dispatch } from '@fabrika/daemon-kit'
 import { resolve } from 'path'
+import { BUILDER_DAEMON_HOST } from '../../shared/urls'
 import { admitRequest } from './admission'
 import { BuildStream } from './build-stream'
 import { createHandlers } from './handlers'
@@ -65,7 +66,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 
 	const server = Bun.serve<WSData>({
 		port,
-		hostname: 'localhost',
+		hostname: BUILDER_DAEMON_HOST,
 		fetch(req, server) {
 			const url = new URL(req.url)
 			const rejection = admitRequest(req, url, portRef.value)

@@ -3,7 +3,7 @@ import type { Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import type { z } from 'zod'
-import { buildEventSchema, planInputSchema } from '../../shared'
+import { builderDaemonUrl, buildEventSchema, planInputSchema } from '../../shared'
 import type { BuildEvent, BuildStream } from './build-stream'
 import { COMPILE_TEMP_DIR } from './paths'
 import { derivePhaseState, type GateOracle } from './phases'
@@ -29,7 +29,7 @@ function routeParam(match: URLPatternResult, name: string): string {
 
 export function corsHeaders(port: number): Record<string, string> {
 	return {
-		'Access-Control-Allow-Origin': `http://localhost:${port}`,
+		'Access-Control-Allow-Origin': builderDaemonUrl(port),
 		'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 		'Access-Control-Allow-Headers': 'Content-Type',
 	}
@@ -201,7 +201,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			broadcastPlanUpdate(sessionId)
 			watchSession(sessionId, sessionManager, broadcastPlanUpdate, { tempDir: COMPILE_TEMP_DIR, assertReadable })
 
-			const browserUrl = `http://localhost:${ctx.port}/s/${sessionId}`
+			const browserUrl = `${builderDaemonUrl(ctx.port)}/s/${sessionId}`
 			return jsonResponse({
 				ok: true,
 				browserUrl,

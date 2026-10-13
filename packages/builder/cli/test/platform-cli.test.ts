@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, unlinkSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import type { BuilderPlatformStatus, BuilderProjectConnection } from '../../shared'
+import { BUILDER_DAEMON_HOST, type BuilderPlatformStatus, type BuilderProjectConnection } from '../../shared'
 import { type Fixture, makeFixture } from './helpers'
 
 const bin = resolve(import.meta.dir, '../src/bin.ts')
@@ -54,7 +54,7 @@ function setup() {
 	let onPlatform: (() => void) | undefined
 	server = Bun.serve({
 		port: 0,
-		hostname: 'localhost',
+		hostname: BUILDER_DAEMON_HOST,
 		async fetch(request) {
 			const path = new URL(request.url).pathname
 			if (path === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(fx.root, 'data', 'sessions') })

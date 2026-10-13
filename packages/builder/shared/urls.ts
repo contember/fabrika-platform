@@ -1,3 +1,10 @@
+// Bound and addressed as a literal: `localhost` can bind ::1 while a client connects to 127.0.0.1.
+export const BUILDER_DAEMON_HOST = '127.0.0.1'
+
+export function builderDaemonUrl(port: number, scheme: 'http' | 'ws' = 'http'): string {
+	return `${scheme}://${BUILDER_DAEMON_HOST}:${port}`
+}
+
 function parseHttpUrl(value: unknown, label: string): URL {
 	if (
 		typeof value !== 'string' || value.length === 0 || value.trim() !== value

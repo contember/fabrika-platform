@@ -22,7 +22,7 @@ const port = Number(Bun.argv[2]);
 const version = Bun.argv[3];
 Bun.serve({
   port,
-  hostname: "localhost",
+  hostname: "127.0.0.1",
   fetch(request) {
     if (new URL(request.url).pathname === "/health") {
       return Response.json({ ok: true, version, pid: process.pid });
@@ -65,7 +65,7 @@ function portOf(server: { port?: number }): number {
 
 /** A free port, released right before the daemon under test claims it. */
 function freePort(): number {
-	const probe = Bun.serve({ port: 0, hostname: 'localhost', fetch: () => new Response('probe') })
+	const probe = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('probe') })
 	const port = portOf(probe)
 	probe.stop(true)
 	return port
@@ -91,7 +91,7 @@ function createFixture(options: { version?: string; expected?: string; crashing?
 	const logFile = join(directory, 'daemon.log')
 	const authFile = join(directory, 'auth-token')
 	const port = freePort()
-	const baseUrl = `http://localhost:${port}`
+	const baseUrl = `http://127.0.0.1:${port}`
 	const events: DaemonEvent[] = []
 
 	const lifecycle = createDaemonLifecycle<FixtureHealth>({
@@ -123,13 +123,13 @@ describe('health', () => {
 	test('a body this CLI cannot read is not a daemon it can talk to', async () => {
 		const server = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			fetch: () => Response.json({ ok: true, version: '1.0.0' }), // no pid
 		})
 		servers.push(server)
 
 		const lifecycle = createDaemonLifecycle<FixtureHealth>({
-			baseUrl: `http://localhost:${portOf(server)}`,
+			baseUrl: `http://127.0.0.1:${portOf(server)}`,
 			parseHealth,
 			pidFile: join(tmpdir(), 'unused.pid'),
 			command: [process.execPath, '--version'],
@@ -255,7 +255,7 @@ describe('stop', () => {
 		await dead.exited
 		const server = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			fetch: () => Response.json({ ok: true, version: '1.0.0', pid: dead.pid }),
 		})
 		servers.push(server)
@@ -263,7 +263,7 @@ describe('stop', () => {
 		directories.push(directory)
 
 		const lifecycle = createDaemonLifecycle<FixtureHealth>({
-			baseUrl: `http://localhost:${portOf(server)}`,
+			baseUrl: `http://127.0.0.1:${portOf(server)}`,
 			parseHealth,
 			pidFile: join(directory, 'daemon.pid'),
 			command: [process.execPath, '--version'],
@@ -278,7 +278,7 @@ describe('stop', () => {
 	test('refuses to signal itself', async () => {
 		const server = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			fetch: () => Response.json({ ok: true, version: '1.0.0', pid: process.pid }),
 		})
 		servers.push(server)
@@ -286,7 +286,7 @@ describe('stop', () => {
 		directories.push(directory)
 
 		const lifecycle = createDaemonLifecycle<FixtureHealth>({
-			baseUrl: `http://localhost:${portOf(server)}`,
+			baseUrl: `http://127.0.0.1:${portOf(server)}`,
 			parseHealth,
 			pidFile: join(directory, 'daemon.pid'),
 			command: [process.execPath, '--version'],

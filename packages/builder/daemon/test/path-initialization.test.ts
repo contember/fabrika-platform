@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const daemonModule = new URL('../src/index.ts', import.meta.url).href
+const urlsModule = new URL('../../shared/urls.ts', import.meta.url).href
 
 test('importing startDaemon does not initialize default paths; explicit startup creates only its selected sessions root', () => {
 	const root = mkdtempSync(join(tmpdir(), 'builder-path-import-'))
@@ -22,6 +23,7 @@ test('importing startDaemon does not initialize default paths; explicit startup 
 			import assert from 'node:assert/strict'
 			import { existsSync } from 'node:fs'
 			const { startDaemon } = await import(${JSON.stringify(daemonModule)})
+			const { builderDaemonUrl } = await import(${JSON.stringify(urlsModule)})
 			assert.equal(existsSync(${JSON.stringify(sessions)}), false)
 			assert.equal(existsSync(${JSON.stringify(join(home, '.fabrika'))}), false)
 			assert.equal(existsSync(${JSON.stringify(join(temp, 'fabrika'))}), false)
@@ -34,7 +36,7 @@ test('importing startDaemon does not initialize default paths; explicit startup 
 			})
 			try {
 				assert.equal(existsSync(${JSON.stringify(sessions)}), true)
-				const health = await fetch('http://localhost:' + daemon.port + '/health')
+				const health = await fetch(builderDaemonUrl(daemon.port) + '/health')
 				assert.equal(health.status, 200)
 				assert.equal((await health.json()).sessionsDir, ${JSON.stringify(sessions)})
 			} finally { daemon.stop() }
@@ -68,11 +70,12 @@ test('default startup initializes the configured sessions root after a side-effe
 			import assert from 'node:assert/strict'
 			import { existsSync } from 'node:fs'
 			const { startDaemon } = await import(${JSON.stringify(daemonModule)})
+			const { builderDaemonUrl } = await import(${JSON.stringify(urlsModule)})
 			assert.equal(existsSync(${JSON.stringify(data)}), false)
 			const daemon = startDaemon({ port: 0 })
 			try {
 				assert.equal(existsSync(${JSON.stringify(join(data, 'sessions'))}), true)
-				const health = await fetch('http://localhost:' + daemon.port + '/health')
+				const health = await fetch(builderDaemonUrl(daemon.port) + '/health')
 				assert.equal(health.status, 200)
 				assert.equal((await health.json()).sessionsDir, ${JSON.stringify(join(data, 'sessions'))})
 			} finally { daemon.stop() }

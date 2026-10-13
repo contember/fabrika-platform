@@ -1,6 +1,8 @@
+import { BUILDER_DAEMON_HOST } from '../../shared/urls'
+
 export function admitRequest(req: Request, url: URL, port: number): Response | null {
 	const authority = req.headers.get('host')
-	const allowedHostname = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+	const allowedHostname = url.hostname === BUILDER_DAEMON_HOST || url.hostname === 'localhost'
 	const allowedAuthority = authority === `${url.hostname}:${port}` || (port === 80 && authority === url.hostname)
 	const expectedPort = port === 80 ? '' : String(port)
 	const origin = req.headers.get('origin')

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
 import { admitRequest } from '../src/admission'
 import { type RunningDaemon, startDaemon } from '../src/index'
 
@@ -14,8 +15,8 @@ let origin: string
 beforeAll(() => {
 	directory = mkdtempSync(join(tmpdir(), 'builder-admission-'))
 	daemon = startDaemon({ port: 0, sessionsDir: join(directory, 'sessions') })
-	authority = `localhost:${daemon.port}`
-	origin = `http://${authority}`
+	origin = builderDaemonUrl(daemon.port)
+	authority = new URL(origin).host
 	daemon.sessionManager.upsert('protected', new Map([['view.jsx', '<div />']]), directory)
 })
 
@@ -26,7 +27,7 @@ afterAll(() => {
 
 function send(path: string, method: string, headers: Record<string, string> = {}): Promise<number> {
 	return new Promise((resolve, reject) => {
-		const req = request({ hostname: 'localhost', port: daemon.port, path, method, headers: { Host: authority, ...headers } })
+		const req = request({ hostname: BUILDER_DAEMON_HOST, port: daemon.port, path, method, headers: { Host: authority, ...headers } })
 		req.on('response', (res) => {
 			res.resume()
 			resolve(res.statusCode ?? 0)
@@ -47,10 +48,13 @@ function deniedHeaders(): Record<string, string>[] {
 		{ Host: 'localhost:0' },
 		{ Host: `localhost.evil.example:${daemon.port}` },
 		{ Host: `localhost.:${daemon.port}` },
+		{ Host: `127.0.0.1.evil.example:${daemon.port}` },
+		{ Host: `127.1:${daemon.port}` },
+		{ Host: `[::1]:${daemon.port}` },
 		{ Origin: 'https://foreign.example' },
 		{ Origin: 'null' },
 		{ Origin: 'http://localhost:0' },
-		{ Origin: `http://127.0.0.1:${daemon.port}` },
+		{ Origin: `http://localhost:${daemon.port}` },
 		{ Origin: `${origin}/` },
 		{ Origin: origin, 'Sec-Fetch-Site': 'cross-site' },
 		{ 'Sec-Fetch-Site': 'cross-site' },
@@ -126,7 +130,7 @@ describe('daemon request admission on the bound dynamic port', () => {
 	})
 
 	test('allows loopback alias only with its own exact origin', async () => {
-		const Host = `127.0.0.1:${daemon.port}`
+		const Host = `localhost:${daemon.port}`
 		expect(await send('/health', 'GET', { Host })).toBe(200)
 		expect(await send('/health', 'GET', { Host, Origin: `http://${Host}` })).toBe(200)
 		expect(await send('/health', 'GET', { Host, Origin: origin })).toBe(403)

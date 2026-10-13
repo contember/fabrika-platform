@@ -52,11 +52,11 @@ describe('dom harness', () => {
 	test('leaves the runtime fetch stack alone', async () => {
 		const server = Bun.serve({
 			port: 0,
-			hostname: 'localhost',
+			hostname: '127.0.0.1',
 			fetch: () => Response.json({ ok: true }),
 		})
 		try {
-			const response = await fetch(`http://localhost:${server.port}/`)
+			const response = await fetch(`http://127.0.0.1:${server.port}/`)
 			expect(await response.json()).toEqual({ ok: true })
 		} finally {
 			server.stop(true)
