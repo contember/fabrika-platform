@@ -20,13 +20,14 @@ if (postgres !== null) {
 	afterAll(() => postgres.close())
 	const objects = new MemoryFileObjects()
 	const kit = testKit(app, { database: postgres.database, files: objects })
-	const inOrg = (role: 'manager' | 'sales' | 'viewer', org = 'acme') => kit.testCaller([{ role, scope: { type: 'org', value: org } }])
+	const acme = kit.scope('org', 'acme')
+	const inOrg = (role: 'manager' | 'sales' | 'viewer', org = 'acme') => kit.testCaller([{ role, scope: kit.scope('org', org) }])
 	const apiOf = (caller: TestCaller) => createClient(contract, 'api', { fetch: kit.browser(caller) })
 
-	const managerCaller = kit.testCaller([{ role: 'manager', scope: { type: 'org', value: 'acme' } }], { label: 'mia@acme.example' })
+	const managerCaller = kit.testCaller([{ role: 'manager', scope: acme }], { label: 'mia@acme.example' })
 	const manager = apiOf(managerCaller)
 	const SALES_LABEL = 'sam@acme.example'
-	const sales = kit.testCaller([{ role: 'sales', scope: { type: 'org', value: 'acme' } }], { label: SALES_LABEL })
+	const sales = kit.testCaller([{ role: 'sales', scope: acme }], { label: SALES_LABEL })
 	const salesApi = apiOf(sales)
 	const viewer = inOrg('viewer')
 	const viewerApi = apiOf(viewer)
@@ -215,7 +216,7 @@ if (postgres !== null) {
 		test('without a credential the proxy sends the caller to sign in; a script key is not a caller of the API', async () => {
 			const answer = await kit.fetch('/api/companies.list', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
 			expect(answer.status).toBe(302)
-			const script = kit.testCaller([{ role: 'viewer', scope: { type: 'org', value: 'acme' } }], { kind: 'machine' })
+			const script = kit.testCaller([{ role: 'viewer', scope: acme }], { kind: 'machine' })
 			if (script.key === null) throw new Error('a machine caller presents a key')
 			expect(await statusOf(createClient(contract, 'api', { fetch: kit.fetch, key: script.key }).companies.list({}))).toBe(403)
 		})

@@ -28,7 +28,7 @@ import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrik
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
-import type { AnyContract } from '../contract/define'
+import type { AnyContract, DimensionOf } from '../contract/define'
 import type { RequestExecutionContext } from '../fetch'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
@@ -38,7 +38,15 @@ import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
-import { type LabelledTestCaller, type LinkTestCaller, resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
+import {
+	type LabelledTestCaller,
+	type LinkTestCaller,
+	resolveGrants,
+	type TestCaller,
+	type TestCallerOptions,
+	type TestGrant,
+	type TestScope,
+} from './caller'
 import { credentialCallers, kitDirectory, kitMembership, type MintedToken, type TestMembership, writesThroughIam } from './membership'
 import { endpointProxy } from './proxy'
 
@@ -89,6 +97,11 @@ export interface TestKit<C extends AnyContract> {
 	testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
 	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] }): LabelledTestCaller
 	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
+	/**
+	 * One value of the contract's dimension `dimension`, for a grant's `scope`. Stored in a variable it keeps its
+	 * dimension, where an object literal's `type` widens to `string`: `const acme = kit.scope('org', 'acme')`.
+	 */
+	scope<D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D>
 	/** A request as it reaches the proxy, credentials as written: a script, a `px_` key, or another site. */
 	readonly fetch: RpcFetch
 	/** `fetch` from a page of the application: same-origin, with the session cookie of `caller` when given. */
@@ -301,6 +314,8 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		return caller
 	}
 
+	const scope = <D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D> => Object.freeze({ type: dimension, value })
+
 	/** The caller's token, or `null` above `MAX_ACCESS_TOKEN_BYTES`, which IAM refuses to sign. */
 	async function mint(caller: TestCaller): Promise<{ readonly token: string; readonly expiresAt: number } | null> {
 		const now = Math.floor(Date.now() / 1000)
@@ -409,5 +424,5 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		return application.jobs.run(name, runOptions)
 	}
 
-	return Object.freeze({ origin, appId, artifact, testCaller, fetch: kitFetch, browser, iam, runJob })
+	return Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob })
 }

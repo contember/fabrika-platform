@@ -15,6 +15,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'07-call-an-attachment-procedure.ts': "Type 'AttachmentProcedure<ZodObject<{ orgId: ZodString; }, $strict>>' has no call signatures.",
 	'08-download-input-of-another-shape.ts': "'org' does not exist in type '{ orgId: string; }'",
 	'09-link-caller-label.ts': "Type 'null' is not assignable to type 'string'.",
+	'10-test-scope-dimension-typo.ts': `Argument of type '"workspaces"' is not assignable to parameter of type '"workspace" | "note"'.`,
 }
 
 describe('client and test kit mistakes are type errors', () => {

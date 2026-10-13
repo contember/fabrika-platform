@@ -16,7 +16,7 @@ if (postgres !== null) {
 	afterAll(() => postgres.close())
 	const kit = testKit(app, { database: postgres.database, files: new MemoryFileObjects() })
 	const inOrg = (role: 'manager' | 'sales' | 'viewer', org: string, label?: string) =>
-		kit.testCaller([{ role, scope: { type: 'org', value: org } }], label === undefined ? {} : { label })
+		kit.testCaller([{ role, scope: kit.scope('org', org) }], label === undefined ? {} : { label })
 	const apiOf = (caller: TestCaller) => createClient(contract, 'api', { fetch: kit.browser(caller) })
 
 	const managerCaller = inOrg('manager', 'acme')

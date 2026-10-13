@@ -19,8 +19,9 @@ const TIMEOUT_MS = 300_000
 if (postgres !== null) {
 	afterAll(() => postgres.close())
 	const kit = testKit(app, { database: postgres.database, files: new MemoryFileObjects() })
-	const api = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'sales', scope: { type: 'org', value: 'acme' } }])) })
-	const manager = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'manager', scope: { type: 'org', value: 'acme' } }])) })
+	const acme = kit.scope('org', 'acme')
+	const api = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'sales', scope: acme }])) })
+	const manager = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'manager', scope: acme }])) })
 
 	const allTasks = async () => {
 		const items = []

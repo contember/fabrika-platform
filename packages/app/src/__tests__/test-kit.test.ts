@@ -208,6 +208,15 @@ describe('test callers', () => {
 		expect((await failure(api.notes.create({ workspaceId: 'w2', title: 'x' }))).httpStatus).toBe(403)
 	})
 
+	test('a scope the kit builds keeps its dimension and grants in that value', async () => {
+		const w1 = kit.scope('workspace', 'w1')
+		expect(w1).toEqual({ type: 'workspace', value: 'w1' })
+		expect(Object.isFrozen(w1)).toBe(true)
+		const api = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'editor', scope: w1 }])) })
+		expect((await api.notes.create({ workspaceId: 'w1', title: 'scoped' })).title).toBe('scoped')
+		expect((await failure(api.notes.create({ workspaceId: 'w2', title: 'x' }))).httpStatus).toBe(403)
+	})
+
 	test('a membership role is granted in one value of its dimension', () => {
 		expect(() => kit.testCaller([{ role: 'editor' }])).toThrow("'editor' is a membership role: grant it in one workspace")
 		expect(() => kit.testCaller([{ role: 'editor', scope: { type: 'note', value: N1 } }])).toThrow('membership role')
