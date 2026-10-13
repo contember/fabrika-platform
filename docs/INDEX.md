@@ -23,10 +23,10 @@ For editing an application from Claude or ChatGPT through MCP, see [MCP authorin
 
 [MCP application authoring](sprints/sprint-2026-10-07-mcp-authoring.md) is active: MCP in Control, IAM OAuth for Claude/ChatGPT, Git workspaces, stage deploys and pull requests on Zerops ([ADR-0049](decisions/0049-author-applications-through-mcp-in-control.md)).
 
-[The paved-road application framework](sprints/sprint-2026-10-11-paved-road-framework.md) is active: a declarative shell with handlers colocated with their endpoints, a mini-ORM scoped by the endpoint's capability, raw SQL as a legitimate tool, and deviations from the road shown to the approver. It replaces the rejected declared-operations idea. Its [first part](archive/sprint-2026-10-11-paved-road-core.md) (WU0–WU10, WU12, WU13a, WU13b, WU14, WU18) shipped on 2026-10-12.
-
 The application framework plan shipped and its idea documents were deleted; the contract is
 [ADR-0012](decisions/0012-fabrika-app-runtime.md) and [`reference/application-runtime.md`](reference/application-runtime.md). Its sprints: [M0](archive/sprint-2026-10-08-m0-current-holes.md) (shipped), [A-M1](archive/sprint-2026-10-08-a-m1-framework-core.md) (shipped), [A-M2](archive/sprint-2026-10-08-a-m2-data.md) (shipped), [A-M3](archive/sprint-2026-10-08-a-m3-multi-tenant.md) (shipped), [B-M1](archive/sprint-2026-10-08-b-m1-binding-contract.md) (shipped), [B-M2](archive/sprint-2026-10-09-b-m2-locked-providers.md) (shipped), [A-M4](archive/sprint-2026-10-09-a-m4-companions.md) (shipped), [B-M3](archive/sprint-2026-10-09-b-m3-workloads-and-platform.md) (shipped).
+
+The paved-road application framework shipped on 2026-10-13, in two parts: [the core](archive/sprint-2026-10-11-paved-road-core.md) (the staged kit, the mini-ORM, declared raw SQL, reviewed deviations, a role per application, the skill) and [the framework](archive/sprint-2026-10-11-paved-road-framework.md) (the public intake gaps, the CRM in `examples/crm`, the trials, application-wide data).
 
 The [local-hardening port](archive/sprint-2026-10-08-local-hardening-port.md) shipped on 2026-10-08.
 The [second simplification pass](archive/sprint-2026-10-08-second-simplification-pass.md)

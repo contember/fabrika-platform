@@ -1,10 +1,36 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-10-13.** An agent writes a Fabrika application on a paved road. The
+> [first part](sprint-2026-10-11-paved-road-core.md) built the framework: the staged kit, the mini-ORM scoped by the
+> endpoint's capability, declared raw SQL with `ctx.sql.scope`, the migration classifier, a least-privileged role
+> family per application, deviations as "needs closer review" lines in the approval, the generated tests and one
+> versioned agent skill. This part closed the gaps of a public intake application: a public SPA (WU14), a link for an
+> anonymous visitor issued by a job, with link-holder files (WU15), a form that kicks its job (WU15b), per-client
+> admission, a honeypot and a challenge (WU16), malware quarantine (WU17), CSV downloads (WU19), HSTS and 5xx reports
+> to Operations (WU20), and the skill for all of them (WU10b). From the trials came the member lookup below its
+> dimension (WU22), application-wide data with `{ action, app: true }` (WU23a), the dogfood's cheap fixes (WU23b) and
+> an `app` capability's SQL scope held to what `ctx.db.app` reaches (WU23c). The CRM is rewritten in `examples/crm`
+> at 386 hand-written server lines against the baseline's 538 (−28 %), with 160 tests. The deviation trial was refused
+> nothing and showed every off-road step as closer review, on the CRM and in a parked Notes run. The fresh-agent trial
+> met the run cap of 3 tsc and checker runs for 3 of 6 agents (gpt-a, gpt-b, opus-c); opus-b (4), gpt-d (6) and opus-e
+> (7) missed it, and gpt-b left out the owner hand-over that WU22 then made possible. The private dogfood built the
+> module with 123 passing tests but far over the cap (tsc/checker runs per group: 27/6, 6/4, 4/3, 8/3), and no checker
+> run exited 0, because the tarball install's `package-replacement` refusals stayed (131). Commit map (first…last on
+> main): WU0–WU10, WU12, WU13a, WU13b, WU14 and WU18 are in the first part's map. WU20 → `99c81709`…`6f7ba0e6`, WU17 →
+> `af28a8ee`…`a600106b`, WU22 → `75254085`…`f339fb79`, WU11 → `9e49d9c3`…`0c13d394` (trial record `5716c060`), WU16
+> → `fda16209`…`d85cfffe`, WU19 → `d74741e1`…`3eb0336e`, WU15 → `681880fd`…`924b5387`, WU15b →
+> `f346a607`…`af32c77f`, WU10b → `c52ecf3c`…`debb4e58`, WU21 → `74f72ac5` (its backlog), WU23a →
+> `421ea9df`…`051b65c9`, WU23b → `0049735e`…`d613b688`, WU23c → `22a43f62`…`440affe9`; leftover findings
+> `bf167362`; flaky-test fixes `6bf104fa`, `abe5a3cd`, `85b09dbc`. The 0.3 release fixes (`e291e1ec`…`c732b94e`) were
+> integrated into main before WU23c. Verification at `440affe9`: typecheck, lint, `format:check`, and `bun run test`
+> with Postgres and S3: 7299 pass, 38 skip, 0 fail; then the agent interfaces 318, `examples/zerops-app` 47 and
+> `examples/crm` 160 pass, 0 fail. Backlog closed: 110 (WU12), 102 (WU20), 125 (WU23a), 121, 123 and 124 (WU23b); 71
+> rescoped (WU18). Filed: 111–131 during the sprint, 132–136 at the close; 114 updated. Deferred: the open items
+> 111–120, 122 and 126–136, among them the export permission (132), application tables for scoped endpoints (133), the
+> fragment's action (134), the Postgres batch hang (115), share links and `creates` in the generated endpoint test
+> (113) and the flaky suites (114); ClamAV and the other Zerops facts on a real account (116); per-client form
+> admission on Zerops, where the client is the balancer until backlog 05; HSTS on the installation hosts (IAM,
+> Control); a data layer on Cloudflare, so a contract with a job does not boot there;
+> `tests/browser/notes-agent-adds-endpoint-and-table.test.ts` was updated but not run; `differential.test.ts`'s
+> reader-forms fixture still does not reach `public-spa` (WU14).
 
 # Sprint — the paved-road application framework (2026-10-11)
 
@@ -685,10 +711,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   them to `src/__tests__/skill-app/catalog.json`, from which the generated schema is rendered (equal to real
   codegen). Materialized, the application passes the whole loop on main + WU13b: tsc clean, `fabrika-check` 0
   refusals and 0 hints, 62 tests (generated included), the SPA build. After the rebase onto WU13b the test needs no allowance.
-- **WU10 — what the trial app taught the skill.** An edit endpoint with only optional fields fails its generated
-  cases (the sample sends none, and an empty update is a 500), so the skill's edit takes its fields as required. A
-  webhook's generated `bind` needs a fixture. Share links, `creates` and member management still fail the generated
-  endpoint test (dogfood finding 6): the skill says so under "Not built yet" and asks first.
+- **WU10 — what the trial app taught the skill.** → backlog 112 (an empty update) and 113 (share links, `creates` and
+  member management in the generated endpoint test).
 - **WU10 — readers.** `@fabrika/app/agent-skill`: `AppAgentSkill` gains `version` and `references` (`{ path, topic,
   text }`), plus `readAppAgentSkillAt(skillDir)` and `installedAppAgentSkill(appRoot)` (the nearest
   `node_modules/@fabrika/app/skill`). The builder installs every file from the application's pinned package, else
@@ -702,99 +726,39 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   test holds the two equal); the seed's limits (text markers break a `CHECK`, use an `ENUM`; a required foreign key
   outside the chain) in `tests.md`. The name rules are stated as defense in depth with the runtime role as the
   boundary (WU12 landed), so the skill has no "until WU12".
-- **WU10 review round 1.** (1) The release staged every `skill/SKILL.md` and threw on the builder's, which has no
-  version: only `@fabrika/app`'s skill is staged (`stagePackage`, `stagedAppSkill`), and the whole public set is
-  staged in a witness. (2) **Raw SQL is sound by construction:** `${ctx.sql.scope(capability, table, alias?)}`
-  (`packages/db/src/sql.ts`, `scopeTerms` in `store.ts`) renders the capability's whole predicate as bound values — a
-  `Ref`'s object and every chain link, a `Within`'s values and container grants, `(true)` for `all`, `(false)` when
-  empty — and refuses a table it does not reach; the fragment is a private class bound to its site, the one
-  interpolation that is not a single parameter. The access fixture's reports written with it pass the in+sql leak
-  case, and the skill shows it as the way to scope a statement. (3) The staged reference files' `@fabrika/*` ranges
-  are the released version. (5) `testKit` answers a member directory from its own callers when no `membership` is
-  given (`testing/directory.ts`); a contract that writes through IAM still gets none, so `boot` still names the
-  transport. (4, 6–10) The skill states the connector CLI's Control credentials, the webhook's 30-day replay window
-  and crash gap, connector outcomes as no HTTP answer, sums' types and nulls, the `HttpError` statuses, and the
-  versioned and unversioned write answers.
-- **WU10 review round 2.** (1) A fragment is a frozen object without a prototype, registered in a module-private
-  `WeakMap` read through methods bound at load: replacing a static, forging an object or patching `WeakMap.prototype`
-  no longer passes one, and a fragment of another site (live or ended) is refused. (2) Every interpolation's place is
-  checked in the original text before any fragment is spliced, so `(true)`/`(false)` fragments with no value are
-  refused inside a literal, a quoted name, a dollar body and both comment forms. (3) Placement is enforced: a fragment
-  stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause with no top-level OR or BETWEEN; the
-  access fixture's ORed report is refused and leaks nothing, its parenthesized twin passes the leak case. (4–7) The
-  skill exempts reference tables, names the capability per access form and for jobs (`tx.sql.scope`), states the
-  structural error contract, the fragment as the one SQL interpolation, and labels for `members.manage` holders.
-- **WU18 — durable audit.** The SQL port has only `batch`, so a change's record is a statement in the change's own
-  batch (`auditEventStatement`), and a guarded change records itself through `INSERT … SELECT … WHERE` behind a
-  row-locking no-op UPDATE; without the lock two concurrent Postgres revokes wrote two rows. Deviations: a member
-  revoke writes one `iam.member.revoke` row per role removed (`metadata.role`, was `roles`), because the creator role
-  and the others are one batch now; an invitation whose email fails is deleted with an `iam.member.uninvite` row
-  (`reason: 'delivery_failed'`); a password action records `{ delivery }` at issue and a failed email as its own
-  `iam.password.<purpose>.delivery_failed` row; disabling a disabled principal, revoking a revoked share link or
-  session records nothing. `auth_log` gains the `logout` kind and `privileged` (migration 0008 rebuilds the table on
-  SQLite). Mint rows stay in `waitUntil` (not logins). `iam-contract`'s `AuthLogDto` gained `kind: 'logout'` and
-  `privileged`, outside the touch points. Discovery: concurrent statements on the connection the IAM test fixture
-  migrated with hang in Bun SQL; a fresh pool does not, so `durable-audit.test.ts` runs on a pool of its own.
-- **WU18 review round 1.** A guarded change's record no longer rests on an existence check behind a row lock: other
-  writers (an admin grant beside a membership one, a login beside a bulk revoke) took no such lock. `AuditWriter`
-  writes the record from what the change itself changed — one `WITH c AS (… RETURNING) INSERT … WHERE EXISTS` statement
-  on Postgres, `changes()` right after the change on SQLite/D1, whose writers are serialized; the composition passes
-  the dialect. OIDC principal create, claim and refresh, password completion and rehash, the forgot-password bootstrap
-  principal and a workload's first principal now commit with their record; bulk revocations that change nothing record
-  nothing; audit rows label a user by its id and carry no address; every terminal login refusal is logged with a fixed
-  reason. Five Postgres suites built the SQLite composition over Postgres and now use `createPostgresIamRepositories`.
+- **WU10 review round 1.** Raw SQL scoped by `ctx.sql.scope` → `packages/db/CLAUDE.md`,
+  `docs/reference/application-runtime.md`; the kit's member directory → backlog 113.
+- **WU10 review round 2.** The fragment's integrity and placement → `packages/db/CLAUDE.md` (`ctx.sql.scope`).
+- **WU18 — durable audit.** A change's audit row in the change's own batch → `packages/iam/CLAUDE.md`; the Bun SQL
+  hang → backlog 115.
+- **WU18 review round 1.** The record written from what the change changed → `packages/iam/CLAUDE.md`.
 - **WU18 review round 2.** A public recovery issues its token (and a bootstrap admin's enrollment opt-in) with its
   record in one batch; a handoff redemption writes its `allow` row in the child session's batch and opens nothing when
   that write fails; an oversized or cross-origin password form is a logged refusal; an admin's 404/405 REST request is
   recorded (`/admin/*` or its template). The write-path sweep found OAuth consent and grant revocation unaudited; they
   now record `iam.oauth.grant.create` / `iam.oauth.grant.revoke` in their own batch.
-- **WU18 — the Bun SQL hang, diagnosed.** Under concurrency a Postgres `batch` (`sql.begin`) holds a pooled connection
-  idle in its transaction while pool queries queue behind it, so a burst larger than the pool hangs; the round-1 note
-  blamed the migration connection. `AuditWriter.run` now sends a single audited statement (always the case on Postgres)
-  without a transaction, which is atomic alone. Batches elsewhere keep the hazard; it predates this unit.
-- **WU20 — failure codes, not names (review item 7).** A 5xx reports `framework_fault`, `unavailable`,
-  `capability_refused`, `query_refused`, `handler_status` or `handler_failed`, never the error's name or message. The
-  server log line (the record without a DSN) is the code plus the text of a framework refusal; it no longer prints an
-  unknown error's name, which any thrown value sets.
+- **WU18 — the Bun SQL hang, diagnosed.** → backlog 115.
+- **WU20 — failure codes, not names (review item 7).** → `packages/app/CLAUDE.md` (a 5xx is reported as a fixed code).
 - **WU20 — one reporter per boot.** `operationsSettings` reads the DSN once in `boot`; jobs and requests get their own
   envelope `logger` (`fabrika.jobs`, `fabrika.requests`). A DSN that is not an ingest DSN now stops every boot, not only
   one with jobs. `JobReport`/`JobReporter` are renamed `OperationsReport`/`OperationsReporter` (`runner.ts`: a merge
   note for WU15). The delivery is not awaited: `ContractApp.fetch(request, exec?)` hands it to a Worker's `waitUntil`.
-- **WU20 — HSTS lives in the proxy only.** The framework has no public scheme, so its in-process policy stays without
-  it; `appHeaderPolicy`/`appFileTreatment` add it from the manifest. Caddy's own 502 (an upstream it cannot dial)
-  carried no header at all before; the server's `errors` routes now give it the host's policy. Installation hosts
-  (IAM, Control) are out of scope: their answers pass through, and a proxy denial there carries the base policy
-  without HSTS.
+- **WU20 — HSTS lives in the proxy only.** → ADR-0022 (HSTS). Installation hosts (IAM, Control) carry no HSTS
+  (Deferred in the OUTCOME).
 - **WU20 — the SDK witness is the Notes example.** The local stack builds the example's SPA on every prepare (it was
   never built, so `/` answered no file); the browser identity's notes grant replaced the witness grant
   (`packages/iam/src/node/browser-identity.ts`, one line). The scenario throws an uncaught error whose function name
   carries the run marker, because the SPA sets no SDK fingerprint and the grouping is by type and frames.
-- **WU20 review round 1.** Framework refusal messages can quote request data, so `QueryRefusedError`,
-  `CapabilityRefusedError` and `ServerFault` take a `reason` from a closed catalog (`QUERY_REFUSALS` in `@fabrika/db`,
-  `CAPABILITY_REFUSALS`, `SERVER_FAULTS`), and the log line prints the code, the reason and its fixed text only
-  (`query_refused: sql_read_only: sql: 'read' runs queries only; …`); the message stays on the error for the author's
-  own run. Every throw site in `@fabrika/db` (123) and the app (39) names a reason. Early proxy refusals carry the named
-  host's transport header; the Cloudflare Worker's initialization 503 the named host's treatment; an application's own
-  HSTS is dropped on `http` (Caddy deletes it only on `http`, because a named delete runs after the set). The followed
-  agent-change commit's SPA is built before Notes serves it; the SDK scenario passes after that follow, without a reset.
+- **WU20 review round 1.** Closed refusal catalogs → `packages/db/CLAUDE.md`, `packages/app/CLAUDE.md`; the transport
+  header on early refusals → ADR-0022.
 - **WU20 review round 2.** The sweep of runtime log sinks found two more: a file cleanup and sweep logged a storage
   error's name, and a failed webhook delivery logged the unsigned `X-GitHub-Delivery`. Both now log fixed codes (the
   failed step; `delivery_failed`), and `deliveryIdOf` is gone. Every other `console.*` and reporter call in the app and
   db runtime interpolates only declared names, fixed codes or closed IAM outcomes.
-- **WU17 — file malware quarantine.** ClamAV was measured locally only (`clamav/clamav:1.4`): one `clamscan` over 21
-  files took 11 s and peaked at 0.99 GB resident, so a scanning contract's deploy service needs `minRam: 2`
-  (`ZEROPS_SCAN_MIN_RAM_GB`); the Zerops facts stay UNVERIFIED in `docs/reference/zerops-platform.md`. Deviations:
-  `freshclam` also runs in `initCommands` (an image's signatures are as old as its build, and the scanner refuses
-  ones older than three days); `ALTER TABLE fabrika_files_*` was refused everywhere, so `fileScanSql` and its exact
-  classifier exemption exist; `scan` is in the artifact only when true, so other digests stay; every file collection
-  gains `files.<name>.list`; the local stack's `notes` service runs `app-image/` (not started, only built).
-- **WU17 review rounds 1–2.** ClamAV answers OK for an LZMA entry, a damaged deflate stream and a ZIP after a prefix
-  whose entry sizes are in a data descriptor, so the framework checks archives itself and fails closed: a ZIP-based
-  type starts at offset 0, any other file holding a ZIP signature is rejected (about once per 1400 MB of random
-  binary data, accepted), and the end record must be unique and end the file. A download reads only the scanned
-  version (`If-Match` on the recorded ETag); object keys are written once. A file without a verdict, or whose delete
-  failed, waits with backoff and is retried alone; the batch takes the oldest due files across collections. An empty
-  upload to a scanning collection is refused (400 `empty`) rather than promoted without a verdict.
+- **WU17 — file malware quarantine.** ClamAV was measured locally only (21 files: 11 s, 0.99 GB, so `minRam: 2`); the
+  Zerops facts → backlog 116; the scan → `packages/app/CLAUDE.md`.
+- **WU17 review rounds 1–2.** → `packages/app/CLAUDE.md` (ClamAV's OK never vouches for an archive; only the scanned
+  version is served; retries with backoff).
 - **WU22 — generated cases of a nested list.** A generated case grants the endpoint's action at the table's grant
   dimension (a deal's company). IAM checks a list on the directory's value (the org), so the case of a deal endpoint
   of `crm.read` was refused 403. The endpoint access kit now grants such an endpoint's action on the directory's value
@@ -811,15 +775,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU22 — one process, one binding.** The root `bun test` runs every file in one process, and a data layer binds
   once. The fixture's `src/app.ts` is booted by its own generated tests, so every other suite over the fixture boots
   `serve(contract, { database: scoped(tables) })` of its own.
-- **WU22 review round 1.** (1) `findMember` trusted the application's chain and action: a grant on a note with a
-  substituted parent, or the global creation action, found a member of another workspace. IAM now derives the
-  authority itself: the action must be one of the dimension's reconciled `lookups`, held on the directory's value
-  (the coarse rule; IAM holds no containment below a value), and the input names no chain. A lookup from a caller who
-  holds the action only on a company is now 403, as a list was; the endpoint access kit grants every directory
-  endpoint's case its action on the directory's value. (2) The reach is recorded in the artifact (`directories`), so
-  the digest covers it and a baseline without it widens. (3) A generated member's id and label are the other side's
-  markers, so `kit.leaked` catches a cross-org member in an answer. After the rebase onto WU20, the new throw sites
-  name `facility_unbound`, `directory_unlocated` (new) and `iam_answer_mismatch` (a lookup answered for another id).
+- **WU22 review round 1.** → WU22's decisions above, ADR-0012 and `packages/iam/CLAUDE.md` (`findMember`).
 - **WU11 — the CRM** (`examples/crm`, in `test:examples`): the dogfood surface in six slices (orgs, companies,
   contacts, deals, tasks, activities), the attachments of a deal, the hourly `overdue` job and the SPA through the plugin
   (`web/__tests__/bundle.test.ts`: no handler code, no server module). Added: `deals.reopen` and a closed-deal rule for
@@ -860,12 +816,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `api.admin.stageChanges` declares table `deal_stage_changes` unscoped (`read`); the migration declares function
   `deals_record_stage_change` and trigger `deals.deals_record_stage_change`. `snapshotDeviations` of the head also names
   `api.deals.pipeline`'s raw SQL, the base's one deviation.
-- **WU11 — `ctx.sql` without the declaration** (`sql: 'read'` dropped from `deals.pipeline`): tsc names the fix at the
-  line (`Unavailable<"ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site">`, and a
-  cascade of TS7006 in an authored test that reads the output's type); `fabrika-check` 0 refusals, 2 hints
-  `sql-undeclared … (allowed form: sql: 'read' in the options of 'pipeline')`; at runtime the site has no `ctx.sql`,
-  the call is a `TypeError`, the request a 500 (log `api.deals.pipeline: TypeError thrown`) and nothing reaches the
-  database. The refusal does not name the declaration at runtime; a named throw would be friendlier (not done).
+- **WU11 — `ctx.sql` without the declaration.** tsc and the checker name the declaration; the runtime gives a
+  `TypeError` and a 500 → backlog 120.
 - **WU11 — the parked run on Notes.** The agent change fixture (`fixtures/source/notes-agent-change.patch`, re-pinned to
   `3b293853`) gains `20261010090100_note_titles.sql`, a `BEFORE INSERT OR UPDATE OF title` trigger that trims a note's
   title. On `local:up` the pinned commit deployed and was approved; the change parked on protected `prod` as run
@@ -879,25 +831,9 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `--isolate`) a second `Bun.build` with an `onLoad` plugin in one process fails with `EISDIR reading file` on workspace
   sources, whichever example builds second (Bun 1.3.14; two builds in a plain `bun` script pass). Each example's SPA
   bundle test builds once, so one process per example sidesteps it.
-- **WU11 review round 1.** (2) The `overdue` job read one page of 500 and reported success with tasks left; it pages
-  through every task (100 a page) with the `overdue = false` filter and versioned, fenced writes.
-  `src/tasks/__tests__/overdue.test.ts` marks 130 tasks whose first attempt times out once it has committed some (its
-  `JobClock` fires the deadline then): the run succeeds on attempt 2, every task is at version 2, and a second run
-  changes nothing. A raw-SQL fault trigger was refused by `fabrika-check` in a test (`forbidden-global` for `bun`'s
-  `SQL`, `env-read`), so the clock is the only fault an application test can inject. (4) `deals.pipeline` cast each
-  sum to `INTEGER`, so two deals of 1.5e9 broke it; the sum stays `bigint`, arrives as text
-  (`z.string().regex(…)`) and `safeTotal` (`src/deals/logic.ts`) refuses one past 2^53 − 1 instead of rounding (a
-  3e9 case in `deals.test.ts`, the edges in `logic.test.ts`). (3) `TRIAL.md`: a copy is renamed
-  `fabrika-example-crm-trial-<group>` (two workspaces of one name stop `bun install`), the SPA's script, build line and
-  `web/**/*` include go with it, and group C's contract comment drops the job; checked for C beside `examples/crm`
-  (136 tests). (5) 28 RPC endpoints, 34 in all (WU17 added the file list endpoint), not 30. Server lines are 400 (the job's loop and `safeTotal`, with the
-  three `remove` handlers on one line each). 157 tests.
-- **WU11 — owner/assignee validation waits for WU22.** `deals.assign` and `tasks.create` take the principal and label
-  from the input, so an outsider or a forged label persists. No endpoint below the org can check membership:
-  `ctx.members` exists only where the action is the org's `members.list` and the access is `on`/`in` the org; on a
-  deal it is `Unavailable<"the dimension deal declares no members">`. Framework finding: the paved road has no member
-  lookup beside a write capability on a nested scope. WU22 adds it; WU11 then validates the picked principal through it
-  and takes the label from the directory.
+- **WU11 review round 1.** The `overdue` job pages every task, the pipeline's sums stay exact past `INTEGER`,
+  `TRIAL.md` fixed; only the job clock can fail an attempt in a test → backlog 117.
+- **WU11 — owner/assignee validation waits for WU22.** → WU22.
 - **WU11 — owner and assignee validated (on WU22).** `deals.assign` takes `newOwner` and `tasks.create` an `assignee`
   id (the caller when null); `picked` (`src/orgs/logic.ts`) refuses with 400 a principal `ctx.members.get` does not
   find in the deal's org, an unknown id and a disabled member, and the stored label is the directory's (the id when it
@@ -919,56 +855,26 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   no hand-edited generated file, no new role, grant, action or deviation, and the reference tests pass on five; gpt-b
   left out the owner hand-over, because no endpoint below the org could check membership (→ WU22, now merged). The
   cap fails on reruns after test edits (opus-b, gpt-d) and on opus-e probing types through tsc for "the caller's orgs",
-  which the skill does not teach. Skill gaps for WU10b: the `over` dimension (four trials chose `over: 'org'`, which
-  `classifyAccess` reports as a false widening), `ctx.within.values` and the all-orgs case, `aggregate`'s `sum` and the
-  safe-integer limit, a job re-reading its row under `getForUpdate`, the test kit's origin (`https://crm.test`), an
-  undeclared route answering 403, the formatter in the loop, a test caller with a global grant or a disabled member.
-- **WU16 — anonymous abuse control.** The buckets are fixed per-minute windows of the database clock
-  (`fabrika_form_admissions`, framework migration `0003_form_admissions.sql`), each take one upsert whose update runs
-  only below the limit, pruning 32 expired rows `for update skip locked`; a row of a past minute is expired by its key.
-  Deviations: a form declares `rate: { perClient, perForm }` (the form's ceiling too, because on Zerops the client is
-  the balancer and a fixed ceiling would cap every intake); the ceiling is taken only after the input, the honeypot
-  and the challenge, so refused requests never empty it (review item 6). The challenge token travels in the input
-  field `challengeToken`, which the input must declare (forms take no header the proxy keeps, and the typed page needs
-  the field); Turnstile's `action` is the form's mount name and its hostname the request's host. A passed token's digest
-  is recorded in `fabrika_form_challenges` for 360 s, so a replay fails whatever the provider says. A refused secret
-  (`invalid-input-secret`) is a 503 like an unreachable provider, not the visitor's 400. The provider's fixed origin is
-  added to `scriptSrc`/`frameSrc` by `buildArtifact` (the diff shows it); `rate`, `honeypot`, `challenge`, `scriptSrc`
-  and `frameSrc` are in the artifact only when declared, so other digests and stored snapshots stay, and the manifest
-  parser defaults the two directives for a manifest written before them. An IPv6 client counts by its /64, the
-  address is kept as a SHA-256 digest, and a request without `X-Fabrika-Client-Ip` (the test kit) is one `unknown`
-  client. Any change of a form's admission widens in the approval diff (a mount change), conservatively.
+  which the skill does not teach. Skill gaps → WU10b.
+- **WU16 — anonymous abuse control.** → `packages/app/CLAUDE.md` and `packages/db/CLAUDE.md` (a form's admission),
+  ADR-0050 (an admission change widens); on Zerops the client is the balancer until backlog 05.
 - **WU16 review round 1.** The form's accepted bucket was taken in its own statement before the insert, so a row
   the database refused (a schema-valid string holding U+0000) consumed the shared quota and the next valid client got
   429. `appendToInbox` now takes from the bucket in the insert's transaction (`InboxQuota`); the per-client bucket stays
   its own statement. Every strict input (procedures, forms, webhooks) and every path parameter refuses a string or key
   holding U+0000 with a 400, because Postgres `text` cannot store it. A declared `frame-src` keeps `'self'`, so removing
   the last frame origin narrows, as the approval diff already says.
-- **WU19 — file-download responses.** CSV only, per the binding review; XLSX → [backlog 111](../backlog/111-an-attachment-has-no-xlsx-format.md).
-  Deviations: the builder is a standalone `attachment({ … })` of `@fabrika/app/contract`, not `c.attachment`, so a
-  schema module (`src/schemas.ts`) and every kit form can declare one, and the reader recognises it like `defineApp`.
-  Its value is the rows' array schema, marked, so the handler's types, projection and validation need no new path; the
-  artifact row's `output` widens to `OutputShape` (`SchemaShape | AttachmentShape`, auth-core), with ordered `columns`.
-  The file carries a UTF-8 byte order mark (Excel reads a BOM-less CSV in the legacy code page) and the header policy,
-  not the file treatment: the proxy applies the policy to every procedure row, and it keeps `Content-Type` and
-  `Content-Disposition`. A number cell is not formula-escaped (its text is a numeric literal); full-width `＝＋－＠`
-  are, beside the review's list. Limits: `maxBytes` ≤ 16 MiB, `maxRows` 10 000 by default and ≤ 100 000, a cell ≤
-  32 767 characters.
+- **WU19 — file-download responses.** CSV only; XLSX → [backlog 111](../backlog/111-an-attachment-has-no-xlsx-format.md).
+  The attachment output → `packages/app/CLAUDE.md`.
 - **WU19 review round 1.** (1) The row bound ran after projection and validation had copied the whole result; the
   attachment path now checks the count before it reads a row and projects, validates and encodes row by row. (2) The
   byte bound was checked per encoded line, whose width has no column bound; each field is now encoded and counted
   with its separator before the next is read. Witnesses count row and cell reads through a `Proxy`. A result that is
   no list is `output_refused`, as the whole-output validation answered it before.
-- **WU15 — verify first.** A job's token carries its actions `scope: null` (app-wide), so it meets `issueLink`'s
-  delegation rule on any chain: an issuing job is app-wide for its mount, the link is bound to one object. Measured: a
-  revoked link keeps working through a warm proxy cache for at most 270 s (the token's 300 s less the 30 s refresh
-  skew, `TOKEN_REFRESH_SKEW_SECONDS`); `visitor-link.test.ts` moves the proxy's clock across that edge.
-- **WU15 — how IAM knows a job may issue (review item 1).** `AppWorkloadDef.issues` (auth-core) carries the job's
-  approved mount from `schemaFromContract`; the reconcile writes it to `app_workloads.issues` (IAM migration 0010, a
-  `CHECK` keeps it job-only), and `appSchemaSchema` refuses a mount the schema lacks or a job without its `issuedBy` and
-  grants. `resolveCaller` still refuses every workload; a new `resolveLinkCaller` admits a job for `issueLink` and
-  `revokeLink` only, and `membership.ts` reads the declaration at each call; `createLinkCredential` inserts a job's link
-  only while the declaration still names the mount. The job presents its token: `WorkloadAuthority` gains `token`.
+- **WU15 — verify first.** A job's token meets `issueLink`'s delegation rule on any chain; a revoked link works
+  through a warm proxy cache for at most 270 s → `docs/reference/application-runtime.md`.
+- **WU15 — how IAM knows a job may issue (review item 1).** → `packages/iam/CLAUDE.md` (`app_workloads.issues`),
+  `packages/app/CLAUDE.md` (Jobs).
 - **WU15 — deviations.** `@fabrika/iam` gains the dev dependencies `@fabrika/db` and `@fabrika/proxy-core` for the
   end-to-end witness, which boots `@fabrika/app`'s intake fixture against IAM's SQLite harness through proxy-core's
   `Authorizer` (Postgres for the application only). Link-file rows take source `{ kind: 'mount', name: <mount> }` and
@@ -976,11 +882,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   in the contract (not at boot) when no link mount is bound to the owner's dimension or one does not grant write and
   read. The endpoint test of `ctx.links.revoke` is in `job-links.test.ts`: the multi-tenant fixture is implemented by
   the type-mistake fixtures, which an extra endpoint breaks.
-- **WU15 — the intake recipe's crash semantics (review item 3).** The job records each delivery step in the record's
-  row before the next effect: revoke a superseded link → record; issue → record the id (`issued`); e-mail → `sent`. A
-  stop after any effect is finished by the next run with exactly one live e-mailed link (`intake.test.ts`, one case
-  per stop, a refused e-mail and an unreachable IAM): an `issued` row's link is revoked and replaced, an unrecorded
-  link's key never left the job. The e-mail is at-least-once; a link's key is never stored.
+- **WU15 — the intake recipe's crash semantics (review item 3).** → `docs/reference/application-runtime.md` (the
+  intake recipe's stops).
 - **WU15 — link-holder files on WU17.** After the rebase onto WU17 the link holder's list (`<mount>.files.<name>.list`,
   `{ after?, limit? }`, no owner) joins upload and download; quarantine and the held-file quota apply through the shared
   upload and download paths. No scanning link collection is tested here: WU17's suites own the scan.
@@ -1001,13 +904,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   WU15 recipe lives in `fixtures/visitor-intake`, renamed in every WU15 commit; `fabrika-check`'s differential registry
   reads both.
 - **WU15 — on WU19.** WU19 took kit mistake 30, so `job-links-without-issues` is mistake 31.
-- **WU15b — verify first.** The serving process already holds every job's key: Control writes
-  `FABRIKA_JOB_<NAME>_KEY` into every deploy, `boot` refuses to start without it and binds the jobs in the server too
-  (`serveContract` runs `jobs.check()`). A kicked run is `runJob` in that process under the job's own
-  `WorkloadCredential` (an IAM exchange per attempt), so it widens nothing; no `fabrika job run` is spawned. A form
-  carries no token, so there is no request identity to inherit. Cloudflare: no data layer and no token exchange, so a
-  contract with a job does not boot there; the kick still goes to `waitUntil` (30 s past the answer against a 15 min
-  job timeout, moot until jobs run on Workers).
+- **WU15b — verify first.** → `packages/app/CLAUDE.md` (a kicked run is the job's own, in the serving process). On
+  Cloudflare a contract with a job does not boot.
 - **WU15b — deviations.** The name stays `then`. The compiler check sits on the whole surface (`FormJobs`, an F-bounded
   `S`), so its message is elaborated (kit mistake 32 is in `ELABORATED`). Beside the lease's `pending` flag (framework
   migration `0004_job_kicks.sql`), a kick in flight in one process absorbs the next, so a flood issues one kick per
@@ -1017,8 +915,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   transaction: an in-process `pg_terminate_backend` prints Bun's unhandled release rejection (`@fabrika/db`'s
   connection-loss note). The visitor-intake fixture keeps explicit runs, because its crash tests arm a fault before a
   run and a kick would race them; the witnesses use `fixtures/form-kick`, and WU10b's recipe adds `then`.
-- **WU15b — approval.** A form's `then` is a line that widens nothing. It does let anonymous submissions keep the job
-  running back to back, bounded by the form's `rate.perForm` and the coalescing: an availability cost, not access.
+- **WU15b — approval.** → ADR-0050 (a form's `then` widens nothing).
 - **WU15b review round 1.** (1) A kick waited on the lease row while a run's attempt held it as its fence, on a
   connection requests share, so a held write transaction made an unrelated form wait. A kick now takes the lease with
   `tryAcquire` (`for update skip locked`) and keeps its pending flag in its own table, `fabrika_job_kicks` (migration
@@ -1052,14 +949,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `scan: true` collection's generated download case answered 409 (it now runs the scan job with a passing stand-in).
   `testKit`'s `runJob` takes `FILE_SCAN_JOB`. Also found: `defineDeps(build)` runs at the generated tests' boot, which
   sets no variable, so `build` must not require one (the skill says so).
-- **WU10b — the trial's gaps** are in the references: `over` names the nearest dimension of the rows' chain (the
-  skill's own `mine`, `counts` and the job moved from `org` to `project`), `ctx.within.values` and `'all'`
-  (`members.orgs`, a query without input, tested with a global grant), the generated cases' samples and the seed's
-  defaults, `aggregate`'s argument and `exactInteger`, the job's re-read under `getForUpdate`, the kit's origin, 403
-  for an undeclared path, the formatter and linter, an audited export (`exportProject`, an `in: 'project'` mutation
-  with a `project_exports` child row). Open, already in the backlog: labels typed nullable (118), no disabled member
-  in the kit (119), no fault injection in a test (117). Not on the road: the log row of an export across a top-level
-  dimension (every candidate), which has no table scope a capability writes; the recipe says to ask.
+- **WU10b — the trial's gaps.** → the skill's references; labels typed nullable, no disabled member, no fault
+  injection → backlog 118, 119, 117; the log row of an export across a top-level dimension → WU23a.
 - **WU10b — `fromPage`** (`@fabrika/app`): `fromPage(Schema, page)` is `{ items: page.items.map(fromRow), next }`. The
   CRM's six list handlers use it: 400 → 386 hand-written server lines; 160 tests pass.
 - **WU10b review round 1.** (1) The intake job's batch took the first 50 undelivered rows and skipped a spent budget
@@ -1071,23 +962,17 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU10b — on WU15b.** Rebased onto `af32c77f`: both catalogs hold `fabrika_job_kicks` (the base's from main, the
   intake's regenerated). The recipe's forms name `then: 'intake'`, the marked spot and the one-minute latency are gone,
   and the schedule is stated as the recovery path. Materialized again on the kick: tsc, `fabrika-check` 0/0, 44 tests.
-- **WU10b — a fresh application outside the monorepo** (the integrator's setup with only the skill). The skill had no
-  setup before the first table, no first test (the scaffold printed nothing, `bun test` fails with no file), no way to
-  install or update itself, and made the SPA mandatory. `references/start.md` is a tableless application of its own
-  (compiled by `skill-code.test.ts` without a catalog; materialized: tsc, `fabrika-check` 0/0, 2 tests), with the steps
-  to its first table and `fabrika builder init --profile zerops-app --no-daemon --no-open` or `renderAgentsFile` for the
-  skill (`init` also creates `.fabrika/` and an empty `tests/`); `fabrika db test-scaffold` now says when it writes no
-  test; `app-setup.md` marks the SPA's parts as added with the SPA.
+- **WU10b — a fresh application outside the monorepo.** → the skill's `references/start.md`; installing locally packed
+  packages → backlog 131.
 - **WU21 — private dogfood.** A fresh agent built a public intake application (a candidate registration module of one
   of our projects) from locally packed packages and the skill alone. Runs through the wrapper, tsc/checker per endpoint
   group: public 27/6, hr 6/4, consent 4/3, roles 8/3. About 10 more tsc probes ran outside the wrapper. No checker run
   exited 0, because the tarball install's `package-replacement` refusals were always present. 123 tests pass: 86
   generated and 37 authored. Not built: the audited export of every record, which is blocked on the access-form
   question (125, → WU23a). Setup findings fixed by WU10b, which are already above: the tableless start, the first test, the
-  skill install, and the optional SPA. Filed → backlog 121–131.
-- **WU23a — `ctx.app` is on `ctx`.** The decision named only `ctx.db.app`; the policy probe's `implement` handlers
-  need the capability itself, so it is `ctx.app` (`AppCapability`), beside `ctx.target` and `ctx.within`, and
-  `ctx.sql.scope(ctx.app, table)` is every row.
+  skill install, and the optional SPA. Filed → backlog 121–131 (121 and 123–125 shipped in WU23a and WU23b); at the
+  close → backlog 132 (the export permission) and 133 (a scoped endpoint reading an application table).
+- **WU23a — `ctx.app` is on `ctx`.** → `docs/reference/application-runtime.md`, `packages/app/CLAUDE.md`.
 - **WU23a — what the generated cases count.** The global case answers `{ answered: true }` unless a 401, a 403 or a
   5xx: the app form refuses with 403 alone, so a 404 is the handler's own answer to a sampled id. The scoped case
   grants the action in the vocabulary's first dimension, or in a scope type `scope` when there is none: any scoped
@@ -1108,9 +993,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   two optional filters and the `priorities` lookup (404 for an unknown code). Intake (`full_name`, `received_at`): tsc,
   `fabrika-check` 0/0, 44 tests, and a probe: `{ result: { received: true } }`, a replayed token 400, a camelCase
   field 400, the job drains `full_name` into the candidate's name. The deps entry stays documentation: `testKit` gets
-  no `deps` override. Not fixed here: an unscoped `get(id)` of a reference or inbox table still fails at run time
-  (`row_address`), and `sql: 'write'` still writes a reference table (a code list an administrator edits is an
-  application table, WU23a).
+  no `deps` override. Not fixed here: an unscoped `get(id)` of a keyless table → backlog 136; `sql: 'write'` still
+  writes a reference table → backlog 134.
 - **WU23b review round 1.** (1) An options object typed apart from its call widened `honeypot` to `string`, which
   exempted every field, and `appendTo: string` skipped the check: `appendTo` and `honeypot` are now one literal each,
   and `appendTo` names an inbox table of the kit (kit mistakes 36–38, a literal honeypot compiles). Mistake 32 moved
@@ -1120,3 +1004,4 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU23c — the fixture has an application table.** `settings` joined the shared `@fabrika/db` test fixture (its
   migration, its generated columns and both literal copies of its policies), and `TestAuthority` mints an `app`
   capability. `names` moved from `orm.ts` to `policy.ts` as `namesAction`, shared by `ctx.db.app` and the scope check.
+  Out of its scope: a fragment ties neither the statement's operation nor a `Ref`'s or `Within`'s action → backlog 134.

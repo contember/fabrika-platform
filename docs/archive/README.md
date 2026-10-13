@@ -9,8 +9,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [The paved-road framework (2026-10-13)](sprint-2026-10-11-paved-road-framework.md)
+  — the second part: the public intake gaps (visitor links, form kicks, abuse control, malware quarantine, CSV downloads, HSTS), the member lookup, application-wide data, the CRM at 386 server lines against 538, the fresh-agent and private dogfood trials.
 - [The paved-road framework, core (2026-10-12)](sprint-2026-10-11-paved-road-core.md)
-  — the first part of the paved-road sprint: the staged kit, the mini-ORM, declared `ctx.sql`, reviewed deviations, a role per application, the skill, a public SPA and durable IAM audit; the rest continues in [the active sprint](../sprints/sprint-2026-10-11-paved-road-framework.md).
+  — the first part of the paved-road sprint: the staged kit, the mini-ORM, declared `ctx.sql`, reviewed deviations, a role per application, the skill, a public SPA and durable IAM audit; the rest is in [the second part](sprint-2026-10-11-paved-road-framework.md).
 - [B-M3 — workloads and platform (2026-10-09)](sprint-2026-10-09-b-m3-workloads-and-platform.md)
 - [A-M4 — companions (2026-10-09)](sprint-2026-10-09-a-m4-companions.md)
 - [B-M2 — locked providers (2026-10-09)](sprint-2026-10-09-b-m2-locked-providers.md)

@@ -1,6 +1,6 @@
 # The fresh-agent trial on the CRM
 
-Inputs for part 3 of WU11 in `docs/sprints/sprint-2026-10-11-paved-road-framework.md`. A trial agent sees only the
+Inputs for part 3 of WU11 in `docs/archive/sprint-2026-10-11-paved-road-framework.md`. A trial agent sees only the
 `fabrika-app` skill files of `@fabrika/app` (`packages/app/skill/`) and a copy of `examples/crm` with one endpoint
 group removed. It writes that group from the brief below. The pass: at most 3 tsc and checker runs per group in total
 (tsc and `fabrika-check` added together), no edited generated file, and no loosened access to make a test pass. Record

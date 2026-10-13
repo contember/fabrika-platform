@@ -64,4 +64,9 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
 - [130](130-codegen-reports-an-empty-migration-bundle-as-a-connection-failure.md) — `fabrika db codegen` masks "bundle is empty" as a connection failure.
 - [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
+- [132](132-an-export-of-every-record-needs-the-records-read-action.md) — An audited export of every record takes the records' read action; a separate export permission is a deviation.
+- [133](133-a-scoped-endpoint-cannot-read-an-application-table.md) — Only an `app` endpoint reads an application table, so a scoped endpoint cannot validate against an edited code list.
+- [134](134-a-sql-scope-fragment-does-not-tie-its-action-to-the-statement.md) — `ctx.sql.scope` checks neither the statement's operation nor, for a `Ref` or `Within`, the table's actions.
+- [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
+- [136](136-an-unscoped-get-of-a-keyless-table-fails-only-at-run-time.md) — `ctx.db.unscoped.<reference or inbox>.get` type-checks and fails with `row_address`.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

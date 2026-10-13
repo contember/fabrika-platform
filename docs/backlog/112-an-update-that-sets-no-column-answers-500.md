@@ -37,4 +37,4 @@ patch form that sends only the changed fields) cannot follow that advice.
 `packages/db/src/{store.ts,orm.ts,errors.ts}`, `packages/app/src/implement/{failures.ts,dispatch.ts}`,
 `packages/check/src/scaffold-sample.ts`, `packages/app/skill/references/{endpoint.md,errors.md}`.
 
-<!-- Origin: the paved-road sprint, WU10's trial app (docs/sprints/sprint-2026-10-11-paved-road-framework.md). -->
+<!-- Origin: the paved-road sprint, WU10's trial app (docs/archive/sprint-2026-10-11-paved-road-framework.md). -->

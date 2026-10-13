@@ -1,5 +1,5 @@
-> **OUTCOME — shipped 2026-10-12, first part of the paved-road sprint; the rest continues in
-> [../sprints/sprint-2026-10-11-paved-road-framework.md](../sprints/sprint-2026-10-11-paved-road-framework.md).** An
+> **OUTCOME — shipped 2026-10-12, first part of the paved-road sprint; the rest is in
+> [sprint-2026-10-11-paved-road-framework.md](sprint-2026-10-11-paved-road-framework.md).** An
 > application is written on the paved road. The staged kit (`defineVocabulary` → `defineTables(vocabulary, columns)` →
 > `defineApp` → `app.group` → `app.contract` → `serve`) fixes the file order and colocates `.handle()` with each
 > endpoint, sliced off by the reader (WU0, WU4). Tables derive their scope and actions from the vocabulary (WU2). The
@@ -24,7 +24,7 @@
 # Sprint — the paved-road application framework, core (2026-10-11)
 
 The goal, theme, target shape, decisions and the remaining units are in the
-[active sprint](../sprints/sprint-2026-10-11-paved-road-framework.md).
+[second part](sprint-2026-10-11-paved-road-framework.md).
 
 ## Evidence carried over
 

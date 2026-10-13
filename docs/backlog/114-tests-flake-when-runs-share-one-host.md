@@ -12,8 +12,16 @@ stretches. Effort: S–M; one fix per suite.
 
 ## Problem
 
-`6bf104fa` fixed one case: `platform-source.test.ts` (provider-zerops) saw another run's `fabrika-platform-source-*`
-directories in the shared tmpdir, and now gives itself a private `TMPDIR`. These suites remain:
+Two cases are fixed:
+
+- `6bf104fa`: `platform-source.test.ts` (provider-zerops) saw another run's `fabrika-platform-source-*` directories in
+  the shared tmpdir, and now gives itself a private `TMPDIR`.
+- `85b09dbc`: `packages/iam/src/__tests__/visitor-link.test.ts` once answered 200 for a revoked link's cached token
+  under load. IAM stamps the token's expiry from the real clock, while the proxy reads the test's clock, fixed when
+  the stack starts. A run slower than a second left the proxy's clock one second short of the token's refresh, so the
+  revoked link still worked. The test now moves the proxy's clock from the real now.
+
+These suites remain:
 
 - **`packages/cli/src/__tests__/db.test.ts`.** The test-isolation case writes `bunfig.toml` and `skip-everything.ts`
   into the committed fixture directory itself (`:319`–`:330`), which every other run of the suite in the same
