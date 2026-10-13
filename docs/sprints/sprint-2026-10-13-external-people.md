@@ -1,0 +1,147 @@
+# Sprint — external people and a complete password flow (2026-10-13)
+
+**Goal.** An application invites people from outside the organization by e-mail, in its own language and wording;
+they set a password and sign in, and IAM guarantees they never hold an internal role.
+
+**Theme.** The driving case is an internal application of one of our projects: its staff sign in through the
+organization's OIDC, and the partner companies it works with get accounts of their own. A staff member invites one or
+more people of a company; each receives the application's e-mail with a link that sets the password and opens the
+application; they then see only their company. Today an application cannot onboard a person IAM does not know, every
+e-mail and page is fixed English, and nothing tells an internal person from an external one. The batch succeeds when
+that application's backend is written on the paved road, with the invitation, the reset and the removal working end
+to end in a browser.
+
+Design consulted with GPT (gpt-6-astra) and Opus, both read-only over HEAD; they agreed on every point below except
+when the external principal is created (decision D3).
+
+## Refs re-verified at HEAD (2026-10-13)
+
+- ✔ Principals are `user` | `service`; nothing marks a person external — `packages/iam/migrations-postgres/0001_init.sql:24`.
+- ✔ An e-mail assignment opens a 7-day invitation and never creates a principal; acceptance needs a principal signed in
+  on IAM with the invited mailbox — `packages/iam/src/membership.ts:66`, `packages/iam/src/auth/invitations.ts:31-41`.
+- ✔ Only an installation admin creates a user (`inviteUser`) and issues its enrollment, as two operations —
+  `packages/iam/src/admin/principals.ts:110-133`, `packages/iam/src/admin/passwords.ts:49`.
+- ✔ A password action lives one hour — `packages/iam/src/password-service.ts:9`.
+- ✔ Repeating an invitation sends nothing (`ON CONFLICT … DO NOTHING`) — `packages/iam/src/repositories/membership.ts:300-312`.
+- ⚠ An assigner must hold its role in exactly the scope value: a global staff role cannot invite into a company —
+  `packages/app/src/contract/build.ts:365-369`, `packages/iam/src/repositories/membership.ts:132-142`.
+- ⚠ OIDC claims any principal with that mailbox and no `external_id`, a password-only one included, and a known
+  principal skips the domain allowlist — `packages/iam/src/resolve.ts:157-170`, `packages/iam/src/auth/oidc.ts:92-102`.
+- ⚠ The bootstrap admin is recognised by mailbox alone at resolution — `packages/iam/src/resolve.ts:263-267`.
+- ✔ E-mails and pages are fixed English — `packages/iam/src/invitation-email.ts:13`, `packages/iam/src/password-email.ts:10`,
+  `packages/iam/src/password-pages.ts:139`; a completed password action lands on IAM's own origin —
+  `packages/iam/src/auth/password.ts:309-316`.
+- ✔ Already there: the hybrid login renders password and SSO together (`packages/iam/src/auth/login.ts:50-57`),
+  forgot-password enrolls a pending account (`auth/password.ts:241-243`), cancelling an invitation
+  (`membership.ts:468-484`), password replacement revokes password-origin sessions (`password-db.ts:299`).
+
+## Decisions
+
+- **D1 — Affiliation is an IAM fact about the person, eligibility a contract fact about the role.**
+  `principals.affiliation` (`internal` | `external`, default `internal` for every existing row) and `external: true` on
+  a membership role. An external holds only grants of roles declared `external`; an internal may hold one too. Not
+  derived from the authentication method or the mailbox domain. Not `audience` or `member`, which already mean other
+  things.
+- **D2 — No new token claim and no endpoint marker.** Endpoints require actions; the external role's actions in the
+  company's scope are the boundary. The member directory and the console show the affiliation.
+- **D3 — The external principal is created when the invitation is accepted** (GPT), not when it is sent (Opus). An
+  unaccepted invitation leaves no account and reserves no mailbox.
+- **D4 — Templates belong to the application** (owner's choice: full templates). The contract declares the subject, the
+  text and the HTML of each IAM message (invitation, enrollment, reset) per language. IAM renders them with a closed set
+  of variables, escapes every value, and puts in the action link itself. A template must contain `{{actionUrl}}`; any
+  other link may point only to the application's registered return origins; no script, form, frame or remote resource.
+  The checker refuses a bad template; IAM refuses it again at reconcile. A template change is a review line in the
+  approval. IAM's own pages (sign-in, set password, forgot password, invitation outcome) stay IAM's, localized from its
+  catalog with the application's display name, because a page that takes a password is never app-authored.
+- **D5 — Reset is self-service, plus the installation admin in IAM's console** (owner's choice). No staff button in
+  the application. A reset started from the application's sign-in uses its template and returns to it.
+- **D6 — Removing a person removes their access to the company** (owner's choice). Their roles there go; the account
+  stays, because other companies or applications may use it; access ends within the token TTL (300 s). No automatic
+  disabling.
+- **D7 — A company is application data, not IAM structure.** Backlog 91 (org units and groups) is independent; when it
+  lands, a group must not give an external an internal role either.
+- **D8 — Promotion is an installation-admin operation.** An external becomes internal only there, audited; OIDC never
+  claims an external principal and never creates one.
+
+## Work units
+
+### WU1 — External principals and external roles (L)
+
+- **Problem.** No affiliation exists, and three paths would give an external internal authority: OIDC claiming the row,
+  the bootstrap mailbox, and admin grants (inline, custom policy, cross-app).
+- **Verify first.** List every grant-writing path in `packages/iam/src/repositories/grants.ts` and `membership.ts`, and
+  every resolution input in `resolve.ts`.
+- **Scope.** Migration (D1 and Postgres) for `principals.affiliation` and `roles.external`; `RoleDef.external` in the
+  contract (membership roles only), the artifact schema and the reconcile; the rule enforced at grant write (admin,
+  membership, acceptance, scope creation), at reconcile (409 when a role loses `external` while an external holds it,
+  plus the batch guard) and at resolution (an incompatible grant contributes nothing; no bootstrap or cross-app
+  authority for an external); OIDC refuses an external row with a fixed `LoginRefusal`, and the domain allowlist also
+  applies to a known principal with no `external_id`; admin creation of an external and promotion; the console badge;
+  `affiliation` in `listMembers`/`findMember` items; a checker hint for a `{ member: true }` endpoint in a contract
+  that declares an external role. A new ADR "External principals"; ADR-0020 and ADR-0022 rule 6 amended.
+- **Acceptance / witness.** IAM tests on both backends: each write path refuses an internal role for an external; a
+  grant written before a schema narrowing contributes nothing; an OIDC login with an external's mailbox is refused;
+  a bootstrap mailbox held by an external is no admin; promotion then lets OIDC claim.
+
+### WU2 — An application-wide role may assign a membership role (M)
+
+- **Problem.** `assignableBy` names only membership roles of the same dimension (`build.ts:365`), so staff cannot invite
+  into a company they did not create.
+- **Scope.** `assignableBy` may also name a role of the application with no `member`; IAM's `roleAuthorityProblem`
+  accepts that role's global grant. `members.manage`, the action ceiling and the delegation grant stay; the acceptance
+  re-check uses the same rule. ADR-0022 rule 6 wording.
+- **Acceptance / witness.** A staff member with only the global role invites into a company; after losing that role the
+  open invitation's acceptance is `not_allowed`.
+
+### WU3 — IAM speaks the application's language (M)
+
+- **Scope.** A catalog (`en`, `cs`) for every IAM page and its own default e-mails; the contract's `locale` and
+  `displayName`, reconciled; the language chosen from the request's application, then `principals.locale`, then the
+  installation default; a password action and an invitation keep their application and return to it after completion.
+- **Acceptance / witness.** Page tests per locale; a browser run: sign-in from the application, forgot password, reset,
+  back in the application.
+
+### WU4 — Application e-mail templates (M)
+
+- **Scope.** D4: the contract declaration (files beside the contract, read at build into the artifact, size-capped),
+  the closed variables per message (application display name, recipient, inviter label, company label, personal
+  message, action URL, expiry), the validation in `@fabrika/check` and again in IAM's reconcile, rendering text and
+  HTML from one template set, the approval's review line.
+- **Acceptance / witness.** A template without `{{actionUrl}}`, with a foreign link or with a script is refused by the
+  checker and by IAM; a rendered invitation escapes a company label and a message carrying markup.
+
+### WU5 — One e-mail onboards a new external person (L)
+
+- **Scope.** D3: `ctx.members.assign` by e-mail with a role declared `external` takes `{ label, message }`; the invitation
+  stores them and the application's locale. The accept page for a mailbox IAM does not know renders set-password; its
+  POST creates the external principal, stores the password, activates it, writes the grant and consumes the invitation
+  in one transaction, then signs the person in and sends the browser to the application through the normal handoff.
+  An existing mailbox keeps today's sign-in-and-accept. A bootstrap mailbox or one the OIDC allowlist names explicitly
+  is refused. An explicit resend rotates the token and restarts the 7 days. ADR-0020 amended (an invitation-bound
+  enrollment, its 7-day exception) and ADR-0022 rule 6 (a membership write may create an external principal).
+- **Acceptance / witness.** Tests: a scanner GET changes nothing; two concurrent acceptances create one principal; a
+  resent link invalidates the old one; the inviter's removal before acceptance refuses it. A browser run of the whole
+  path, also for a person invited by two companies.
+
+### WU6 — The paved road for a partner portal (M)
+
+- **Scope.** The skill's recipe: a company dimension, a staff role and an external partner role, invitation, resend,
+  cancel, removal (D6), the company's active flag checked where an endpoint loads the company, the templates. Backlog
+  113 first, so the recipe's generated tests boot an application that writes through IAM.
+- **Acceptance / witness.** The recipe materialized green (tsc, `fabrika-check` 0/0, its tests), and the private dogfood
+  of the driving case written on it.
+
+## Out of scope (explicit)
+
+- Org units and groups (backlog 91); delegated administration of global roles (backlog 126).
+- A staff-triggered reset in the application (D5); automatic disabling after the last membership (D6).
+- Immediate revocation below the 300 s token TTL: it needs an ADR-0022 decision of its own.
+- Branding of IAM's pages beyond the display name; SCIM; several IdPs or account linking.
+- An IAM suspension of a company's scope value: the active flag is application data.
+
+## Sequencing
+
+WU1 first: every later unit depends on affiliation. WU2 and WU3 then run in parallel. WU4 needs WU3's locale; WU5 needs
+WU1, WU2 and WU4. WU6 last, with backlog 113 at its start (may run beside WU5).
+
+## Run log
