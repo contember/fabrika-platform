@@ -1,7 +1,8 @@
 // The external-role rule against concurrent writers on a REAL Postgres (ADR-0051): a grant write and a reconcile that
 // narrows the role, in both orders, an invitation's acceptance with a narrowing between its statements, and a
-// promotion against a password action's completion, which both lock the principal row first. A
-// test-only trigger on `audit_events` pauses one transaction after its change and before its commit, and the other
+// promotion against a password action's completion, and a login rehash against a completion and a password disable,
+// all of which lock the principal row first. A
+// test-only trigger pauses one transaction after one of its writes and before its commit, and the other
 // runs on a second connection; the trigger decides only the schedule, both sides run their shipped SQL. SQLite and D1
 // run one writer at a time, so only the batch guard of an acceptance is witnessed there. Skips cleanly when
 // FABRIKA_TEST_POSTGRES_URL is unset.
@@ -42,14 +43,31 @@ interface Pause {
 	release(): Promise<void>
 }
 
-/** Pause the transaction that records `action` before its commit: its audit row waits on an advisory lock this holds. */
-async function pauseAt(fixture: PostgresFixture, action: string, lock: number): Promise<Pause> {
+/** Where a transaction pauses: a row written to `table` for which `when` holds. */
+interface PausePoint {
+	readonly table: string
+	readonly when: string
+}
+
+/** The audit row of `action`, the last write of a change before its commit. */
+const audited = (action: string): PausePoint => ({ table: 'audit_events', when: `NEW.action = '${action}'` })
+
+/** A `password_accounts` write of a transaction on the fixture's own connection, which `pauseHere` marks. */
+const ACCOUNT_WRITE: PausePoint = { table: 'password_accounts', when: `current_setting('race.pause', true) = 'on'` }
+
+/** Mark the fixture's connection (a pool of one), so `ACCOUNT_WRITE` pauses its transactions and no other's. */
+async function pauseHere(fixture: PostgresFixture): Promise<void> {
+	await fixture.db.prepare(`SELECT set_config('race.pause', 'on', false)`).run()
+}
+
+/** Pause the transaction that writes at `point` before its commit: the trigger waits on an advisory lock this holds. */
+async function pauseAt(fixture: PostgresFixture, point: PausePoint, lock: number): Promise<Pause> {
 	if (postgresUrl === null) throw new Error('Postgres is required')
 	const gate = new SQL({ url: postgresUrl, adapter: 'postgres', max: 1 })
 	await gate.unsafe('SELECT pg_advisory_lock($1)', [lock])
 	await fixture.db.prepare(`CREATE OR REPLACE FUNCTION race_pause() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN IF NEW.action = '${action}' THEN PERFORM pg_advisory_xact_lock(${lock}); END IF; RETURN NEW; END $$`).run()
-	await fixture.db.prepare('CREATE TRIGGER race_pause BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION race_pause()').run()
+		BEGIN IF ${point.when} THEN PERFORM pg_advisory_xact_lock(${lock}); END IF; RETURN NEW; END $$`).run()
+	await fixture.db.prepare(`CREATE TRIGGER race_pause AFTER INSERT OR UPDATE ON ${point.table} FOR EACH ROW EXECUTE FUNCTION race_pause()`).run()
 	const until = async (sql: string, args: unknown[], what: string) => {
 		for (let attempt = 0; attempt < 500; attempt += 1) {
 			const rows = await gate.unsafe<{ found: boolean }[]>(sql, args)
@@ -106,7 +124,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 	test('a grant write first: the narrowing waits for it and its batch guard rolls it back', async () => {
 		const { repositories, concurrent, fixture } = await race()
 		const external = await repositories.principals.inviteUser('ext@race.test', 'ext@race.test', undefined, 'external')
-		const pause = await pauseAt(fixture, 'race.grant', 1051101)
+		const pause = await pauseAt(fixture, audited('race.grant'), 1051101)
 		open.push(() => pause.release())
 		const grant = { principalId: external.id, app: APP, roleKey: 'partner', scopeType: SCOPE.type, scopeValue: SCOPE.value }
 		const granting = repositories.grants.createGrant(grant, () => event('race.grant', external.id))
@@ -123,7 +141,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 	test('a narrowing first: the grant write waits for it and writes nothing', async () => {
 		const { repositories, concurrent, fixture } = await race()
 		const external = await repositories.principals.inviteUser('ext@race.test', 'ext@race.test', undefined, 'external')
-		const pause = await pauseAt(fixture, 'race.reconcile', 1051102)
+		const pause = await pauseAt(fixture, audited('race.reconcile'), 1051102)
 		open.push(() => pause.release())
 		const narrowing = concurrent.appSchema.reconcileAppSchema(schema(false), event('race.reconcile', external.id))
 		await pause.reached()
@@ -152,7 +170,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 			invitedBy: inviter.id,
 			expiresAt: Math.floor(Date.now() / 1000) + 600,
 		})
-		const pause = await pauseAt(fixture, 'race.accept', 1051103)
+		const pause = await pauseAt(fixture, audited('race.accept'), 1051103)
 		open.push(() => pause.release())
 		const accepting = repositories.membership.acceptInvitation(invitation, external.id, ['partner'], event('race.accept', external.id))
 		await pause.reached()
@@ -179,7 +197,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 			invitedBy: inviter.id,
 			expiresAt: Math.floor(Date.now() / 1000) + 600,
 		})
-		const pause = await pauseAt(fixture, 'race.reconcile', 1051104)
+		const pause = await pauseAt(fixture, audited('race.reconcile'), 1051104)
 		open.push(() => pause.release())
 		const narrowing = concurrent.appSchema.reconcileAppSchema(schema(false), event('race.reconcile', external.id))
 		await pause.reached()
@@ -212,7 +230,7 @@ describe.skipIf(!hasPostgres)('a promotion and a password action completion on P
 	test('a completion first: the promotion waits for it, then both commit', async () => {
 		const { repositories, concurrent, fixture } = await race()
 		const external = await enrolling(repositories)
-		const pause = await pauseAt(fixture, 'race.complete', 1051105)
+		const pause = await pauseAt(fixture, audited('race.complete'), 1051105)
 		open.push(() => pause.release())
 		const completing = repositories.passwords.completeAction(
 			{ tokenHash: 'race-enrollment', purpose: 'enrollment', password },
@@ -233,7 +251,7 @@ describe.skipIf(!hasPostgres)('a promotion and a password action completion on P
 	test('a promotion first: the completion waits for it and finds its action spent', async () => {
 		const { repositories, concurrent, fixture } = await race()
 		const external = await enrolling(repositories)
-		const pause = await pauseAt(fixture, 'race.promote', 1051106)
+		const pause = await pauseAt(fixture, audited('race.promote'), 1051106)
 		open.push(() => pause.release())
 		const promoting = concurrent.principals.promoteToInternal(external.id, { ...event('race.promote', external.id), resourceId: external.id })
 		await pause.reached()
@@ -249,6 +267,66 @@ describe.skipIf(!hasPostgres)('a promotion and a password action completion on P
 		expect((await repositories.principals.getPrincipalById(external.id))?.affiliation).toBe('internal')
 		expect(await repositories.passwords.getCredential(external.id)).toBeNull()
 		expect(await actions(repositories, external.id)).toEqual(['race.promote'])
+	}, 20000)
+})
+
+describe.skipIf(!hasPostgres)('a password rehash against a completion and a password disable on Postgres', () => {
+	const rehashed = { algorithm: 'rehashed', parameters: '{}', salt: 'salt', passwordHash: 'rehashed' }
+	const reset = { algorithm: 'reset', parameters: '{}', salt: 'salt', passwordHash: 'reset' }
+
+	/** An internal user with a password and a pending reset link: what a login rehash and a reset both write. */
+	async function withPassword(repositories: IamRepositories) {
+		const user = await repositories.principals.createUser('race-user', 'user@race.test')
+		await repositories.passwords.upsertCredential(user.id, { algorithm: 'old', parameters: '{}', salt: 'salt', passwordHash: 'old' })
+		const expiresAt = Math.floor(Date.now() / 1000) + 600
+		await repositories.passwords.issueActionToken({ principalId: user.id, purpose: 'reset', tokenHash: 'race-reset', expiresAt })
+		return user
+	}
+
+	async function actions(repositories: IamRepositories, principalId: string): Promise<string[]> {
+		return (await repositories.audit.listAuditEvents({ resourceId: principalId, limit: 10 })).map((row) => row.action).sort()
+	}
+
+	test('a rehash holding the account: the completion waits at the principal, then both commit', async () => {
+		const { repositories, concurrent, fixture } = await race()
+		const user = await withPassword(repositories)
+		const pause = await pauseAt(fixture, ACCOUNT_WRITE, 1051107)
+		open.push(() => pause.release())
+		await pauseHere(fixture)
+		const rehashing = repositories.passwords.upsertCredential(user.id, rehashed, { ...event('race.rehash', user.id), resourceId: user.id })
+		await pause.reached()
+		const completing = concurrent.passwords.completeAction(
+			{ tokenHash: 'race-reset', purpose: 'reset', password: reset },
+			{ ...event('race.complete', user.id), resourceId: user.id },
+		)
+		await pause.blocked()
+		await pause.release()
+
+		await rehashing
+		expect(await completing).toEqual({ principalId: user.id })
+		expect((await repositories.passwords.getCredential(user.id))?.password_hash).toBe('reset')
+		expect(await repositories.passwords.inspectActionToken('race-reset', 'reset')).toBeNull()
+		expect(await actions(repositories, user.id)).toEqual(['race.complete', 'race.rehash'])
+	}, 20000)
+
+	test('a rehash holding the account: the password disable waits at the principal, then both commit', async () => {
+		const { repositories, concurrent, fixture } = await race()
+		const user = await withPassword(repositories)
+		const pause = await pauseAt(fixture, ACCOUNT_WRITE, 1051108)
+		open.push(() => pause.release())
+		await pauseHere(fixture)
+		const rehashing = repositories.passwords.upsertCredential(user.id, rehashed, { ...event('race.rehash', user.id), resourceId: user.id })
+		await pause.reached()
+		const disabling = concurrent.passwords.disableCredential(user.id, { ...event('race.disable', user.id), resourceId: user.id })
+		await pause.blocked()
+		await pause.release()
+
+		await rehashing
+		await disabling
+		expect((await repositories.passwords.getAccount(user.id))?.state).toBe('disabled')
+		expect(await repositories.passwords.getCredential(user.id)).toBeNull()
+		expect(await repositories.passwords.inspectActionToken('race-reset', 'reset')).toBeNull()
+		expect(await actions(repositories, user.id)).toEqual(['race.disable', 'race.rehash'])
 	}, 20000)
 })
 

@@ -159,6 +159,7 @@ export class PasswordRepository {
 	async upsertCredential(principalId: string, password: StoredPasswordHash, audit?: AuditEventInput): Promise<void> {
 		const now = unixNow()
 		await this.db.batch([
+			...principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [principalId] }),
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
 				VALUES (?, 'enabled', ?, ?)
 				ON CONFLICT (principal_id) DO UPDATE SET state = 'enabled', updated_at = excluded.updated_at`)
@@ -184,7 +185,6 @@ export class PasswordRepository {
 	async disableCredential(principalId: string, audit?: AuditEventInput): Promise<void> {
 		const now = unixNow()
 		await this.db.batch([
-			// It writes the account, the tokens and the sessions a completion writes: the principal first, as that does.
 			...principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [principalId] }),
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
 				VALUES (?, 'disabled', ?, ?)
@@ -228,6 +228,7 @@ export class PasswordRepository {
 		issuance: ActionIssuance | undefined,
 	): Promise<void> {
 		await this.db.batch([
+			...principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [input.principalId] }),
 			...(issuance?.enableEnrollment === true ? [this.enableEnrollmentStatement(input.principalId)] : []),
 			this.db.prepare(`UPDATE password_action_tokens SET consumed_at = ?
 				WHERE principal_id = ? AND purpose = ? AND consumed_at IS NULL`).bind(now, input.principalId, input.purpose),

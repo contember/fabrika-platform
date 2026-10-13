@@ -44,11 +44,13 @@ export function principalStatus(row: PrincipalRow): PrincipalStatus {
  * whatever spelling they hold, the mailbox lands in `email` and the spelling in `label`.
  */
 /**
- * On Postgres, the first statement of a transaction that writes a principal's password actions, sessions or password
- * state together with other rows of it: it takes the principal row `FOR NO KEY UPDATE`, so every such writer waits at
- * the same row before it locks anything else, and two of them never hold each other's rows. `FOR NO KEY UPDATE` leaves
- * a foreign-key check (an inserted session, token or grant) unblocked. `principalId` is SQL that yields the id, with
- * its binds. SQLite and D1 run one writer at a time and need none.
+ * On Postgres, the first statement of every transaction that writes more than one of a principal's rows among
+ * `principals`, `password_accounts`, `password_credentials`, `password_action_tokens` and `sessions`: it takes the
+ * principal row `FOR NO KEY UPDATE`, so every such writer waits at the same row before it locks anything else, and two
+ * of them never hold each other's rows. The writers: `promoteToInternal`, and `PasswordRepository`'s `upsertCredential`,
+ * `disableCredential`, `completeAction` and action-token issuance. A new one must start here too. `FOR NO KEY UPDATE`
+ * leaves a foreign-key check (an inserted session, token or grant) unblocked. `principalId` is SQL that yields the id,
+ * with its binds. SQLite and D1 run one writer at a time and need none.
  */
 export function principalLockStatements(db: SqlDatabase, dialect: SqlDialect, principalId: SqlChange): SqlStatement[] {
 	if (dialect !== 'postgres') return []

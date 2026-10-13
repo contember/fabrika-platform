@@ -234,8 +234,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   known-principal bypass admits only an internal one. Only `principals.promote` (installation admin, audited) makes one
   internal, and it revokes the principal's sessions and spends its pending password actions in the same statement
   group (`promoteToInternal`): promotion widens what it reaches, a bootstrap mailbox to installation admin. No demotion.
-  On Postgres it locks the principal row first (`principalLockStatements`), as a password action's completion and
-  `disableCredential` do, so writers of one principal's tokens and sessions wait at one row and never deadlock.
+  On Postgres every transaction that writes more than one of a principal's rows among `principals`, `password_accounts`,
+  `password_credentials`, `password_action_tokens` and `sessions` locks the principal row first
+  (`principalLockStatements`): `promoteToInternal`, `upsertCredential` (enrollment and login rehash), `disableCredential`,
+  `completeAction` and action-token issuance. They wait at one row and never hold each other's; a new such writer must
+  start there too.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and
