@@ -390,7 +390,8 @@ describe('Zerops provider', () => {
 					{ id: 'env-dsn', key: 'FABRIKA_OPERATIONS_DSN', content: 'private-old-dsn', type: 'USER', sensitive: true },
 					{ id: 'env-app', key: 'FABRIKA_APP_ID', content: 'demo', type: 'USER', sensitive: true },
 					{ id: 'env-issuer', key: 'FABRIKA_IAM_ISSUER', content: 'https://old-issuer.test', type: 'USER', sensitive: true },
-					{ id: 'env-release', key: 'FABRIKA_RELEASE', content: 'stray', type: 'USER', sensitive: true },
+					// What `/env` reports for the previous version's descriptor variable; Zerops refuses to delete it.
+					{ id: 'env-release', key: 'FABRIKA_RELEASE', content: 'release-previous', type: 'USER', sensitive: false },
 					{ id: 'env-own', key: 'TOKEN', content: 'blurred', type: 'USER', sensitive: true },
 				],
 			})
@@ -412,9 +413,9 @@ describe('Zerops provider', () => {
 			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
 			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
 		])
-		expect(recorded.envDeletes).toEqual(['env-issuer', 'env-release'])
+		expect(recorded.envDeletes).toEqual(['env-issuer'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
-		expect(recorded.timeline.indexOf('delete:env-release')).toBeLessThan(recorded.timeline.indexOf('build-call'))
+		expect(recorded.timeline.indexOf('delete:env-issuer')).toBeLessThan(recorded.timeline.indexOf('build-call'))
 		expect(Bun.YAML.parse(recorded.builds[0]?.zeropsYaml ?? '')).toEqual({
 			zerops: [{ setup: 'api', run: { envVariables: { FABRIKA_RELEASE: RELEASE } } }],
 		})
@@ -426,7 +427,7 @@ describe('Zerops provider', () => {
 		expect(log).toContain('FABRIKA_OPERATIONS_DSN: updated')
 		expect(log).toContain('FABRIKA_APP_ID: unchanged')
 		expect(log).toContain('FABRIKA_IAM_ISSUER: removed')
-		expect(log).toContain('FABRIKA_RELEASE: removed')
+		expect(log).not.toContain('FABRIKA_RELEASE')
 		expect(log).not.toContain('private-')
 		expect(JSON.stringify([recorded.externalStates, recorded.checkpoints])).not.toContain('private-')
 	})

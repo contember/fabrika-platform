@@ -77,8 +77,6 @@ const POLL_INTERVAL_MS = 3000
 /** A run stops waiting for its version this long after it started. Zerops' own pipeline limit is 1 hour. */
 export const ZEROPS_VERSION_DEADLINE_MS = 75 * 60 * 1000
 
-const RELEASE_KEY = 'FABRIKA_RELEASE'
-
 /** Abandon the step if the run was cancelled. Checked before every real mutation and each poll iteration. */
 const assertRunning = (signal: AbortSignal): void => {
 	if (signal.aborted) {
@@ -419,7 +417,7 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		const written = SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null)
 		const removed = SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] === null)
 		log(`  [dry-run] would write service variables on ${serviceId}: ${written.join(', ') || '(none)'}`)
-		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${[...removed, RELEASE_KEY].join(', ')}`)
+		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${removed.join(', ') || '(none)'}`)
 		return
 	}
 	assertRunning(signal)
@@ -438,12 +436,6 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		} else {
 			log(`  ${key}: unchanged`)
 		}
-	}
-	const strayRelease = records.find((record) => record.key === RELEASE_KEY)
-	if (strayRelease !== undefined) {
-		assertRunning(signal)
-		await zerops.api.deleteServiceEnv({ envId: strayRelease.id, signal })
-		log(`  ${RELEASE_KEY}: removed`)
 	}
 }
 

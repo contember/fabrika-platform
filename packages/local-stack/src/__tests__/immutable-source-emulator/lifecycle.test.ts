@@ -55,7 +55,7 @@ async function stateFile() {
 	return `${directory}/state.json`
 }
 
-test("the active version's literal run variables become ENV records that stay out of /env and refuse a user-data write", async () => {
+test("the active version's literal run variables are listed by /env as USER records that refuse a write or a delete", async () => {
 	const path = await stateFile()
 	let now = 100
 	const f = await fixture({ stateFile: path, activationDelayMs: 100, now: () => now })
@@ -78,10 +78,11 @@ test("the active version's literal run variables become ENV records that stay ou
 	now = 200
 	expect((await f.api.getService({ serviceId: f.serviceId, signal: signal() })).activeAppVersionId).toBeDefined()
 	expect(await envRecords(f.state)).toEqual({ APP_LABEL: 'a', FABRIKA_RELEASE: 'release-a' })
-	expect(await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })).toEqual([])
-	await expect(f.api.putServiceEnv({ serviceId: f.serviceId, key: 'FABRIKA_RELEASE', value: 'service-variable', signal: signal() })).rejects.toThrow(
-		'outside the environment API',
-	)
+	const listed = await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
+	expect(listed.map(({ key, type }) => ({ key, type }))).toEqual([{ key: 'APP_LABEL', type: 'USER' }, { key: 'FABRIKA_RELEASE', type: 'USER' }])
+	await expect(f.api.putServiceEnv({ serviceId: f.serviceId, key: 'FABRIKA_RELEASE', value: 'service-variable', signal: signal() })).rejects.toThrow()
+	const release = listed.find((record) => record.key === 'FABRIKA_RELEASE')
+	await expect(f.api.deleteServiceEnv({ envId: release?.id ?? '', signal: signal() })).rejects.toThrow('userDataDeleteForbidden')
 
 	// A version still building leaves the active version's values in place, across a restart too.
 	const second = await deploy('release-b', null)
@@ -91,7 +92,7 @@ test("the active version's literal run variables become ENV records that stay ou
 	now = 300
 	expect((await restarted.api.getAppVersion({ appVersionId: second.id, signal: signal() })).status).toBe('ACTIVE')
 	expect(await envRecords(restarted.state)).toEqual({ FABRIKA_RELEASE: 'release-b' })
-	expect(await restarted.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })).toEqual([])
+	expect((await restarted.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })).map(({ key }) => key)).toEqual(['FABRIKA_RELEASE'])
 })
 
 const tarEntry = (path: string, contents: string): Uint8Array => {

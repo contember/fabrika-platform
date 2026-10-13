@@ -253,19 +253,26 @@ rather than facts about a field:
 Written while fixing the write path. Every row was produced with `zops` against the
 live account; the operation ids are `zops api --list --tag UserData`.
 
-| Behaviour                                                                   | Result                                                                                                                           |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /service-stack/{id}/user-data` (`ListServiceStackUserData`)            | **Still always 400 `serviceStackNotFound`** — **SUPERSEDED, see 2026-08-21 below**: it answers a list now                        |
-| `POST /service-stack/{id}/user-data` (`CreateUserData`)                     | Works. Returns a **process**, not the created record — the new record's id is not in the response                                |
-| `POST` on a key the service already has                                     | **400 `userDataDuplicateKey`**, "not unique in service stack frame of reference". Nothing is written; it does not replace        |
-| **`GET /service-stack/{id}/env` (`GetServiceStackEnvList`)**                | **Works on every service** — ACTIVE, managed (`db`, `storage`) and a stopped build runtime alike. This is the read path          |
-| The `id` in that response                                                   | **Is the user-data record id** — the same value `POST /user-data/search` returns, and accepted by `PUT`/`DELETE /user-data/{id}` |
-| `PUT /user-data/{id}` (`UpdateUserDataById`)                                | **Replaces in place**: same record id, new `content`, `lastUpdate` moves. Non-destructive — no delete window exists              |
-| `PUT /user-data/{id}` with `content` but no `key`                           | **Refused** — 400 `invalidUserInput`. Both fields are required even when the key is unchanged                                    |
-| `GET /user-data/{id}` (`GetUserDataById`)                                   | Works — a single record by id, unlike the list                                                                                   |
-| Three `POST`s to one service back to back                                   | **All three succeed.** The "synchronizing userData is already running" conflict gates a DEPLOY, not another write                |
-| `type: ENV` variables (from the service's `zerops.yaml` `run.envVariables`) | **Absent from `/env`, present in `POST /user-data/search`** — and they still make a `POST` answer `userDataDuplicateKey`         |
-| The error envelope                                                          | `{ error: { code, message, meta[] } }`. `code` is a stable identifier; `message` can quote the value it rejected                 |
+| Behaviour                                                                   | Result                                                                                                                                                         |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /service-stack/{id}/user-data` (`ListServiceStackUserData`)            | **Still always 400 `serviceStackNotFound`** — **SUPERSEDED, see 2026-08-21 below**: it answers a list now                                                      |
+| `POST /service-stack/{id}/user-data` (`CreateUserData`)                     | Works. Returns a **process**, not the created record — the new record's id is not in the response                                                              |
+| `POST` on a key the service already has                                     | **400 `userDataDuplicateKey`**, "not unique in service stack frame of reference". Nothing is written; it does not replace                                      |
+| **`GET /service-stack/{id}/env` (`GetServiceStackEnvList`)**                | **Works on every service** — ACTIVE, managed (`db`, `storage`) and a stopped build runtime alike. This is the read path                                        |
+| The `id` in that response                                                   | **Is the user-data record id** — the same value `POST /user-data/search` returns, and accepted by `PUT`/`DELETE /user-data/{id}`                               |
+| `PUT /user-data/{id}` (`UpdateUserDataById`)                                | **Replaces in place**: same record id, new `content`, `lastUpdate` moves. Non-destructive — no delete window exists                                            |
+| `PUT /user-data/{id}` with `content` but no `key`                           | **Refused** — 400 `invalidUserInput`. Both fields are required even when the key is unchanged                                                                  |
+| `GET /user-data/{id}` (`GetUserDataById`)                                   | Works — a single record by id, unlike the list                                                                                                                 |
+| Three `POST`s to one service back to back                                   | **All three succeed.** The "synchronizing userData is already running" conflict gates a DEPLOY, not another write                                              |
+| `type: ENV` variables (from the service's `zerops.yaml` `run.envVariables`) | **Absent from `/env`, present in `POST /user-data/search`** — and they still make a `POST` answer `userDataDuplicateKey`. **SUPERSEDED, see 2026-10-13 below** |
+| The error envelope                                                          | `{ error: { code, message, meta[] } }`. `code` is a stable identifier; `message` can quote the value it rejected                                               |
+
+**2026-10-13, project `fabrika-v03-apps-mid`:** `/env` now lists a deployed version's `run.envVariables`
+too, as `type: USER` records indistinguishable in shape from env-API records, and
+`DELETE /user-data/{id}` on one answers **400 `userDataDeleteForbidden`** ("Deleting a system environment
+variable is forbidden"). A deploy may therefore delete only keys no descriptor can carry; the managed keys
+qualify because an app descriptor may not author them, and `FABRIKA_RELEASE`, which the descriptor does
+carry, is never deleted.
 
 Consequences:
 

@@ -951,6 +951,8 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		request: { method: 'GET', path: '/service-stack/{serviceId}/env' },
 		expect: { status: 200 },
 		live: 'not-probed',
+		// SUPERSEDED 2026-10-13: `/env` lists those variables as `USER` records now, and deleting one answers
+		// 400 `userDataDeleteForbidden` (docs/reference/zerops-platform.md).
 		liveNote: 'needs a deployed service whose `zerops.yaml` declares `run.envVariables`, which is a build',
 		emulator: false,
 		emulatorNote: 'the double stores no `type: ENV` records, so it cannot omit them',

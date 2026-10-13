@@ -361,7 +361,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
 			`[dry-run] would write service variables on ${TARGET.serviceId}: (none)`,
-			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
+			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
 			'[dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor',
