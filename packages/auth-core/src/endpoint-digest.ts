@@ -50,6 +50,9 @@ export function endpointDelegation(artifact: Pick<ContractArtifact, 'dimensions'
 	if (access.form === 'creates') {
 		return 'creates'
 	}
+	if (access.form === 'app') {
+		return null
+	}
 	const managed = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
 	return managed?.manage === action ? 'members' : null
 }

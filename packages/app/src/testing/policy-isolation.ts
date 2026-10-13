@@ -65,7 +65,29 @@ export interface PolicyIsolationKit {
 	removeWithRead(): Promise<MisuseOutcome>
 }
 
+/**
+ * An application table's isolation kit: the rows belong to no scope, so the boundary is the grant. `global` holds the
+ * table's actions as global grants; `scoped` holds the same actions in one value of a dimension only, which the proxy
+ * refuses on an `app` endpoint. Each attempt seeds one fresh row.
+ */
+export interface AppIsolationKit {
+	readonly table: string
+	get(caller: AppCaller): Promise<ReadOutcome>
+	/** Lists through the `app` capability; `rows` is `['own']` when the list holds the seeded row. */
+	list(caller: AppCaller): Promise<ListOutcome>
+	insert(caller: AppCaller): Promise<IsolationOutcome>
+	update(caller: AppCaller): Promise<IsolationOutcome>
+	remove(caller: AppCaller): Promise<IsolationOutcome>
+	/** The capability of the read action handed to update: the data layer must refuse it. */
+	updateWithRead(): Promise<MisuseOutcome>
+	/** The capability of the read action handed to remove. */
+	removeWithRead(): Promise<MisuseOutcome>
+}
+
+export type AppCaller = 'global' | 'scoped'
+
 const ById = z.strictObject({ id: z.string() })
+const Tagged = z.strictObject({ tag: z.string() })
 const Edit = z.strictObject({ id: z.string(), tag: z.string() })
 const InScope = z.strictObject({ scope: z.string(), tag: z.string() })
 const ChildByKey = z.strictObject({ parent: z.string(), key: z.string() })
@@ -144,6 +166,160 @@ function childProbe(vocabulary: Vocabulary<string, string, string>, parent: stri
 			removeWithRead: c.mutation({ input: ChildByKey, output: Refused, access: { action: read, on: parent, from: 'parent' } }),
 		}),
 	}))
+}
+
+function appProbe(vocabulary: Vocabulary<string, string, string>, actions: ProbeActions) {
+	const { read } = actions
+	return defineContract(vocabulary, (c) => ({
+		probe: c.rpc('/probe', { callers: ['human'] }, {
+			get: c.query({ input: ById, output: Columns, access: { action: read, app: true } }),
+			list: c.query({ output: Keys, access: { action: read, app: true } }),
+			insert: c.mutation({ input: Tagged, output: Done, access: { action: actions.insert ?? read, app: true } }),
+			update: c.mutation({ input: Edit, output: Done, access: { action: actions.update ?? read, app: true } }),
+			remove: c.mutation({ input: ById, output: Done, access: { action: actions.delete ?? read, app: true } }),
+			updateWithRead: c.mutation({ input: Edit, output: Refused, access: { action: read, app: true } }),
+			removeWithRead: c.mutation({ input: ById, output: Refused, access: { action: read, app: true } }),
+		}),
+	}))
+}
+
+/**
+ * The isolation kit of `table`, an application table of `tables`, over `postgres`, through a probe contract of `app`
+ * endpoints. `contract` gives only the vocabulary. The kit binds a data layer of its own.
+ */
+export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
+	contract: C,
+	tables: Tables<DB, P>,
+	table: string,
+	postgres: TestDatabase,
+): AppIsolationKit {
+	const policy = tablePolicies(tables)[table]
+	if (policy === undefined) {
+		throw new Error(`${table} is not a table of src/db/tables.ts`)
+	}
+	const scope = policy.scope
+	if (scope.mode !== 'app') {
+		throw new Error(`${table} is a ${scope.mode} table; policyIsolationKit probes a dimension or child table`)
+	}
+	const actions: ProbeActions = policy.actions
+	const layer = scoped(withoutInboxes(tables))
+	const probe = tableProbe(layer, table)
+	const expectVersion = policy.version === null ? undefined : 1
+	const staged = new Map<string, Readonly<Record<string, SampleValue>>>()
+	const tagged = (values: Readonly<Record<string, SampleValue>>): string => {
+		const tag = crypto.randomUUID()
+		staged.set(tag, values)
+		return tag
+	}
+	const valuesOf = (tag: string): Readonly<Record<string, SampleValue>> => {
+		const values = staged.get(tag)
+		staged.delete(tag)
+		if (values === undefined) {
+			throw new Error(`no values were staged for ${tag}`)
+		}
+		return values
+	}
+	const required = (operation: 'insert' | 'update' | 'delete'): void => {
+		if (actions[operation] === null) {
+			throw new Error(`the policy of ${table} declares no ${operation} action`)
+		}
+	}
+	const misuse = async (run: () => Promise<unknown>): Promise<{ readonly refused: boolean }> => {
+		try {
+			await run()
+			return { refused: false }
+		} catch (error) {
+			if (isCapabilityError(error)) {
+				return { refused: true }
+			}
+			throw error
+		}
+	}
+	const probeContract = appProbe(contract.vocabulary, actions)
+	const kit = testKit(
+		implement(probeContract, {
+			database: layer,
+			deps: () => ({}),
+			handlers: () => ({
+				probe: {
+					get: async ({ input, ctx }) => ({ columns: Object.keys(await probe.get(ctx.app, input.id)) }),
+					list: async ({ ctx }) => ({ keys: (await probe.select(ctx.app)).map((row) => String(row[scope.key])) }),
+					insert: async ({ input, ctx }) => {
+						await probe.insert(ctx.app, valuesOf(input.tag))
+						return { done: true }
+					},
+					update: async ({ input, ctx }) => {
+						await probe.update(ctx.app, input.id, valuesOf(input.tag), expectVersion)
+						return { done: true }
+					},
+					remove: async ({ input, ctx }) => {
+						await probe.remove(ctx.app, input.id)
+						return { done: true }
+					},
+					updateWithRead: ({ input, ctx }) => misuse(() => probe.update(ctx.app, input.id, valuesOf(input.tag), expectVersion)),
+					removeWithRead: ({ input, ctx }) => misuse(() => probe.remove(ctx.app, input.id)),
+				},
+			}),
+		}),
+		{ database: postgres.database },
+	)
+	const held = [...new Set([actions.read, actions.insert, actions.update, actions.delete].filter((action) => action !== null))]
+	const dimension = scopeTypeOf(contract.vocabulary.dimensions)
+	const grantsOf = (caller: AppCaller): TestGrant<AnyContract>[] =>
+		caller === 'global'
+			? held.map((action) => ({ action }))
+			: held.map((action) => ({ action, scope: { type: dimension, value: `${dimension}-scoped-${crypto.randomUUID()}` } }))
+	const session = (caller: AppCaller) => createClient(probeContract, 'probe', { fetch: kit.browser(kit.testCaller(grantsOf(caller))) })
+	const seed = () => postgres.seedRow(tables, table)
+	const appKit: AppIsolationKit = {
+		table,
+		async get(caller) {
+			const row = await seed()
+			const api = session(caller)
+			return attempt(async () => ({ status: 200, ...(await api.get({ id: row.key })) }), (status) => ({ status, columns: [] }))
+		},
+		async list(caller) {
+			const row = await seed()
+			const api = session(caller)
+			return attempt(async () => {
+				const { keys } = await api.list()
+				const rows: IsolationRow[] = keys.includes(row.key) ? ['own'] : []
+				return { status: 200, rows }
+			}, (status) => ({ status, rows: [] }))
+		},
+		async insert(caller) {
+			required('insert')
+			const api = session(caller)
+			const tag = tagged(await postgres.sampleInsert(tables, table))
+			return wrote(() => api.insert({ tag }))
+		},
+		async update(caller) {
+			required('update')
+			const row = await seed()
+			const api = session(caller)
+			return wrote(() => api.update({ id: row.key, tag: tagged(row.updates) }))
+		},
+		async remove(caller) {
+			required('delete')
+			const row = await seed()
+			const api = session(caller)
+			return wrote(() => api.remove({ id: row.key }))
+		},
+		async updateWithRead() {
+			const row = await seed()
+			const api = session('global')
+			return attempt(
+				async () => ({ status: 200, ...(await api.updateWithRead({ id: row.key, tag: tagged(row.updates) })) }),
+				(status) => ({ status, refused: false }),
+			)
+		},
+		async removeWithRead() {
+			const row = await seed()
+			const api = session('global')
+			return attempt(async () => ({ status: 200, ...(await api.removeWithRead({ id: row.key })) }), (status) => ({ status, refused: false }))
+		},
+	}
+	return Object.freeze(appKit)
 }
 
 /**
@@ -413,6 +589,14 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 		},
 	}
 	return Object.freeze(childKit)
+}
+
+/**
+ * The scope type a `scoped` caller's grants name: the vocabulary's first dimension, or, in a vocabulary without one, a
+ * name IAM never grants in. Either way the grant is not global, which is all the app form looks at.
+ */
+export function scopeTypeOf(dimensions: object): string {
+	return Object.keys(dimensions).sort()[0] ?? 'scope'
 }
 
 /** Which of the two seeded rows `keys` holds; a key of neither (a row another test seeded) is not one of them. */

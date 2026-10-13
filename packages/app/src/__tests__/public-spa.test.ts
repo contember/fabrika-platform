@@ -65,7 +65,7 @@ describe('the contract build', () => {
 			site: c.spa('/', { dir: 'dist/site', access: { public: true, member: true } }),
 		}))
 		expect(problemsOf(() => compileContract(mixed, {}))).toEqual([
-			`mount 'site': access {"public":true,"member":true} is not an SPA access (allowed: { member: true }, { action, over } or { public: true })`,
+			`mount 'site': access {"public":true,"member":true} is not an SPA access (allowed: { member: true }, { action, over }, { action, app: true } or { public: true })`,
 		])
 	})
 })

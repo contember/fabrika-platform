@@ -526,7 +526,7 @@ export class ContractRuntime {
 	/** The caller's authority at IAM for this request, when the endpoint's access form names a dimension and an action. */
 	#membershipRequest(row: CredentialedEndpoint, caller: Caller, request: Request, frame: RequestFrame): MembershipRequest | null {
 		const iam = this.#parts.membership
-		if (iam === null || row.requirement.kind !== 'action') {
+		if (iam === null || row.requirement.kind !== 'action' || row.requirement.access.form === 'app') {
 			return null
 		}
 		return {
@@ -618,6 +618,10 @@ export class ContractRuntime {
 				}
 				const value = await createScope(membership)
 				return { context: { created: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, new Map()) }, input }
+			}
+			case 'app': {
+				// `#authorize` ran `satisfies`, which the app form meets only with a global grant of the action.
+				return { context: { app: this.#parts.mint.app(frame, action, caller.subject) }, input }
 			}
 		}
 	}
@@ -821,6 +825,7 @@ function siteContext(
 		target: access['target'],
 		within: access['within'],
 		created: access['created'],
+		app: access['app'],
 	})
 	return site.declaration.sql === null ? { db } : { db, sql: invocation.sql(site.declaration.sql) }
 }

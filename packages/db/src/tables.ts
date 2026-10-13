@@ -8,6 +8,8 @@ import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } f
 export { PolicyError } from './errors'
 export type {
 	AnyDbIndex,
+	ApplicationRows,
+	ApplicationTables,
 	ChildRows,
 	ContainedRows,
 	CountOptions,
@@ -40,6 +42,8 @@ export type {
 	WithinTables,
 } from './orm-types'
 export {
+	type ApplicationPolicy,
+	type ApplicationScope,
 	type ChildPolicy,
 	type ChildScope,
 	type ColumnList,
@@ -132,5 +136,7 @@ function scopeOf(scope: ScopeModel): TableScope {
 			return { mode: 'reference', reason: scope.reason }
 		case 'inbox':
 			return { mode: 'inbox', form: scope.form }
+		case 'app':
+			return { mode: 'app', reason: scope.reason, key: scope.key }
 	}
 }

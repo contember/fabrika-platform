@@ -26,6 +26,7 @@ import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { TestCaller, TestGrant } from './caller'
 import { testKit } from './kit'
+import { scopeTypeOf } from './policy-isolation'
 
 export interface DeniedOutcome {
 	readonly status: number
@@ -39,6 +40,9 @@ export interface DeniedOutcome {
 export type LeakOutcome =
 	| { readonly answered: true; readonly leaked: readonly string[] }
 	| { readonly answered: false; readonly status: number; readonly leaked: readonly string[] }
+
+/** `answered` unless the caller got a 401, a 403 or a 5xx; otherwise that status. */
+export type ReachOutcome = { readonly answered: true } | { readonly answered: false; readonly status: number }
 
 /** Column → value of the row of the table that owns the endpoint's dimension, in both scopes: the author's seed. */
 export type Seed = Readonly<Record<string, SampleValue>>
@@ -65,6 +69,16 @@ export interface EndpointAccessKit {
 	 * the other scope's, `reader` holds only the collection's read action and addresses its own.
 	 */
 	file(collection: string, operation: FileOperation, caller: 'own' | 'other' | 'reader'): Promise<DeniedOutcome>
+	/**
+	 * An `app` endpoint asked by a caller who holds its action in one value of a dimension only, never globally: the
+	 * proxy refuses it (403), because the app form needs the action held as a global grant.
+	 */
+	scoped(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
+	/**
+	 * An `app` endpoint asked by a caller who holds its action as a global grant, and nothing else: `answered` unless the
+	 * answer is a 401, a 403 or a 5xx.
+	 */
+	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 }
 
 export type FileOperation = 'upload' | 'download' | 'remove'
@@ -229,6 +243,14 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		}
 	}
 
+	const appEndpointOf = (id: string): ActionEndpoint => {
+		const row = endpointOf(id)
+		if (row.access.form !== 'app') {
+			throw new Error(`${id} has the access form ${row.access.form}; only app needs the action held globally`)
+		}
+		return row
+	}
+
 	/** The dimension a table's rows are listed by: a dimension table's container or its own; a child's parent's. */
 	const listDimensionOf = (name: string): string | undefined => {
 		const scope = policies[name]?.scope
@@ -238,8 +260,12 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return parent?.mode === 'dimension' ? (parent.container?.dimension ?? parent.dimension) : undefined
 	}
 
-	const callerFor = (row: ActionEndpoint, grants: readonly Grant[]): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
-		const asGrants: TestGrant<AnyContract>[] = grants.map((grant) => ({ action: grant.action, scope: grant.scope }))
+	const callerFor = (
+		row: ActionEndpoint,
+		grants: readonly Grant[],
+		global: readonly { readonly action: string }[] = [],
+	): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
+		const asGrants: TestGrant<AnyContract>[] = [...grants.map((grant) => ({ action: grant.action, scope: grant.scope })), ...global]
 		if (row.callers.some((caller) => caller === 'human')) {
 			const caller = kit.testCaller(asGrants)
 			return { caller, fetch: kit.browser(caller) }
@@ -416,7 +442,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		}
 		const value = chain.find((link) => link.type === directory.dimension)?.value
 		if (value === undefined) {
-			throw new Error(`${row.id}: no table locates the ${directory.dimension} of its ${row.access.dimension}, so the kit cannot make a member there`)
+			throw new Error(`${row.id}: no table locates the ${directory.dimension} of its target, so the kit cannot make a member there`)
 		}
 		const role = Object.keys(kit.artifact.roles).sort().find((name) => kit.artifact.roles[name]?.member?.scope === directory.dimension)
 		if (role === undefined) {
@@ -460,12 +486,16 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 
 	/** A link holder of `row`'s mount, its key bound to the own world's object. */
 	const linkHolder = async (row: ActionEndpoint, mount: string, seed: Seed): Promise<RpcFetch> => {
-		const owner = ownerOf(row.access.dimension)
+		const access = row.access
+		if (access.form !== 'on') {
+			throw new Error(`${row.id} is a link procedure, so its access form is on the link's object, not ${access.form}`)
+		}
+		const owner = ownerOf(access.dimension)
 		if (owner === undefined) {
-			throw new Error(`${row.id}: no table owns ${row.access.dimension}, so no link can be bound to one`)
+			throw new Error(`${row.id}: no table owns ${access.dimension}, so no link can be bound to one`)
 		}
 		const { own } = await postgres.seedWorlds(tables, owner, seed)
-		const holder = kit.testCaller([{ action: row.action, scope: { type: row.access.dimension, value: own.key } }], {
+		const holder = kit.testCaller([{ action: row.action, scope: { type: access.dimension, value: own.key } }], {
 			kind: 'link',
 			link: { mount, chain: own.chain },
 		})
@@ -551,6 +581,18 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			}
 			const body = JSON.stringify({ id: fileId })
 			return { status: (await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).status }
+		},
+		async scoped(endpoint, input) {
+			const row = appEndpointOf(endpoint)
+			const dimension = scopeTypeOf(kit.artifact.dimensions)
+			const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input)
+			return { status }
+		},
+		async global(endpoint, input) {
+			const row = appEndpointOf(endpoint)
+			const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
+			// The app form refuses with 403 alone, so a 404 is the handler's own answer (a row the sampled input names is missing).
+			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 		},
 	}
 	return Object.freeze(accessKit)

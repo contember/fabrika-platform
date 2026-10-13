@@ -105,6 +105,7 @@ const accessForm = z.discriminatedUnion('form', [
 	z.strictObject({ form: z.literal('in'), dimension: name, from: name }),
 	z.strictObject({ form: z.literal('on'), dimension: name, from: nullableName }),
 	z.strictObject({ form: z.literal('creates'), dimension: name }),
+	z.strictObject({ form: z.literal('app') }),
 ])
 
 const requirement = z.discriminatedUnion('kind', [
@@ -193,6 +194,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		z.strictObject({ mode: z.literal('child'), parent: name, key: name, column: name, inherit: names }),
 		z.strictObject({ mode: z.literal('inbox'), form: name }),
 		z.strictObject({ mode: z.literal('reference'), reason: name }),
+		z.strictObject({ mode: z.literal('app'), reason: name, key: name }),
 	]),
 	actions: z.strictObject({ read: action, insert: nullableAction, update: nullableAction, delete: nullableAction }),
 	insert: names,
@@ -262,6 +264,9 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 			}
 			if (row.source.kind === 'export' && row.requirement?.kind !== 'action') {
 				context.addIssue({ code: 'custom', path: [index, 'requirement'], message: 'an export row requires an action' })
+			}
+			if (row.source.kind === 'export' && row.requirement?.kind === 'action' && row.requirement.access.form === 'app') {
+				context.addIssue({ code: 'custom', path: [index, 'requirement'], message: 'an export row reads in one dimension, never app-wide' })
 			}
 		}
 	}),

@@ -112,17 +112,24 @@ export type AccessDeclaration =
 	| { readonly action: string; readonly in: string; readonly from: string }
 	| { readonly action: string; readonly on: string; readonly from: string }
 	| { readonly action: string; readonly creates: string }
+	| { readonly action: string; readonly app: true }
 
-/** A link procedure acts on the object its key is bound to, so it names only the action. */
-/** An export procedure's access: an action, never `member`, because the consumer's key holds exactly the actions. */
-export type ExportAccessDeclaration = Exclude<AccessDeclaration, { readonly member: true }>
+/**
+ * An export procedure's access: an action in a dimension, never `member`, because the consumer's key holds exactly the
+ * actions, and never `app`, because a v1 export declares one dimension.
+ */
+export type ExportAccessDeclaration = Exclude<AccessDeclaration, { readonly member: true } | { readonly app: true }>
 
 export interface LinkAccessDeclaration {
 	readonly action: string
 }
 
 /** `{ public: true }` serves the SPA to anyone, with no session: an anonymous `public-spa` row. */
-export type SpaAccessDeclaration = { readonly member: true } | { readonly action: string; readonly over: string } | { readonly public: true }
+export type SpaAccessDeclaration =
+	| { readonly member: true }
+	| { readonly action: string; readonly over: string }
+	| { readonly action: string; readonly app: true }
+	| { readonly public: true }
 
 export type ProcedureType = 'query' | 'mutation'
 

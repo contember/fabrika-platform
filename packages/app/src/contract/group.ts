@@ -10,7 +10,7 @@ import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
 import type { AttachmentBrand } from './attachment'
 import type { CheckedAccess, Declared, EndpointContext, ExportContext, ImportOf, KitTypes, LinkContext, SqlMode } from './context'
 import type { ProcedureType } from './declaration'
-import type { InputOf, InputSchema, LinkAccess, MemberAccess, MutationAccess, NotLoose, Procedure, QueryAccess, Schema } from './define'
+import type { AppAccess, InputOf, InputSchema, LinkAccess, MemberAccess, MutationAccess, NotLoose, Procedure, QueryAccess, Schema } from './define'
 
 /** Fields a builder sets itself: a definition that carries one does not type-check. */
 type Owned<K extends string> = { readonly [P in K]?: never }
@@ -240,7 +240,7 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 }
 
 /** An export procedure names its action and its scope; `{ member: true }` would give the consumer's key nothing to hold. */
-export type ExportAccess<A extends string, D extends string, In> = Exclude<QueryAccess<A, D, In>, MemberAccess>
+export type ExportAccess<A extends string, D extends string, In> = Exclude<QueryAccess<A, D, In>, MemberAccess | AppAccess<A>>
 
 /** The builder of an export's callback: queries only, run read-only. */
 export interface ExportKit<K extends KitTypes> {

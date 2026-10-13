@@ -6,7 +6,7 @@ import type { ConnectSnapshot } from '../contract/connect'
 import type { SurfaceSection } from '../contract/declaration'
 import type { Export, InputOf, InputSchema, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Schema, WebhookMount } from '../contract/define'
 import type { JobHandlersOf } from '../jobs/types'
-import type { Ref, Within } from './capability'
+import type { AppCapability, Ref, Within } from './capability'
 import type { ConnectResult } from './connect'
 import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from './membership'
 import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
@@ -24,6 +24,7 @@ export type AccessContext<Acc> = Acc extends MemberAccess ? unknown
 	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? { readonly target: Ref<D, A> }
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: Ref<D, A> }
 	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Ref<D, A> }
+	: Acc extends { readonly action: infer A extends string; readonly app: true } ? { readonly app: AppCapability<A> }
 	: never
 
 type DimensionsOf<C> = C extends { readonly dimensions: infer Dims } ? Dims : never

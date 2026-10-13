@@ -97,7 +97,7 @@ function linkDef(mount: LinkMountArtifact): AppLinkMountDef {
 /** The grant IAM issues for an endpoint that spends membership authority; `endpointDelegation` decides which do. */
 function delegationOf(artifact: ContractArtifact, row: EndpointRow): AppDelegationDef | null {
 	const purpose = endpointDelegation(artifact, row)
-	if (purpose === null || row.requirement?.kind !== 'action') {
+	if (purpose === null || row.requirement?.kind !== 'action' || row.requirement.access.form === 'app') {
 		return null
 	}
 	return { action: row.requirement.action, dimension: row.requirement.access.dimension, purpose }

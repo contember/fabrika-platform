@@ -1,5 +1,6 @@
 // The type half of the mini-ORM: each file in `orm-mistakes/` is one data mistake a handler makes, refused on the line
-// after its `// mistake:` marker. 08–11 run on the probe task tracker (`probe-tasks/`). The API matrix itself is pinned by `kit-fixture/matrix.ts` (`kit-types.test.ts`).
+// after its `// mistake:` marker. 08–11 run on the probe task tracker (`probe-tasks/`), 12–14 on application-wide data
+// (`app-wide-fixture/`). The API matrix itself is pinned by `kit-fixture/matrix.ts` (`kit-types.test.ts`).
 
 import { describe } from 'bun:test'
 import { join } from 'node:path'
@@ -20,6 +21,12 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'10-a-day-as-a-date.ts': "Type 'Date' is not assignable to type 'string'.",
 	'11-row-of-an-action-the-table-does-not-name.ts':
 		`Type '"tasks.raed"' does not satisfy the constraint '"tasks.read" | "tasks.write" | "tasks.assign"'.`,
+	'12-app-insert-with-the-read-action.ts':
+		`Type 'Unavailable<"insert on positions needs the action 'positions.manage', and this endpoint holds 'positions.read'">' has no call signatures.`,
+	'13-application-table-under-on.ts':
+		`Property 'count' does not exist on type 'Unavailable<"positions is an application table: declare access: { action, app: true } and use ctx.db.app.positions">'.`,
+	'14-app-list-with-another-read-action.ts':
+		`Type 'Unavailable<"a list of candidates needs its read action 'candidates.read', and this endpoint holds 'positions.manage'">' has no call signatures.`,
 }
 
 /**

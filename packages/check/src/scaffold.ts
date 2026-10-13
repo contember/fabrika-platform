@@ -91,6 +91,41 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 	return cases
 }
 
+/**
+ * An application table's cases: its rows lie in no scope, so the boundary is the grant. A holder of the table's actions
+ * as global grants reaches each operation; a holder of the same actions in one scope only is refused by the proxy.
+ */
+const appIsolationCases = (policy: TablePolicyArtifact): readonly Case[] => {
+	const { actions } = policy
+	const writes = policy.update.length > 0 || policy.version !== null
+	const pair = (operation: string, call: string, done: string): Case[] => [
+		testCase(`${operation} by a global holder succeeds`, `expect(${call.replace('CALLER', "'global'")}).${done}`),
+		testCase(`${operation} by a holder in one scope only is 403`, `expect((${call.replace('CALLER', "'scoped'")}).status).toBe(403)`),
+	]
+	const cases: Case[] = [
+		...pair('get', 'await kit.get(CALLER)', 'toMatchObject({ status: 200 })'),
+		...pair('a list', 'await kit.list(CALLER)', "toEqual({ status: 200, rows: ['own'] })"),
+	]
+	if (actions.insert !== null) cases.push(...pair('insert', 'await kit.insert(CALLER)', 'toEqual({ status: 200 })'))
+	if (actions.update !== null) {
+		if (writes) cases.push(...pair('update', 'await kit.update(CALLER)', 'toEqual({ status: 200 })'))
+		if (actions.update !== actions.read) {
+			cases.push(
+				testCase(`update refuses a capability of ${actions.read}`, 'expect(await kit.updateWithRead()).toEqual({ status: 200, refused: true })'),
+			)
+		}
+	}
+	if (actions.delete !== null) {
+		cases.push(...pair('remove', 'await kit.remove(CALLER)', 'toEqual({ status: 200 })'))
+		if (actions.delete !== actions.read) {
+			cases.push(
+				testCase(`remove refuses a capability of ${actions.read}`, 'expect(await kit.removeWithRead()).toEqual({ status: 200, refused: true })'),
+			)
+		}
+	}
+	return cases
+}
+
 const describeBlock = (title: string, cases: readonly Case[]): string =>
 	[`\tdescribe(${quote(title)}, () => {`, cases.map(renderCase).join('\n\n'), '\t})'].join('\n')
 
@@ -98,21 +133,27 @@ const describeBlock = (title: string, cases: readonly Case[]): string =>
 const policyTestBody = (policies: Policies, table: string): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const policy = policies[table]
 	if (policy === undefined) return undefined
+	const app = policy.scope.mode === 'app'
 	const dimension = grantDimension(policies, policy)
-	if (dimension === undefined) return undefined
-	const isolation = isolationCases(policy, dimension)
+	if (dimension === undefined && !app) return undefined
+	const isolation = dimension === undefined ? appIsolationCases(policy) : isolationCases(policy, dimension)
+	const own = app ? "'global'" : "'own'"
 	// A column with only its own write action is read by the table's read action, so it is returned like any other.
 	const hidden = Object.keys(policy.columns).filter((column) => policy.columns[column]?.read !== undefined).sort().map((column) =>
-		testCase(`get leaves out ${column}, which has its own read action`, `expect((await kit.get('own')).columns).not.toContain(${quote(column)})`)
+		testCase(`get leaves out ${column}, which has its own read action`, `expect((await kit.get(${own})).columns).not.toContain(${quote(column)})`)
 	)
-	const blocks = [describeBlock(`policy of ${table}: a caller of one ${dimension} reaches no row of another`, isolation)]
+	const title = dimension === undefined
+		? `policy of ${table}: only a global holder of its actions reaches a row`
+		: `policy of ${table}: a caller of one ${dimension} reaches no row of another`
+	const kitOf = app ? 'appPolicyIsolationKit' : 'policyIsolationKit'
+	const blocks = [describeBlock(title, isolation)]
 	if (hidden.length > 0) blocks.push(describeBlock(`policy of ${table}: a column with its own read action is never returned`, hidden))
 	const body = [
 		`// The policy isolation tests of ${table}, written by fabrika db test-scaffold from src/db/tables.ts. They prove that`,
 		"// the data layer enforces the policy, through a probe of their own: the application's handlers and stores do not run.",
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a policy change.',
 		'',
-		"import { afterAll, describe, expect, policyIsolationKit, test } from '@fabrika/app/testing/isolation'",
+		`import { ${['afterAll', 'describe', 'expect', kitOf, 'test'].sort().join(', ')} } from '@fabrika/app/testing/isolation'`,
 		"import { testDatabase } from '@fabrika/db/testing'",
 		"import { contract } from '../../../fabrika.contract'",
 		"import { tables } from '../tables'",
@@ -122,7 +163,7 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 		'',
 		'if (postgres !== null) {',
 		'\tafterAll(() => postgres.close())',
-		`\tconst kit = policyIsolationKit(contract, tables, ${quote(table)}, postgres)`,
+		`\tconst kit = ${kitOf}(contract, tables, ${quote(table)}, postgres)`,
 		'',
 		blocks.join('\n\n'),
 		'}',
@@ -131,11 +172,11 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 	return { body, cases: [...isolation, ...hidden].map((item) => item.name) }
 }
 
-/** Whether an endpoint gets endpoint access cases: a procedure with an `on`, `in` or `over` access form, for a person or a machine. */
+/** Whether an endpoint gets endpoint access cases: a procedure with an `on`, `in`, `over` or `app` access form, for a person or a machine. */
 const isAccessTested = (row: EndpointRow): boolean => {
 	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind !== 'action') return false
 	const { form } = row.requirement.access
-	return row.callers.some((caller) => caller === 'human' || caller === 'machine') && (form === 'on' || form === 'in' || form === 'over')
+	return row.callers.some((caller) => caller === 'human' || caller === 'machine') && form !== 'creates'
 }
 
 /** Whether an endpoint is a procedure of a link mount: its link holder reaches the object the key is bound to. */
@@ -193,6 +234,12 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 			),
 		]),
 	]
+	if (access.form === 'app') {
+		return [
+			testCase(`${row.id}: a caller with ${action} in one scope only is 403`, `expect(await kit.scoped(${args})).toEqual({ status: 403 })`),
+			testCase(`${row.id}: a caller with ${action} held globally reaches it`, `expect(await kit.global(${args})).toEqual({ answered: true })`),
+		]
+	}
 	if (linked) {
 		if (own) {
 			cases.push(
@@ -358,7 +405,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 	)
 	for (const id of Object.keys(fixtures.inputs).sort()) {
 		if (!tested.some((row) => row.id === id)) {
-			findings.push(at(`${id} is no endpoint with an on, in or over access form`, 'a fixture of a tested endpoint, or none'))
+			findings.push(at(`${id} is no endpoint with an on, in, over or app access form`, 'a fixture of a tested endpoint, or none'))
 		}
 	}
 	for (const [id, fields] of Object.entries(fixtures.members).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {

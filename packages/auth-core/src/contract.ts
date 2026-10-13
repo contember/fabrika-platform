@@ -114,7 +114,8 @@ export interface BodyAdmission {
 
 /**
  * What the token must carry before the request reaches a handler. `member` is any permission of this application;
- * `action` is that action in some scope, global included. The access form is what the framework then resolves.
+ * `action` is that action in some scope, global included, and only globally under the `app` form. The access form is
+ * what the framework then resolves.
  */
 export type EndpointRequirement = MemberRequirement | ActionRequirement
 
@@ -135,6 +136,8 @@ export type AccessForm =
 	/** `from: null` is the object a link key is bound to. */
 	| { readonly form: 'on'; readonly dimension: string; readonly from: string | null }
 	| { readonly form: 'creates'; readonly dimension: string }
+	/** The action held as a global grant: data of the whole application, in no dimension. */
+	| { readonly form: 'app' }
 
 /**
  * The structure and constraints of an input or output schema. Objects are always strict: a contract admits no other.
@@ -454,3 +457,5 @@ export type TableScope =
 	| { readonly mode: 'child'; readonly parent: string; readonly key: string; readonly column: string; readonly inherit: readonly string[] }
 	| { readonly mode: 'inbox'; readonly form: string }
 	| { readonly mode: 'reference'; readonly reason: string }
+	/** Rows of the whole application, in no dimension: an `app` endpoint reads and writes them. */
+	| { readonly mode: 'app'; readonly reason: string; readonly key: string }

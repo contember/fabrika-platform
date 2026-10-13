@@ -5,6 +5,7 @@
 import type { RpcCaller } from '@fabrika/auth-core'
 import type {
 	AnyDbIndex,
+	ApplicationTables,
 	DataKind,
 	NoUnscoped,
 	ReferenceTables,
@@ -15,7 +16,7 @@ import type {
 	WithinTables,
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { Ref, Within } from '../implement/capability'
+import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
 import type { ConnectCall, RequestContext } from '../implement/types'
@@ -63,6 +64,8 @@ export interface NoTablesIndex {
 	readonly listed: Record<never, never>
 	readonly within: Record<never, never>
 	readonly references: never
+	readonly applications: never
+	readonly records: never
 }
 
 /** `ctx.db` of a site: its handles, or, in a kit without tables, a message that there are none. */
@@ -99,11 +102,11 @@ export interface SqlTag<T extends string = string> {
 	<Row extends Schema>(row: Row): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<Row>[]>
 	/**
 	 * The capability's whole predicate on `table` (`alias` its name in the statement, the table's by default): the
-	 * object's key and every link of its chain for a `Ref`, what `ctx.db.within` matches for a `Within`. Interpolated
-	 * as `where ${ctx.sql.scope(ctx.target, 'tasks', 't')}`, its values are bound parameters; a table the capability
-	 * does not reach is refused.
+	 * object's key and every link of its chain for a `Ref`, what `ctx.db.within` matches for a `Within`, every row for
+	 * `ctx.app`. Interpolated as `where ${ctx.sql.scope(ctx.target, 'tasks', 't')}`, its values are bound parameters; a
+	 * table the capability does not reach is refused.
 	 */
-	scope(capability: Ref<string, string> | Within<string, string>, table: T, alias?: string): SqlScope
+	scope(capability: Ref<string, string> | Within<string, string> | AppCapability<string>, table: T, alias?: string): SqlScope
 }
 
 declare const sqlScope: unique symbol
@@ -149,6 +152,11 @@ export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
 			readonly within: Within<D, A>
 			readonly target: Unavailable<'an over endpoint holds ctx.within, the scopes it may list in: declare access with on or in for ctx.target'>
 		}
+	: Acc extends { readonly action: infer A extends string; readonly app: true } ? {
+			readonly app: AppCapability<A>
+			readonly target: Unavailable<'an app endpoint holds ctx.app, its action application-wide: declare access with on or in for ctx.target'>
+			readonly within: Unavailable<'an app endpoint holds ctx.app, its action application-wide: declare access with over for ctx.within'>
+		}
 	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? { readonly target: Ref<D, A> }
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: Ref<D, A> }
 	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Ref<D, A> }
@@ -172,6 +180,7 @@ type Reach<Ix extends AnyDbIndex, T extends string, Form extends 'target' | 'ove
 type Unreached<Ix extends AnyDbIndex, T extends string, Where extends string, Form extends 'target' | 'over'> = T extends Ix['references']
 	? Unavailable<`${T} is a reference table: read it through ctx.db.reference.${T}`>
 	: TableOf<Ix, T>['mode'] extends 'inbox' ? Unavailable<`${T} is a form inbox, which no ctx.db handle reads`>
+	: T extends Ix['applications'] ? Unavailable<`${T} is an application table: declare access: { action, app: true } and use ctx.db.app.${T}`>
 	: Unavailable<`${T} is not under ${Where} (${Lies<Ix, T>}): ${Reach<Ix, T, Form>}`>
 
 /**
@@ -191,6 +200,8 @@ type Target<Ix extends AnyDbIndex, D extends string, A extends string, K extends
 
 type WithinData<Ix extends AnyDbIndex, D extends string, A extends string> = Reaching<Ix, WithinTables<Ix, D, A>, `over: '${D}'`, 'over'>
 
+type AppData<Ix extends AnyDbIndex, A extends string, K extends DataKind> = Reaching<Ix, ApplicationTables<Ix, A, K>, 'app: true', 'over'>
+
 /** `ctx.db` by access form (the API matrix of `docs/reference/application-runtime.md`). */
 type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends InvalidAccess ? {
 		readonly target: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
@@ -203,6 +214,11 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
 			readonly within: WithinData<Ix, D, A>
 			readonly target: Unavailable<'an over endpoint lists through ctx.db.within: declare access with on or in for ctx.db.target'>
+		}
+	: Acc extends { readonly action: infer A extends string; readonly app: true } ? {
+			readonly app: AppData<Ix, A, K>
+			readonly target: Unavailable<'an app endpoint reaches its data through ctx.db.app: declare access with on or in for ctx.db.target'>
+			readonly within: Unavailable<'an app endpoint reaches its data through ctx.db.app: declare access with over for ctx.db.within'>
 		}
 	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? { readonly target: Target<Ix, D, A, K, 'in'> }
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: Target<Ix, D, A, K, 'on'> }
@@ -360,6 +376,12 @@ type IndexOf<A> = A extends App<infer K> ? K['index'] : never
 export type DbHandle<A, F extends TargetForm | 'over', D extends string, Act extends string, K extends DataKind = 'query'> = F extends TargetForm
 	? Target<IndexOf<A>, D, Act, K, F>
 	: WithinData<IndexOf<A>, D, Act>
+
+/**
+ * The type of `ctx.db.app` of an `app` endpoint, for a function of `src/<slice>/queries.ts` that takes it:
+ * `AppHandle<typeof app, 'candidates.export', 'mutation'>`.
+ */
+export type AppHandle<A, Act extends string, K extends DataKind = 'query'> = AppData<IndexOf<A>, Act, K>
 
 /** The type of `ctx.db.reference`, for a query function that takes it. */
 export type ReferenceHandle<A> = ReferenceTables<IndexOf<A>>

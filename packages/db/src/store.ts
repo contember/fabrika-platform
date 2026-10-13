@@ -18,7 +18,16 @@ import {
 	prototypeOf,
 	setOwn,
 } from './builtins'
-import { type CapabilityAuthority, MAX_WITHIN_VALUES, type Ref, type RefGrant, type Within, type WithinGrant } from './capability'
+import {
+	type AppGrant,
+	type CapabilityAuthority,
+	describeGrant,
+	MAX_WITHIN_VALUES,
+	type Ref,
+	type RefGrant,
+	type Within,
+	type WithinGrant,
+} from './capability'
 import { type Database, InvocationTransaction, type Session, sessionOf } from './database'
 import {
 	finishSelect,
@@ -166,7 +175,7 @@ function checkGrant(context: TableContext, grant: RefGrant | WithinGrant, dimens
 function refGrant(context: TableContext, capability: unknown, dimension: string, operation: Operation): RefGrant {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind !== 'ref') {
-		throw new CapabilityError(`${operation} on ${context.model.name} needs a Ref of ${dimension}, got a Within`)
+		throw new CapabilityError(`${operation} on ${context.model.name} needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	checkGrant(context, grant, dimension, operation)
 	return grant
@@ -175,7 +184,7 @@ function refGrant(context: TableContext, capability: unknown, dimension: string,
 function withinGrant(context: TableContext, capability: unknown, dimension: string, operation: Operation): WithinGrant {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind !== 'within') {
-		throw new CapabilityError(`${operation} on ${context.model.name} needs a Within of ${dimension}, got a Ref`)
+		throw new CapabilityError(`${operation} on ${context.model.name} needs a Within of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	checkGrant(context, grant, dimension, operation)
 	return grant
@@ -272,6 +281,9 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 		checkGrant(context, grant, scope.parent.dimension, operation)
 		return parentPredicate(context, grant)
 	}
+	if (grant.kind === 'app') {
+		throw new CapabilityError(`a list of ${context.model.name} by its parent needs a Ref or a Within, got an app capability`)
+	}
 	checkGrant(context, grant, listDimension(scope.parent), operation)
 	return withinPredicate(context.model, scope.parent.container?.column ?? scope.column, grant)
 }
@@ -301,7 +313,7 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'within') {
-		throw new CapabilityError(`a list of ${table} needs a Within, got a Ref`)
+		throw new CapabilityError(`a list of ${table} needs a Within, got ${describeGrant(grant)}`)
 	}
 	const action = requiredAction(context, 'read')
 	if (grant.action !== action) {
@@ -333,6 +345,10 @@ export function scopeTerms(context: TableContext, capability: unknown): ScopeTer
 			throw new CapabilityError(`a Ref of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
 		}
 		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
+	}
+	if (grant.kind === 'app') {
+		// The action is held as a global grant, so its scope is every row.
+		return 'all'
 	}
 	const column = reachColumn(model, grant.dimension)
 	if (column === undefined) {
@@ -373,10 +389,69 @@ export function updatingRef(context: TableContext, capability: unknown, dimensio
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'ref') {
-		throw new CapabilityError(`update on ${table} needs a Ref of ${dimension}, got a Within`)
+		throw new CapabilityError(`update on ${table} needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	if (grant.dimension !== dimension) {
 		throw new CapabilityError(`update on ${table} needs a ref of ${dimension}, got a ref of ${grant.dimension}`)
+	}
+	const actions = updateActions(context.model)
+	if (actions.length === 0) {
+		throw new CapabilityError(`${table} allows no update; its policy declares no update action`)
+	}
+	for (let index = 0; index < actions.length; index++) {
+		if (actions[index] === grant.action) {
+			return grant
+		}
+	}
+	throw new CapabilityError(`update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
+}
+
+/**
+ * The capability of an `app` endpoint for `operation` on `table`: its action is that operation's. An application table
+ * is written with it, and a dimension or child table read with it.
+ */
+function appGrant(context: TableContext, capability: unknown, operation: Operation): AppGrant {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const table = context.model.name
+	if (grant.kind !== 'app') {
+		throw new CapabilityError(`${operation} on ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+	}
+	const action = requiredAction(context, operation)
+	if (grant.action !== action) {
+		throw new CapabilityError(`${operation} on ${table} requires ${action}; the capability holds ${grant.action}`)
+	}
+	return grant
+}
+
+/** Every row a capability of an `app` endpoint reads in `table`, by the table's read action: `true`. */
+export function appListPredicate(context: TableContext, capability: unknown): OperationNode {
+	appGrant(context, capability, 'read')
+	return everything()
+}
+
+/** One row of an application table by its key, for an `app` capability of `operation`'s action. */
+export function appRowPredicate(context: TableContext, capability: unknown, key: unknown, operation: Operation): OperationNode {
+	appGrant(context, capability, operation)
+	return appKeyPredicate(context.model, key)
+}
+
+/** The row of an application table `key` names. */
+export function appKeyPredicate(model: TableModel, key: unknown): OperationNode {
+	if (typeof key !== 'string' || key.length === 0) {
+		throw new QueryRefusedError('row_address', `a ${model.name} row is addressed by its ${keyOf(model)}, a non-empty string`)
+	}
+	return equals(model.name, keyOf(model), key)
+}
+
+/**
+ * The capability of an `app` endpoint whose action updates columns of an application table: its update action, or a
+ * column's own write action. Which columns it updates follows from the action (`updatableBy`).
+ */
+export function updatingApp(context: TableContext, capability: unknown): AppGrant {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const table = context.model.name
+	if (grant.kind !== 'app') {
+		throw new CapabilityError(`update on ${table} needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
 	const actions = updateActions(context.model)
 	if (actions.length === 0) {
@@ -500,7 +575,13 @@ export function updateValues(values: unknown, allowed: NameSet, model: TableMode
 	return changes
 }
 
-function stampInsert(context: TableContext, grant: RefGrant, values: Map<string, Primitive | null>, key: string, keyValue: string): void {
+function stampInsert(
+	context: TableContext,
+	grant: { readonly principal: string },
+	values: Map<string, Primitive | null>,
+	key: string,
+	keyValue: string,
+): void {
 	values.set(key, keyValue)
 	if (context.model.version !== undefined) {
 		values.set(context.model.version, 1)
@@ -591,7 +672,7 @@ function checkVersion(context: TableContext, row: unknown): void {
 }
 
 export function keyOf(model: TableModel): string {
-	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
+	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child' && model.scope.mode !== 'app') {
 		throw new CapabilityError(`${model.name} is not written by handlers`)
 	}
 	return model.scope.key
@@ -838,6 +919,14 @@ export function insertIntoDimension<O>(context: TableContext, run: Runner, targe
 	return insertRow(context, run, row, grant)
 }
 
+/** An application table's insert, for an `app` capability of its insert action: a new key, no containment. */
+export function insertIntoApplication<O>(context: TableContext, run: Runner, capability: unknown, values: unknown): Promise<O> {
+	const grant = appGrant(context, capability, 'insert')
+	const row = readValues(values, context.model.insert, 'insert', context.model)
+	stampInsert(context, grant, row, keyOf(context.model), Bun.randomUUIDv7())
+	return insertRow(context, run, row, undefined)
+}
+
 /** `ChildTable.insert` over a capability nobody type-checked. */
 export function insertIntoChild<O>(context: TableContext, run: Runner, parent: unknown, values: unknown): Promise<O> {
 	const scope = childScope(context)
@@ -999,7 +1088,7 @@ Object.freeze(ChildTable.prototype)
  * `key`, a dimension row by its capability alone.
  */
 export interface TableProbe {
-	readonly mode: 'dimension' | 'child'
+	readonly mode: 'dimension' | 'child' | 'app'
 	get(capability: unknown, key?: string): Promise<Readonly<Record<string, unknown>>>
 	select(capability: unknown): Promise<readonly Readonly<Record<string, unknown>>[]>
 	/** `aggregate(capability, { count: true })`; zero rows when the capability reaches none. */
@@ -1045,6 +1134,43 @@ function probeOf(context: TableContext): TableProbe {
 			return updateRow(context, run, addressed(scope), changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
 		},
 		remove: async (capability: unknown, key?: string) => removeRow(context, run, addressed(object(capability, key, 'delete'))),
+	})
+}
+
+/** The probe of an application table: every operation takes an `app` capability and, but for an insert, a key. */
+function appProbeOf(context: TableContext): TableProbe {
+	const run = storeRunner(context)
+	const count = async (capability: unknown): Promise<string> => {
+		const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(
+			context,
+			run,
+			appListPredicate(context, capability),
+			{ count: true },
+		)
+		const value = row === undefined ? '0' : ownEntry(row, 'count')
+		return typeof value === 'string' ? value : '0'
+	}
+	return freeze({
+		mode: 'app',
+		get: async (capability: unknown, key?: string) =>
+			selectOne<Readonly<Record<string, unknown>>>(context, run, appRowPredicate(context, capability, key, 'read')),
+		select: async (capability: unknown) => {
+			const start = startSelect<Readonly<Record<string, unknown>>, NoColumns>(context.shape)
+			return selectRows<Readonly<Record<string, unknown>>>(
+				context,
+				appListPredicate(context, capability),
+				finishSelect(start, start),
+				requiredAction(context, 'read'),
+			)
+		},
+		count,
+		insert: async (capability: unknown, values: unknown) => insertIntoApplication(context, run, capability, values),
+		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
+			const scope = appRowPredicate(context, capability, key, 'update')
+			const changes = readValues(values, context.model.update, 'update', context.model)
+			return updateRow(context, run, addressed(scope), changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
+		},
+		remove: async (capability: unknown, key?: string) => removeRow(context, run, addressed(appRowPredicate(context, capability, key, 'delete'))),
 	})
 }
 
@@ -1116,7 +1242,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	const models = tableModels(tables)
 	const connection: Connection = { runtime: undefined }
 
-	function contextFor(table: string, mode: 'dimension' | 'child'): TableContext {
+	function contextFor(table: string, mode: 'dimension' | 'child' | 'app'): TableContext {
 		const model = typeof table === 'string' ? modelOf(models, table) : undefined
 		if (model === undefined || model.scope.mode !== mode) {
 			throw new QueryRefusedError('unknown_table', `${String(table)} is not a ${mode} table`)
@@ -1145,8 +1271,11 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		tableContext: contextFor,
 		probe(table: string): TableProbe {
 			const mode = modelOf(models, table)?.scope.mode
+			if (mode === 'app') {
+				return appProbeOf(contextFor(table, mode))
+			}
 			if (mode !== 'dimension' && mode !== 'child') {
-				throw new QueryRefusedError('unknown_table', `${String(table)} is not a dimension or child table; no store reaches it`)
+				throw new QueryRefusedError('unknown_table', `${String(table)} is not a dimension, child or application table; no store reaches it`)
 			}
 			return probeOf(contextFor(table, mode))
 		},

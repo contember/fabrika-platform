@@ -64,8 +64,12 @@ takes from its per-minute buckets in `fabrika_form_admissions` and records accep
 `fabrika_form_challenges` (`frameworkTablesOf(…).forms`). `fabrika db migrate`
 applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle.
 `dataAccessOf` gives the framework the mini-ORM (`orm.ts`): an `InvocationTransaction` per invocation and the handles of
-each staged-kit site's `ctx.db`, which read `reference` tables too. Not built yet: reading an inbox on the road (an
-`unscoped` declaration reads it).
+each staged-kit site's `ctx.db`, which read `reference` tables too. An application table (`scope: { app: '<why>' }`,
+`ApplicationPolicy`) belongs to no dimension: its key is generated on insert, it has no chain, and only an `app`
+capability (`AppGrant`, the action held as a global grant) reaches it, through `ctx.db.app` (`applicationTables` in
+`orm.ts`; `appGrant`, `appListPredicate`, `appRowPredicate`, `updatingApp` and `insertIntoApplication` in `store.ts`),
+which also lists every dimension and child table whose read action is the capability's, with the predicate `true`.
+Not built yet: reading an inbox on the road (an `unscoped` declaration reads it).
 
 `@fabrika/db/testing` is the database half of the generated isolation tests (`fabrika db test-scaffold`, A11):
 `testDatabase` migrates a fresh `app_test_<hex>` schema with its own role family through `@fabrika/platform-node`'s

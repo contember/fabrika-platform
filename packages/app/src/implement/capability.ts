@@ -5,9 +5,12 @@
 // that application code makes, or a second runtime it boots, reaches none of them.
 
 import {
+	type AppCapability as AppCapabilityType,
+	type AppGrant,
 	type CapabilityAuthority,
 	type CapabilityGrant,
 	type ContainerGrant,
+	describeGrant,
 	type LeaseFence,
 	MAX_WITHIN_VALUES,
 	type Ref as RefCapability,
@@ -168,6 +171,7 @@ interface Bound {
 
 let readRef: (value: unknown) => Bound | undefined = () => undefined
 let readWithin: (value: unknown) => Bound | undefined = () => undefined
+let readApp: (value: unknown) => Bound | undefined = () => undefined
 
 /** One authorized object for one action, in one request. `chain` holds the containers the object lies in. */
 export class Ref<D extends string, A extends string> implements RefCapability<D, A> {
@@ -308,9 +312,41 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 	}
 }
 
+/**
+ * One action held as a global grant, in one request: what an `app` endpoint's `ctx.db.app` is built from. The proxy
+ * admitted the request only for a caller who holds the action without a scope.
+ */
+export class AppCapability<A extends string> implements AppCapabilityType<A> {
+	declare readonly '~capability': { readonly kind: 'app'; readonly action: A }
+	readonly #action: A
+	readonly #grant: AppGrant
+	readonly #frame: RequestFrame
+	readonly #issuer: object
+
+	constructor(token: typeof MINT, issuer: object, frame: RequestFrame, action: A, principal: string) {
+		if (token !== MINT) {
+			throw new CapabilityRefusedError('not_minted', 'an app capability is minted by the framework only; declare access: { action, app: true }')
+		}
+		this.#action = action
+		this.#grant = freeze({ kind: 'app', action, principal })
+		this.#frame = frame
+		this.#issuer = issuer
+	}
+
+	get action(): A {
+		return this.#action
+	}
+
+	static {
+		readApp = (value) =>
+			typeof value === 'object' && value !== null && #grant in value ? { grant: value.#grant, frame: value.#frame, issuer: value.#issuer } : undefined
+	}
+}
+
 // Application code could otherwise redefine a getter that the framework or a handler reads.
 freeze(Ref.prototype)
 freeze(Within.prototype)
+freeze(AppCapability.prototype)
 
 /** Makes the capabilities one authority accepts; a runtime's is held by the `boot` call that made it alone. */
 export interface CapabilityMint {
@@ -330,6 +366,7 @@ export interface CapabilityMint {
 		values: readonly string[] | 'all',
 		containers?: readonly ContainerGrant[],
 	): Within<D, A>
+	app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A>
 }
 
 /** A mint and the one authority that accepts what it mints. */
@@ -366,22 +403,28 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 		): Within<D, A> {
 			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers)
 		},
+		app<A extends string>(frame: RequestFrame, action: A, principal: string): AppCapability<A> {
+			return new AppCapability(MINT, issuer, frame, action, principal)
+		},
 	})
 	const authority: CapabilityAuthority = freeze({
 		resolve(capability: unknown): CapabilityGrant {
-			const bound = readRef(capability) ?? readWithin(capability)
+			const bound = readRef(capability) ?? readWithin(capability) ?? readApp(capability)
 			if (bound === undefined || bound.issuer !== issuer) {
 				throw new CapabilityRefusedError('not_minted', 'not a capability the framework minted: pass the ctx.target or ctx.within of this request')
 			}
 			const { grant, frame } = bound
-			const what = `${grant.kind === 'ref' ? 'Ref' : 'Within'} of '${grant.dimension}' for '${grant.action}'`
+			const what = `${describeGrant(grant)} for '${grant.action}'`
 			if (frame.ended) {
-				throw new CapabilityRefusedError('ended', `the ${what} belongs to request ${frame.id}, which has ended; never keep a capability past its request`)
+				throw new CapabilityRefusedError(
+					'ended',
+					`the capability (${what}) belongs to request ${frame.id}, which has ended; never keep a capability past its request`,
+				)
 			}
 			if (currentRequest.getStore() !== frame) {
 				throw new CapabilityRefusedError(
 					'foreign_work',
-					`the ${what} belongs to request ${frame.id}, not to the one running now; never share a capability`,
+					`the capability (${what}) belongs to request ${frame.id}, not to the one running now; never share a capability`,
 				)
 			}
 			return grant

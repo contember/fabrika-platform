@@ -158,7 +158,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		)
 	}
 	compareKeyed(changes, record(baseline.tables), record(candidate.tables), {
-		added: (name, table) => `New table policy \`${name}\` read with \`${table.actions.read}\``,
+		added: (name, table) => newTableLine(name, table),
 		removed: (name) => `Table policy \`${name}\` is removed`,
 		changed: tableChanges,
 	})
@@ -178,7 +178,7 @@ function baselineDirectories(artifact: ContractArtifact): Directories {
 	if (artifact.directories !== undefined) return artifact.directories
 	const implied: Record<string, EndpointDirectory> = {}
 	for (const row of artifact.endpoints) {
-		if (row.requirement?.kind === 'action' && endpointMembers(artifact, row) === 'list') {
+		if (row.requirement?.kind === 'action' && row.requirement.access.form !== 'app' && endpointMembers(artifact, row) === 'list') {
 			implied[row.id] = { dimension: row.requirement.access.dimension, lists: true }
 		}
 	}
@@ -639,9 +639,11 @@ function audience(row: EndpointRow): string {
 	if (row.kind === 'public-spa') return 'for anyone, without signing in'
 	if (row.requirement === null) return `for anonymous ${row.kind} requests`
 	const callers = row.callers.join(', ')
-	return row.requirement.kind === 'member'
-		? `for ${callers} callers who are members`
-		: `for ${callers} callers with \`${row.requirement.action}\` (${row.requirement.access.form} \`${row.requirement.access.dimension}\`)`
+	if (row.requirement.kind === 'member') return `for ${callers} callers who are members`
+	const { action, access } = row.requirement
+	return access.form === 'app'
+		? `for ${callers} callers with \`${action}\` (app-wide: a global grant)`
+		: `for ${callers} callers with \`${action}\` (${access.form} \`${access.dimension}\`)`
 }
 
 function endpointMap(rows: readonly EndpointRow[]): Map<string, EndpointRow> {
@@ -686,6 +688,21 @@ function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollect
 		...linkChange,
 		...scanChange,
 	]
+}
+
+/**
+ * A new table's line. An application table names its reason and every action, because each one reaches every row of
+ * it for a global holder.
+ */
+function newTableLine(name: string, table: TablePolicyArtifact): string {
+	if (table.scope.mode !== 'app') return `New table policy \`${name}\` read with \`${table.actions.read}\``
+	const { read, insert, update, delete: remove } = table.actions
+	const writes = [
+		...(insert === null ? [] : [`inserted with \`${insert}\``]),
+		...(update === null ? [] : [`updated with \`${update}\``]),
+		...(remove === null ? [] : [`removed with \`${remove}\``]),
+	]
+	return `New application table \`${name}\` (${table.scope.reason}), read with \`${read}\`${writes.map((write) => `, ${write}`).join('')}`
 }
 
 function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyArtifact): AccessChange[] {

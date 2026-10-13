@@ -79,7 +79,7 @@ src/
     caller.ts         test callers and their grants
     directory.ts      the default membership transport: member directories (list, find) from the kit's callers, writes refused
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
-    policy-isolation.ts  policyIsolationKit: a probe contract over one table's policy
+    policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
     runner.ts         the test functions the generated tests register through
   contract/           @fabrika/app/contract — browser-safe
@@ -449,6 +449,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   Never expand a container grant into values: a scope moved out after the check would
   stay reachable. A `Within` over `MAX_WITHIN_VALUES` values in total is refused at mint
   (`CapabilityLimitError`: 403 to the caller, one log line).
+- **`app` is the action held as a global grant, and the proxy alone decides it.** `{ action, app: true }` (an RPC
+  procedure or an SPA; never a link procedure or an export, whose v1 reads one dimension) compiles to `{ form: 'app' }`,
+  which `satisfies` meets only with an entry without a scope, so a scoped holder is the proxy's 403. `#access` reads
+  nothing and mints `ctx.app` (`AppCapability`, `mint.app`); `ctx.db.app` (`endpointData`) holds every application
+  table (`scope: { app }`) and, read-only, every dimension and child table whose read action is the action. It has no
+  `ctx.members`, `ctx.links` or delegation. Never add a check of the grant's scope here: the requirement is the check.
 - **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's
@@ -762,7 +768,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   storage: `kit.file` seeds one file per scope through the real upload endpoint. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
-  holder, reaches its own object); each takes the author's seed, the state `seedWorlds` writes into both rows. A leak scans every value of
+  holder, reaches its own object); each takes the author's seed, the state `seedWorlds` writes into both rows. An
+  `app` procedure gets `scoped` (a holder of the action in one scope: exactly 403) and `global` (a global holder:
+  answered unless a 401, 403 or 5xx), and an application table `appPolicyIsolationKit`, whose probe procedures are
+  `app` endpoints over one row `seedRow` writes. A leak scans every value of
   the other row's chain, so an outer dimension's value is a leak too. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
   kit does not. Its API is what `fabrika db test-scaffold` writes against: a change

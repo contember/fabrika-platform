@@ -68,6 +68,15 @@ const IMPORT = endpointRow({
 	requirement: { kind: 'action', action: 'notes.write', access: { form: 'over', dimension: 'workspace' } },
 	admission: JSON_BODY,
 })
+const CODELISTS = endpointRow({
+	id: 'api.codelists.save',
+	kind: 'mutation',
+	method: 'POST',
+	path: '/api/codelists.save',
+	callers: ['human'],
+	requirement: { kind: 'action', action: 'codelists.manage', access: { form: 'app' } },
+	admission: JSON_BODY,
+})
 const SHARED = endpointRow({
 	id: 'shared.note',
 	kind: 'query',
@@ -106,7 +115,7 @@ const CONTACT = anonymousRow({
 	admission: { contentTypes: ['application/x-www-form-urlencoded'], maxBytes: 4096 },
 })
 
-const TABLE = [ME, REMOVE, INVITE, IMPORT, SHARED, EXPORTED, PARTNER, SPA, HEALTH, CONTACT]
+const TABLE = [ME, REMOVE, INVITE, IMPORT, CODELISTS, SHARED, EXPORTED, PARTNER, SPA, HEALTH, CONTACT]
 const RESERVED = ['/api', '/machine', '/s/api', '/__fabrika/connect', '/partner']
 
 const grant = (action: string, scope: PermissionEntry['scope'] = null): PermissionEntry => ({ action, scope, source: 'grant' })
@@ -330,6 +339,18 @@ describe('step 5 — the requirement', () => {
 	test('the action in one scope is enough at the proxy; the framework narrows it to the object', async () => {
 		const { verify } = service({ mintToken: await minted('user', [grant('notes.delete', { type: 'note', value: 'n1' })]) })
 		expect((await verify(verifyRequest({ ...JSON_POST, path: '/api/notes.remove', cookie: SESSION }))).status).toBe(204)
+	})
+
+	test('the app form needs the action held globally: the action in one scope is a 403 at the proxy', async () => {
+		const { verify } = service({
+			mintToken: await minted('user', [grant('codelists.manage', { type: 'workspace', value: 'w1' }), grant('notes.read')]),
+		})
+		expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/api/codelists.save', cookie: SESSION })), 403)
+	})
+
+	test('the app form admits a global grant of the action', async () => {
+		const { verify } = service({ mintToken: await minted('user', [grant('codelists.manage')]) })
+		expect((await verify(verifyRequest({ ...JSON_POST, path: '/api/codelists.save', cookie: SESSION }))).status).toBe(204)
 	})
 })
 

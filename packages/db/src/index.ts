@@ -1,4 +1,15 @@
-export type { CapabilityAuthority, CapabilityGrant, ContainerGrant, LeaseFence, Ref, RefGrant, Within, WithinGrant } from './capability'
+export type {
+	AppCapability,
+	AppGrant,
+	CapabilityAuthority,
+	CapabilityGrant,
+	ContainerGrant,
+	LeaseFence,
+	Ref,
+	RefGrant,
+	Within,
+	WithinGrant,
+} from './capability'
 export { MAX_WITHIN_VALUES } from './capability'
 export { applicationSchema, Database, type PostgresOptions } from './database'
 export type {

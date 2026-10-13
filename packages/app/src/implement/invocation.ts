@@ -236,10 +236,16 @@ export interface AccessCapabilities {
 	readonly target?: unknown
 	readonly within?: unknown
 	readonly created?: unknown
+	/** An `app` endpoint's capability, `ctx.app`. */
+	readonly app?: unknown
 }
 
 /** `ctx.db` of an endpoint, by its access form: the API matrix of `docs/reference/application-runtime.md`. */
-export function endpointData(handles: DataHandles, form: 'on' | 'in' | 'over' | 'creates' | 'member', access: AccessCapabilities): object {
+export function endpointData(
+	handles: DataHandles,
+	form: 'on' | 'in' | 'over' | 'creates' | 'app' | 'member',
+	access: AccessCapabilities,
+): object {
 	const shared = { reference: handles.reference, ...(handles.unscoped === undefined ? {} : { unscoped: handles.unscoped }) }
 	switch (form) {
 		case 'on':
@@ -250,6 +256,8 @@ export function endpointData(handles: DataHandles, form: 'on' | 'in' | 'over' | 
 			return Object.freeze({ created: handles.target(access.created, 'in'), ...shared })
 		case 'over':
 			return Object.freeze({ within: handles.within(access.within), ...shared })
+		case 'app':
+			return Object.freeze({ app: handles.app(access.app), ...shared })
 		case 'member':
 			return Object.freeze(shared)
 	}

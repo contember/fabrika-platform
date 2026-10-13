@@ -8,6 +8,7 @@ const workspace = (value: string): Scope => ({ type: 'workspace', value })
 
 const member: EndpointRequirement = { kind: 'member' }
 const deleteNote: EndpointRequirement = { kind: 'action', action: 'notes.delete', access: { form: 'on', dimension: 'note', from: 'id' } }
+const manageLists: EndpointRequirement = { kind: 'action', action: 'codelists.manage', access: { form: 'app' } }
 
 describe('satisfies refuses', () => {
 	test.each<[string, EndpointRequirement, PermissionEntry[]]>([
@@ -15,6 +16,9 @@ describe('satisfies refuses', () => {
 		['an action without any permission', deleteNote, []],
 		['an action the caller holds only a different one of', deleteNote, [grant('notes.read'), grant('notes.read', workspace('w1'))]],
 		['an action outside a wildcard namespace', deleteNote, [grant('note.*'), grant('notesx.*', workspace('w1'))]],
+		['the app form, with the action held in one scope only', manageLists, [grant('codelists.manage', workspace('w1'))]],
+		['the app form, with a wildcard held in one scope only', manageLists, [grant('*', workspace('w1')), grant('codelists.manage', workspace('w2'))]],
+		['the app form, with another action held globally', manageLists, [grant('codelists.read')]],
 		['an action that only shares a string prefix', { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } }, [
 			grant('notes.readall'),
 		]],
@@ -33,6 +37,8 @@ describe('satisfies admits', () => {
 		['a wildcard that covers the action globally', deleteNote, [grant('notes.*')]],
 		['a wildcard that covers the action in one scope', deleteNote, [grant('notes.*', workspace('w1'))]],
 		['the universal wildcard', deleteNote, [grant('*')]],
+		['the app form, with the action held globally', manageLists, [grant('codelists.read', workspace('w1')), grant('codelists.manage')]],
+		['the app form, with a wildcard held globally', manageLists, [grant('codelists.*')]],
 	])('%s', (_name, requirement, perms) => {
 		expect(satisfies(requirement, perms)).toBe(true)
 	})

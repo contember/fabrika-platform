@@ -40,6 +40,12 @@ export interface ReferenceScope {
 	readonly reference: string
 }
 
+/** Rows of the whole application, in no dimension; the value says why. `key` defaults to `id`. */
+export interface ApplicationScope<Col extends string> {
+	readonly app: string
+	readonly key?: Col
+}
+
 export interface InboxScope<A extends string> {
 	readonly inbox: string
 	readonly read: A
@@ -84,6 +90,11 @@ export interface DimensionPolicy<Col extends string, A extends string, V extends
 
 export interface ChildPolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
 	readonly scope: ChildScope<Table, Col>
+}
+
+/** An application table: written like a dimension table, by an `app` endpoint whose action is the operation's. */
+export interface ApplicationPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
+	readonly scope: ApplicationScope<Col>
 }
 
 interface ReadOnlyPolicy<Col extends string, A extends string> {
@@ -137,6 +148,7 @@ export type ScopeModel =
 	| { readonly mode: 'child'; readonly parent: string; readonly key: string; readonly column: string; readonly inherit: readonly string[] }
 	| { readonly mode: 'reference'; readonly reason: string }
 	| { readonly mode: 'inbox'; readonly form: string }
+	| { readonly mode: 'app'; readonly reason: string; readonly key: string }
 
 export interface ActionModel {
 	readonly read: string
@@ -304,6 +316,7 @@ const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
 const CONTAINER_FIELDS = nameSet(['dimension', 'column'])
 const CHILD_FIELDS = nameSet(['child', 'key', 'column', 'inherit'])
 const REFERENCE_FIELDS = nameSet(['reference'])
+const APPLICATION_FIELDS = nameSet(['app', 'key'])
 const INBOX_FIELDS = nameSet(['inbox', 'read'])
 const COLUMN_FIELDS = nameSet(['read', 'write'])
 
@@ -458,13 +471,13 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const hidden = nameSet(restricted)
 
 	// Every capability reads the key and the version: a page is ordered by the key, and a write answers both.
-	if ((scope.mode === 'dimension' || scope.mode === 'child') && hasOwn(columnPolicies, scope.key)) {
+	if ((scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app') && hasOwn(columnPolicies, scope.key)) {
 		throw new PolicyError(`${table}: the key ${scope.key} takes no action of its own`)
 	}
 	if (version !== undefined && hasOwn(columnPolicies, version)) {
 		throw new PolicyError(`${table}: the version ${version} takes no action of its own`)
 	}
-	const writable = scope.mode === 'dimension' || scope.mode === 'child'
+	const writable = scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app'
 	if (
 		!writable
 		&& (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined
@@ -615,7 +628,13 @@ function parseScope(table: string, scope: Readonly<Record<string, unknown>>, col
 		onlyFields(scope, INBOX_FIELDS, what)
 		return freeze({ mode: 'inbox', form: nonEmpty(table, ownEntry(scope, 'inbox'), 'scope.inbox') })
 	}
-	throw new PolicyError(`${what} takes one mode: { dimension, key?, in? }, { child, key?, column?, inherit? }, { reference } or { inbox, read }`)
+	if (hasOwn(scope, 'app')) {
+		onlyFields(scope, APPLICATION_FIELDS, what)
+		return freeze({ mode: 'app', reason: nonEmpty(table, ownEntry(scope, 'app'), 'scope.app'), key: key() })
+	}
+	throw new PolicyError(
+		`${what} takes one mode: { dimension, key?, in? }, { child, key?, column?, inherit? }, { app, key? }, { reference } or { inbox, read }`,
+	)
 }
 
 /**
@@ -692,7 +711,7 @@ interface Stamp {
 /** The columns the layer writes itself: the key, every containment link, the version and the creator. */
 function stampsOf(table: ParsedTable, chain: readonly Container[]): readonly Stamp[] {
 	const stamps: Stamp[] = []
-	if (table.scope.mode === 'dimension' || table.scope.mode === 'child') {
+	if (table.scope.mode === 'dimension' || table.scope.mode === 'child' || table.scope.mode === 'app') {
 		stamps[stamps.length] = { column: table.scope.key, role: 'the key' }
 	}
 	for (let index = 0; index < chain.length; index++) {
@@ -1038,6 +1057,7 @@ export type ParentOf<P, T> = ScopeOf<P, T> extends { readonly child: infer C ext
 
 export type DimensionTableName<P> = { [K in keyof P]: P[K] extends { readonly scope: { readonly dimension: string } } ? K : never }[keyof P] & string
 export type ChildTableName<P> = { [K in keyof P]: P[K] extends { readonly scope: { readonly child: string } } ? K : never }[keyof P] & string
+export type ApplicationTableName<P> = { [K in keyof P]: P[K] extends { readonly scope: { readonly app: string } } ? K : never }[keyof P] & string
 
 type ListedColumns<P, T, Field extends 'insert' | 'update'> = PolicyOf<P, T> extends { readonly [K in Field]: readonly (infer C extends string)[] }
 	? C

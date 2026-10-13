@@ -6,7 +6,7 @@
 import type { OperationNode } from 'kysely'
 import { BinaryOperationNode, OperatorNode, ValueNode } from 'kysely'
 import { freeze, hasOwn, inSet, isSafeInteger, nameSet, namesOf, ownDescriptor, ownKeys, ownNames, parseList, setOwn } from './builtins'
-import type { CapabilityGrant, RefGrant } from './capability'
+import { type CapabilityGrant, describeGrant, type RefGrant } from './capability'
 import type { InvocationTransaction, Session } from './database'
 import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
 import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } from './errors'
@@ -18,9 +18,13 @@ import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	aggregateRows,
 	type AggregateSpec,
+	appKeyPredicate,
+	appListPredicate,
+	appRowPredicate,
 	childObjectPredicate,
 	childScope,
 	type DataLayerRuntime,
+	insertIntoApplication,
 	insertIntoChild,
 	insertIntoDimension,
 	insertRow,
@@ -40,6 +44,7 @@ import {
 	type TableContext,
 	updateRow,
 	updateValues,
+	updatingApp,
 	updatingRef,
 	versionArgument,
 } from './store'
@@ -72,6 +77,11 @@ export interface DataHandles {
 	target(capability: unknown, form: TargetForm): object
 	/** `ctx.db.within` (or a job's `ctx.db.over`): every table listed in a `Within`'s dimension. */
 	within(capability: unknown): object
+	/**
+	 * `ctx.db.app` of an `app` endpoint: each application table, and each dimension and child table, read-only, by the
+	 * capability's action held application-wide.
+	 */
+	app(capability: unknown): object
 	/** `ctx.db.reference`. */
 	readonly reference: object
 	/** `ctx.db.unscoped`, or `undefined` for a site that declares none. */
@@ -198,9 +208,7 @@ function namedRef(context: TableContext, capability: unknown, dimension: string)
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'ref' || grant.dimension !== dimension) {
-		throw new CapabilityError(
-			`a read of ${table} here needs a Ref of ${dimension}, got a ${grant.kind === 'ref' ? 'Ref' : 'Within'} of ${grant.dimension}`,
-		)
+		throw new CapabilityError(`a read of ${table} here needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	if (!names(context.model, grant.action)) {
 		throw new CapabilityError(
@@ -225,6 +233,10 @@ function handlesOf(parts: DataLayerParts, site: DataSite): DataHandles {
 		within: (capability: unknown) => {
 			site.check()
 			return withinTables(parts, site, run, capability)
+		},
+		app: (capability: unknown) => {
+			site.check()
+			return applicationTables(parts, site, run, capability)
 		},
 		reference: referenceTables(parts, site, run),
 		unscoped,
@@ -405,6 +417,85 @@ function listedRows(context: TableContext, site: DataSite, run: Runner, scope: (
 	})
 }
 
+function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown): object {
+	const grant = resolved(parts, capability)
+	if (grant.kind !== 'app') {
+		throw new CapabilityError(`ctx.db.app is built from the capability of an app endpoint, got ${describeGrant(grant)}`)
+	}
+	const handle: Record<string, unknown> = {}
+	const tables = ownKeys(parts.models)
+	for (let index = 0; index < tables.length; index++) {
+		const model = modelOf(parts.models, tables[index] ?? '')
+		if (model === undefined) {
+			continue
+		}
+		const context = parts.contextOf(model.name)
+		if (model.scope.mode === 'app') {
+			setOwn(handle, model.name, applicationRows(context, site, run, capability))
+		} else if (model.scope.mode === 'dimension' || model.scope.mode === 'child') {
+			setOwn(handle, model.name, listedRows(context, site, run, () => appListPredicate(context, capability)))
+		}
+	}
+	return freeze(handle)
+}
+
+/** An `app` capability whose action the application table names: it reads one row with the columns of its action. */
+function namedApp(context: TableContext, capability: unknown): string {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const table = context.model.name
+	if (grant.kind !== 'app') {
+		throw new CapabilityError(`a read of ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+	}
+	if (!names(context.model, grant.action)) {
+		throw new CapabilityError(`${table} does not name the action '${grant.action}': read it from an app endpoint whose action ${table} names`)
+	}
+	return grant.action
+}
+
+/**
+ * An application table under an `app` capability: listed, counted and aggregated with its read action; one row read
+ * (and locked) with any action it names; inserted, updated and removed with that operation's action.
+ */
+function applicationRows(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
+	const model = context.model
+	const table = model.name
+	const visible = model.visible
+	const key = [keyOf(model)]
+	const getForUpdate = site.kind === 'job'
+		? refused(site, 'read_only', 'a job writes inside ctx.transaction((tx) => …): use tx.db there')
+		: site.kind === 'query'
+		? refused(site, 'read_only', 'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation')
+		: bound(site, async (id: unknown) => {
+			const scope = appKeyPredicate(model, id)
+			const node = lockedSelectNode(table, visibleFor(model, namedApp(context, capability)), scope, model.dates)
+			const rows = await (await run.read()).run(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'update' })
+			const [row] = answerDays(table, model.dates, rows)
+			if (row === undefined) {
+				throw new NotFoundError(`${table} not found`)
+			}
+			return row
+		})
+	return freeze({
+		list: bound(site, async (options?: unknown) => listRows(context, run, appListPredicate(context, capability), visible, options, key)),
+		count: bound(site, async (options?: unknown) => countRows(context, run, appListPredicate(context, capability), visible, options)),
+		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appListPredicate(context, capability), spec)),
+		get: bound(site, async (id: unknown) => {
+			const action = namedApp(context, capability)
+			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action))
+		}),
+		getForUpdate,
+		insert: writing(site, 'insert', async (values: unknown) => insertIntoApplication(context, run, capability, values)),
+		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
+			const grant = updatingApp(context, capability)
+			const changes = updateValues(values, updatableBy(model, grant.action), model)
+			return updateRow(context, run, { scope: appKeyPredicate(model, id) }, changes, versionArgument(context, options))
+		}),
+		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
+			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
+		}),
+	})
+}
+
 function referenceTables(parts: DataLayerParts, site: DataSite, run: Runner): object {
 	const handle: Record<string, unknown> = {}
 	const tables = ownKeys(parts.models)
@@ -453,7 +544,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 	const model = context.model
 	const table = model.name
 	const visible = model.visible
-	const keyed = model.scope.mode === 'dimension' || model.scope.mode === 'child'
+	const keyed = model.scope.mode === 'dimension' || model.scope.mode === 'child' || model.scope.mode === 'app'
 	const byKey = (id: unknown): OperationNode => {
 		if (!keyed) {
 			throw new QueryRefusedError('row_address', `${table} has no key; read it with list`)
@@ -501,7 +592,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
  */
 async function insertUnscoped(context: TableContext, run: Runner, principal: string, values: unknown): Promise<unknown> {
 	const model = context.model
-	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
+	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child' && model.scope.mode !== 'app') {
 		throw new QueryRefusedError('read_only', `${model.name} is a ${model.scope.mode} table, which no handler writes`)
 	}
 	const chain: string[] = []

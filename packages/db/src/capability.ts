@@ -12,6 +12,14 @@ export interface Within<Dim extends string, Action extends string> {
 	readonly '~capability': { readonly kind: 'within'; readonly dimension: Dim; readonly action: Action }
 }
 
+/**
+ * One action held as a global grant: the capability of an `app` endpoint, for data of the whole application. Like a
+ * `Ref`, the member is type-only.
+ */
+export interface AppCapability<Action extends string> {
+	readonly '~capability': { readonly kind: 'app'; readonly action: Action }
+}
+
 export interface RefGrant {
 	readonly kind: 'ref'
 	readonly dimension: string
@@ -48,7 +56,19 @@ export interface WithinGrant {
 	readonly containers: readonly ContainerGrant[]
 }
 
-export type CapabilityGrant = RefGrant | WithinGrant
+/** An `app` endpoint's grant: the action everywhere in the application, which the proxy checked was held globally. */
+export interface AppGrant {
+	readonly kind: 'app'
+	readonly action: string
+	readonly principal: string
+}
+
+export type CapabilityGrant = RefGrant | WithinGrant | AppGrant
+
+/** How a refusal names a capability: `a Ref of note`, `a Within of workspace`, `an app capability`. */
+export function describeGrant(grant: CapabilityGrant): string {
+	return grant.kind === 'app' ? 'an app capability' : `a ${grant.kind === 'ref' ? 'Ref' : 'Within'} of ${grant.dimension}`
+}
 
 /** One generation of a job's lease, held by one attempt. A write of the attempt commits only while it still holds it. */
 export interface LeaseFence {

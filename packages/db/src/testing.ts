@@ -64,6 +64,15 @@ export interface WorldRow {
 	readonly markers: readonly string[]
 }
 
+/** One seeded row of an application table, which lies in no dimension. */
+export interface ApplicationRow {
+	readonly key: string
+	/** The row's values of the policy's update columns, as seeded. */
+	readonly updates: Readonly<Record<string, SampleValue>>
+	/** The distinct value written into every text column the fixture filled itself. */
+	readonly markers: readonly string[]
+}
+
 /** One row of a table in each of two containment chains that share no value. */
 export interface IsolationWorlds {
 	/**
@@ -85,6 +94,8 @@ export interface TestDatabase {
 	 * marker, so a seed of one, or of a column that places the row, throws.
 	 */
 	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string, values?: Readonly<Record<string, SampleValue>>): Promise<IsolationWorlds>
+	/** Seeds one row of the application table `table`: its key, version and creator stamped, every other column sampled. */
+	seedRow<DB, P>(tables: Tables<DB, P>, table: string): Promise<ApplicationRow>
 	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled. */
 	sampleInsert<DB, P>(tables: Tables<DB, P>, table: string): Promise<Readonly<Record<string, SampleValue>>>
 	/** Closes the connections and drops the schema and its roles. */
@@ -351,7 +362,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	function placement(model: TableModel, values: ReadonlyMap<string, string>, key: string): Map<string, SampleValue> {
 		const assigned = new Map<string, SampleValue>()
 		const scope = model.scope
-		if (scope.mode === 'dimension' || scope.mode === 'child') {
+		if (scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app') {
 			assigned.set(scope.key, key)
 		}
 		for (const link of model.chain) {
@@ -436,6 +447,20 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			const { models, model } = scopedModel(tables, table)
 			const dimension = grantDimension(models, model)
 			return { dimension, own: await seedWorld(models, model, 'own', values), other: await seedWorld(models, model, 'other', values) }
+		},
+		async seedRow(tables, table) {
+			const { model } = scopedModel(tables, table)
+			if (model.scope.mode !== 'app') {
+				throw new Error(`${table} is a ${model.scope.mode} table; seedWorlds seeds a dimension or child table`)
+			}
+			const markers: string[] = []
+			const key = await scopeValue(table, model.scope.key, table, 'app')
+			const row = await insert(table, placement(model, new Map(), key), markers)
+			const updates: Record<string, SampleValue> = {}
+			for (const name of namesOf(model.update)) {
+				updates[name] = row.get(name) ?? await updateSample(table, name)
+			}
+			return { key, updates, markers }
 		},
 		async sampleInsert(tables, table) {
 			const { model } = scopedModel(tables, table)

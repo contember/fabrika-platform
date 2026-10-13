@@ -245,7 +245,7 @@ function unservable(
 			continue
 		}
 		const { access } = row.requirement
-		if (access.form === 'creates') {
+		if (access.form === 'creates' || access.form === 'app') {
 			continue
 		}
 		if (access.form === 'on' && access.from === null) {

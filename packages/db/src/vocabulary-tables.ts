@@ -122,19 +122,25 @@ type AuthoredDimensionPolicy<Col extends string, A extends string, V, Ver extend
 type AuthoredChildPolicy<Table extends string, Col extends string, A extends string, Ver extends Col, S, P> = WritableFields<Col, A, Ver> & {
 	readonly scope: ChildScopes<Table, Col, S, P>
 }
+/** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
+type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver> & {
+	readonly scope: { readonly app: string } & KeyField<Col>
+}
 
 /**
  * One table's policy as an application writes it under a vocabulary. `S` is its scope as written: its mode picks the
- * one policy form a mistake is reported against, rather than a union of all four. `P` is every policy as written.
+ * one policy form a mistake is reported against, rather than a union of all five. `P` is every policy as written.
  */
 export type VocabularyTablePolicy<Table extends string, Col extends string, A extends string, V, Ver extends Col, S = unknown, P = unknown> =
 	S extends { readonly dimension: unknown } ? AuthoredDimensionPolicy<Col, A, V, Ver, S>
 		: S extends { readonly child: unknown } ? AuthoredChildPolicy<Table, Col, A, Ver, S, P>
+		: S extends { readonly app: unknown } ? AuthoredApplicationPolicy<Col, A, Ver>
 		: S extends { readonly reference: unknown } ? ReferencePolicy<Col, A>
 		: S extends { readonly inbox: unknown } ? InboxPolicy<Col, A>
 		:
 			| AuthoredDimensionPolicy<Col, A, V, Ver, S>
 			| AuthoredChildPolicy<Table, Col, A, Ver, S, P>
+			| AuthoredApplicationPolicy<Col, A, Ver>
 			| ReferencePolicy<Col, A>
 			| InboxPolicy<Col, A>
 
@@ -181,6 +187,7 @@ type NormalScope<S, V, P> = S extends { readonly dimension: infer D extends stri
 			readonly column: S extends { readonly column: infer C extends string } ? C : `${ParentDimension<P, T>}_id`
 			readonly inherit: readonly string[]
 		}
+	: S extends { readonly app: infer R extends string } ? { readonly app: R; readonly key: KeyOf<S> }
 	: S
 
 /**

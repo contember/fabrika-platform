@@ -119,6 +119,11 @@ export interface CreatesAccess<A extends string, D extends string> {
 	readonly action: A
 	readonly creates: D
 }
+/** The action held as a global grant: data of the whole application (`ctx.db.app`). */
+export interface AppAccess<A extends string> {
+	readonly action: A
+	readonly app: true
+}
 export interface LinkAccess<A extends string> {
 	readonly action: A
 }
@@ -138,6 +143,7 @@ export type QueryAccess<A extends string, D extends string, In> =
 	| OverAccess<A, D>
 	| InAccess<A, D, StringField<In>>
 	| OnAccess<A, D, StringField<In>>
+	| AppAccess<A>
 
 export type MutationAccess<A extends string, D extends string, CD extends string, In> = QueryAccess<A, D, In> | CreatesAccess<A, CD>
 
@@ -275,7 +281,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 		} & Owned<'kind' | 'prefix'>,
 	): LinkMount<LD, G[number], IB, T>
 	/** The SPA under `prefix`: for signed-in people, or for anyone with `access: { public: true }`. */
-	spa<const Acc extends MemberAccess | OverAccess<A, D> | PublicAccess>(
+	spa<const Acc extends MemberAccess | OverAccess<A, D> | AppAccess<A> | PublicAccess>(
 		prefix: Path,
 		options: { readonly dir: string; readonly access: Acc } & Owned<'kind' | 'prefix'>,
 	): SpaMount<Acc>

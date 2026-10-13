@@ -137,7 +137,8 @@ bun test               # app-environment · canonical-path · contract-canonical
   method is never a pattern: a request sent as `*` selects only a `*` row.
 - **`satisfies(requirement, perms)` is the requirement check.** `member` is any permission of the
   application; an action form is that action in some scope, including global, through `permits` over
-  each entry's own scope. The proxy runs it as part of its decision; the framework repeats it as
+  each entry's own scope. The `app` form (`{ form: 'app' }`, data of the whole application) is the action held as a
+  global grant only: an entry with any scope does not meet it. The proxy runs it as part of its decision; the framework repeats it as
   authorization, which never replaces the proxy's decision.
   Scopes stay flat here: the framework resolves a containment chain, and each link is checked as a
   flat scope.

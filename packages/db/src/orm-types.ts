@@ -6,6 +6,7 @@ import type { Selectable, Updateable } from 'kysely'
 import type { ConditionTuple } from './description'
 import type {
 	ActionOf,
+	ApplicationTableName,
 	ChildTableName,
 	ContainerOf,
 	DimensionOf,
@@ -34,6 +35,7 @@ type PolicyOf<P, T> = T extends keyof P ? P[T] : never
 
 type ModeOf<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S extends { readonly dimension: string } ? 'dimension'
 	: S extends { readonly child: string } ? 'child'
+	: S extends { readonly app: string } ? 'app'
 	: S extends { readonly reference: string } ? 'reference'
 	: 'inbox'
 	: never
@@ -67,7 +69,7 @@ type ColumnWriteAction<C> = { [K in keyof C]: C[K] extends { readonly write: inf
 
 /** One table, as every handle reads it. */
 export interface IndexedTable {
-	readonly mode: 'dimension' | 'child' | 'reference' | 'inbox'
+	readonly mode: 'dimension' | 'child' | 'app' | 'reference' | 'inbox'
 	/** The dimension a dimension table owns. */
 	readonly dimension: string
 	/** The dimension its rows are listed and inserted in: the container's, or a top-level table's own. */
@@ -161,6 +163,10 @@ export type DbIndex<DB, P, V = unknown> = {
 	/** Dimension → the tables an `over` of it lists: each whose containment chain holds it, and a top-level table its own. */
 	readonly within: { readonly [T in DimensionTableName<P> | ChildTableName<P> as ReachOf<P, T, V>]: T }
 	readonly references: ReferenceTableName<P>
+	/** The application tables: an `app` endpoint reads and writes them. */
+	readonly applications: ApplicationTableName<P>
+	/** The dimension and child tables: an `app` endpoint reads each whose read action is its own. */
+	readonly records: DimensionTableName<P> | ChildTableName<P>
 }
 
 /** What every handle type takes: a `DbIndex`. */
@@ -171,6 +177,8 @@ export interface AnyDbIndex {
 	readonly listed: object
 	readonly within: object
 	readonly references: string
+	readonly applications: string
+	readonly records: string
 }
 
 type TableName<Ix extends AnyDbIndex> = keyof Ix['tables'] & string
@@ -327,16 +335,18 @@ export type ScopeTarget<Ix extends AnyDbIndex, D extends string, A extends strin
 
 /** A table listed in an `over` endpoint's dimension, read through its `Within`. */
 export interface WithinRows<T extends string, E extends IndexedTable, A extends string> {
-	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>> : WithinRead<T, E, A>
-	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : WithinRead<T, E, A>
+	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
+		: Unavailable<ListRefusal<T, E, A>>
+	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : Unavailable<ListRefusal<T, E, A>>
 	readonly aggregate: A extends E['actions']['read']
 		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
-		: WithinRead<T, E, A>
+		: Unavailable<ListRefusal<T, E, A>>
 }
 
-type WithinRead<T extends string, E extends IndexedTable, A extends string> = Unavailable<
-	`a list of ${T} needs its read action '${E['actions']['read'] & string}', and this endpoint holds '${A}'`
->
+/** Inlined where used: an alias of its own would be printed by name, with the table's index entry spelled out. */
+type ListRefusal<T extends string, E extends IndexedTable, A extends string> = `a list of ${T} needs its read action '${
+	& E['actions']['read']
+	& string}', and this endpoint holds '${A}'`
 
 /**
  * `ctx.db.within` of an `over` endpoint: every table whose containment chain holds its dimension (tasks two levels
@@ -345,6 +355,39 @@ type WithinRead<T extends string, E extends IndexedTable, A extends string> = Un
 export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends string> = {
 	readonly [T in WithinIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A>
 }
+
+/** An application table under the capability of an `app` endpoint of action `A`, in a site of kind `K`. */
+export interface ApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
+	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
+		: Unavailable<ListRefusal<T, E, A>>
+	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : Unavailable<ListRefusal<T, E, A>>
+	readonly aggregate: A extends E['actions']['read']
+		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
+		: Unavailable<ListRefusal<T, E, A>>
+	/** One row by its key; a column that declares another read action than `A` is hidden. */
+	readonly get: Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
+	/** `SELECT … FOR UPDATE` of one row by its key: a precondition read that no concurrent write overtakes. */
+	readonly getForUpdate: K extends 'mutation' ? Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
+		: K extends 'job' ? Unavailable<'a job writes inside ctx.transaction((tx) => …): use tx.db there'>
+		: Unavailable<'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation'>
+	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
+	readonly update: Update<
+		T,
+		E,
+		A,
+		K,
+		(key: string, values: { [C in keyof UpdateValuesOf<E, A>]: UpdateValuesOf<E, A>[C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>
+	>
+	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
+}
+
+/**
+ * `ctx.db.app` of an `app` endpoint: every application table, and every dimension and child table read-only, all
+ * rows, where the endpoint's action is its read action (`over` with `'all'` reads them so).
+ */
+export type ApplicationTables<Ix extends AnyDbIndex, A extends string, K extends DataKind> =
+	& { readonly [T in Ix['applications']]: ApplicationRows<T, Ix['tables'][T], A, K> }
+	& { readonly [T in Ix['records']]: WithinRows<T, Ix['tables'][T], A> }
 
 /** The row a site reads without a capability of its own: through the table's read action. */
 type TableRow<E extends IndexedTable> = RowFor<E, E['actions']['read']>

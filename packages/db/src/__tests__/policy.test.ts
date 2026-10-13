@@ -299,3 +299,41 @@ describe('the parsed model', () => {
 		expect(modelOf(models, 'contact_messages')?.actions.read).toBe('contact.read')
 	})
 })
+
+describe('an application table', () => {
+	const settings = {
+		scope: { app: 'settings an administrator edits' },
+		actions: { read: 'notes.read', insert: 'notes.admin', update: 'notes.admin', delete: 'notes.admin' },
+		insert: ['name'],
+		update: ['name'],
+		version: 'version',
+		createdBy: 'created_by',
+	}
+	const withSettings = (policy: unknown, settingsColumns: readonly string[] = ['id', 'name', 'version', 'created_by']) =>
+		define({ ...columns, settings: settingsColumns }, { notes, note_comments: comments, countries, settings: policy })
+
+	test('lies in no dimension: its key defaults to id, and it carries no containment chain', () => {
+		const model = modelOf(tableModels(withSettings(settings)), 'settings')
+		expect(model?.scope).toEqual({ mode: 'app', reason: 'settings an administrator edits', key: 'id' })
+		expect(model?.chain).toEqual([])
+		expect(model?.actions).toEqual({ read: 'notes.read', insert: 'notes.admin', update: 'notes.admin', delete: 'notes.admin' })
+	})
+
+	test('names its key off the convention, and refuses a field another scope takes', () => {
+		const keyed = { ...settings, scope: { app: 'settings', key: 'code' } }
+		expect(modelOf(tableModels(withSettings(keyed, ['code', 'name', 'version', 'created_by'])), 'settings')?.scope).toEqual({
+			mode: 'app',
+			reason: 'settings',
+			key: 'code',
+		})
+		expect(() => withSettings({ ...settings, scope: { app: 'settings', dimension: 'workspace' } })).toThrow(PolicyError)
+		expect(() => withSettings({ ...settings, scope: { app: '' } })).toThrow('settings: scope.app must be a non-empty string')
+	})
+
+	test('stamps its key like a dimension table: the key is never written, and takes no action of its own', () => {
+		expect(() => withSettings({ ...settings, insert: ['id', 'name'] })).toThrow(
+			'settings: id is stamped by the layer; remove it from insert and update',
+		)
+		expect(() => withSettings({ ...settings, columns: { id: { read: 'notes.admin' } } })).toThrow('settings: the key id takes no action of its own')
+	})
+})

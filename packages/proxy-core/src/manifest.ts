@@ -143,6 +143,7 @@ const accessFormSchema = z.discriminatedUnion('form', [
 	z.object({ form: z.literal('in'), dimension: nameSchema, from: nameSchema }).strict(),
 	z.object({ form: z.literal('on'), dimension: nameSchema, from: nameSchema.nullable() }).strict(),
 	z.object({ form: z.literal('creates'), dimension: nameSchema }).strict(),
+	z.object({ form: z.literal('app') }).strict(),
 ])
 const requirementSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('member') }).strict(),

@@ -721,7 +721,7 @@ class ArtifactBuilder {
 				where,
 				`access ${
 					JSON.stringify(access)
-				} is not one access form (allowed: { member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates })`,
+				} is not one access form (allowed: { member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true })`,
 			)
 			return null
 		}
@@ -729,7 +729,9 @@ class ArtifactBuilder {
 			return { kind: 'member' }
 		}
 		this.#knownAction(where, form.action)
-		this.#knownDimension(where, form.access.dimension)
+		if (form.access.form !== 'app') {
+			this.#knownDimension(where, form.access.dimension)
+		}
 		if ('from' in access) {
 			this.#fromField(where, procedure.input, access.from)
 		}
@@ -775,7 +777,14 @@ class ArtifactBuilder {
 			this.#knownDimension(where, access.over)
 			return { kind: 'action', action: access.action, access: { form: 'over', dimension: access.over } }
 		}
-		this.#problem(where, `access ${JSON.stringify(access)} is not an SPA access (allowed: { member: true }, { action, over } or { public: true })`)
+		if (hasExactKeys(access, ['action', 'app']) && 'app' in access && access.app === true) {
+			this.#knownAction(where, access.action)
+			return { kind: 'action', action: access.action, access: { form: 'app' } }
+		}
+		this.#problem(
+			where,
+			`access ${JSON.stringify(access)} is not an SPA access (allowed: { member: true }, { action, over }, { action, app: true } or { public: true })`,
+		)
 		return null
 	}
 
@@ -1057,6 +1066,11 @@ class ArtifactBuilder {
 				if (!('action' in procedure.access)) {
 					// The consumer's key holds exactly the export's actions, so a `member` procedure would have none to hold.
 					this.#problem(`procedure '${id}'`, 'an export procedure names its action (allowed: { action, over })')
+				} else if ('app' in procedure.access) {
+					this.#problem(
+						`procedure '${id}'`,
+						'an export procedure reads in one dimension (allowed: { action, over }, { action, in, from }, { action, on, from })',
+					)
 				}
 				if (procedure.attachment !== undefined) {
 					this.#problem(`procedure '${id}'`, 'an export answers its consumers JSON; an attachment() is for an RPC or a link procedure')
@@ -1096,14 +1110,20 @@ class ArtifactBuilder {
 			this.#problem(where, 'exports no procedure (allowed: procedures: { <name>: c.query({ … }) })')
 			return null
 		}
-		const description: EndpointRequirement = first.kind === 'member'
+		const dimensionOf = (requirement: EndpointRequirement): string | null =>
+			requirement.kind === 'action' && requirement.access.form !== 'app' ? requirement.access.dimension : null
+		const dimension = dimensionOf(first)
+		if (first.kind === 'action' && dimension === null) {
+			// `#exports` refused the app form already: a description needs one dimension.
+			return null
+		}
+		const description: EndpointRequirement = first.kind === 'member' || dimension === null
 			? first
-			: { kind: 'action', action: first.action, access: { form: 'over', dimension: first.access.dimension } }
+			: { kind: 'action', action: first.action, access: { form: 'over', dimension } }
 		const same = requirements.every((requirement) =>
 			requirement !== null && (requirement.kind === 'member'
 				? description.kind === 'member'
-				: description.kind === 'action' && requirement.action === description.action
-					&& requirement.access.dimension === description.access.dimension)
+				: description.kind === 'action' && requirement.action === description.action && dimensionOf(requirement) === dimension)
 		)
 		if (!same) {
 			this.#problem(where, 'its procedures need different actions or dimensions (allowed: one action in one dimension for every procedure of an export)')
@@ -1621,6 +1641,9 @@ function accessForm(access: AccessDeclaration): ResolvedAccess | null {
 		return hasExactKeys(access, ['action', 'creates'])
 			? { form: 'action', action: access.action, access: { form: 'creates', dimension: access.creates } }
 			: null
+	}
+	if ('app' in access) {
+		return hasExactKeys(access, ['action', 'app']) && access.app === true ? { form: 'action', action: access.action, access: { form: 'app' } } : null
 	}
 	return null
 }

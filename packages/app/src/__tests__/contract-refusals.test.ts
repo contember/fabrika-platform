@@ -280,10 +280,34 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			},
 		}))
 		expect(problems.filter((problem) => problem.startsWith('procedure'))).toEqual([
-			`procedure 'api.mixed': access {"member":true,"action":"notes.read","over":"workspace"} is not one access form (allowed: { member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates })`,
+			`procedure 'api.mixed': access {"member":true,"action":"notes.read","over":"workspace"} is not one access form (allowed: { member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true })`,
 			"procedure 'api.typo': 'notes.raed' is not an action of the contract — did you mean 'notes.read'?",
 			"procedure 'api.optional': access.from 'id' is not a required string field of the input (allowed: a string, a string literal or an enum)",
 			"procedure 'api.create': creates a 'workspace' in a query (allowed: c.mutation)",
+		])
+	})
+
+	test('an app form beside a dimension, on an RPC procedure and on an export procedure', () => {
+		const products = base.exports['products']
+		if (products === undefined) {
+			throw new Error('the notes fixture changed')
+		}
+		// A const, not a literal: the types refuse the literal, and a reader of source could still produce this value.
+		const both = { action: 'notes.read', app: true, over: 'workspace' } as const
+		const problems = build({
+			...withMounts({
+				...base.mounts,
+				api: { ...api, procedures: { both: { '~kind': 'procedure', type: 'query', input: null, output, access: both } } },
+			}),
+			exports: {
+				...base.exports,
+				products: { ...products, procedures: { list: { '~kind': 'procedure', type: 'query', input: null, output, access: both } } },
+			},
+		})
+		expect(problems.filter((problem) => problem.startsWith('procedure'))).toEqual([
+			expect.stringContaining(`procedure 'api.both': access {"action":"notes.read","app":true,"over":"workspace"} is not one access form`),
+			"procedure 'products.v1.list': an export procedure reads in one dimension (allowed: { action, over }, { action, in, from }, { action, on, from })",
+			expect.stringContaining(`procedure 'products.v1.list': access {"action":"notes.read","app":true,"over":"workspace"} is not one access form`),
 		])
 	})
 

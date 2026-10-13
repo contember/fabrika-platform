@@ -59,7 +59,7 @@ const CONTRACT_ALLOWED = 'export const contract = app.contract((c) => ({ … }))
 
 /** Which builders a surface is written with: `defineContract`'s `c`, or the staged kit's (`app.*` and its `c`). */
 type Form = 'surface' | 'kit'
-const ACCESS_ALLOWED = '{ member: true }, { action, over }, { action, in, from }, { action, on, from } or { action, creates }'
+const ACCESS_ALLOWED = '{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates } or { action, app: true }'
 
 type Entries = ReadonlyMap<string, LiteralValue>
 
@@ -856,6 +856,12 @@ function isMember(fields: Entries): boolean {
 	return hasKeys(fields, ['member']) && member?.kind === 'boolean' && member.value
 }
 
+/** `{ action, app: true }`: `app` is the literal `true`, as `buildArtifact` reads it. */
+function isApp(fields: Entries): boolean {
+	const app = fields.get('app')
+	return hasKeys(fields, ['action', 'app']) && app?.kind === 'boolean' && app.value
+}
+
 /** The one access form the object spells, with exactly its keys, as `buildArtifact` reads it. */
 function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): AccessDeclaration {
 	const fields = accessFields(value, at, ACCESS_ALLOWED)
@@ -875,14 +881,23 @@ function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): A
 	if (hasKeys(fields, ['action', 'creates'])) {
 		return { action: field('action'), creates: field('creates') }
 	}
+	if (isApp(fields)) {
+		return { action: field('action'), app: true }
+	}
 	throw new Refused(value?.at ?? at.at, 'access is not one access form', ACCESS_ALLOWED)
 }
 
-/** An export procedure names its action: the consumer's key holds exactly the actions, so `member` would hold none. */
+/**
+ * An export procedure names its action in a dimension: the consumer's key holds exactly the actions, so `member` would
+ * hold none, and a v1 export declares one dimension, which `app` names none of.
+ */
 function exportAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue): ExportAccessDeclaration {
 	const access = accessDeclaration(value, at)
 	if ('member' in access) {
 		throw new Refused(value?.at ?? at.at, 'an export procedure names its action', '{ action, over } (or in, on, creates)')
+	}
+	if ('app' in access) {
+		throw new Refused(value?.at ?? at.at, 'an export procedure reads in one dimension', '{ action, over } (or in, on)')
 	}
 	return access
 }
@@ -895,7 +910,7 @@ function linkAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue
 	return { action: text(fields.get('action'), value ?? at, 'access.action') }
 }
 
-const SPA_ACCESS_ALLOWED = '{ member: true }, { action, over } or { public: true }'
+const SPA_ACCESS_ALLOWED = '{ member: true }, { action, over }, { action, app: true } or { public: true }'
 
 function spaAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue): SpaAccessDeclaration {
 	const fields = accessFields(value, at, SPA_ACCESS_ALLOWED)
@@ -908,6 +923,9 @@ function spaAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue)
 	}
 	if (hasKeys(fields, ['action', 'over'])) {
 		return { action: text(fields.get('action'), value ?? at, 'access.action'), over: text(fields.get('over'), value ?? at, 'access.over') }
+	}
+	if (isApp(fields)) {
+		return { action: text(fields.get('action'), value ?? at, 'access.action'), app: true }
 	}
 	throw new Refused(value?.at ?? at.at, 'access is not an SPA access', SPA_ACCESS_ALLOWED)
 }

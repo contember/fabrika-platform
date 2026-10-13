@@ -23,7 +23,7 @@ import {
 	ValueNode,
 } from 'kysely'
 import { freeze, ownEntry } from './builtins'
-import type { RefGrant } from './capability'
+import { describeGrant, type RefGrant } from './capability'
 import { type Session, sessionOf } from './database'
 import { CapabilityError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { FILE_COLUMNS, type FileStatus, tableOf } from './file-table-sql'
@@ -272,7 +272,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		const grant = runtime().capabilities.resolve(capability)
 		if (grant.kind !== 'ref' || grant.dimension !== dimension || grant.action !== action) {
 			throw new CapabilityError(
-				`files '${spec.name}' needs a Ref of ${dimension} for ${action}, got a ${grant.kind} of ${grant.dimension} for ${grant.action}`,
+				`files '${spec.name}' needs a Ref of ${dimension} for ${action}, got ${describeGrant(grant)} for ${grant.action}`,
 			)
 		}
 		return grant
