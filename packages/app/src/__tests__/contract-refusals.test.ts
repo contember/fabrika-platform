@@ -419,6 +419,28 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(appSchemaSchema.safeParse(translated).success).toBe(false)
 	})
 
+	test('assignableBy names a membership role of the same dimension or an application-wide role, and IAM takes it unchanged', () => {
+		const assignable = (assignableBy: readonly string[]) => ({
+			...base,
+			roles: {
+				...base.roles,
+				author: { grants: ['notes.read'], member: { scope: 'note', assignableBy: ['author'] } },
+				editor: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy } },
+			},
+		})
+		const artifact = buildArtifact(assignable(['owner', 'support']), notesArtifact.tables)
+		expect(artifact.roles['editor']?.member).toEqual({ scope: 'workspace', assignableBy: ['owner', 'support'] })
+		const schema = schemaFromContract(parseContractArtifact(artifact))
+		expect(schema.roles['editor']?.member).toEqual({ scope: 'workspace', assignableBy: ['owner', 'support'] })
+		expect(appSchemaSchema.safeParse(schema).success).toBe(true)
+
+		expect(build(assignable(['author', 'nobody', 'toString']))).toEqual(
+			['author', 'nobody', 'toString'].map((assigner) =>
+				`role 'editor': is assignable by '${assigner}', which is neither a membership role of 'workspace' nor an application-wide role (a role with no member)`
+			),
+		)
+	})
+
 	test("a role named after one of IAM's own roles", () => {
 		const problems = build({ ...base, roles: { ...base.roles, admin: { grants: ['notes.read'] } } })
 		expect(problems).toEqual(["role 'admin': is a role IAM defines itself for every application (reserved: admin); choose another name"])

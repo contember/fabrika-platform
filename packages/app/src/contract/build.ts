@@ -420,8 +420,12 @@ class ArtifactBuilder {
 					this.#problem(where, `is a membership role of '${scope}', which is not a dimension of the contract`)
 				}
 				for (const assigner of role.member.assignableBy) {
-					if (this.#contract.roles[assigner]?.member?.scope !== scope) {
-						this.#problem(where, `is assignable by '${assigner}', which is not a membership role of '${scope}'`)
+					const assigning = Object.hasOwn(this.#contract.roles, assigner) ? this.#contract.roles[assigner] : undefined
+					if (assigning === undefined || (assigning.member !== undefined && assigning.member.scope !== scope)) {
+						this.#problem(
+							where,
+							`is assignable by '${assigner}', which is neither a membership role of '${scope}' nor an application-wide role (a role with no member)`,
+						)
 					}
 				}
 			}

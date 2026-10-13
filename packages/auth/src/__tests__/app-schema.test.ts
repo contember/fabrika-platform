@@ -76,13 +76,19 @@ describe('appSchemaSchema — membership metadata', () => {
 		)
 	})
 
-	test('assignableBy names only membership roles of the same scope', () => {
-		const schema = notes()
-		const roles = {
-			...schema.roles,
-			editor: { name: 'Editor', permissions: ['notes.read'], member: { scope: 'workspace', assignableBy: ['starter'] } },
-		}
-		expect(messages({ ...schema, roles })).toEqual(['role `editor` is assignable only by a membership role of its scope, not `starter`'])
+	test('assignableBy names a membership role of the same scope or an application-wide role', () => {
+		const schema = notes({ scopes: [...notes().scopes, { type: 'team' }] })
+		const lead = { name: 'Lead', permissions: ['notes.read'], member: { scope: 'team' } }
+		const assignable = (assignableBy: string[]) => ({
+			...schema,
+			roles: { ...schema.roles, lead, editor: { name: 'Editor', permissions: ['notes.read'], member: { scope: 'workspace', assignableBy } } },
+		})
+		expect(messages(assignable(['owner', 'starter']))).toEqual([])
+		expect(messages(assignable(['lead', 'admin', 'nobody']))).toEqual([
+			'role `editor` is assignable only by a membership role of its scope or an application-wide role, not `lead`',
+			'role `editor` is assignable only by a membership role of its scope or an application-wide role, not `admin`',
+			'role `editor` is assignable only by a membership role of its scope or an application-wide role, not `nobody`',
+		])
 	})
 
 	test('a link mount names a declared scope, exact grants and an exact issuing action, for at most a year', () => {

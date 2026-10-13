@@ -222,8 +222,9 @@ async function manageAuthority(
 
 /**
  * Could `actor` give `role` in `scope`? The role is a membership role of the scope's dimension, the actor
- * holds there a role that `assignableBy` names, and the role grants nothing the actor lacks there. The
- * same question decides an assignment, a revocation and, again at acceptance, an invitation.
+ * holds a role that `assignableBy` names — there, or an application-wide role globally — and the role grants
+ * nothing the actor lacks there. The same question decides an assignment, a revocation and, again at
+ * acceptance, an invitation.
  */
 async function roleAuthorityProblem(
 	services: Services,
@@ -235,7 +236,7 @@ async function roleAuthorityProblem(
 		return invalid(`role '${role.role_key}' is not a membership role of scope '${scope.type}'`)
 	}
 	const assigners = role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
-	const held = (await services.repositories.membership.listRoleGrantsAt(actor.app, actor.principalId, scope)).map((grant) => grant.role_key)
+	const held = (await services.repositories.membership.listAssigningGrants(actor.app, actor.principalId, scope)).map((grant) => grant.role_key)
 	if (!assigners.some((assigner) => held.includes(assigner))) {
 		return NOT_ALLOWED
 	}

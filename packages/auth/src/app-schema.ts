@@ -74,6 +74,11 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 		const role = Object.hasOwn(schema.roles, key) ? schema.roles[key] : undefined
 		return role?.member?.scope === dimension
 	}
+	// IAM counts an application-wide role (no `member`) held globally as an assigner in every value (ADR-0022 rule 6).
+	const assignerOf = (key: string, dimension: string): boolean => {
+		const role = Object.hasOwn(schema.roles, key) ? schema.roles[key] : undefined
+		return role !== undefined && !BUILTIN_ROLE_KEYS.includes(key) && (role.member === undefined || role.member.scope === dimension)
+	}
 
 	for (const [index, scope] of schema.scopes.entries()) {
 		if (scope.in !== undefined && (scope.in === scope.type || !dimensions.has(scope.in))) {
@@ -117,10 +122,10 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 			issues.push({ path: ['roles', key, 'external'], message: `role ${quote(key)} is declared external and is not a membership role` })
 		}
 		for (const [index, assigner] of (role.member?.assignableBy ?? []).entries()) {
-			if (role.member !== undefined && !membershipRoleOf(assigner, role.member.scope)) {
+			if (role.member !== undefined && !assignerOf(assigner, role.member.scope)) {
 				issues.push({
 					path: ['roles', key, 'member', 'assignableBy', index],
-					message: `role ${quote(key)} is assignable only by a membership role of its scope, not ${quote(assigner)}`,
+					message: `role ${quote(key)} is assignable only by a membership role of its scope or an application-wide role, not ${quote(assigner)}`,
 				})
 			}
 		}

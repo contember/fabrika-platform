@@ -250,6 +250,50 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
 	})
 
+	test("an acceptance waits for a removal that holds a staff inviter's global grant, then grants nothing", async () => {
+		if (fixture === null || postgresUrl === null) throw new Error('fixture')
+		const email = new CapturingEmail()
+		const f = await membershipFixture(repositories, { email })
+		fixtureSeq += 1
+		const scope = await workspaceOf(f, await f.person(`global-owner-${fixtureSeq}`))
+		const staff = await f.person(`global-staff-${fixtureSeq}`)
+		await repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff' })
+		const invited = await assignMember(f.services, CALLER_ENV, f.ctx, {
+			...(await delegated(f, staff)),
+			scope,
+			role: 'editor',
+			member: { email: `global-invitee-${fixtureSeq}@example.test` },
+		})
+		expect(invited).toMatchObject({ ok: true, invited: {} })
+		const invitee = await f.person(`global-invitee-${fixtureSeq}`)
+		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		if (invitation === null) throw new Error('fixture')
+
+		// The removal's transaction has deleted the staff member's global grant and not committed yet.
+		const removal = new SQL({ url: postgresUrl, max: 1, connection: { search_path: fixture.schema } })
+		const reserved = await removal.reserve()
+		try {
+			await reserved.unsafe('BEGIN')
+			await reserved.unsafe('DELETE FROM grants WHERE app = $1 AND principal_id = $2 AND role_key = $3 AND scope_value IS NULL', [
+				APP,
+				staff.id,
+				'staff',
+			])
+			let settled = false
+			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner', 'manager', 'staff']).finally(() => {
+				settled = true
+			})
+			await Bun.sleep(300)
+			expect(settled).toBe(false)
+			await reserved.unsafe('COMMIT')
+			expect(await acceptance).toBe('not_allowed')
+		} finally {
+			reserved.release()
+			await removal.close()
+		}
+		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
+	})
+
 	test('a link issued while a reconcile removes its mount is never left usable', async () => {
 		const f = await membershipFixture(repositories)
 		fixtureSeq += 1

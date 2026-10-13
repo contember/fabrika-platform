@@ -72,7 +72,8 @@ export interface RoleDef {
 	permissions: string[]
 	/**
 	 * A membership role is granted only in a value of `scope`, never globally. `assignableBy` names the
-	 * membership roles of the same scope whose holders may assign it there; absent, only an IAM
+	 * roles whose holders may assign it there: a membership role of the same scope, held there, or an
+	 * application-wide role (one with no `member`), held there or globally. Absent, only an IAM
 	 * administrator assigns it.
 	 */
 	member?: { scope: string; assignableBy?: string[] }

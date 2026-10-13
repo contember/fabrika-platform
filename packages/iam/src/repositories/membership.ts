@@ -64,6 +64,14 @@ const RENEW_EXPIRED_MEMBERSHIP = `ON CONFLICT (principal_id, role_key, scope_typ
  * How an acceptance ended: written; refused because the inviter holds no assigning role there now, or because the
  * accepting principal may not hold the role (ADR-0051); or no longer open.
  */
+/**
+ * The grants that make their holder an assigner in the value bound next (type, value): a role grant in exactly that
+ * value, or a global grant of an application-wide role, one with no `member_scope` (ADR-0022 rule 6).
+ */
+const ASSIGNING_GRANT = `((grants.scope_type = ? AND grants.scope_value = ?)
+	OR (grants.scope_type IS NULL AND grants.scope_value IS NULL AND EXISTS (
+		SELECT 1 FROM roles WHERE roles.app = grants.app AND roles.role_key = grants.role_key AND roles.member_scope IS NULL)))`
+
 export type InvitationAcceptance = 'accepted' | 'not_allowed' | 'not_eligible' | 'not_open'
 
 export interface MembershipRepositoryOptions {
@@ -148,6 +156,18 @@ export class MembershipRepository {
 		const { results } = await this.db
 			.prepare(`SELECT * FROM grants
 				WHERE app = ? AND principal_id = ? AND role_key IS NOT NULL AND scope_type = ? AND scope_value = ?
+					AND (expires_at IS NULL OR expires_at > ?)
+				ORDER BY role_key`)
+			.bind(app, principalId, scope.type, scope.value, unixNow())
+			.all<GrantRow>()
+		return results
+	}
+
+	/** The active role grants that make a principal an assigner in `scope` (`ASSIGNING_GRANT`). */
+	async listAssigningGrants(app: string, principalId: string, scope: Scope): Promise<GrantRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT * FROM grants
+				WHERE app = ? AND principal_id = ? AND role_key IS NOT NULL AND ${ASSIGNING_GRANT}
 					AND (expires_at IS NULL OR expires_at > ?)
 				ORDER BY role_key`)
 			.bind(app, principalId, scope.type, scope.value, unixNow())
@@ -385,8 +405,9 @@ export class MembershipRepository {
 	/**
 	 * Accept an invitation for `principalId` and write its grant, in one transaction. The guarded UPDATE
 	 * stamps a fresh acceptance id on the invitation only when it is still open AND the inviter still holds one
-	 * of `assigners` in the value — the authority re-check is part of the statement that consumes the
-	 * invitation, so a removal of the inviter cannot land between a check and the write. The grant is written
+	 * of `assigners` in the value or, an application-wide role, globally (`ASSIGNING_GRANT`) — the authority
+	 * re-check is part of the statement that consumes the invitation, so a removal of the inviter cannot land
+	 * between a check and the write. The grant is written
 	 * only for the attempt holding that id — never on the strength of a timestamp another attempt can share.
 	 * An expired grant of the role is renewed; an active one is left as it is. A refused acceptance leaves the
 	 * invitation open. `audit` is written only for the attempt holding the acceptance id, in the same batch.
@@ -408,7 +429,7 @@ export class MembershipRepository {
 				WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
 					AND EXISTS (
 						SELECT 1 FROM grants
-						WHERE app = ? AND principal_id = ? AND scope_type = ? AND scope_value = ? AND role_key IN (${placeholders})
+						WHERE app = ? AND principal_id = ? AND ${ASSIGNING_GRANT} AND role_key IN (${placeholders})
 							AND (expires_at IS NULL OR expires_at > ?)
 						${this.#inviterLock})
 					AND ${this.#eligible}

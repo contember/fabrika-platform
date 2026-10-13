@@ -75,7 +75,10 @@ export interface DimensionDef<A extends string, D extends string, R extends stri
 export interface RoleDef<A extends string, D extends string, R extends string> {
 	/** Exact actions only: `'*'` and `'notes.*'` are not actions of this contract. */
 	readonly grants: readonly A[]
-	/** A membership role, granted in one value of `scope` by a holder of an `assignableBy` role there. */
+	/**
+	 * A membership role, granted in one value of `scope`. `assignableBy` names who may assign it there: a holder of one
+	 * of its membership roles of `scope` in that value, or of an application-wide role (one with no `member`) globally.
+	 */
 	readonly member?: { readonly scope: D; readonly assignableBy: readonly R[] }
 	/**
 	 * An external principal, a person from outside the organization, may hold this membership role (ADR-0051). Absent,

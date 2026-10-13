@@ -47,10 +47,12 @@ export const NOTES_SCHEMA: AppSchema = {
 	roles: {
 		starter: { name: 'Starter', permissions: ['workspaces.create'] },
 		support: { name: 'Support', permissions: ['notes.read', 'notes.admin'] },
+		// An application-wide role that assigns an editor in every workspace it holds the actions in.
+		staff: { name: 'Staff', permissions: ['notes.read', 'notes.write', 'notes.share', 'notes.admin'] },
 		editor: {
 			name: 'Editor',
 			permissions: ['notes.read', 'notes.write', 'notes.share'],
-			member: { scope: 'workspace', assignableBy: ['owner', 'manager'] },
+			member: { scope: 'workspace', assignableBy: ['owner', 'manager', 'staff'] },
 		},
 		manager: {
 			name: 'Manager',

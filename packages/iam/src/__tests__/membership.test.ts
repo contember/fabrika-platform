@@ -10,6 +10,7 @@ import {
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
+import { ExternalGrantError } from '../db'
 import {
 	acceptInvitation,
 	assignMember,
@@ -434,6 +435,106 @@ describe('members.assign by email: an invitation only the verified mailbox can a
 		const scope = await workspaceOf(f, owner)
 		expect(await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })).toEqual({ ok: false, reason: 'delivery_failed' })
 		expect(await f.repositories.membership.listOpenInvitations(APP, scope)).toEqual([])
+	})
+})
+
+describe('an application-wide role in assignableBy assigns in every value, held globally', () => {
+	/** A staff member holding only the global `staff` role, which `editor`'s `assignableBy` names. */
+	async function staffOf(f: MembershipFixture): Promise<{ staff: Person; grantId: string }> {
+		const staff = await f.person('staff')
+		const grant = await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff' })
+		if (grant === null) throw new Error('fixture')
+		return { staff, grantId: grant.id }
+	}
+
+	test('a staff member assigns an editor by id into a workspace it did not create, and no owner', async () => {
+		const f = await fixture()
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const { staff } = await staffOf(f)
+		const target = await f.person('target')
+		expect(await rolesOf(f, staff, scope)).toEqual([])
+		expect(await assign(f, staff, scope, 'editor', { principalId: target.id })).toEqual({
+			ok: true,
+			assigned: { principalId: target.id, role: 'editor' },
+		})
+		expect(await rolesOf(f, target, scope)).toEqual(['editor'])
+		// `owner` names only itself: the global role gives no authority over it.
+		expect(await assign(f, staff, scope, 'owner', { principalId: target.id })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await revoke(f, staff, scope, { principalId: target.id })).toEqual({ ok: true })
+		expect(await rolesOf(f, target, scope)).toEqual([])
+	})
+
+	test('a staff member invites by e-mail, and the invitation is accepted', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const { staff } = await staffOf(f)
+		expect(await assign(f, staff, scope, 'editor', { email: 'invitee@example.test' })).toMatchObject({ ok: true, invited: {} })
+		const invitee = await f.repositories.principals.getPrincipalById((await f.person('invitee')).id)
+		if (invitee === null) throw new Error('fixture')
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toMatchObject({ ok: true })
+		expect(await rolesOf(f, { id: invitee.id, token: () => Promise.reject(new Error('unused')) }, scope)).toEqual(['editor'])
+	})
+
+	test('after the staff member loses the global role, the open invitation is not_allowed and stays open', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const { staff, grantId } = await staffOf(f)
+		await assign(f, staff, scope, 'editor', { email: 'invitee@example.test' })
+		expect(await f.repositories.grants.deleteGrant(grantId)).toBe(true)
+		const invitee = await f.repositories.principals.getPrincipalById((await f.person('invitee')).id)
+		if (invitee === null) throw new Error('fixture')
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
+		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])
+	})
+
+	test('the guarded acceptance write counts the global grant, and refuses once it is gone', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const { staff, grantId } = await staffOf(f)
+		await assign(f, staff, scope, 'editor', { email: 'first@example.test' })
+		const first = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		await assign(f, staff, scope, 'editor', { email: 'second@example.test' })
+		const second = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		if (first === null || second === null) throw new Error('fixture')
+		const accepting = await f.person('first')
+		expect(await f.repositories.membership.acceptInvitation(first, accepting.id, ['staff'])).toBe('accepted')
+		await f.repositories.grants.deleteGrant(grantId)
+		expect(await f.repositories.membership.acceptInvitation(second, (await f.person('second')).id, ['staff'])).toBe('not_allowed')
+	})
+
+	test('the role held in another value assigns nothing here', async () => {
+		const f = await fixture()
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const other = await workspaceOf(f, await f.person('other-owner'))
+		const staff = await f.person('staff')
+		await f.repositories.grants.createRoleGrantUnlessHeld({
+			principalId: staff.id,
+			app: APP,
+			roleKey: 'staff',
+			scopeType: 'workspace',
+			scopeValue: other.value,
+		})
+		const target = await f.person('target')
+		expect(await assign(f, staff, scope, 'editor', { principalId: target.id })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await assign(f, staff, other, 'editor', { principalId: target.id })).toMatchObject({ ok: true })
+	})
+
+	test('an external principal never holds the application-wide role, so never assigns through it', async () => {
+		const f = await fixture()
+		const scope = await workspaceOf(f, await f.person('owner'))
+		const external = await f.external('partner')
+		await expect(f.repositories.grants.createRoleGrantUnlessHeld({ principalId: external.id, app: APP, roleKey: 'staff' })).rejects.toBeInstanceOf(
+			ExternalGrantError,
+		)
+		expect(await f.repositories.membership.listAssigningGrants(APP, external.id, scope)).toEqual([])
+		expect(await requestDelegation(f.services, CALLER_ENV, f.ctx, { ...(await caller(external)), endpoint: INVITE_ENDPOINT })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
 	})
 })
 

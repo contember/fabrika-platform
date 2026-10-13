@@ -252,7 +252,10 @@ export interface DimensionArtifact {
 
 export interface RoleArtifact {
 	readonly grants: readonly string[]
-	/** A membership role is granted only in a value of `scope`, by a holder of one of the `assignableBy` roles there. */
+	/**
+	 * A membership role is granted only in a value of `scope`, by a holder of one of the `assignableBy` roles: there,
+	 * or globally for an application-wide role (one with no `member`).
+	 */
 	readonly member: { readonly scope: string; readonly assignableBy: readonly string[] } | null
 	/** An external principal may hold this membership role (ADR-0051). Absent unless declared, so digests stay. */
 	readonly external?: true
