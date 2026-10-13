@@ -713,6 +713,21 @@ describe('literal: a schema method on an imported literal schema', () => {
 	})
 })
 
+describe('member-admits-external', () => {
+	test('names a { member: true } endpoint a human reaches, and not one of a machine-only mount', async () => {
+		const external = CLEAN_CONTRACT.replace(
+			"assignableBy: ['owner'] } } },",
+			"assignableBy: ['owner'] } }, partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true } },",
+		).replace('\t\tget: c.query(', "\t\tme: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true } }),\n\t\tget: c.query(")
+		const hints = async (contract: string) =>
+			(await check({ ...CLEAN_APPLICATION, 'fabrika.contract.ts': contract })).filter((finding) => finding.rule === 'member-admits-external')
+		expect(await hints(external)).toEqual([
+			expect.objectContaining({ severity: 'hint', message: "'api.me' admits every member, and external role 'partner' makes a person from outside the organization one" }),
+		])
+		expect(await hints(external.replace("callers: ['human']", "callers: ['machine']"))).toEqual([])
+	})
+})
+
 describe('sql-undeclared', () => {
 	test('is a hint that names the site and the declaration to add', async () => {
 		const findings = await check({
