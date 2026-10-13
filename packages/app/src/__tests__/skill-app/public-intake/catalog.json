@@ -798,12 +798,22 @@
 		},
 		{
 			"table_name": "registrations",
-			"column_name": "name",
+			"column_name": "full_name",
 			"type_name": "text",
 			"type_type": "b",
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "registrations",
+			"column_name": "received_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
 			"enum_labels": []
 		},
 		{
@@ -814,6 +824,16 @@
 			"type_category": "S",
 			"nullable": false,
 			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "resend_requests",
+			"column_name": "received_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
 			"enum_labels": []
 		}
 	],

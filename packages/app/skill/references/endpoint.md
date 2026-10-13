@@ -37,6 +37,7 @@ export const TaskPage = z.strictObject({
 export const ListTasks = z.strictObject({
 	projectId: z.uuid(),
 	status: TaskStatus.optional(),
+	title: z.string().min(1).max(200).optional(),
 	after: Cursor.optional(),
 })
 export const MyTasks = z.strictObject({ after: Cursor.optional() })
@@ -109,6 +110,21 @@ dimension value takes `access: { action, app: true }`.
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
 
+### The methods of each handle
+
+| Handle                                                 | Methods                                                                                                                                                                                         |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target` (the object of `on`, the container of `in`)   | `get()`; under `on`, in a mutation, `getForUpdate()`, `update(values, { expectVersion })`, `remove({ expectVersion })`                                                                          |
+| `target.<child table>` (`on`)                          | `list(options)`, `get(id)`; in a mutation `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })`; no `getForUpdate`                                         |
+| `target.<table>` (`in`), `created.<table>` (`creates`) | `list(options)` of a contained table; in a mutation `insert(values)`                                                                                                                            |
+| `within.<table>` (`over`)                              | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
+| `reference.<table>`                                    | `list(options)`, `count({ where })`: no `get`; look a row up by its key with `where` (`priorities.get` below)                                                                                   |
+| `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
+| `app.<table>` (`app: true`), a scoped table            | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
+| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)`; with `'write'` also `insert`, `update`, `remove`                                                                                                       |
+
+`{ expectVersion }` is taken only on a table with `version`.
+
 ### Which dimension `over` names
 
 `over` names the nearest dimension of the listed rows' chain: the dimension the table's rows lie in (tasks lie in a
@@ -135,9 +151,9 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 - `list({ where, orderBy, limit, after })` answers `{ items, next }`: a keyset page of at most `limit` rows (50 by
   default, 500 at most). Pass `next` back as `after`; it is `null` on the last page.
 - `where` is AND of `[column, operator, value]`: `=`, `<>`, `<`, `<=`, `>`, `>=`, `in` and `not in` (a list),
-  `like`, `ilike`, `not like`, `not ilike`, `contains`. An optional filter is a conditional list:
-  `where: input.status === undefined ? [] : [['status', '=', input.status]]`. There is no `is null` and no OR:
-  write that in `ctx.sql`.
+  `like`, `ilike`, `not like`, `not ilike`, `contains`. Optional filters are conditional spreads, each tuple
+  `as const` (`list` in `SKILL.md`): `...(input.status === undefined ? [] : [['status', '=', input.status] as const])`.
+  There is no `is null` and no OR: write that in `ctx.sql`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
 - `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` takes lists of column names
   and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
@@ -270,8 +286,45 @@ export const comments = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-Mount every group in `fabrika.contract.ts`: `api: c.rpc('/api', { projects, tasks, comments, reports, members })`.
-A procedure is served at `POST /api/<group>.<endpoint>`.
+A reference table belongs to no scope, so a `{ member: true }` endpoint reads it. It has no `get`: look a row up by its
+key with a `where`:
+
+```ts src/priorities/endpoints.ts
+import { fromPage, fromRow, NotFoundError } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const Priority = z.strictObject({ code: z.string(), label: z.string() })
+const PriorityPage = z.strictObject({
+	items: z.array(Priority),
+	next: z.nullable(z.string()),
+})
+const ByCode = z.strictObject({ code: z.string().min(1).max(20) })
+
+export const priorities = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({ output: PriorityPage, access: { member: true } })
+		.handle(async ({ ctx }) =>
+			fromPage(
+				Priority,
+				await ctx.db.reference.priorities.list({ orderBy: [['rank', 'asc']] }),
+			)
+		),
+	get: r.query({ input: ByCode, output: Priority, access: { member: true } })
+		.handle(async ({ input, ctx }) => {
+			const page = await ctx.db.reference.priorities.list({
+				where: [['code', '=', input.code]],
+				limit: 1,
+			})
+			const row = page.items[0]
+			if (row === undefined) throw new NotFoundError('no such priority')
+			return fromRow(Priority, row)
+		}),
+}))
+```
+
+Mount every group in `fabrika.contract.ts`:
+`api: c.rpc('/api', { projects, tasks, comments, reports, members, priorities })`. A procedure is served at
+`POST /api/<group>.<endpoint>`, and answers `{ result: <output> }` (`references/errors.md`).
 
 ## Rows and outputs
 
@@ -393,7 +446,8 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
   capability is the access form's: `ctx.target` for `on` and `in`, `ctx.within` for `over`; a job passes the `Ref` or
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is refused. A reference table is shared
-  by every scope and needs no fragment.
+  by every scope and needs no fragment. A form's inbox needs none either; read it from a site that holds the inbox's
+  `read` action (the intake job of `references/public-intake.md`).
 - **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
   top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
   The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a

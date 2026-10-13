@@ -38,7 +38,8 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
   type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A
   `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the containment chain
-  cannot be filled: give it a default or make it nullable.
+  cannot be filled: give it a default, or make it nullable and not text. The seed writes its marker into every text
+  column, a nullable one too, and no row it references holds that marker.
 - A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
   value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
   (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the
@@ -186,12 +187,21 @@ if (postgres !== null) {
   `members.manage` holder). To list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
+- `@fabrika/app/testing` exports the types of those options: `IamMembershipRpc` (`membership`), `ChallengeFetch`
+  (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
 - The kit's directory answers every member as enabled: it cannot make a disabled one. Test the `disabled` branch of a
   pure function in `logic.ts` instead.
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
-  `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`.
+  `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`
+  stand-in, or the real ClamAV one, `clamscanScanner()` of `@fabrika/app/bun`.
+- A form's challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
+  also when the test's `challengeFetch` answers success. Send a fresh token with each submission
+  (`crypto.randomUUID()`).
+- `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
+  outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
+  that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
   where it is used, not in `build` (`references/public-intake.md`).
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per

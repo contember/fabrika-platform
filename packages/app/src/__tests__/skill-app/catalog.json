@@ -521,6 +521,36 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "priorities",
+			"column_name": "code",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "priorities",
+			"column_name": "label",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "priorities",
+			"column_name": "rank",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
 			"table_name": "project_exports",
 			"column_name": "id",
 			"type_name": "uuid",

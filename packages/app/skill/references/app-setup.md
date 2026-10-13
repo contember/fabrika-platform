@@ -85,12 +85,20 @@ export const app = defineApp(vocabulary, tables)
 import { app } from './src/app-kit'
 import { comments } from './src/comments/endpoints'
 import { members } from './src/members/endpoints'
+import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
+	api: c.rpc('/api', {
+		projects,
+		tasks,
+		comments,
+		reports,
+		members,
+		priorities,
+	}),
 	site: c.spa('/', { dir: 'dist/web', access: { member: true } }),
 	health: c.health('/healthz'),
 }))

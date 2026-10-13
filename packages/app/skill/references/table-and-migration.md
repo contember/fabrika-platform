@@ -102,6 +102,14 @@ CREATE TABLE project_exports (
 	FOREIGN KEY (project_id, org_id) REFERENCES projects (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX project_exports_project ON project_exports (project_id);
+
+-- A code list: shared rows that every endpoint reads, and only a migration writes.
+CREATE TABLE priorities (
+	code TEXT PRIMARY KEY,
+	label TEXT NOT NULL,
+	rank INTEGER NOT NULL
+);
+INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 'Normal', 2), ('high', 'High', 3);
 ```
 
 - `bunx fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
@@ -190,6 +198,10 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['row_count'],
 		createdBy: 'created_by',
 	},
+	priorities: {
+		scope: { reference: 'the priority codes; a migration changes them' },
+		actions: { read: 'tasks.read' },
+	},
 })
 ```
 
@@ -201,6 +213,9 @@ export const tables = defineTables(vocabulary, columns)({
   table, and no container. Only an `app: true` endpoint reaches it (`ctx.db.app.<table>`, `references/endpoint.md`),
   and only a caller who holds the operation's action as a global grant. Data that a link holder or a scoped member
   reads stays a reference table.
+- A reference table (`priorities`) takes `actions: { read: '<action>' }` and, at most, `columns` with read actions: no
+  `insert`, `update`, `version` or `createdBy`. Its rows change by a migration only. No handle writes it, and
+  `unscoped: { priorities: 'write' }` is refused by tsc and the checker.
 - The key (`id`), the container column (`<container>_id`), a child's column (`<parent dimension>_id`) and the chain
   are derived. State `in: { column }` or `column` only off that convention.
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
@@ -208,7 +223,13 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
+- A column has one write action. A state that two actions change is two columns: in `references/public-intake.md` the
+  link holder's `candidates.verify` sets `verified_at`, HR's `candidates.review` sets `status`, and `logic.ts` derives
+  the stage HR sees from both (`stageOf`).
 - An audit or history table is an ordinary child table that a handler writes in its own transaction:
   `project_exports` logs each export of a project's tasks, so its insert action is the export's read action
   (`references/endpoint.md`). The log of an export across every record is an application table instead
   (`references/public-intake.md`). There is no framework audit API.
+- IAM already audits sign-ins (its auth log, refusals included) and every grant and revocation (its admin events
+  `iam.grant.create` and `iam.grant.revoke`): do not rebuild either in the application. An operator's access to the
+  database or to the provider's console is outside Fabrika.

@@ -9,8 +9,8 @@ Every piece lets in someone who is not signed in, so ask the human before you bu
 visitor do. The visitor never reaches a handler without a credential:
 
 1. **A public page** (`c.spa('/', { access: { public: true } })`) holds the form. It reads no data.
-2. **A form** appends one row to its inbox table and answers `{ received: true }`, for a new and a known address
-   alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
+2. **A form** appends one row to its inbox table and answers `{ result: { received: true } }`, for a new and a known
+   address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
    a known address would tell a stranger who registered.
 3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
    Each form kicks it (`then: 'intake'`), so it runs within seconds of a submission; its schedule is the recovery.
@@ -79,13 +79,16 @@ CREATE TABLE candidate_events (
 );
 CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
 
--- The forms' inboxes: a column per input field, except the honeypot and the challenge token.
+-- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token. A form
+-- writes its input fields only, so received_at keeps the time of the submission.
 CREATE TABLE registrations (
 	email TEXT NOT NULL,
-	name TEXT NOT NULL
+	full_name TEXT NOT NULL,
+	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE resend_requests (
-	email TEXT NOT NULL
+	email TEXT NOT NULL,
+	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -188,11 +191,15 @@ export const tables = defineTables(vocabulary, columns)({
 ```
 
 - `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
-  declares the reach reads it.
+  declares the reach reads it. No site writes it: `unscoped: { registrations: 'write' }` is refused.
 - `{ app: '<why>' }` is an application table: its rows belong to no candidate. Only an endpoint declared
   `access: { action, app: true }` reaches it, through `ctx.db.app`, with the action the operation names. A position is
   deactivated, never deleted, so the table has no delete action. `candidate_exports` is appended with the export's own
   action, `candidates.read`, and read with `exports.read`.
+- The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
+  name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
+- The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
+  (`received_at`). The job's own `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
 - The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
 
 ## The contract
@@ -209,7 +216,7 @@ export const CandidateStatus = z.enum([
 ])
 export const Register = z.strictObject({
 	email: z.email().max(200),
-	name: z.string().min(1).max(200),
+	full_name: z.string().min(1).max(200),
 	website: z.optional(z.string().max(200)),
 	challengeToken: z.string().max(4096),
 })
@@ -282,6 +289,10 @@ export const contract = app.contract((c) => ({
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
   expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
+- **Counting clicks** on a public page has no primitive. The pattern is an anonymous form without a challenge whose
+  inbox gets one row per click, posted with `fetch(…, { keepalive: true })`. Know both limits before you offer it:
+  anyone can inflate the counts (the rate limits bound only how fast), and nothing drains the inbox but a job you
+  write. Ask the human first; usually the application should not count clicks.
 - **Other origins** the pages load (an image host, an API the browser calls) go in the contract's `csp` section:
   `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc` and
   `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
@@ -350,7 +361,7 @@ import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { mailer } from '../mail'
 
-const Registration = z.strictObject({ email: z.string(), name: z.string() })
+const Registration = z.strictObject({ email: z.string(), fullName: z.string() })
 const Ask = z.strictObject({ email: z.string() })
 const Id = z.strictObject({ id: z.string() })
 const Due = z.strictObject({
@@ -383,11 +394,11 @@ export const intake = app.cron('* * * * *', {
 		// A registration becomes a candidate once; the form told the visitor nothing either way.
 		await ctx.transaction(async (tx) => {
 			const rows = await tx.sql(Registration)`
-				delete from registrations returning email, name`
+				delete from registrations returning email, full_name`
 			for (const row of rows) {
 				await tx.sql(Id)`
 					insert into candidates (id, email, name, created_by, version)
-					values (${crypto.randomUUID()}, ${row.email}, ${row.name}, ${ctx.principal.id}, 1)
+					values (${crypto.randomUUID()}, ${row.email}, ${row.fullName}, ${ctx.principal.id}, 1)
 					on conflict (email) do nothing
 					returning id`
 			}
@@ -597,7 +608,7 @@ export const register = async (
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			email: field('email'),
-			name: field('name'),
+			full_name: field('full_name'),
 			website: field('website'),
 			challengeToken,
 		}),
@@ -628,6 +639,15 @@ const NEXT: Readonly<Record<Status, readonly Status[]>> = {
 
 export const canMove = (from: Status, to: Status): boolean =>
 	NEXT[from].includes(to)
+
+/**
+ * The stage HR sees. Two actions set the two columns it derives from: the link holder's `candidates.verify` sets
+ * `verified_at`, HR's `candidates.review` sets `status`. A column has one write action, so the state is two columns.
+ */
+export const stageOf = (
+	status: Status,
+	verifiedAt: Date | null,
+): Status | 'unconfirmed' => (verifiedAt === null ? 'unconfirmed' : status)
 ```
 
 ```ts src/candidates/endpoints.ts
@@ -909,8 +929,35 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
 - The job asks IAM to issue and revoke links, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an
   `IamMembershipRpc` of your own that answers `issueLink` and `revokeLink`. A test of a form passes `env: {
-  TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`. Test each stop of a
+  TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
+  `challengeToken` with each submission: a token is single use. Test each stop of a
   delivery (a refused e-mail, IAM down, a crash after each step): the next run must leave exactly one live, e-mailed
   link.
 - A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
   submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
+- The e-mail provider is a stand-in too: `testKit(app, { env: { MAIL_API_URL, MAIL_API_KEY: 'test', INTAKE_ORIGIN:
+  'https://intake.test' } })` points the mailer at a test URL, which `standInMail()` answers. Call its `restore()` in
+  `afterEach`.
+
+```ts src/__tests__/mail-stand-in.ts
+import { spyOn } from 'bun:test'
+
+/** The mail provider of a test; `env.MAIL_API_URL` points the mailer here. */
+export const MAIL_API_URL = 'https://mail.test/send'
+
+/** Answers the mail provider's URL and keeps each mail; every other request goes on to the real `fetch`. */
+export const standInMail = () => {
+	const sent: string[] = []
+	const passOn = globalThis.fetch
+	const answer = async (...args: Parameters<typeof fetch>) => {
+		const request = new Request(...args)
+		if (request.url !== MAIL_API_URL) return passOn(...args)
+		sent.push(await request.text())
+		return new Response(null, { status: 202 })
+	}
+	const spy = spyOn(globalThis, 'fetch').mockImplementation(
+		Object.assign(answer, { preconnect: passOn.preconnect }),
+	)
+	return { sent, restore: () => spy.mockRestore() }
+}
+```

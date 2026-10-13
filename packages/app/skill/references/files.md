@@ -7,12 +7,20 @@ contract with generated endpoints: no handler, no storage client, no URL of your
 import { app } from './src/app-kit'
 import { comments } from './src/comments/endpoints'
 import { members } from './src/members/endpoints'
+import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
+	api: c.rpc('/api', {
+		projects,
+		tasks,
+		comments,
+		reports,
+		members,
+		priorities,
+	}),
 	files: {
 		attachments: c.files({
 			owner: 'tasks',
@@ -30,12 +38,12 @@ export const contract = app.contract((c) => ({
 
 The collection serves, for signed-in people only:
 
-| Endpoint                                     | Access                      | Does                                                        |
-| -------------------------------------------- | --------------------------- | ----------------------------------------------------------- |
-| `POST /api/files.attachments.upload/:taskId` | `write` on the task         | the body is the file, `?name=` its name; answers `{ id }`   |
-| `GET /api/files.attachments/:fileId`         | `read` on the file's task   | streams the file                                            |
-| `POST /api/files.attachments.list`           | `read` on the task          | body `{ owner, limit?, after? }`; answers `{ items, next }` |
-| `POST /api/files.attachments.remove`         | `delete` on the file's task | body `{ id }`                                               |
+| Endpoint                                     | Access                      | Does                                                                    |
+| -------------------------------------------- | --------------------------- | ----------------------------------------------------------------------- |
+| `POST /api/files.attachments.upload/:taskId` | `write` on the task         | the body is the file, `?name=` its name; answers `{ result: { id } }`   |
+| `GET /api/files.attachments/:fileId`         | `read` on the file's task   | streams the file                                                        |
+| `POST /api/files.attachments.list`           | `read` on the task          | body `{ owner, limit?, after? }`; answers `{ result: { items, next } }` |
+| `POST /api/files.attachments.remove`         | `delete` on the file's task | body `{ id }`                                                           |
 
 A file reaches what its task reaches, now: a moved task moves its files. The list answers the task's files oldest
 first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–100, default 50) after the id `after`.

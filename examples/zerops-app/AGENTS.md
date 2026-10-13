@@ -49,7 +49,14 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	})
 		.handle(async ({ input, ctx }) => {
 			const page = await ctx.db.target.tasks.list({
-				where: input.status === undefined ? [] : [['status', '=', input.status]],
+				where: [
+					...(input.status === undefined
+						? []
+						: [['status', '=', input.status] as const]),
+					...(input.title === undefined
+						? []
+						: [['title', 'ilike', `%${input.title}%`] as const]),
+				],
 				orderBy: [['title', 'asc']],
 				after: input.after,
 			})
@@ -218,7 +225,8 @@ bun test --isolate                                          # needs FABRIKA_TEST
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
 `bunx dprint fmt <files>` and `bunx biome lint <files>`, never `biome check` (its formatter fights dprint), and never a
-generated file. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
+generated file. An application outside that repository has neither configuration: use the formatter its own
+repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
 "allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
@@ -332,12 +340,20 @@ export const app = defineApp(vocabulary, tables)
 import { app } from './src/app-kit'
 import { comments } from './src/comments/endpoints'
 import { members } from './src/members/endpoints'
+import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
+	api: c.rpc('/api', {
+		projects,
+		tasks,
+		comments,
+		reports,
+		members,
+		priorities,
+	}),
 	site: c.spa('/', { dir: 'dist/web', access: { member: true } }),
 	health: c.health('/healthz'),
 }))
@@ -548,6 +564,7 @@ export const TaskPage = z.strictObject({
 export const ListTasks = z.strictObject({
 	projectId: z.uuid(),
 	status: TaskStatus.optional(),
+	title: z.string().min(1).max(200).optional(),
 	after: Cursor.optional(),
 })
 export const MyTasks = z.strictObject({ after: Cursor.optional() })
@@ -620,6 +637,21 @@ dimension value takes `access: { action, app: true }`.
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
 
+### The methods of each handle
+
+| Handle                                                 | Methods                                                                                                                                                                                         |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target` (the object of `on`, the container of `in`)   | `get()`; under `on`, in a mutation, `getForUpdate()`, `update(values, { expectVersion })`, `remove({ expectVersion })`                                                                          |
+| `target.<child table>` (`on`)                          | `list(options)`, `get(id)`; in a mutation `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })`; no `getForUpdate`                                         |
+| `target.<table>` (`in`), `created.<table>` (`creates`) | `list(options)` of a contained table; in a mutation `insert(values)`                                                                                                                            |
+| `within.<table>` (`over`)                              | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
+| `reference.<table>`                                    | `list(options)`, `count({ where })`: no `get`; look a row up by its key with `where` (`priorities.get` below)                                                                                   |
+| `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
+| `app.<table>` (`app: true`), a scoped table            | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
+| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)`; with `'write'` also `insert`, `update`, `remove`                                                                                                       |
+
+`{ expectVersion }` is taken only on a table with `version`.
+
 ### Which dimension `over` names
 
 `over` names the nearest dimension of the listed rows' chain: the dimension the table's rows lie in (tasks lie in a
@@ -646,9 +678,9 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 - `list({ where, orderBy, limit, after })` answers `{ items, next }`: a keyset page of at most `limit` rows (50 by
   default, 500 at most). Pass `next` back as `after`; it is `null` on the last page.
 - `where` is AND of `[column, operator, value]`: `=`, `<>`, `<`, `<=`, `>`, `>=`, `in` and `not in` (a list),
-  `like`, `ilike`, `not like`, `not ilike`, `contains`. An optional filter is a conditional list:
-  `where: input.status === undefined ? [] : [['status', '=', input.status]]`. There is no `is null` and no OR:
-  write that in `ctx.sql`.
+  `like`, `ilike`, `not like`, `not ilike`, `contains`. Optional filters are conditional spreads, each tuple
+  `as const` (`list` in `SKILL.md`): `...(input.status === undefined ? [] : [['status', '=', input.status] as const])`.
+  There is no `is null` and no OR: write that in `ctx.sql`.
 - `orderBy` is `[[column, 'asc' | 'desc']]`; the key is added last as the tiebreak.
 - `count({ where })` answers a number. `aggregate({ groupBy, count, sum, min, max })` takes lists of column names
   and answers one row per group: the `groupBy` columns, `count` as a string (Postgres `bigint`), and `sum_<column>`,
@@ -781,8 +813,45 @@ export const comments = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-Mount every group in `fabrika.contract.ts`: `api: c.rpc('/api', { projects, tasks, comments, reports, members })`.
-A procedure is served at `POST /api/<group>.<endpoint>`.
+A reference table belongs to no scope, so a `{ member: true }` endpoint reads it. It has no `get`: look a row up by its
+key with a `where`:
+
+```ts src/priorities/endpoints.ts
+import { fromPage, fromRow, NotFoundError } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const Priority = z.strictObject({ code: z.string(), label: z.string() })
+const PriorityPage = z.strictObject({
+	items: z.array(Priority),
+	next: z.nullable(z.string()),
+})
+const ByCode = z.strictObject({ code: z.string().min(1).max(20) })
+
+export const priorities = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({ output: PriorityPage, access: { member: true } })
+		.handle(async ({ ctx }) =>
+			fromPage(
+				Priority,
+				await ctx.db.reference.priorities.list({ orderBy: [['rank', 'asc']] }),
+			)
+		),
+	get: r.query({ input: ByCode, output: Priority, access: { member: true } })
+		.handle(async ({ input, ctx }) => {
+			const page = await ctx.db.reference.priorities.list({
+				where: [['code', '=', input.code]],
+				limit: 1,
+			})
+			const row = page.items[0]
+			if (row === undefined) throw new NotFoundError('no such priority')
+			return fromRow(Priority, row)
+		}),
+}))
+```
+
+Mount every group in `fabrika.contract.ts`:
+`api: c.rpc('/api', { projects, tasks, comments, reports, members, priorities })`. A procedure is served at
+`POST /api/<group>.<endpoint>`, and answers `{ result: <output> }` (`references/errors.md`).
 
 ## Rows and outputs
 
@@ -904,7 +973,8 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
   capability is the access form's: `ctx.target` for `on` and `in`, `ctx.within` for `over`; a job passes the `Ref` or
   `Within` it minted to `tx.sql.scope`. A table the capability does not reach is refused. A reference table is shared
-  by every scope and needs no fragment.
+  by every scope and needs no fragment. A form's inbox needs none either; read it from a site that holds the inbox's
+  `read` action (the intake job of `references/public-intake.md`).
 - **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
   top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
   The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a
@@ -1083,6 +1153,10 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 
 ## Runtime answers
 
+Every JSON answer is an envelope: a 200 is `{ result: <output> }` (a procedure's output, a form's `{ received: true }`,
+a file list's `{ items, next }`), any other status `{ error: { type, message } }`. The typed client unwraps it; a plain
+`fetch` (a form, a test) reads `result`.
+
 | Answer | Comes from                                                                                                                                                                                                              |
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400    | the input does not match its schema; `BadRequestError`                                                                                                                                                                  |
@@ -1120,12 +1194,20 @@ contract with generated endpoints: no handler, no storage client, no URL of your
 import { app } from './src/app-kit'
 import { comments } from './src/comments/endpoints'
 import { members } from './src/members/endpoints'
+import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
+	api: c.rpc('/api', {
+		projects,
+		tasks,
+		comments,
+		reports,
+		members,
+		priorities,
+	}),
 	files: {
 		attachments: c.files({
 			owner: 'tasks',
@@ -1143,12 +1225,12 @@ export const contract = app.contract((c) => ({
 
 The collection serves, for signed-in people only:
 
-| Endpoint                                     | Access                      | Does                                                        |
-| -------------------------------------------- | --------------------------- | ----------------------------------------------------------- |
-| `POST /api/files.attachments.upload/:taskId` | `write` on the task         | the body is the file, `?name=` its name; answers `{ id }`   |
-| `GET /api/files.attachments/:fileId`         | `read` on the file's task   | streams the file                                            |
-| `POST /api/files.attachments.list`           | `read` on the task          | body `{ owner, limit?, after? }`; answers `{ items, next }` |
-| `POST /api/files.attachments.remove`         | `delete` on the file's task | body `{ id }`                                               |
+| Endpoint                                     | Access                      | Does                                                                    |
+| -------------------------------------------- | --------------------------- | ----------------------------------------------------------------------- |
+| `POST /api/files.attachments.upload/:taskId` | `write` on the task         | the body is the file, `?name=` its name; answers `{ result: { id } }`   |
+| `GET /api/files.attachments/:fileId`         | `read` on the file's task   | streams the file                                                        |
+| `POST /api/files.attachments.list`           | `read` on the task          | body `{ owner, limit?, after? }`; answers `{ result: { items, next } }` |
+| `POST /api/files.attachments.remove`         | `delete` on the file's task | body `{ id }`                                                           |
 
 A file reaches what its task reaches, now: a moved task moves its files. The list answers the task's files oldest
 first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–100, default 50) after the id `after`.
@@ -1327,12 +1409,20 @@ import { app } from './src/app-kit'
 import { comments } from './src/comments/endpoints'
 import { members } from './src/members/endpoints'
 import { markOverdue } from './src/overdue/endpoints'
+import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
+	api: c.rpc('/api', {
+		projects,
+		tasks,
+		comments,
+		reports,
+		members,
+		priorities,
+	}),
 	jobs: { markOverdue },
 	health: c.health('/healthz'),
 }))
@@ -1379,8 +1469,8 @@ Every piece lets in someone who is not signed in, so ask the human before you bu
 visitor do. The visitor never reaches a handler without a credential:
 
 1. **A public page** (`c.spa('/', { access: { public: true } })`) holds the form. It reads no data.
-2. **A form** appends one row to its inbox table and answers `{ received: true }`, for a new and a known address
-   alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
+2. **A form** appends one row to its inbox table and answers `{ result: { received: true } }`, for a new and a known
+   address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different answer for
    a known address would tell a stranger who registered.
 3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
    Each form kicks it (`then: 'intake'`), so it runs within seconds of a submission; its schedule is the recovery.
@@ -1449,13 +1539,16 @@ CREATE TABLE candidate_events (
 );
 CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
 
--- The forms' inboxes: a column per input field, except the honeypot and the challenge token.
+-- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token. A form
+-- writes its input fields only, so received_at keeps the time of the submission.
 CREATE TABLE registrations (
 	email TEXT NOT NULL,
-	name TEXT NOT NULL
+	full_name TEXT NOT NULL,
+	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE resend_requests (
-	email TEXT NOT NULL
+	email TEXT NOT NULL,
+	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -1558,11 +1651,15 @@ export const tables = defineTables(vocabulary, columns)({
 ```
 
 - `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
-  declares the reach reads it.
+  declares the reach reads it. No site writes it: `unscoped: { registrations: 'write' }` is refused.
 - `{ app: '<why>' }` is an application table: its rows belong to no candidate. Only an endpoint declared
   `access: { action, app: true }` reaches it, through `ctx.db.app`, with the action the operation names. A position is
   deactivated, never deleted, so the table has no delete action. `candidate_exports` is appended with the export's own
   action, `candidates.read`, and read with `exports.read`.
+- The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
+  name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
+- The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
+  (`received_at`). The job's own `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
 - The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
 
 ## The contract
@@ -1579,7 +1676,7 @@ export const CandidateStatus = z.enum([
 ])
 export const Register = z.strictObject({
 	email: z.email().max(200),
-	name: z.string().min(1).max(200),
+	full_name: z.string().min(1).max(200),
 	website: z.optional(z.string().max(200)),
 	challengeToken: z.string().max(4096),
 })
@@ -1652,6 +1749,10 @@ export const contract = app.contract((c) => ({
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
   expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
+- **Counting clicks** on a public page has no primitive. The pattern is an anonymous form without a challenge whose
+  inbox gets one row per click, posted with `fetch(…, { keepalive: true })`. Know both limits before you offer it:
+  anyone can inflate the counts (the rate limits bound only how fast), and nothing drains the inbox but a job you
+  write. Ask the human first; usually the application should not count clicks.
 - **Other origins** the pages load (an image host, an API the browser calls) go in the contract's `csp` section:
   `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc` and
   `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
@@ -1720,7 +1821,7 @@ import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { mailer } from '../mail'
 
-const Registration = z.strictObject({ email: z.string(), name: z.string() })
+const Registration = z.strictObject({ email: z.string(), fullName: z.string() })
 const Ask = z.strictObject({ email: z.string() })
 const Id = z.strictObject({ id: z.string() })
 const Due = z.strictObject({
@@ -1753,11 +1854,11 @@ export const intake = app.cron('* * * * *', {
 		// A registration becomes a candidate once; the form told the visitor nothing either way.
 		await ctx.transaction(async (tx) => {
 			const rows = await tx.sql(Registration)`
-				delete from registrations returning email, name`
+				delete from registrations returning email, full_name`
 			for (const row of rows) {
 				await tx.sql(Id)`
 					insert into candidates (id, email, name, created_by, version)
-					values (${crypto.randomUUID()}, ${row.email}, ${row.name}, ${ctx.principal.id}, 1)
+					values (${crypto.randomUUID()}, ${row.email}, ${row.fullName}, ${ctx.principal.id}, 1)
 					on conflict (email) do nothing
 					returning id`
 			}
@@ -1967,7 +2068,7 @@ export const register = async (
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			email: field('email'),
-			name: field('name'),
+			full_name: field('full_name'),
 			website: field('website'),
 			challengeToken,
 		}),
@@ -1998,6 +2099,15 @@ const NEXT: Readonly<Record<Status, readonly Status[]>> = {
 
 export const canMove = (from: Status, to: Status): boolean =>
 	NEXT[from].includes(to)
+
+/**
+ * The stage HR sees. Two actions set the two columns it derives from: the link holder's `candidates.verify` sets
+ * `verified_at`, HR's `candidates.review` sets `status`. A column has one write action, so the state is two columns.
+ */
+export const stageOf = (
+	status: Status,
+	verifiedAt: Date | null,
+): Status | 'unconfirmed' => (verifiedAt === null ? 'unconfirmed' : status)
 ```
 
 ```ts src/candidates/endpoints.ts
@@ -2279,11 +2389,38 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
 - The job asks IAM to issue and revoke links, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an
   `IamMembershipRpc` of your own that answers `issueLink` and `revokeLink`. A test of a form passes `env: {
-  TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`. Test each stop of a
+  TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
+  `challengeToken` with each submission: a token is single use. Test each stop of a
   delivery (a refused e-mail, IAM down, a crash after each step): the next run must leave exactly one live, e-mailed
   link.
 - A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
   submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
+- The e-mail provider is a stand-in too: `testKit(app, { env: { MAIL_API_URL, MAIL_API_KEY: 'test', INTAKE_ORIGIN:
+  'https://intake.test' } })` points the mailer at a test URL, which `standInMail()` answers. Call its `restore()` in
+  `afterEach`.
+
+```ts src/__tests__/mail-stand-in.ts
+import { spyOn } from 'bun:test'
+
+/** The mail provider of a test; `env.MAIL_API_URL` points the mailer here. */
+export const MAIL_API_URL = 'https://mail.test/send'
+
+/** Answers the mail provider's URL and keeps each mail; every other request goes on to the real `fetch`. */
+export const standInMail = () => {
+	const sent: string[] = []
+	const passOn = globalThis.fetch
+	const answer = async (...args: Parameters<typeof fetch>) => {
+		const request = new Request(...args)
+		if (request.url !== MAIL_API_URL) return passOn(...args)
+		sent.push(await request.text())
+		return new Response(null, { status: 202 })
+	}
+	const spy = spyOn(globalThis, 'fetch').mockImplementation(
+		Object.assign(answer, { preconnect: passOn.preconnect }),
+	)
+	return { sent, restore: () => spy.mockRestore() }
+}
+```
 
 ---
 
@@ -2572,6 +2709,14 @@ CREATE TABLE project_exports (
 	FOREIGN KEY (project_id, org_id) REFERENCES projects (id, org_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX project_exports_project ON project_exports (project_id);
+
+-- A code list: shared rows that every endpoint reads, and only a migration writes.
+CREATE TABLE priorities (
+	code TEXT PRIMARY KEY,
+	label TEXT NOT NULL,
+	rank INTEGER NOT NULL
+);
+INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 'Normal', 2), ('high', 'High', 3);
 ```
 
 - `bunx fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
@@ -2660,6 +2805,10 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['row_count'],
 		createdBy: 'created_by',
 	},
+	priorities: {
+		scope: { reference: 'the priority codes; a migration changes them' },
+		actions: { read: 'tasks.read' },
+	},
 })
 ```
 
@@ -2671,6 +2820,9 @@ export const tables = defineTables(vocabulary, columns)({
   table, and no container. Only an `app: true` endpoint reaches it (`ctx.db.app.<table>`, `references/endpoint.md`),
   and only a caller who holds the operation's action as a global grant. Data that a link holder or a scoped member
   reads stays a reference table.
+- A reference table (`priorities`) takes `actions: { read: '<action>' }` and, at most, `columns` with read actions: no
+  `insert`, `update`, `version` or `createdBy`. Its rows change by a migration only. No handle writes it, and
+  `unscoped: { priorities: 'write' }` is refused by tsc and the checker.
 - The key (`id`), the container column (`<container>_id`), a child's column (`<parent dimension>_id`) and the chain
   are derived. State `in: { column }` or `column` only off that convention.
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
@@ -2678,10 +2830,16 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
+- A column has one write action. A state that two actions change is two columns: in `references/public-intake.md` the
+  link holder's `candidates.verify` sets `verified_at`, HR's `candidates.review` sets `status`, and `logic.ts` derives
+  the stage HR sees from both (`stageOf`).
 - An audit or history table is an ordinary child table that a handler writes in its own transaction:
   `project_exports` logs each export of a project's tasks, so its insert action is the export's read action
   (`references/endpoint.md`). The log of an export across every record is an application table instead
   (`references/public-intake.md`). There is no framework audit API.
+- IAM already audits sign-ins (its auth log, refusals included) and every grant and revocation (its admin events
+  `iam.grant.create` and `iam.grant.revoke`): do not rebuild either in the application. An operator's access to the
+  database or to the provider's console is outside Fabrika.
 
 ---
 
@@ -2725,7 +2883,8 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
   type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A
   `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the containment chain
-  cannot be filled: give it a default or make it nullable.
+  cannot be filled: give it a default, or make it nullable and not text. The seed writes its marker into every text
+  column, a nullable one too, and no row it references holds that marker.
 - A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
   value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
   (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the
@@ -2873,12 +3032,21 @@ if (postgres !== null) {
   `members.manage` holder). To list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
+- `@fabrika/app/testing` exports the types of those options: `IamMembershipRpc` (`membership`), `ChallengeFetch`
+  (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
 - The kit's directory answers every member as enabled: it cannot make a disabled one. Test the `disabled` branch of a
   pure function in `logic.ts` instead.
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
-  `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`.
+  `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`
+  stand-in, or the real ClamAV one, `clamscanScanner()` of `@fabrika/app/bun`.
+- A form's challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
+  also when the test's `challengeFetch` answers success. Send a fresh token with each submission
+  (`crypto.randomUUID()`).
+- `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
+  outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
+  that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
   where it is used, not in `build` (`references/public-intake.md`).
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per

@@ -82,12 +82,20 @@ import { app } from './src/app-kit'
 import { comments } from './src/comments/endpoints'
 import { members } from './src/members/endpoints'
 import { markOverdue } from './src/overdue/endpoints'
+import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { tasks } from './src/tasks/endpoints'
 
 export const contract = app.contract((c) => ({
-	api: c.rpc('/api', { projects, tasks, comments, reports, members }),
+	api: c.rpc('/api', {
+		projects,
+		tasks,
+		comments,
+		reports,
+		members,
+		priorities,
+	}),
 	jobs: { markOverdue },
 	health: c.health('/healthz'),
 }))

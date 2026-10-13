@@ -57,7 +57,14 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	})
 		.handle(async ({ input, ctx }) => {
 			const page = await ctx.db.target.tasks.list({
-				where: input.status === undefined ? [] : [['status', '=', input.status]],
+				where: [
+					...(input.status === undefined
+						? []
+						: [['status', '=', input.status] as const]),
+					...(input.title === undefined
+						? []
+						: [['title', 'ilike', `%${input.title}%`] as const]),
+				],
 				orderBy: [['title', 'asc']],
 				after: input.after,
 			})
@@ -226,7 +233,8 @@ bun test --isolate                                          # needs FABRIKA_TEST
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.
 Format and lint only the files you wrote, with the repository's own tools: in the fabrika-platform repository
 `bunx dprint fmt <files>` and `bunx biome lint <files>`, never `biome check` (its formatter fights dprint), and never a
-generated file. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
+generated file. An application outside that repository has neither configuration: use the formatter its own
+repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
 "allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
