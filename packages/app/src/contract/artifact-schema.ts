@@ -221,6 +221,9 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 			grants: actions,
 			member: z.strictObject({ scope: name, assignableBy: z.array(roleKey) }).nullable(),
 			external: z.literal(true).optional(),
+		}).refine((role) => role.external !== true || role.member !== null, {
+			path: ['external'],
+			message: 'only a membership role admits external principals',
 		}),
 	),
 	mounts: record(mount),

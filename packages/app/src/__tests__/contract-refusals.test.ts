@@ -2,6 +2,7 @@
 // reader of source could produce. Every refusal names where it is and the allowed form.
 
 import { canonicalArtifactJson, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
+import { appSchemaSchema } from '@fabrika/auth'
 import { MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -15,6 +16,8 @@ import {
 	defineContract,
 	describeContract,
 	type MountDeclaration,
+	parseContractArtifact,
+	schemaFromContract,
 } from '../contract'
 import { contract as notes } from './fixtures/notes-app/fabrika.contract'
 
@@ -377,6 +380,19 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(artifact.roles['partner']).toEqual({ grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true })
 		expect(Object.keys(artifact.roles['editor'] ?? {}).sort()).toEqual(['grants', 'member'])
 		expect(canonicalArtifactJson(buildArtifact(base, notesArtifact.tables))).not.toContain('"external"')
+	})
+
+	test('the artifact boundary refuses external on a role that is not a membership role; translation carries the flag', () => {
+		const member = { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true }
+		const parsed = parseContractArtifact({ ...notesArtifact, roles: { ...notesArtifact.roles, partner: member } })
+		expect(schemaFromContract(parsed).roles['partner']).toMatchObject({ member: { scope: 'workspace' }, external: true })
+
+		const loose = { ...notesArtifact, roles: { ...notesArtifact.roles, partner: { grants: ['notes.read'], member: null, external: true } } }
+		expect(() => parseContractArtifact(loose)).toThrow('only a membership role admits external principals')
+		// An artifact that skipped the parser still reaches IAM with the flag, and IAM's own parser refuses it.
+		const translated = schemaFromContract({ ...notesArtifact, roles: { ...notesArtifact.roles, partner: { grants: ['notes.read'], member: null, external: true } } })
+		expect(translated.roles['partner']?.external).toBe(true)
+		expect(appSchemaSchema.safeParse(translated).success).toBe(false)
 	})
 
 	test("a role named after one of IAM's own roles", () => {

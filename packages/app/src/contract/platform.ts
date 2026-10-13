@@ -87,15 +87,13 @@ function scopeDef(type: string, dimension: DimensionArtifact, lookups: readonly 
 }
 
 function roleDef(key: string, role: RoleArtifact): RoleDef {
-	const permissions = [...role.grants]
-	return role.member === null
-		? { name: key, permissions }
-		: {
-			name: key,
-			permissions,
-			member: { scope: role.member.scope, assignableBy: [...role.member.assignableBy] },
-			...(role.external === true ? { external: true } : {}),
-		}
+	// `external` is carried on every role, so IAM refuses one on a role that is not a membership role instead of never seeing it.
+	return {
+		name: key,
+		permissions: [...role.grants],
+		...(role.member === null ? {} : { member: { scope: role.member.scope, assignableBy: [...role.member.assignableBy] } }),
+		...(role.external === true ? { external: true } : {}),
+	}
 }
 
 function linkDef(mount: LinkMountArtifact): AppLinkMountDef {
