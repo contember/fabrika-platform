@@ -5,6 +5,8 @@ import { defineVocabulary } from '@fabrika/app/contract'
 
 export const vocabulary = defineVocabulary({
 	app: 'notes',
+	// IAM's sign-in and password pages speak Czech for Notes, which the browser onboarding suite relies on.
+	locale: 'cs',
 	dimensions: {
 		workspace: {},
 		note: { in: 'workspace' },
