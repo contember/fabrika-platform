@@ -55,7 +55,7 @@ export async function contractGrantProblem(
 /**
  * Why `principal` may not hold this grant, or null (ADR-0051). An external principal holds only a role of one
  * application that the role's schema declares external: no inline permissions, no cross-app grant, no built-in role and
- * no custom policy. The write carries the same condition (`ELIGIBLE_GRANT_SQL`); this check names the reason first.
+ * no custom policy. The write carries the same condition (`eligibleGrantSql`); this check names the reason first.
  */
 export async function externalGrantProblem(
 	appSchema: Pick<AppSchemaRepository, 'getRole'>,

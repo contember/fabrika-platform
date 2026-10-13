@@ -1,5 +1,5 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
-import { type AuditEventInput, AuditWriter, type SqlChange } from './audit'
+import { type AuditEventInput, AuditWriter, type SqlChange, type SqlDialect } from './audit'
 import { unixNow } from './sql'
 
 /** A grant written for a workload principal: its authority is its declared actions, never a grant. */
@@ -22,9 +22,17 @@ export class ExternalGrantError extends Error {
  * The condition every grant write carries (ADR-0051): the principal is internal, or the grant names a role of its app
  * declared external. Binds the principal id, the app and the role key; a null app or role key never matches a role, so
  * an inline, cross-app or built-in grant is refused for an external principal.
+ *
+ * On Postgres the role row is read `FOR SHARE`, and held to the end of the write's transaction. A reconcile deletes and
+ * rewrites every role row of the app, so it waits for a grant write already holding the row, and its batch guard then
+ * sees the committed grant; a grant write that comes second waits for the reconcile, and the lock's re-check of the
+ * latest row version (the old row is gone) makes it write nothing. SQLite and D1 run one writer at a time.
  */
-export const ELIGIBLE_GRANT_SQL = `(NOT EXISTS (SELECT 1 FROM principals ep WHERE ep.id = ? AND ep.affiliation = 'external')
-	OR EXISTS (SELECT 1 FROM roles er WHERE er.app = ? AND er.role_key = ? AND er.external = 1))`
+export function eligibleGrantSql(dialect: SqlDialect): string {
+	const lock = dialect === 'postgres' ? ' FOR SHARE' : ''
+	return `(NOT EXISTS (SELECT 1 FROM principals ep WHERE ep.id = ? AND ep.affiliation = 'external')
+	OR EXISTS (SELECT 1 FROM roles er WHERE er.app = ? AND er.role_key = ? AND er.external = 1${lock}))`
+}
 
 export function eligibleGrantBinds(input: { principalId: string; app?: string | null; roleKey?: string | null }): (string | null)[] {
 	return [input.principalId, input.app ?? null, input.roleKey ?? null]
@@ -166,7 +174,7 @@ export class GrantRepository {
 
 	/** Whether `principalId` may hold this grant: it is internal, or the role is one its app declares external. */
 	async isEligibleGrant(input: { principalId: string; app?: string | null; roleKey?: string | null }): Promise<boolean> {
-		return (await this.db.prepare(`SELECT 1 AS eligible WHERE ${ELIGIBLE_GRANT_SQL}`).bind(...eligibleGrantBinds(input)).first()) !== null
+		return (await this.db.prepare(`SELECT 1 AS eligible WHERE ${eligibleGrantSql('sqlite')}`).bind(...eligibleGrantBinds(input)).first()) !== null
 	}
 
 	/** Whether `principalId` is a job's, a webhook's or a connector's principal, which holds no grant. */
@@ -212,7 +220,7 @@ export class GrantRepository {
 	private grantChange(id: string, input: CreateGrantInput, onConflict: string): SqlChange {
 		return {
 			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${ELIGIBLE_GRANT_SQL} ${onConflict} RETURNING *`,
+				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${eligibleGrantSql(this.writer.dialect)} ${onConflict} RETURNING *`,
 			binds: [
 				id,
 				input.principalId,

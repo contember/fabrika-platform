@@ -1,7 +1,7 @@
 import type { PrincipalAffiliation, Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange, type SqlDialect } from './audit'
-import { ELIGIBLE_GRANT_SQL, eligibleGrantBinds, type GrantRow } from './grants'
+import { eligibleGrantBinds, eligibleGrantSql, type GrantRow } from './grants'
 import { unixNow } from './sql'
 
 /** A single-use delegation grant (`delegation_grants`). Only its hash is stored. */
@@ -60,8 +60,11 @@ const RENEW_EXPIRED_MEMBERSHIP = `ON CONFLICT (principal_id, role_key, scope_typ
 	DO UPDATE SET expires_at = NULL, granted_by = excluded.granted_by, created_at = excluded.created_at
 	WHERE grants.expires_at IS NOT NULL AND grants.expires_at <= ?`
 
-/** How an acceptance ended: written, refused because the inviter holds no assigning role there now, or no longer open. */
-export type InvitationAcceptance = 'accepted' | 'not_allowed' | 'not_open'
+/**
+ * How an acceptance ended: written; refused because the inviter holds no assigning role there now, or because the
+ * accepting principal may not hold the role (ADR-0051); or no longer open.
+ */
+export type InvitationAcceptance = 'accepted' | 'not_allowed' | 'not_eligible' | 'not_open'
 
 export interface MembershipRepositoryOptions {
 	/**
@@ -74,6 +77,8 @@ export interface MembershipRepositoryOptions {
 
 export class MembershipRepository {
 	readonly #inviterLock: string
+	/** `eligibleGrantSql` of the dialect: on Postgres it holds the role row for the transaction. */
+	readonly #eligible: string
 	protected readonly writer: AuditWriter
 
 	constructor(
@@ -82,6 +87,7 @@ export class MembershipRepository {
 	) {
 		const dialect = options.dialect ?? 'sqlite'
 		this.#inviterLock = dialect === 'postgres' ? 'FOR SHARE' : ''
+		this.#eligible = eligibleGrantSql(dialect)
 		this.writer = new AuditWriter(db, dialect)
 	}
 
@@ -125,12 +131,12 @@ export class MembershipRepository {
 		const created = this.writer.changed([
 			{
 				sql: `INSERT INTO membership_scopes (app, scope_type, scope_value, created_by, created_at)
-					SELECT ?, ?, ?, ?, ? WHERE ${ELIGIBLE_GRANT_SQL} RETURNING scope_value`,
+					SELECT ?, ?, ?, ?, ? WHERE ${this.#eligible} RETURNING scope_value`,
 				binds: [input.app, input.scope.type, input.scope.value, input.createdBy, now, ...eligible],
 			},
 			{
 				sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${ELIGIBLE_GRANT_SQL} RETURNING id`,
+					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${this.#eligible} RETURNING id`,
 				binds: [uuidv7(), input.createdBy, input.app, input.roleKey, input.scope.type, input.scope.value, input.createdBy, now, ...eligible],
 			},
 		], audit)
@@ -190,7 +196,7 @@ export class MembershipRepository {
 		const now = unixNow()
 		const grant: SqlChange = {
 			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${ELIGIBLE_GRANT_SQL} ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
+				SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ? WHERE ${this.#eligible} ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`,
 			binds: [
 				uuidv7(),
 				input.principalId,
@@ -405,7 +411,7 @@ export class MembershipRepository {
 						WHERE app = ? AND principal_id = ? AND scope_type = ? AND scope_value = ? AND role_key IN (${placeholders})
 							AND (expires_at IS NULL OR expires_at > ?)
 						${this.#inviterLock})
-					AND ${ELIGIBLE_GRANT_SQL}
+					AND ${this.#eligible}
 				RETURNING id`,
 			binds: [
 				now,
@@ -422,12 +428,12 @@ export class MembershipRepository {
 				...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }),
 			],
 		}], audit)
-		const results = await this.db.batch<{ id: string }>([
+		const statements = [
 			...accept.statements,
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
 					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?
-					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?) AND ${ELIGIBLE_GRANT_SQL}
+					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?) AND ${this.#eligible}
 					${RENEW_EXPIRED_MEMBERSHIP}`)
 				.bind(
 					uuidv7(),
@@ -443,13 +449,50 @@ export class MembershipRepository {
 					...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }),
 					now,
 				),
-		])
-		if (accept.rows(results).length > 0) {
+			// The acceptance holds the grant it promised or does not happen: this NOT NULL violation rolls the batch back,
+			// invitation and record included, when the attempt holding the acceptance id has no active grant of the role.
+			this.db
+				.prepare(`INSERT INTO contract_apps (app, created_at) SELECT ?, NULL
+					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)
+						AND NOT EXISTS (
+							SELECT 1 FROM grants
+							WHERE principal_id = ? AND app = ? AND role_key = ? AND scope_type = ? AND scope_value = ?
+								AND (expires_at IS NULL OR expires_at > ?))`)
+				.bind(
+					`${invitation.app}#acceptance-without-grant`,
+					invitation.id,
+					acceptanceId,
+					principalId,
+					invitation.app,
+					invitation.role_key,
+					invitation.scope_type,
+					invitation.scope_value,
+					now,
+				),
+		]
+		let accepted: boolean
+		try {
+			accepted = accept.rows(await this.db.batch<{ id: string }>(statements)).length > 0
+		} catch (cause) {
+			if (await this.ineligible(invitation, principalId)) return 'not_eligible'
+			throw cause
+		}
+		if (accepted) {
 			return 'accepted'
 		}
 		const current = await this.getInvitationById(invitation.id)
 		const open = current !== null && current.accepted_at === null && current.revoked_at === null && current.expires_at > now
-		return open ? 'not_allowed' : 'not_open'
+		if (!open) return 'not_open'
+		return (await this.ineligible(invitation, principalId)) ? 'not_eligible' : 'not_allowed'
+	}
+
+	/** Whether `principalId` may not hold the invitation's role now (ADR-0051). */
+	private async ineligible(invitation: InvitationRow, principalId: string): Promise<boolean> {
+		const eligible = await this.db
+			.prepare(`SELECT 1 AS eligible WHERE ${eligibleGrantSql('sqlite')}`)
+			.bind(...eligibleGrantBinds({ principalId, app: invitation.app, roleKey: invitation.role_key }))
+			.first()
+		return eligible === null
 	}
 
 	/** Open, unexpired invitations to `scope`. */

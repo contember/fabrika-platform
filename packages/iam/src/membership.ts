@@ -676,6 +676,9 @@ export async function acceptInvitation(
 		resourceId: scopeId(scope),
 		metadata: { invitationId: invitation.id, role: invitation.role_key },
 	})
+	if (accepted === 'not_eligible') {
+		return { ok: false, reason: 'not_eligible' }
+	}
 	if (accepted !== 'accepted') {
 		return { ok: false, reason: accepted === 'not_allowed' ? 'not_allowed' : 'invalid' }
 	}
