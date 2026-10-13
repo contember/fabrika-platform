@@ -20,7 +20,7 @@ application. Effort: M; it needs a decision first.
   person acted, beside each status change, note and withdrawal. That snapshot is right for an audit row, but the
   application cannot show a current name or list its staff.
 - **No role management in the application.** A role's `assignableBy` exists only on a membership role
-  (`packages/app/src/contract/define.ts:78`–`:79`). The application's own administrator ("manages users and roles")
+  (`packages/app/src/contract/define.ts:78`–`:82`). The application's own administrator ("manages users and roles")
   therefore has nothing to call. In-app member management needs a dimension with `members`.
 
 ## Approach / acceptance

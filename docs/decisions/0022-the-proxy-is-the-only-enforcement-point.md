@@ -488,6 +488,11 @@ still refuses any `Authorization` header, as authorization.
   request, also when the token cache is warm. IAM issues a grant only for an endpoint the
   application's schema lists under `delegations`, to a user principal, and consumes it like a handoff
   code: once, before its binding to the caller, the endpoint and the request id is compared.
+- **Who assigns a membership role.** IAM lets a user assign or revoke a membership role in a value only when it holds
+  the dimension's `members.manage` there, every action of that role there, and a role that the role's `assignableBy`
+  names. `assignableBy` names membership roles of the same dimension, held in that value, or application-wide roles
+  (roles with no `member`), held in that value or globally. So a staff member with a global role invites into any
+  value. IAM checks the inviter again when an invitation is accepted, inside the write that consumes it.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
   every write path. In every IAM schema, an installation service's included, IAM refuses a
   global grant of a role declared with `member.scope`, and such a grant resolves to no permission.

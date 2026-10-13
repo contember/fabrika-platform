@@ -2662,7 +2662,10 @@ export const vocabulary = defineVocabulary({
   roles in; no table needs to own it.
 - An **action** is an exact name; a role lists actions and there is no `*`. Give an operation that only some roles
   may do its own action (`tasks.assign`).
-- A **membership role** (`member: { scope, assignableBy }`) is granted in one value of `scope`. `external: true` on
+- A **membership role** (`member: { scope, assignableBy }`) is granted in one value of `scope`. `assignableBy` names
+  who may give it there: a membership role of the same `scope`, held in that value, or a role with no `member`, which
+  IAM grants app-wide (`staff`), held globally. Holding the role is not enough: IAM also requires `members.manage` and
+  every action of the role given in that value, which a global grant covers. `external: true` on
   one lets a person from outside the organization (a partner's account) hold it; IAM gives such a person no other
   role. `{ member: true }` then admits them too, so a staff-only endpoint names an action only internal roles grant.
   `ctx.members` answers each member's `affiliation`.

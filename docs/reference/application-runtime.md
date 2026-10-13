@@ -1083,7 +1083,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   export, `serve(…)`) through the test kit, on the application's own data layer, once: that layer
   binds once per process. Its stand-in IAM (`kitMembership`, `packages/app/src/testing/membership.ts`) also answers
   scope creation, member management and share links, under IAM's rules for the caller's grants: a single-use
-  delegation grant per request, `members.manage` on the value itself, an assigning role there (`assignableBy`), every
+  delegation grant per request, `members.manage` on the value itself, an assigning role (`assignableBy`) there or, an
+  application-wide one, globally, every
   action of the role assigned, a link mount's `issuedBy` and grants on its chain. It records each write it allowed
   and grants the kit's callers nothing. A case's caller of an endpoint that manages members holds, on its target's
   value, the action, one assigning role of each role the input names (every membership role of the dimension when it

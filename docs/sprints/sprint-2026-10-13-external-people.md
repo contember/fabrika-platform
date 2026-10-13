@@ -171,3 +171,8 @@ WU1, WU2 and WU4.
   widening approval line: the diff has no generic contract-change line, so without it a template change read
   `unchanged`. **Deferred:** application-authored HTML templates (the sanitizer, link rules against registered return
   origins, and files beside the contract).
+- **WU2 (2026-10-13).** Shipped: `assignableBy` may name an application-wide role (no `member`, never a built-in);
+  the build and IAM's schema parser accept it, and IAM counts that role held in the value or as a global grant
+  (`ASSIGNING_GRANT`, `repositories/membership.ts`), at assignment, revocation, the acceptance re-check and inside the
+  acceptance's guarded `EXISTS` (`FOR SHARE` on Postgres). The stand-in follows; the generated cases' manager may now
+  hold an application-wide assigner, always in the value. ADR-0022 rule 6 states who assigns.

@@ -248,9 +248,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   no scope and manages no member (`userOnly`), which closes "a form plus a job that invites the
   submitted email". Membership is ordinary role grants scoped to a value (compatible with backlog 91);
   a value is checked as itself, flat — "there" means that exact `(type, value)`, global grants included.
-  Assigning needs the dimension's `members.manage` there, a role there that the target role's
-  `assignableBy` names, and every action of the target role there; revoking needs the same for every
-  role it removes. A built-in role key (`BUILTIN_ROLE_KEYS`, `admin`) is never a membership role: the
+  Assigning needs the dimension's `members.manage` there, a role that the target role's `assignableBy`
+  names, and every action of the target role there; revoking needs the same for every role it removes.
+  `assignableBy` names membership roles of the same dimension or application-wide roles (no `member`, never a
+  built-in); the assigning role counts held in that value, or for an application-wide role also as a global
+  grant (`listAssigningGrants`, `ASSIGNING_GRANT` in `repositories/membership.ts`), so staff with a global
+  role invite into any value. An external never holds an application-wide role, so it never assigns this way.
+  A built-in role key (`BUILTIN_ROLE_KEYS`, `admin`) is never a membership role: the
   schema parser refuses it, and scope creation also applies `contractGrantProblem` to the creator role.
   Repeating an assign or a revoke answers the same result — an active grant is kept, an expired one is
   renewed in the same statement (backlog 82's 409 stays for
@@ -280,7 +284,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   for the principal signed in on IAM's host whose normalized `email` equals the invitation's — the
   token proves the mailbox, the session the principal. The inviter's authority is checked again at
   acceptance, and its assigning role once more inside the UPDATE that consumes the invitation (`EXISTS`
-  over the inviter's grant, `FOR SHARE` on Postgres through `createPostgresIamRepositories`; a D1 batch runs
+  over the inviter's assigning grant, in the value or global, `FOR SHARE` on Postgres through `createPostgresIamRepositories`; a D1 batch runs
   alone): a removal either commits first and the acceptance is `not_allowed` with the invitation still
   open, or waits until the acceptance committed. The guarded UPDATE stamps a fresh `acceptance_id`, and the grant is written in the same
   batch only for the attempt holding it — never on a timestamp a replay can share. Without an email service, an invitation is `invitations_disabled`; assigning an existing
