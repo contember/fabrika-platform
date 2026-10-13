@@ -32,8 +32,11 @@ subsidiary.
 **Affiliation is an IAM fact about the person; eligibility is a contract fact about the role.**
 
 - **The principal.** `principals.affiliation` is `internal` or `external`. Every existing row, and every service, is
-  `internal`; the column's `CHECK` keeps a service internal. Only an installation administrator creates an external
-  principal (`principals.invite` with `affiliation: 'external'`). An external principal becomes internal only through
+  `internal`; the column's `CHECK` keeps a service internal. Two paths create an external
+  principal: an installation administrator (`principals.invite` with `affiliation: 'external'`), and the acceptance of
+  an application's invitation to a role declared external for a mailbox no principal holds, which creates it with its
+  password and its grant in one transaction ([ADR-0020](0020-compose-human-authentication-methods.md)); IAM refuses
+  such an invitation for a mailbox the organization names. An external principal becomes internal only through
   the administrator's `principals.promote`. Promotion writes no grant row, but it widens what the principal reaches:
   it may then hold any role, OIDC may claim it, and a mailbox listed in `IAM_BOOTSTRAP_ADMINS` makes it an
   installation admin at once. So in the change's own transaction it revokes every session the principal holds and

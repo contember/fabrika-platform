@@ -488,6 +488,13 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   (never `!` or a cast); that fallback is a branch no test reaches.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request.
+- A partner company's people: a role with `external: true` whose `assignableBy` names an app-wide staff role.
+  `assign(ref, { email }, 'partner', { label: company.name, message })` mails the invitation with the company's name
+  (≤ 200 characters, one line) and a note (≤ 1000 characters); a new address chooses its password from the mail and
+  lands in the application. `{ resend: true }` sends an open invitation again with a new link and 7 days;
+  `revoke(ref, { invitationId })` cancels one; `revoke(ref, { principalId })` removes a person, whose access ends
+  within the 300 s token lifetime. An address the organization names is refused (409 `internal_mailbox`). A company's
+  deactivation is the application's own flag: check it where the endpoint loads the company row.
 - Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
   those as the caller's own identity (`client-identity`).
 

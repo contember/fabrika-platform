@@ -493,6 +493,13 @@ still refuses any `Authorization` header, as authorization.
   names. `assignableBy` names membership roles of the same dimension, held in that value, or application-wide roles
   (roles with no `member`), held in that value or globally. So a staff member with a global role invites into any
   value. IAM checks the inviter again when an invitation is accepted, inside the write that consumes it.
+- **A membership write may lead to an external principal.** An invitation by e-mail to a role declared `external`
+  ([ADR-0051](0051-external-principals.md)) for a mailbox no principal holds creates the external principal when its
+  owner accepts, with the password chosen there ([ADR-0020](0020-compose-human-authentication-methods.md)), in the
+  transaction that consumes the invitation and writes the grant, under the same inviter re-check. Sending it creates
+  nothing. IAM refuses such an invitation for a mailbox the organization names (`internal_mailbox`). The invitation
+  carries a company label and a personal message as plain text, and a resend rotates its link and restarts its 7 days;
+  each is one membership write under the same delegation.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
   every write path. In every IAM schema, an installation service's included, IAM refuses a
   global grant of a role declared with `member.scope`, and such a grant resolves to no permission.

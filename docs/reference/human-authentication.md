@@ -165,6 +165,36 @@ An application invites an address to a membership role through IAM's
 5. An accepted invitation lands on the application's registered return origin.
    Without one, IAM answers its outcome page.
 
+An invitation may name the invited person's company (`label`, at most 200
+characters on one line) and a personal message (at most 1000 characters of plain
+text). Both reach the e-mail, IAM's wording and an application's
+`{{companyLabel}}`/`{{message}}` alike, and are escaped in its HTML part. A
+resend (`invitation.resend`) gives the open invitation a new link and a new
+7 days and mails it again; the earlier link stops working.
+
+### An invitation that creates its principal
+
+An invitation to a role the application declares `external` (ADR-0051), for a
+mailbox no principal holds, onboards a person IAM does not know. Nothing is
+created when it is sent. When the mailbox's owner opens the link and accepts,
+IAM answers a set-password form instead of asking them to sign in, provided the
+installation enables password authentication and e-mail and the inviter can
+still give the role. That form's `POST` creates the external principal, its
+enabled password (same policy and verifier as enrollment), its grant, consumes
+the invitation and writes the records, in one transaction, then signs the
+browser in to IAM and lands it on the application, whose proxy completes the
+handoff. This enrollment lives as long as the invitation, 7 days (ADR-0020).
+
+- A mailbox some principal holds keeps the sign-in-and-accept steps above. An
+  invitation never sets, replaces or re-enables an existing principal's
+  password, a disabled principal's included.
+- A mailbox the organization names — a bootstrap admin, an exact
+  `HUMAN_EMAILS` entry or a `HUMAN_EMAIL_DOMAINS` domain (`*` names nobody) — is
+  never created as an external: inviting it to an external role is refused with
+  `internal_mailbox`.
+- Two acceptances that would create the same mailbox create one principal; the
+  other person signs in with it and accepts.
+
 ## First administrator
 
 `IAM_BOOTSTRAP_ADMINS` authorizes an email only after identity is proven. It is

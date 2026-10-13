@@ -176,3 +176,12 @@ WU1, WU2 and WU4.
   (`ASSIGNING_GRANT`, `repositories/membership.ts`), at assignment, revocation, the acceptance re-check and inside the
   acceptance's guarded `EXISTS` (`FOR SHARE` on Postgres). The stand-in follows; the generated cases' manager may now
   hold an application-wide assigner, always in the value. ADR-0022 rule 6 states who assigns.
+- **WU5 (2026-10-13).** Shipped: `ctx.members.assign(ref, { email }, role, { label, message, resend })` (`InvitationOptions`,
+  bounds in `invitationOptionsProblem`; migration 0014 stores `company_label` and `message` on the invitation). The
+  smaller resend API was chosen: `resend: true` on assign rotates the open invitation's token and restarts its 7 days,
+  no new IAM method. The accept POST answers a set-password form when `invitationOffer` is `create`; its POST runs
+  `MembershipRepository.acceptAsNewPrincipal`, one batch from the principal row to the three records, then the IAM
+  session and the landing. Every acceptance now names the token hash in its guarded write. An assign to an external
+  role for an address `organizationMailbox` names (bootstrap, an exact `HUMAN_EMAILS` entry, a `HUMAN_EMAIL_DOMAINS`
+  domain) is `internal_mailbox`, whether or not a principal holds it, so the answer says nothing about who has an
+  account. **Still owed:** the browser run of the whole path, also for a person invited by two companies.

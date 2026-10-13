@@ -32,9 +32,24 @@ Principal activation becomes independent of OIDC linkage. Sessions record their 
 
 An external principal ([ADR-0051](0051-external-principals.md)), a person from outside the organization, authenticates by password only. OIDC never claims an external principal's row and never creates one: an IdP that presents its mailbox is refused with the fixed reason `oidc_external_principal`, and the human-admission allowlist's bypass for an already-known principal admits only an internal one. Only an installation administrator's audited promotion makes it internal, after which OIDC may claim it; the promotion ends every session and pending password action issued while it was external. Hybrid linking of an internal principal is unchanged.
 
+An invitation may carry the first enrollment of the principal it creates. An application's invitation by e-mail to a
+membership role declared external, for a mailbox no principal holds, creates nothing when it is sent. When the
+mailbox's owner opens the link, IAM asks for a password instead of a sign-in, and that form's submission creates the
+external principal, its enabled password account and verifier, and the membership grant, consumes the invitation and
+writes their records in one transaction, then signs the browser in. This enrollment lives as long as the invitation,
+7 days, instead of an action's one hour, because the invitation's own one-time token is the action token: it is mailed
+to the mailbox and stored only as a hash, its page is scanner-safe, and only the submission consumes it. It exists only
+for a principal the invitation creates. An invitation never sets, replaces or re-enables the password of an existing
+principal, a disabled one or one whose password is disabled included; such a mailbox signs in and accepts. It needs
+password authentication and e-mail to be enabled, and IAM never creates a mailbox the organization names (a bootstrap
+admin, or one the human-admission allowlist names by address or domain; `*` names nobody) this way: the invitation is
+refused when it is sent.
+
 The existing bootstrap-admin email list grants authorization only after identity is proven, and never to an external principal. When mail is available, control of a configured bootstrap address may complete the first password enrollment. Without mail, the existing provisioning bearer authorizes the first explicit enrollment; there is no persistent bootstrap password.
 
 **Invariant:** Enabling a human authentication method globally never provisions that credential for a principal, and disabling or resetting password authentication never revokes an independent OIDC session.
+
+**Invariant:** An invitation sets a password only for the principal its acceptance creates, in the same transaction.
 
 ## Consequences
 

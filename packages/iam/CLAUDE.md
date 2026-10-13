@@ -288,7 +288,25 @@ fails if that stops being true — it is the guard, not documentation of one.
   alone): a removal either commits first and the acceptance is `not_allowed` with the invitation still
   open, or waits until the acceptance committed. The guarded UPDATE stamps a fresh `acceptance_id`, and the grant is written in the same
   batch only for the attempt holding it — never on a timestamp a replay can share. Without an email service, an invitation is `invitations_disabled`; assigning an existing
-  principal by id still works. Invitations live `INVITATION_TTL_SECONDS` (7 days).
+  principal by id still works. Invitations live `INVITATION_TTL_SECONDS` (7 days). Every acceptance names the token's
+  hash in its guarded write, so a resend (`invitation.resend`, `rotateInvitation`: a new hash and a new 7 days) ends the
+  old link even mid-submission. An invitation's `company_label` and `message` are plain text, bounded by
+  `invitationOptionsProblem` (`@fabrika/auth-core`), and reach the e-mail as `{{companyLabel}}`/`{{message}}`.
+- **AN INVITATION CREATES A PRINCIPAL ONLY AT ACCEPTANCE, AND ONLY AN EXTERNAL ONE WITH NOTHING BEFORE IT** (ADR-0020,
+  ADR-0051, `invitationOffer`, `acceptCreatingPrincipal`, `MembershipRepository.acceptAsNewPrincipal`). The offer is
+  `create` only for an open invitation whose role is declared external, with password and e-mail enabled, a mailbox no
+  principal holds and `organizationMailbox` does not name (a bootstrap admin, an exact `HUMAN_EMAILS` entry or a
+  `HUMAN_EMAIL_DOMAINS` domain; `*` names nobody), and an inviter that can still give the role; then the accept POST
+  without a password answers the set-password form and changes nothing. Its POST with the password writes in ONE batch,
+  principal row first: the `external` principal (label = the invited mailbox, activated), its mailbox claim, the guarded
+  acceptance, the grant, the enabled password account and verifier, and three records (`iam.principal.create`,
+  `iam.member.accept`, `iam.password.enrollment.complete`). The principal INSERT carries the open invitation under this
+  token hash, the inviter's assigning grant and the role's `external = 1` (both `FOR SHARE` on Postgres), so a refusal
+  writes nothing; a guard statement rolls the batch back if the principal ended without its grant. A mailbox claimed
+  concurrently fails the unique mailbox and rolls back too (`account_exists` → sign in and accept), so two acceptances
+  create one principal. Then the IAM session (`invitation_enrollment`) and the 302 to `landingUrl`. An existing
+  principal, disabled or with password disabled included, never gets a password from an invitation. An assign to an
+  external role for a mailbox `organizationMailbox` names is `internal_mailbox` before anything is written.
 - **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,
   `link_chain`). `issueLink` checks the chain against the schema's containment, requires an expiry of
   at most the mount's `maxDays`, and requires the issuer to hold `issuedBy` and every granted action on
