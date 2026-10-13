@@ -4,7 +4,7 @@
 // holds each handler beside its site (`handled.ts`), never calling one.
 
 import type { RpcCaller } from '@fabrika/auth-core'
-import type { DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
+import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Declared, JobKitContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
 import {
@@ -26,13 +26,17 @@ import {
 	unknownOptions,
 	type WebhookMountDeclaration,
 } from './declaration'
+import type { FORM_CHALLENGE_FIELD } from './defaults'
 import {
 	type AnyContract,
 	type Contract,
 	type CreatableDimension,
 	type CronJob,
 	type Export,
+	type FormChallengeOption,
 	type FormJobs,
+	type FormMount,
+	type FormOptions,
 	type InputSchema,
 	type Kit,
 	type LinkMount,
@@ -66,10 +70,10 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 	}
 	: never
 
-export type CronOptions<Acts, Sc, S, U, Is, Tables extends string> =
+export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex> =
 	& Owned<'kind' | 'schedule'>
 	& { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number }
-	& DeclaredFields<S, U, never, Is, Tables>
+	& DeclaredFields<S, U, never, Is, Ix>
 
 /** A cron job of the kit, handled. */
 export interface KitCronJob<Acts extends string, Sc extends string, D> extends CronJob<Acts, Sc> {
@@ -81,7 +85,7 @@ export interface CronBuilder<K extends KitTypes, Acts extends string, Sc extends
 	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
 }
 
-export type WebhookOptions<B, Acts, I, S, U, Tables extends string> =
+export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex> =
 	& Owned<'kind' | 'path'>
 	& {
 		readonly scheme: 'github-sha256'
@@ -90,7 +94,7 @@ export type WebhookOptions<B, Acts, I, S, U, Tables extends string> =
 		readonly input: I & NotLoose<I>
 		readonly maxBytes?: number
 	}
-	& DeclaredFields<S, U, never, never, Tables>
+	& DeclaredFields<S, U, never, never, Ix>
 
 /** A webhook of the kit, handled. */
 export interface KitWebhook<B extends string, Acts extends string, I extends Schema, D> extends WebhookMount<B, Acts, I> {
@@ -144,8 +148,39 @@ type MountPrefix<G> = [PendingOf<G>] extends [never]
 	? true extends IsUnion<CallersOf<G>> ? Unavailable<'every group of one RPC mount names the same callers, in the same order'> : Path
 	: Unavailable<`add .handle(…) to ${ListOf<PendingOf<G>>}: every endpoint takes its handler beside it`>
 
+/**
+ * The input fields of a form that appends to inbox `T` and are no column of it, the honeypot and the challenge token
+ * exempt: the form writes each field to the column of its name.
+ */
+type InboxFields<Ix extends AnyDbIndex, T, Fields, Exempt> = T extends keyof Ix['tables'] & string
+	? Ix['tables'][T]['mode'] extends 'inbox'
+		? ExtraFields<T, Exclude<Fields & string, keyof Ix['tables'][T]['row'] | Exempt>, keyof Ix['tables'][T]['row'] & string>
+	: unknown
+	: unknown
+
+type ExtraFields<T extends string, Extra extends string, Columns extends string> = [Extra] extends [never] ? unknown
+	: Unavailable<`the inbox ${T} has no column ${ListOf<Extra>}: each input field is named like its column (columns: ${ListOf<Columns>})`>
+
+/** The challenge token's field, exempt from the inbox's columns where the form declares a challenge. */
+type ChallengeField<Ch> = [Ch] extends [never] ? never : typeof FORM_CHALLENGE_FIELD
+
 /** The builders of the contract's callback: the mounts that take no handler, and `rpc`, which mounts groups. */
-export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K['dimension'], K['creatable']>, 'spa' | 'health' | 'form' | 'files'> {
+export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K['dimension'], K['creatable']>, 'spa' | 'health' | 'files'> {
+	/** A form that appends each submission to its inbox `appendTo`, one column per input field, and answers a constant. */
+	form<
+		I extends InputSchema,
+		const T extends string,
+		const H extends string = never,
+		const Ch extends FormChallengeOption = never,
+		const Then extends string = never,
+	>(
+		path: Path,
+		options: FormOptions<I, Then> & {
+			readonly appendTo: T & NoInfer<InboxFields<K['index'], T, keyof z.output<I>, H | ChallengeField<Ch>>>
+			readonly honeypot?: H
+			readonly challenge?: Ch
+		},
+	): FormMount<I, NoInfer<Then>>
 	/** The groups' endpoints at `POST <prefix>/<group>.<endpoint>`, to the callers the groups name. */
 	rpc<const G extends MountedGroups>(
 		prefix: MountPrefix<G>,
@@ -180,7 +215,7 @@ export interface App<K extends KitTypes> {
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 		const Is extends string = never,
-	>(schedule: string, options: CronOptions<Acts, Sc, S, U, Is, K['tables']>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is>>
+	>(schedule: string, options: CronOptions<Acts, Sc, S, U, Is, K['index']>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is>>
 	/** A GitHub webhook bound per value of `boundTo`; the contract mounts it by name. */
 	webhook<
 		const B extends K['dimension'],
@@ -188,7 +223,7 @@ export interface App<K extends KitTypes> {
 		I extends InputSchema,
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
-	>(path: Path, options: WebhookOptions<B, Acts, I, S, U, K['tables']>): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>>
+	>(path: Path, options: WebhookOptions<B, Acts, I, S, U, K['index']>): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>>
 	/** A share SPA under `prefix` and its procedures under `<prefix>/api`, for an anonymous key bound to one object. */
 	link<
 		const LD extends K['dimension'],

@@ -34,6 +34,7 @@ import {
 	type ScopeBinding,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
+import type { InboxColumns } from '@fabrika/db/tables'
 import { isPolicyOrigin, MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { contractArtifactSchema } from './artifact-schema'
 import {
@@ -167,10 +168,17 @@ export const WEBHOOK_BIND_OUTPUT: SchemaShape = { type: 'object', fields: { id: 
 export const WEBHOOK_UNBIND_INPUT: SchemaShape = { type: 'object', fields: { [WEBHOOK_SCOPE_FIELD]: TEXT, id: UUID } }
 export const WEBHOOK_UNBIND_OUTPUT: SchemaShape = ID_OBJECT
 
-/** Validates a described contract against its table policies and normalizes it; throws `ContractError` with every problem. */
-export function buildArtifact(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
+/**
+ * Validates a described contract against its table policies and normalizes it; throws `ContractError` with every
+ * problem. A form's fields are checked against its inbox's columns only where `inboxes` names them.
+ */
+export function buildArtifact(
+	contract: ContractDeclaration<SchemaShape>,
+	tables: Readonly<Record<string, TablePolicyArtifact>>,
+	inboxes: InboxColumns = {},
+): ContractArtifact {
 	const problems = new Problems()
-	const artifact = canonicalizeArtifact(new ArtifactBuilder(contract, tables, problems).build())
+	const artifact = canonicalizeArtifact(new ArtifactBuilder(contract, tables, inboxes, problems).build())
 	problems.throwIfAny()
 	// A check missing above must surface here, not in the proxy or Control that reads the artifact later.
 	const parsed = contractArtifactSchema.safeParse(JSON.parse(JSON.stringify(artifact)))
@@ -183,6 +191,7 @@ export function buildArtifact(contract: ContractDeclaration<SchemaShape>, tables
 class ArtifactBuilder {
 	readonly #contract: ContractDeclaration<SchemaShape>
 	readonly #tables: Readonly<Record<string, TablePolicyArtifact>>
+	readonly #inboxes: InboxColumns
 	readonly #problems: Problems
 	readonly #endpoints: EndpointRow[] = []
 	readonly #reservedPrefixes: string[] = []
@@ -194,9 +203,15 @@ class ArtifactBuilder {
 	/** The forms that declare a challenge: their provider's fixed origins join the CSP. */
 	readonly #challenges: { readonly form: string; readonly provider: ChallengeProvider }[] = []
 
-	constructor(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>, problems: Problems) {
+	constructor(
+		contract: ContractDeclaration<SchemaShape>,
+		tables: Readonly<Record<string, TablePolicyArtifact>>,
+		inboxes: InboxColumns,
+		problems: Problems,
+	) {
 		this.#contract = contract
 		this.#tables = tables
+		this.#inboxes = inboxes
 		this.#problems = problems
 	}
 
@@ -1349,6 +1364,15 @@ class ArtifactBuilder {
 			if (readOnly && mode === 'write') {
 				this.#problem(where, `declares unscoped '${table}': 'write', and it runs read-only (allowed: 'read')`)
 			}
+			const scope = Object.hasOwn(this.#tables, table) ? this.#tables[table]?.scope.mode : undefined
+			if (mode === 'write' && scope === 'reference') {
+				this.#problem(
+					where,
+					`declares unscoped '${table}': 'write', and no site writes a reference table: its rows come from a migration (allowed: 'read')`,
+				)
+			} else if (mode === 'write' && scope === 'inbox') {
+				this.#problem(where, `declares unscoped '${table}': 'write', and only its form writes a form's inbox (allowed: 'read')`)
+			}
 			unscoped[table] = mode
 		}
 		return unscoped
@@ -1484,10 +1508,31 @@ class ArtifactBuilder {
 				const inbox = this.#tables[mount.appendTo]?.scope
 				if (inbox?.mode !== 'inbox' || inbox.form !== name) {
 					this.#problem(`mount '${name}'`, `appends to '${mount.appendTo}', which is not an inbox table of this form (scope: { inbox: '${name}', … })`)
+				} else {
+					this.#inboxFields(name, mount)
 				}
 			}
 		}
 		return tables
+	}
+
+	/** Each input field of a form is a column of its inbox, of the same name; the honeypot and the challenge token are not. */
+	#inboxFields(name: string, mount: FormMountDeclaration<SchemaShape>): void {
+		const columns = Object.hasOwn(this.#inboxes, mount.appendTo) ? this.#inboxes[mount.appendTo] : undefined
+		if (columns === undefined || mount.input.type !== 'object') {
+			return
+		}
+		for (const field of Object.keys(mount.input.fields)) {
+			const exempt = field === mount.honeypot || (mount.challenge !== undefined && field === FORM_CHALLENGE_FIELD)
+			if (!exempt && !columns.includes(field)) {
+				this.#problem(
+					`mount '${name}'`,
+					`the input field '${field}' is not a column of its inbox ${mount.appendTo}${suggestion(field, columns)} (allowed: a field named like a column: ${
+						columns.join(', ')
+					})`,
+				)
+			}
+		}
 	}
 
 	// ── Shared checks ───────────────────────────────────────────────────────────────────────────

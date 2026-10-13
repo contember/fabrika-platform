@@ -21,6 +21,7 @@ export type {
 	NoUnscoped,
 	OrderTerm,
 	OwnerRow,
+	ReadOnlyUnscoped,
 	ReferenceRows,
 	ReferenceTables,
 	RowFor,
@@ -94,6 +95,23 @@ export function tablePolicies<DB, P>(tables: Tables<DB, P>): TablePolicies {
 		}
 	}
 	return freeze(artifacts)
+}
+
+/** Each form inbox's columns, by table: the only fields its form writes. The artifact carries no column list. */
+export type InboxColumns = Readonly<Record<string, readonly string[]>>
+
+/** The columns of every inbox table `defineTables` (or `readTables`) checked. */
+export function inboxColumns<DB, P>(tables: Tables<DB, P>): InboxColumns {
+	const models = tableModels(tables)
+	const names = ownKeys(models)
+	const columns: Record<string, readonly string[]> = {}
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model?.scope.mode === 'inbox') {
+			setOwn(columns, model.name, freeze([...namesOf(model.columns)]))
+		}
+	}
+	return freeze(columns)
 }
 
 function artifactOf(model: TableModel): TablePolicyArtifact {

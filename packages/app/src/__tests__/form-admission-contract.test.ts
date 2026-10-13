@@ -85,6 +85,8 @@ describe('compileContract refuses', () => {
 			"mount 'contact': honeypot 'email2' is not a field of its input (allowed: a z.string() field the form's page hides)",
 			"mount 'apply': honeypot 'age' is not a string field (allowed: z.string() or z.optional(z.string()))",
 			"mount 'apply': declares a challenge, so its input needs the required field challengeToken: z.string(), the widget's token",
+			// Its honeypot names no field, so the page's hidden field is an input field like any other.
+			"mount 'contact': the input field 'website' is not a column of its inbox messages (allowed: a field named like a column: email, body)",
 		])
 	})
 

@@ -246,6 +246,26 @@ export type FormJobs<S> = {
 		: unknown
 }
 
+/** A form's challenge: the provider and the application variable that holds its secret. */
+export interface FormChallengeOption {
+	readonly provider: ChallengeProvider
+	readonly secret: string
+}
+
+/** What `c.form(path, options)` takes. */
+export type FormOptions<I, T> =
+	& {
+		readonly input: I & NotLoose<I>
+		readonly appendTo: string
+		readonly maxBytes?: number
+		readonly rate?: { readonly perClient?: number; readonly perForm?: number }
+		readonly honeypot?: string
+		readonly challenge?: FormChallengeOption
+		/** The cron job each accepted submission kicks, in the background of the constant answer. */
+		readonly then?: T
+	}
+	& Owned<'kind' | 'path'>
+
 export interface LinkKit<A extends string> {
 	query<const Acc extends LinkAccess<A>, O extends Schema, I extends InputSchema | null = null>(
 		def: ProcedureDef<I, O, Acc>,
@@ -286,19 +306,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 		options: { readonly dir: string; readonly access: Acc } & Owned<'kind' | 'prefix'>,
 	): SpaMount<Acc>
 	health(path: Path): HealthMount
-	form<I extends InputSchema, const T extends string = never>(
-		path: Path,
-		options: {
-			readonly input: I & NotLoose<I>
-			readonly appendTo: string
-			readonly maxBytes?: number
-			readonly rate?: { readonly perClient?: number; readonly perForm?: number }
-			readonly honeypot?: string
-			readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string }
-			/** The cron job each accepted submission kicks, in the background of the constant answer. */
-			readonly then?: T
-		} & Owned<'kind' | 'path'>,
-	): FormMount<I, NoInfer<T>>
+	form<I extends InputSchema, const T extends string = never>(path: Path, options: FormOptions<I, T>): FormMount<I, NoInfer<T>>
 	webhook<const B extends D | 'app', const Acts extends readonly [A, ...A[]], I extends InputSchema>(
 		path: Path,
 		options: {

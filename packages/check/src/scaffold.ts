@@ -5,10 +5,11 @@
 
 import { GENERATED_MEMBER } from '@fabrika/app/contract'
 import { type ContractArtifact, endpointDirectory, type EndpointRow, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
-import { ContractSourceError, readContractSource, readTablesSource } from './contract'
+import { tablePolicies } from '@fabrika/db/tables'
+import { ContractSourceError, readContractSource, readTablesDefinition } from './contract'
 import { type EndpointFixtures, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
 import type { Finding } from './finding'
-import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR, TABLES_FILE } from './layout'
+import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
 
 export { ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
 import { generatedTestHeader } from './rules/tests'
@@ -373,11 +374,12 @@ export interface ScaffoldInputs {
 
 /** What the scaffold reads from an application's files; throws `ContractSourceError` or `ContractError` as the reader does. */
 export const scaffoldInputs = (files: ReadonlyMap<string, string>): ScaffoldInputs => {
-	const policies = readTablesSource(files)
+	const tables = readTablesDefinition(files)
+	const policies = tables === null ? {} : tablePolicies(tables)
 	const fixtures = readEndpointFixtures(files)
 	if (!fixtures.ok) throw new ContractSourceError(fixtures.findings)
 	// Endpoint tests seed rows from the policies, so without src/db/tables.ts there is nothing to compile them against.
-	const artifact = files.has(CONTRACT_FILE) && files.has(TABLES_FILE) ? readContractSource(files, policies) : null
+	const artifact = files.has(CONTRACT_FILE) && tables !== null ? readContractSource(files, tables) : null
 	return { policies, artifact, fixtures: fixtures.fixtures }
 }
 

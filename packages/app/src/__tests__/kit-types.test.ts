@@ -43,6 +43,11 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'30-attachment-handler-returns-no-rows.ts': 'an attachment handler returns its rows: an array of its row schema, with nothing around it',
 	'31-job-links-without-issues.ts': "declare issues: '<link mount>' on this job to issue its share links",
 	'32-form-kicks-an-unknown-job.ts': "then names a job of the contract's jobs section",
+	// The compiler lists a union's members in no fixed order.
+	'33-form-field-that-is-no-inbox-column.ts': 'the inbox registrations has no column fullName: each input field is named like its column (columns: ',
+	'34-unscoped-write-of-a-reference-table.ts':
+		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
+	'35-unscoped-write-of-an-inbox.ts': "registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
 }
 
 /**

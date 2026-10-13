@@ -74,7 +74,8 @@ src/
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope or a file
   testing/            @fabrika/app/testing — no test-runner dependency
-    kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
+    kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM; the module re-exports
+                      the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner)
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
     directory.ts      the default membership transport: member directories (list, find) from the kit's callers, writes refused
@@ -198,7 +199,10 @@ src/
   `files`, `jobs`, `exports`, `imports`, `csp` (`SURFACE_SECTIONS`); a mount may
   not take one of those names.
 - **`buildArtifact` is the one normalization.** `compileContract(contract, tables)`
-  = `describeContract` (zod → `SchemaShape`) + `buildArtifact`. The static reader
+  = `describeContract` (zod → `SchemaShape`) + `buildArtifact`. Given what `defineTables` returned, it also hands
+  `buildArtifact` each inbox's columns (`inboxColumns`), which the artifact does not carry, and a form's input field
+  outside them (its honeypot and `challengeToken` excepted) is refused; the artifact form of the policies checks
+  nothing there, and `boot` checks it against the data layer either way. The static reader
   (B1) must produce the same `ContractDeclaration<SchemaShape>` from source and
   call `buildArtifact`, never a copy. Every default and generated path is in
   `defaults.ts`; add new ones there, nowhere else.
@@ -287,7 +291,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   and falls back to the whole constraint (a union), `CheckedAccess` makes the capability and `ctx.db` an
   `Unavailable` that says so, never a union of every form.
 - **A declaration exists only if the object carries it**: each off-road field is inferred from its optional field and
-  then required (`DeclaredFields`), and an `unscoped` key that is no table is refused at its line.
+  then required (`DeclaredFields`), and an `unscoped` key that is no table is refused at its line, and so is
+  `'write'` of a reference table or a form inbox (`ReadOnlyUnscoped`), which no site writes.
+- **The kit's `c.form` types its input by its inbox** (`ContractKit.form`): where `appendTo` names an inbox table of
+  the kit, an input field that is no column of it, other than the honeypot and, with a challenge, `challengeToken`, is
+  an `Unavailable` at `appendTo` that names the inbox's columns. `defineContract`'s `c.form` knows no tables.
 - **`connect` is a literal list and `issues` one literal**: a widened `string[]` or a union declares nothing, so the
   site refuses it with a message that shows the literal form.
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
@@ -313,7 +321,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   only as a type argument, would let the type promise a section the runtime does not build (`colocated-mistakes/05`–`07`). A kit import no endpoint connects is refused by `buildArtifact`, as before.
 - **`buildArtifact` parses `declared`** (the static reader copies it unchecked): `sql` and each `unscoped` mode `read`
   or `write`, `read` only on a query and an export; `unscoped` names tables of `src/db/tables.ts` and never a
-  `fabrika_*` one; `connect` only on an RPC endpoint, naming the kit's imports; `issues` on an RPC endpoint, a link
+  `fabrika_*` one, and `'write'` never a reference table or a form inbox (their rows come from a migration and a form); `connect` only on an RPC endpoint, naming the kit's imports; `issues` on an RPC endpoint, a link
   mount whose `issuedBy` on its dimension is the endpoint's own access, and on a cron job, a link mount whose
   `issuedBy` and every grant are among the job's actions (`schemaFromContract` hands it to IAM as the job's `issues`).
   The artifact's `declared` section holds

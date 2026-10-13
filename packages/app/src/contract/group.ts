@@ -3,7 +3,7 @@
 // of many endpoints stays cheap to type-check, and an endpoint without `.handle` is not a group member.
 
 import type { RpcCaller } from '@fabrika/auth-core'
-import type { Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
+import type { AnyDbIndex, ReadOnlyUnscoped, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Snake } from '../from-row'
 import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
@@ -23,7 +23,7 @@ type ExactTables<U, Tables extends string> = [Exclude<keyof U, Tables>] extends 
  * The off-road fields a site declares. Each is inferred from its optional field and then required: a handle exists
  * only for a declaration the object really carries, never for one an annotation merely allows.
  */
-export type DeclaredFields<S, U, Cn, Is, Tables extends string> =
+export type DeclaredFields<S, U, Cn, Is, Ix extends AnyDbIndex> =
 	& {
 		/** `ctx.sql`, in this mode; a query declares only `'read'`. */
 		readonly sql?: S
@@ -34,8 +34,8 @@ export type DeclaredFields<S, U, Cn, Is, Tables extends string> =
 		/** `ctx.links.issue` for this link mount, on an endpoint whose action is the mount's `issuedBy`. */
 		readonly issues?: Is
 	}
-	& ([S] extends [never] ? unknown : { readonly sql: S & NoInfer<SqlReach<Tables>> })
-	& ([U] extends [never] ? unknown : { readonly unscoped: U & NoInfer<ExactTables<U, Tables>> })
+	& ([S] extends [never] ? unknown : { readonly sql: S & NoInfer<SqlReach<keyof Ix['tables'] & string>> })
+	& ([U] extends [never] ? unknown : { readonly unscoped: U & NoInfer<ExactTables<U, keyof Ix['tables'] & string> & ReadOnlyUnscoped<Ix, U>> })
 	& ([Cn] extends [never] ? unknown : { readonly connect: Cn & NoInfer<LiteralList<Cn>> })
 	& ([Is] extends [never] ? unknown : { readonly issues: Is & NoInfer<OneLiteral<Is>> })
 
@@ -58,14 +58,14 @@ type OneLiteral<Is> = string extends Is ? Unavailable<"issues names one link mou
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
 /** An endpoint's declaration: its schemas, its access form and the reach it declares. */
-export type EndpointDef<I, O, Acc, S, U, Cn, Is, Tables extends string> =
+export type EndpointDef<I, O, Acc, S, U, Cn, Is, Ix extends AnyDbIndex> =
 	& Owned<'~kind' | 'type'>
 	& {
 		readonly input?: I & NotLoose<I>
 		readonly output: O & NotLoose<O>
 		readonly access: Acc
 	}
-	& DeclaredFields<S, U, Cn, Is, Tables>
+	& DeclaredFields<S, U, Cn, Is, Ix>
 
 type Returned<F> = F extends (args: never) => infer R ? Awaited<R> : never
 
@@ -147,7 +147,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['tables']>,
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>,
 	): EndpointBuilder<
 		'query',
 		I,
@@ -165,7 +165,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['tables']>,
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>,
 	): EndpointBuilder<
 		'mutation',
 		I,
@@ -226,7 +226,7 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 		const S extends 'read' = never,
 		const U extends UnscopedDeclaration<K['tables'], 'read'> = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, never, never, K['tables']>,
+		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']>,
 	): EndpointBuilder<'query', I, O, Acc, Declared<S, U, never, never>, LinkContext<K, 'query', LD, Acc['action'], Declared<S, U, never, never>>>
 	mutation<
 		const Acc extends LinkAccess<G>,
@@ -235,7 +235,7 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, never, never, K['tables']>,
+		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']>,
 	): EndpointBuilder<'mutation', I, O, Acc, Declared<S, U, never, never>, LinkContext<K, 'mutation', LD, Acc['action'], Declared<S, U, never, never>>>
 }
 
@@ -251,7 +251,7 @@ export interface ExportKit<K extends KitTypes> {
 		const S extends 'read' = never,
 		const U extends UnscopedDeclaration<K['tables'], 'read'> = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, never, never, K['tables']>,
+		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']>,
 	): EndpointBuilder<
 		'query',
 		I,

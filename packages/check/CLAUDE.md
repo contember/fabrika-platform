@@ -43,7 +43,8 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   application's other modules load as they are. An SPA build that imports `fabrika.contract.ts` therefore holds no
   handler code, with every package bundled.
 - Reader: `@fabrika/check/contract` exports `readContractSource(files, tables?) → ContractArtifact`,
-  `readContract(files) → AnyContract` and `readTablesSource(files) → TablePolicies`. `files` holds
+  `readContract(files) → AnyContract`, `readTablesSource(files) → TablePolicies` and
+  `readTablesDefinition(files) → Tables | null` (what `defineTables` returns). `files` holds
   `fabrika.contract.ts`, `src/db/tables.ts`, the modules their shell slices import (path → text) and every `package.json`,
   `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those of each directory of
   such a module. For an import without an extension, `files` holds every candidate that
@@ -55,7 +56,9 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   `readTablesSource` reads `src/db/tables.ts` and the modules it imports (the generated `src/db/schema.generated.ts`)
   under the same literal rule, and parses the column list and the policies of `defineTables` with `@fabrika/db/tables`' `readTables`,
   the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
-  `files` means no policies. `readContractSource` uses it unless `tables` (the artifact form) is given.
+  `files` means no policies. `readContractSource` compiles against `readTablesDefinition` unless `tables` is given: only
+  the parsed policies carry each inbox's columns, so only they make `compileContract` check a form's input fields
+  against them; the artifact form does not.
 
 | Module                 | What it owns                                                                                                                                                                                                                                                     |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -300,7 +303,8 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   accident or by an honest shortcut. A deliberately hostile author can always subvert code that runs in the same
   process; do not grow these rules into a sandbox.
 - **The scaffold and the check are one function.** `fabrika db test-scaffold` writes exactly `generatedTests` of what
-  `scaffoldInputs` reads (`readTablesSource`, `readEndpointFixtures`, and `readContractSource` against the policies), and
+  `scaffoldInputs` reads (`readTablesDefinition`, `readEndpointFixtures`, and `readContractSource` against the parsed
+  policies, so the checker reports a form field that is no inbox column), and
   `rules/isolation.ts` compares the tree with the same call, byte for byte. The case names are what `fabrika db
   test-isolation` requires as passed in the JUnit report, so keep them unique within a file. The output is
   not formatter-stable: the root `dprint.json` excludes the generated files of `examples/*` and `packages/cli`'s fixtures,

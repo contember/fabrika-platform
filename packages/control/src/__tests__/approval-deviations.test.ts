@@ -172,19 +172,19 @@ describe('declared reach in the reviewed snapshot', () => {
 	})
 
 	test('`read` → `write` and a new `unscoped` table each widen with closer review; the way back narrows', async () => {
-		const base = await snapshotOf(commitOf({ retitle: "sql: 'read', unscoped: { audit: 'read' }" }))
-		const writes = await snapshotOf(commitOf({ retitle: "sql: 'write', unscoped: { audit: 'write' }" }))
+		const base = await snapshotOf(commitOf({ retitle: "sql: 'read', unscoped: { notes: 'read' }" }))
+		const writes = await snapshotOf(commitOf({ retitle: "sql: 'write', unscoped: { notes: 'write' }" }))
 		const wider = classifyAccess(base, writes)
 		expect(wider.outcome).toBe('widening')
 		expect(closer(wider)).toEqual([
 			'Endpoint `api.notes.retitle` raw SQL changes from `read` to `write`',
-			'Endpoint `api.notes.retitle` table `audit` unscoped changes from `read` to `write`',
+			'Endpoint `api.notes.retitle` table `notes` unscoped changes from `read` to `write`',
 		])
 		expect(classifyAccess(writes, base)).toEqual({
 			outcome: 'removal',
 			changes: [
 				{ widens: false, line: 'Endpoint `api.notes.retitle` raw SQL changes from `write` to `read`' },
-				{ widens: false, line: 'Endpoint `api.notes.retitle` table `audit` unscoped changes from `write` to `read`' },
+				{ widens: false, line: 'Endpoint `api.notes.retitle` table `notes` unscoped changes from `write` to `read`' },
 			],
 		})
 

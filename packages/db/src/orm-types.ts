@@ -407,6 +407,19 @@ export type UnscopedMode = 'read' | 'write'
 /** `unscoped: { <table>: 'read' | 'write' }` as a site may declare it: only tables of `src/db/tables.ts`. */
 export type UnscopedDeclaration<Table extends string, Mode extends UnscopedMode> = { readonly [T in Table]?: Mode }
 
+/** The tables of `U` declared `'write'` that no site writes: a reference table and a form's inbox. */
+type ReadOnlyWritten<Ix extends AnyDbIndex, U> = {
+	[T in keyof U & TableName<Ix>]: U[T] extends 'write' ? Ix['tables'][T]['mode'] extends 'reference' | 'inbox' ? T : never : never
+}[keyof U & TableName<Ix>]
+
+type ReadOnlyMessage<T extends string, Mode> = Mode extends 'reference'
+	? `${T} is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { ${T}: 'read' }`
+	: `${T} is a form's inbox, which only its form writes: declare unscoped: { ${T}: 'read' }`
+
+/** An `unscoped` declaration's `'write'` of a read-only table, refused at its own line. */
+export type ReadOnlyUnscoped<Ix extends AnyDbIndex, U> = [ReadOnlyWritten<Ix, U>] extends [never] ? unknown
+	: { readonly [T in ReadOnlyWritten<Ix, U>]: Unavailable<ReadOnlyMessage<T, Ix['tables'][T]['mode']>> }
+
 /** A table a site declared `unscoped`: its scope predicate is `true`, and `'read'` writes nothing. */
 export interface UnscopedRows<T extends string, E extends IndexedTable, M extends UnscopedMode, K extends DataKind> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>

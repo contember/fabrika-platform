@@ -49,6 +49,7 @@ export type {
 	NoUnscoped,
 	OrderTerm,
 	OwnerRow,
+	ReadOnlyUnscoped,
 	ReferenceRows,
 	ReferenceTables,
 	RowFor,

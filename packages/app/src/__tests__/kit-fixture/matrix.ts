@@ -26,7 +26,7 @@ import type {
 	Ref,
 	Within,
 } from '@fabrika/app/implement'
-import type { DbIndex, ScopeTarget, Tables } from '@fabrika/db/tables'
+import type { DbIndex, ReadOnlyUnscoped, ScopeTarget, Tables } from '@fabrika/db/tables'
 import type { contract } from './fabrika.contract'
 import type { app } from './src/app-kit'
 import type { DB } from './src/db/schema.generated'
@@ -201,6 +201,18 @@ export type OffRoadFields = [
 	>,
 	Expect<Equal<OffRoad['db']['unscoped']['deals'], Unavailable<"deals is outside this site's scope: declare unscoped: { deals: 'read' } on it">>>,
 	Expect<Equal<OnQuery['db']['unscoped'], Unavailable<"this site declares no unscoped table: add unscoped: { <table>: 'read' } to its declaration">>>,
+	// No site writes a reference table: a declaration of 'write' is refused at its key, and 'read' stands.
+	Expect<
+		Equal<
+			ReadOnlyUnscoped<K['index'], { readonly countries: 'write'; readonly deals: 'write' }>,
+			{
+				readonly countries: Unavailable<
+					"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }"
+				>
+			}
+		>
+	>,
+	Expect<Equal<ReadOnlyUnscoped<K['index'], { readonly countries: 'read' }>, unknown>>,
 	Expect<
 		Equal<
 			Returned<OffRoad['connect']['catalog']['get']>,

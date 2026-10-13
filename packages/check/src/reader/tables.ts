@@ -2,8 +2,8 @@
 // `defineTables(vocabulary, columns)({ … })` are read as literals, then parsed by `@fabrika/db`'s own policy parse,
 // which derives each table's containment from the vocabulary as `defineTables` does.
 
-import { PolicyError, readTables, type TablePolicies, tablePolicies } from '@fabrika/db/tables'
-import { children, identifierName } from '../ast'
+import { PolicyError, readTables, type Tables } from '@fabrika/db/tables'
+import { children, identifierName, type ParsedModule } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
 import { TABLES_EXPORT, TABLES_FILE } from '../layout'
 import { BUILDER_IMPORTS, decompose } from '../rules/literal'
@@ -13,12 +13,8 @@ import { type LiteralValue, ValueReader } from './value'
 const ALLOWED_CALL = `export const ${TABLES_EXPORT} = defineTables(vocabulary, columns)({ … })`
 const ALLOWED_POLICY = 'a table policy defineTables accepts (packages/db/CLAUDE.md)'
 
-/** The policies of `src/db/tables.ts`; none when the graph has no such module. `null` after recording why not. */
-export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): TablePolicies | null {
-	const module = graph.module(TABLES_FILE)
-	if (module === undefined) {
-		return {}
-	}
+/** The policies of `src/db/tables.ts`, as `defineTables` returns them; `null` after recording why not. */
+export function readTablesValue(graph: ModuleGraph, module: ParsedModule, problems: ReaderProblems): Tables<unknown, unknown> | null {
 	const binding = graph.exported(module, TABLES_EXPORT)
 	if (binding.kind !== 'const' || binding.init === undefined) {
 		problems.add({ module, node: module.program }, `${TABLES_FILE} exports no const '${TABLES_EXPORT}'`, ALLOWED_CALL)
@@ -53,7 +49,7 @@ export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): T
 		return null
 	}
 	try {
-		return tablePolicies(readTables(plainColumns, plainPolicies, plainVocabulary))
+		return readTables(plainColumns, plainPolicies, plainVocabulary)
 	} catch (error) {
 		if (!(error instanceof PolicyError)) {
 			throw error

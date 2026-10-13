@@ -23,7 +23,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.                           |
 | `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`; `dataAccess`.                            |
 | `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                                           |
-| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                                          |
+| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), each inbox's columns (`inboxColumns`), `readTables`, `isTables`.                   |
 | `temporal.ts`          | Days and timestamps at the boundary: a read's `YYYY-MM-DD` (`answerDays`), a write's strict day and ISO 8601 text (`dayInput`, `timestampInput`).              |
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                        |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                         |
@@ -126,7 +126,9 @@ and the target `Ref`, so no handler can call it.
 - **A capability reads a column that declares its own read action only when its action is exactly that one**
   (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The row type omits
   the hidden column (`Omit<DealsTable, "margin">`, which a diagnostic names), so a read of it is TypeScript's plain
-  "does not exist" error; reference and unscoped rows read through the table's read action. `RowOf<typeof tables, T, A>`
+  "does not exist" error; reference and unscoped rows read through the table's read action. An `unscoped` declaration's
+  `'write'` of a reference or inbox table is an `Unavailable` at its key (`ReadOnlyUnscoped`): no site writes either, and
+  `insertUnscoped` still refuses it at run time. `RowOf<typeof tables, T, A>`
   (`@fabrika/db/tables`) is that row for an application's mapper; `A` defaults to the table's read action. A job's handles outside
   its transaction read only: every write is an `Unavailable` that names `ctx.transaction((tx) => …)` and `tx.db`. The static reader reads
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.

@@ -4,7 +4,7 @@
 
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
-import type { TablePolicies } from '@fabrika/db/tables'
+import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { importedSpecifiers, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
@@ -39,25 +39,38 @@ export class ContractSourceError extends Error {
 /**
  * The contract artifact of an application, read from the text of its files (path relative to the application root →
  * text): `fabrika.contract.ts`, every module it imports and the configuration that applies to them (`readContract`),
- * and `src/db/tables.ts` with the modules it imports (`readTablesSource`). `tables`, when given, replaces what
- * `src/db/tables.ts` declares with the artifact form of each policy.
+ * and `src/db/tables.ts` with the modules it imports (`readTablesDefinition`). `tables`, when given, replaces what
+ * `src/db/tables.ts` declares: its parsed policies, or the artifact form of each policy, which names no inbox's
+ * columns, so a form's fields are not checked against them.
  *
  * Throws `ContractSourceError` for a form the reader refuses, and `ContractError` with the same problems
  * `compileContract` reports for a contract that does not compile.
  */
-export function readContractSource(files: ReadonlyMap<string, string>, tables?: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
+export function readContractSource(
+	files: ReadonlyMap<string, string>,
+	tables?: Tables<unknown, unknown> | Readonly<Record<string, TablePolicyArtifact>>,
+): ContractArtifact {
 	const contract = readContract(files)
-	return compileContract(contract, tables ?? readTablesSource(files))
+	return compileContract(contract, tables ?? readTablesDefinition(files) ?? {})
 }
 
 /**
- * The table policies of `src/db/tables.ts`, read from source and parsed by `@fabrika/db`'s own policy parse; none when
- * `files` has no such file. `files` carries its imports (the generated `src/db/schema.generated.ts`) and the
- * configuration `readContract` names. Throws `ContractSourceError`.
+ * The table policies of `src/db/tables.ts` in their artifact form (`readTablesDefinition`); none when `files` has no
+ * such file. Throws `ContractSourceError`.
  */
 export function readTablesSource(files: ReadonlyMap<string, string>): TablePolicies {
+	const tables = readTablesDefinition(files)
+	return tables === null ? {} : tablePolicies(tables)
+}
+
+/**
+ * The table policies of `src/db/tables.ts`, read from source and parsed by `@fabrika/db`'s own policy parse, as
+ * `defineTables` returns them; `null` when `files` has no such file. `files` carries its imports (the generated
+ * `src/db/schema.generated.ts`) and the configuration `readContract` names. Throws `ContractSourceError`.
+ */
+export function readTablesDefinition(files: ReadonlyMap<string, string>): Tables<unknown, unknown> | null {
 	if (!files.has(TABLES_FILE)) {
-		return {}
+		return null
 	}
 	const trust = checkTrustedResolution(files)
 	if (trust.length > 0) {
@@ -73,8 +86,11 @@ export function readTablesSource(files: ReadonlyMap<string, string>): TablePolic
 	if (literal.length > 0 || budget.length > 0) {
 		throw new ContractSourceError([...literal, ...budget])
 	}
+	if (module === undefined) {
+		return null
+	}
 	const problems = new ReaderProblems()
-	const tables = readTablesValue(parsed.graph, problems)
+	const tables = readTablesValue(parsed.graph, module, problems)
 	if (tables === null || problems.findings.length > 0) {
 		throw new ContractSourceError(problems.findings)
 	}

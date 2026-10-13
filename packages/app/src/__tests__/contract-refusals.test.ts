@@ -367,6 +367,30 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
+	test('an unscoped write of a reference table or a form inbox, which no site writes', () => {
+		const problems = build(withMounts({
+			...base.mounts,
+			api: {
+				...api,
+				procedures: {
+					...api.procedures,
+					fill: {
+						'~kind': 'procedure',
+						type: 'mutation',
+						input: null,
+						output,
+						access: { member: true },
+						declared: { unscoped: { countries: 'write', contact_messages: 'write', notes: 'write' } },
+					},
+				},
+			},
+		}))
+		expect(problems).toEqual([
+			"procedure 'api.fill': declares unscoped 'countries': 'write', and no site writes a reference table: its rows come from a migration (allowed: 'read')",
+			"procedure 'api.fill': declares unscoped 'contact_messages': 'write', and only its form writes a form's inbox (allowed: 'read')",
+		])
+	})
+
 	test('a mutation in an export', () => {
 		const products = base.exports['products']
 		if (products === undefined) {
