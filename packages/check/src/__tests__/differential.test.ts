@@ -201,6 +201,7 @@ describe('the static reader and the evaluated contract agree', () => {
 		expect(Object.keys(artifact.exports)).toEqual(['tasks'])
 		expect(Object.keys(artifact.imports)).toEqual(['billing'])
 		expect(artifact.dimensions['project']?.directory).toBe('labels')
+		expect([artifact.locale, artifact.displayName]).toEqual(['cs', 'Úkoly'])
 	})
 })
 
@@ -225,6 +226,7 @@ const MISTAKES: Readonly<Record<string, string>> = {
 	'21-oauth-caller-on-rpc-mount.ts': "fabrika.contract.ts:30:40 'oauth' is not a caller of an RPC mount",
 	'22-app-caller-on-rpc-mount.ts': "fabrika.contract.ts:30:40 'app:billing' is not a caller of an RPC mount",
 	'23-member-access-in-export.ts': 'fabrika.contract.ts:36:55 an export procedure names its action',
+	'24-unsupported-locale.ts': "fabrika.contract.ts:6:10 locale is 'de'",
 }
 
 /** The first refusal, as a finding line without its rule id and allowed form, or as a compile problem. */

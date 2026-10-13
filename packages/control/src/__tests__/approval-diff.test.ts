@@ -149,6 +149,25 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(EMPTY_SNAPSHOT, EMPTY_SNAPSHOT).outcome).toBe('unchanged')
 	})
 
+	test('a display name or a locale, declared, changed or dropped, is a line the approver reads', () => {
+		const named = snapshot(edited("app: 'notes',", "app: 'notes',\n\tlocale: 'cs',\n\tdisplayName: 'Poznámky',"))
+		const renamed = snapshot(edited("app: 'notes',", "app: 'notes',\n\tlocale: 'cs',\n\tdisplayName: 'Notes',"))
+		const pages = 'sign-in, password and invitation pages and e-mails'
+		expect(classifyAccess(snapshot(), named)).toEqual({
+			outcome: 'widening',
+			changes: [
+				{ widens: true, line: `IAM names the application \`"Poznámky"\` on its ${pages}` },
+				{ widens: true, line: `IAM speaks \`cs\` on the application's ${pages}` },
+			],
+		})
+		expect(lines(named, renamed)).toEqual([`IAM names the application \`"Notes"\` on its ${pages}`])
+		expect(lines(named, snapshot())).toEqual([
+			`IAM no longer names the application on its ${pages}`,
+			`IAM speaks \`its default language\` on the application's ${pages}`,
+		])
+		expect(lines(EMPTY_SNAPSHOT, snapshot()).some((line) => line.startsWith('IAM '))).toBe(false)
+	})
+
 	test("a dimension's directory: 'labels' widens for closer review; removing it narrows", () => {
 		const members = "workspace: { creator: 'owner', members: { manage: 'notes.delete', list: 'notes.read' } }"
 		const listed = snapshot(edited("workspace: { creator: 'owner' }", members))

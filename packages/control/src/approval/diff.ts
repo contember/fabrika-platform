@@ -81,6 +81,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	const baseline = before === null ? emptyArtifact(candidate) : canonicalizeArtifact(before)
 	if (before === null) changes.add(widening(`The application becomes the contract application \`${candidate.app}\``))
 	else if (baseline.app !== candidate.app) changes.add(widening(`The contract's application changes from \`${baseline.app}\` to \`${candidate.app}\``))
+	changes.add(...presentationChanges(baseline, candidate))
 	compareEndpoints(changes, baseline, candidate)
 	compareSet(changes, baseline.reservedPrefixes, candidate.reservedPrefixes, {
 		// A reserved prefix restricts which endpoints compete under it, so losing one widens.
@@ -784,6 +785,27 @@ function setChanges(subject: string, before: readonly string[], after: readonly 
 		removed: (value) => removal(`${subject} ${loses} \`${value}\``),
 	})
 	return changes.list
+}
+
+/**
+ * The words IAM shows a person signing in, setting a password or accepting an invitation of this application. They
+ * grant nothing, but they stand beside a password field, so the approver reads every change.
+ */
+function presentationChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
+	const changes: AccessChange[] = []
+	if (baseline.displayName !== candidate.displayName) {
+		changes.push(widening(
+			candidate.displayName === undefined
+				? 'IAM no longer names the application on its sign-in, password and invitation pages and e-mails'
+				: `IAM names the application ${shown(JSON.stringify(candidate.displayName))} on its sign-in, password and invitation pages and e-mails`,
+		))
+	}
+	if (baseline.locale !== candidate.locale) {
+		changes.push(
+			widening(`IAM speaks \`${candidate.locale ?? 'its default language'}\` on the application's sign-in, password and invitation pages and e-mails`),
+		)
+	}
+	return changes
 }
 
 function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): AccessChange[] {

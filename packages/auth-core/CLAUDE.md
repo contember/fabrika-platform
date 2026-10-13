@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · permissions · requirement · resource-token · sha256 · token · wire
+bun test               # app-environment · canonical-path · contract-canonical · device · endpoint-digest · endpoints · environment · framework-variables · json · locale · permissions · requirement · resource-token · sha256 · token · wire
 ```
 
 | Module                     | What it owns                                                                                                                                                                                      |
@@ -21,6 +21,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `endpoint-digest.ts`       | `requirementDigest`, `contractDigest`, `exportDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                                                                             |
 | `endpoints.ts`             | The endpoint matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint` — for every endpoint table.                                                                                    |
 | `installation-endpoint.ts` | The forms only an installation entry may use: `protocol`/`service`, method `*`, caller `oauth`, requirement `authenticated`.                                                                      |
+| `locale.ts`                | `LOCALES`, `DEFAULT_LOCALE` and `displayNameProblem` — the languages IAM speaks and the display-name rule.                                                                                        |
 | `path-segment.ts`          | `parameterName` — the one `:name` segment rule of every endpoint table.                                                                                                                           |
 | `permissions.ts`           | `matchAction` and `permits` — the authorization decision itself.                                                                                                                                  |
 | `requirement.ts`           | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.                                                                              |

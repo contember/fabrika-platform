@@ -1,4 +1,4 @@
-import { type AppSchema, BUILTIN_ROLE_KEYS, isActionAllowed } from '@fabrika/auth-core'
+import { type AppSchema, BUILTIN_ROLE_KEYS, displayNameProblem, isActionAllowed, LOCALES } from '@fabrika/auth-core'
 import { z } from 'zod'
 
 /** Quote an untrusted fragment for an error message a run log may carry. */
@@ -175,6 +175,11 @@ const appSchemaShape = z.object({
 	links: z.record(keySchema, linkSchema).optional(),
 	delegations: z.record(keySchema, delegationSchema).optional(),
 	workloads: z.array(workloadSchema).optional(),
+	locale: z.enum(LOCALES).optional(),
+	displayName: z.string().superRefine((value, ctx) => {
+		const problem = displayNameProblem(value)
+		if (problem !== null) ctx.addIssue({ code: 'custom', message: `the display name ${problem}` })
+	}).optional(),
 })
 
 /**

@@ -48,6 +48,8 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 			? {}
 			: { declared: mapValues(artifact.declared, (reach) => ({ ...reach, connect: sorted(reach.connect) })) }),
 		...(artifact.directories === undefined ? {} : { directories: artifact.directories }),
+		...(artifact.locale === undefined ? {} : { locale: artifact.locale }),
+		...(artifact.displayName === undefined ? {} : { displayName: artifact.displayName }),
 	}
 }
 

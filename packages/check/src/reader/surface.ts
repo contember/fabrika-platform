@@ -32,7 +32,7 @@ import {
 	unknownOptions,
 	type Vocabulary,
 } from '@fabrika/app/contract'
-import type { CspSource, RpcCaller } from '@fabrika/auth-core'
+import { type CspSource, isLocale, type Locale, LOCALES, type RpcCaller } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import type { Located } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
@@ -178,9 +178,13 @@ class SurfaceReader {
 	// ── Vocabulary ──────────────────────────────────────────────────────────────────────────────
 
 	#vocabulary(value: LiteralValue): Vocabulary<string, string, string> {
-		const fields = strictFields(value, 'the vocabulary', ['app', 'dimensions', 'actions', 'roles'], [])
+		const fields = strictFields(value, 'the vocabulary', ['app', 'dimensions', 'actions', 'roles'], ['locale', 'displayName'])
+		const locale = fields.get('locale')
+		const displayName = fields.get('displayName')
 		return {
 			app: text(fields.get('app'), value, 'app'),
+			...(locale === undefined ? {} : { locale: localeOf(locale, value) }),
+			...(displayName === undefined ? {} : { displayName: text(displayName, value, 'displayName') }),
 			dimensions: this.#each(entries(fields.get('dimensions'), value, 'dimensions'), (name, dimension) => this.#dimension(name, dimension)),
 			actions: this.#each(entries(fields.get('actions'), value, 'actions'), (_, description) => text(description, description, 'an action description')),
 			roles: this.#each(entries(fields.get('roles'), value, 'roles'), (name, role) => this.#role(name, role)),
@@ -759,6 +763,15 @@ function text(value: LiteralValue | undefined, owner: Owner, field: string): str
 		)
 	}
 	return value.value
+}
+
+/** The vocabulary's `locale`: one of the languages IAM speaks. */
+function localeOf(value: LiteralValue, owner: Owner): Locale {
+	const locale = text(value, owner, 'locale')
+	if (!isLocale(locale)) {
+		throw new Refused(value.at, `locale is '${locale}'`, LOCALES.map((allowed) => `locale: '${allowed}'`).join(' or '))
+	}
+	return locale
 }
 
 /** A dimension's `directory`, which only `'labels'` is. */

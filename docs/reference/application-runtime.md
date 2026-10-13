@@ -85,6 +85,10 @@ export default serve(contract, { database: scoped(tables) })
   `issues` — and the approver sees the declaration. Jobs (`app.cron`), webhooks (`app.webhook`), share links
   (`app.link`) and exports (`app.export`) take their handlers the same way.
 - The shell is literal: the reader and Control read each module as its slice, without the `.handle(…)` bodies.
+- `defineVocabulary` also takes `locale` (`'en'` or `'cs'`) and `displayName`: the language and the name of the
+  application on IAM's sign-in, password and invitation pages and e-mails. The artifact carries each only when it is
+  declared, so a contract without them keeps its digest; `schemaFromContract` hands them to IAM, and a change is a line
+  the approver reads.
 
 ## Serving surfaces
 

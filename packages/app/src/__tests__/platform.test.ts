@@ -11,13 +11,15 @@ import { contract as notesContract } from './fixtures/notes-app/fabrika.contract
 const Empty = z.strictObject({})
 const ById = z.strictObject({ id: z.uuid() })
 
-/** Both caller kinds on one mount, and another application as the consumer of an export. */
-const mixedContract = defineContract({
+const mixedVocabulary = {
 	app: 'mixed',
 	dimensions: { queue: {} },
 	actions: { 'jobs.run': 'Run jobs' },
 	roles: { runner: { grants: ['jobs.run'] } },
-}, (c) => ({
+} as const
+
+/** Both caller kinds on one mount, and another application as the consumer of an export. */
+const mixedContract = defineContract(mixedVocabulary, (c) => ({
 	tasks: c.rpc('/tasks', { callers: ['human', 'machine'] }, {
 		run: c.mutation({ input: Empty, output: Empty, access: { action: 'jobs.run', over: 'queue' } }),
 	}),
@@ -124,6 +126,15 @@ describe('schemaFromContract', () => {
 			'api.members.invite': { action: 'workspace.admin', dimension: 'workspace', purpose: 'members' },
 			'api.workspaces.create': { action: 'workspace.create', dimension: 'workspace', purpose: 'creates' },
 		})
+	})
+
+	test('the locale and the display name reach IAM only when the vocabulary declares them', () => {
+		const named = defineContract({ ...mixedVocabulary, locale: 'cs', displayName: 'Fronta úloh' }, () => ({}))
+		const schema = schemaFromContract(compileContract(named, {}))
+		expect([schema.locale, schema.displayName]).toEqual(['cs', 'Fronta úloh'])
+		expect(appSchemaSchema.parse(schema)).toEqual(schema)
+		const unnamed = schemaFromContract(compileContract(defineContract(mixedVocabulary, () => ({})), {}))
+		expect('locale' in unnamed || 'displayName' in unnamed).toBe(false)
 	})
 
 	test('a contract without link mounts or delegations says so, so IAM drops what an earlier schema had', () => {

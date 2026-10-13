@@ -2668,6 +2668,9 @@ export const vocabulary = defineVocabulary({
   `members: { manage, list }` on a dimension gives `ctx.members` to the endpoints on, in or below it: a lookup of one
   member everywhere, the list with `list`, management with `manage` (`references/endpoint.md`).
 - `admin` is reserved: IAM defines it for every application. `defineVocabulary` refuses it.
+- `locale: 'cs'` (or `'en'`) and `displayName: 'Tasks'` beside `app` set the language and the name IAM uses for the
+  application on its sign-in, password and invitation pages and e-mails. Without them IAM speaks its default language
+  and names no application. The approver sees each change.
 - `creator: '<role>'` on a top-level dimension lets an endpoint with `creates: '<dimension>'` make a new value and
   grant the caller that role there.
 

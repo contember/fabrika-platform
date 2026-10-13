@@ -15,6 +15,7 @@ import {
 	type DeclaredReach,
 	type DimensionArtifact,
 	directoryReach,
+	displayNameProblem,
 	type EndpointDirectory,
 	type EndpointRequirement,
 	type EndpointRow,
@@ -25,8 +26,11 @@ import {
 	type FormMountArtifact,
 	type FormRate,
 	type ImportArtifact,
+	isLocale,
 	JOB_SITE_PREFIX,
 	type JobArtifact,
+	type Locale,
+	LOCALES,
 	type MountArtifact,
 	type OutputShape,
 	type RoleArtifact,
@@ -241,6 +245,8 @@ class ArtifactBuilder {
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'files') ? FILES_PREFIX : null)
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'export') ? CONNECT_PREFIX : null)
 		const directories = this.#directories(dimensions)
+		const locale = this.#locale()
+		const displayName = this.#displayName()
 		const artifact: ContractArtifact = {
 			app: contract.app,
 			dimensions,
@@ -257,6 +263,8 @@ class ArtifactBuilder {
 			reservedPrefixes: this.#reservedPrefixes,
 			...(this.#kit ? { declared: this.#declared } : {}),
 			...(Object.keys(directories).length === 0 ? {} : { directories }),
+			...(locale === null ? {} : { locale }),
+			...(displayName === null ? {} : { displayName }),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -279,6 +287,22 @@ class ArtifactBuilder {
 	}
 
 	// ── Vocabulary ──────────────────────────────────────────────────────────────────────────────
+
+	#locale(): Locale | null {
+		const locale = this.#contract.locale
+		if (locale === undefined) return null
+		if (isLocale(locale)) return locale
+		this.#problem('locale', `'${locale}' is not a language IAM speaks (allowed: ${LOCALES.map((value) => `'${value}'`).join(', ')})`)
+		return null
+	}
+
+	#displayName(): string | null {
+		const displayName = this.#contract.displayName
+		if (displayName === undefined) return null
+		const problem = displayNameProblem(displayName)
+		if (problem !== null) this.#problem('displayName', problem)
+		return displayName
+	}
 
 	#actions(): Record<string, string> {
 		const actions: Record<string, string> = {}

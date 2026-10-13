@@ -158,6 +158,14 @@ describe('contractDigest', () => {
 		expect(contractDigest({ ...notesArtifact, endpoints: notesArtifact.endpoints.slice(1) })).not.toBe(digest)
 		expect(contractDigest({ ...notesArtifact, actions: { ...notesArtifact.actions, 'notes.extra': 'x' } })).not.toBe(digest)
 	})
+
+	test('covers the locale and the display name only when the artifact carries them', () => {
+		const digest = contractDigest(notesArtifact)
+		expect(contractDigest({ ...notesArtifact, locale: undefined, displayName: undefined })).toBe(digest)
+		expect(contractDigest({ ...notesArtifact, locale: 'cs' })).not.toBe(digest)
+		expect(contractDigest({ ...notesArtifact, displayName: 'Notes' })).not.toBe(digest)
+		expect(contractDigest({ ...notesArtifact, displayName: 'Notes' })).not.toBe(contractDigest({ ...notesArtifact, displayName: 'Poznámky' }))
+	})
 })
 
 describe('the endpoint header', () => {

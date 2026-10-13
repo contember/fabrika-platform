@@ -42,6 +42,7 @@ import {
 	type LinkMount,
 	type NotLoose,
 	type Path,
+	presentationOf,
 	type ProcedureTree,
 	type RpcMount,
 	type Schema,
@@ -470,7 +471,13 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 			}
 			const declared = imports === undefined ? surface : { ...surface, imports: kitImportsSection(importDeclarations(imports), surface) }
 			const contract: AnyContract = {
-				vocabulary: { app: vocabulary.app, dimensions: vocabulary.dimensions, actions: vocabulary.actions, roles: vocabulary.roles },
+				vocabulary: {
+					app: vocabulary.app,
+					dimensions: vocabulary.dimensions,
+					actions: vocabulary.actions,
+					roles: vocabulary.roles,
+					...presentationOf(vocabulary),
+				},
 				dimensions: vocabulary.dimensions,
 				surface: declared,
 			}

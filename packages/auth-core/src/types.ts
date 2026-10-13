@@ -1,3 +1,5 @@
+import type { Locale } from './locale'
+
 export type PrincipalType = 'user' | 'service'
 
 /**
@@ -151,6 +153,10 @@ export interface AppSchema {
 	 * and to nothing once its workload is no longer declared; removing one revokes its keys.
 	 */
 	workloads?: AppWorkloadDef[]
+	/** The language IAM speaks to the app's people; absent, IAM's default. */
+	locale?: Locale
+	/** The name IAM shows on its pages and e-mails for the app; absent, a wording without a name. */
+	displayName?: string
 }
 
 /**

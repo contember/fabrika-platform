@@ -1,6 +1,8 @@
 // The compiled form of an application contract (ADR-0012). Types only: each reader parses the artifact with its
 // own schema, as gate rules are parsed today.
 
+import type { Locale } from './locale'
+
 /**
  * An application's whole access surface as plain JSON. `compileContract` produces it from the evaluated contract and
  * the static reader from source; both must produce the same value for the same contract. Every optional authored
@@ -32,6 +34,10 @@ export interface ContractArtifact extends EndpointTable {
 	 * reads one, so the digest of such a contract stays.
 	 */
 	readonly directories?: Readonly<Record<string, { readonly dimension: string; readonly lists: boolean }>>
+	/** The language IAM speaks to this application's people. Absent unless declared, so the digest stays. */
+	readonly locale?: Locale
+	/** The name IAM shows on its pages and e-mails for this application. Absent unless declared, so the digest stays. */
+	readonly displayName?: string
 }
 
 // ── The endpoint table ──────────────────────────────────────────────────────────────────────────

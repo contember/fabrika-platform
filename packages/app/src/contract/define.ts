@@ -1,7 +1,7 @@
 // `defineContract`: the application's whole access surface as data. Browser-safe: it builds plain objects and
 // holds zod schemas; it validates nothing at runtime, `compileContract` does.
 
-import type { BuiltinRoleKey, ChallengeProvider, RpcCaller } from '@fabrika/auth-core'
+import type { BuiltinRoleKey, ChallengeProvider, Locale, RpcCaller } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
 import {
 	type CronDeclaration,
@@ -79,11 +79,27 @@ export interface RoleDef<A extends string, D extends string, R extends string> {
 	readonly member?: { readonly scope: D; readonly assignableBy: readonly R[] }
 }
 
-export interface Vocabulary<A extends string, D extends string, R extends string> {
+export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation {
 	readonly app: string
 	readonly dimensions: { readonly [K in D]: DimensionDef<A, D, R> }
 	readonly actions: { readonly [K in A]: string }
 	readonly roles: { readonly [K in R]: RoleDef<A, D, R> }
+}
+
+/** How IAM names the application to a person: on its sign-in, password and invitation pages, and in its e-mails. */
+export interface Presentation {
+	/** The language of those pages and e-mails; absent, the installation's default. */
+	readonly locale?: Locale
+	/** The application's name there, plain text of one short line; absent, a wording without a name. */
+	readonly displayName?: string
+}
+
+/** A vocabulary's presentation fields, copied one by one: each exists only when declared. */
+export function presentationOf(vocabulary: Presentation): Presentation {
+	return {
+		...(vocabulary.locale === undefined ? {} : { locale: vocabulary.locale }),
+		...(vocabulary.displayName === undefined ? {} : { displayName: vocabulary.displayName }),
+	}
 }
 
 /**
@@ -472,7 +488,7 @@ export function defineContract<
 	const Dims extends { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> },
 	const S extends Surface & FormJobs<S>,
 >(
-	vocabulary: {
+	vocabulary: Presentation & {
 		readonly app: string
 		readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 		readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
@@ -481,7 +497,13 @@ export function defineContract<
 	surface: (c: Kit<A, D, CreatableDimension<Dims>>) => S,
 ): Contract<A, D, R, Dims, S> {
 	return {
-		vocabulary: { app: vocabulary.app, dimensions: vocabulary.dimensions, actions: vocabulary.actions, roles: vocabulary.roles },
+		vocabulary: {
+			app: vocabulary.app,
+			dimensions: vocabulary.dimensions,
+			actions: vocabulary.actions,
+			roles: vocabulary.roles,
+			...presentationOf(vocabulary),
+		},
 		dimensions: vocabulary.dimensions,
 		surface: surface(surfaceKit()),
 	}

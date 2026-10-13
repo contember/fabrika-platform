@@ -6,7 +6,9 @@ import {
 	type AttachmentShape,
 	BUILTIN_ROLE_KEYS,
 	type ContractArtifact,
+	displayNameProblem,
 	type EndpointRow,
+	LOCALES,
 	type NumberShape,
 	type OutputShape,
 	type RecordShape,
@@ -278,6 +280,8 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		issues: nullableName,
 	})).optional(),
 	directories: record(z.strictObject({ dimension: name, lists: z.boolean() })).optional(),
+	locale: z.enum(LOCALES).optional(),
+	displayName: z.string().refine((value) => displayNameProblem(value) === null, 'not a display name').optional(),
 })
 
 /** Parses JSON that should be a contract artifact; throws a `ZodError` naming every mismatch. */

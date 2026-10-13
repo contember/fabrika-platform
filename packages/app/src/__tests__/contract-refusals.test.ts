@@ -327,6 +327,15 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 	})
 
+	test('a locale IAM does not speak, and a display name that is not one short line', () => {
+		expect(build({ ...base, locale: 'de', displayName: ' Notes\n' })).toEqual([
+			"locale: 'de' is not a language IAM speaks (allowed: 'en', 'cs')",
+			'displayName: is empty or starts or ends with whitespace',
+		])
+		expect(build({ ...base, displayName: 'N'.repeat(81) })).toEqual(['displayName: is longer than 80 characters'])
+		expect(build({ ...base, displayName: 'Notes\u0007' })).toEqual(['displayName: contains a control character'])
+	})
+
 	test("a directory other than 'labels', or one on a dimension that declares no members", () => {
 		const problems = build({
 			...base,

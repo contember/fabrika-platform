@@ -65,6 +65,8 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 		exports,
 		imports: surface.imports ?? {},
 		csp: surface.csp ?? {},
+		...(vocabulary.locale === undefined ? {} : { locale: vocabulary.locale }),
+		...(vocabulary.displayName === undefined ? {} : { displayName: vocabulary.displayName }),
 	}
 }
 

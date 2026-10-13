@@ -15,6 +15,9 @@ export interface ContractDeclaration<S> {
 	readonly exports: Readonly<Record<string, ExportDeclaration<S>>>
 	readonly imports: Readonly<Record<string, ImportDeclaration>>
 	readonly csp: CspDeclaration
+	/** A language IAM speaks; `buildArtifact` refuses another value. */
+	readonly locale?: string
+	readonly displayName?: string
 }
 
 /**
