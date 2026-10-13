@@ -78,6 +78,7 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 | `{ action, in: 'project', from: 'projectId' }` | a container; 403 when not held    | `target.get()` (the container's row); `target.<table>.list` | `target.<table>.insert(v)`                                                                  |
 | `{ action, over: 'org' }`                      | a list across the caller's scopes | `within.<table>.list`, `.count`, `.aggregate`               | — (a list write: `sql` or `unscoped`)                                                       |
 | `{ action, creates: 'org' }`                   | a new top-level scope from IAM    | —                                                           | `created.<table>.insert(v)`                                                                 |
+| `{ action, app: true }`                        | data of the whole application     | `app.<table>.list`, `.get(id)`; every row of a scoped table | `app.<table>.insert(v)`, `.update(id, v, …)`, `.remove(id, …)` of an application table      |
 | `{ member: true }`                             | any member, no application data   | nothing                                                     | nothing                                                                                     |
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
@@ -89,6 +90,24 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   its own read action is left out for every other action.
 - Never use `{ member: true }` for application data. `callers` is `['human']`, `['machine']` or both; every group of
   one mount names the same callers.
+
+### Data of the whole application: `app: true`
+
+A code list an administrator edits, operational counts, the log of an export of every record: data that belongs to no
+dimension value takes `access: { action, app: true }`.
+
+- The proxy admits it only for a caller who holds the action as a global grant (a role granted without a scope); a
+  grant in any one scope is 403. So declare it only where every caller is application-wide; a list a scoped member
+  also uses stays `over`.
+- `ctx.db.app` holds every application table (`scope: { app: '<why>' }`, `references/table-and-migration.md`), with
+  each operation's own action, and every scoped table whose read action is the endpoint's action: `list`, `count` and
+  `aggregate` over all its rows, as `over` reads them for a global holder. `ctx.app` is the capability.
+- An audited export of every record is one `app` mutation: it lists the records through `ctx.db.app.<table>` and
+  inserts its log row into an application table whose insert action is the export's action
+  (`references/public-intake.md`). It needs no `sql` and no `unscoped`.
+- An `app` endpoint has no `ctx.target`, `ctx.within`, `ctx.members` or `ctx.links`. A link procedure and an export
+  keep their own forms.
+- The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
 
 ### Which dimension `over` names
 
@@ -406,7 +425,8 @@ above is one.
 - **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows: `exportProject`
   inserts a `project_exports` row (who, when, how many rows) in the invocation's one transaction. The file is encoded
   before the transaction commits, so a file over its limit keeps no log row, and no file leaves without its row. The
-  log table lies in the scope the export reads (a child of `projects`), so the export's own capability writes it.
+  log table lies in the scope the export reads (a child of `projects`), so the export's own capability writes it. An
+  export of every record is an `app` mutation that writes an application table instead (`app: true` above).
 - A mutation may declare `sql: 'read'`: its statements only read, and its handles still write.
 - The SPA calls `download(api.reports.exportProject, { projectId })` from `@fabrika/app/client`: it saves the file and
   answers it as a `File`. `api.reports.exportProject` is not a function. A refusal is an `RpcError`.

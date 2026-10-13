@@ -1,8 +1,9 @@
 # references/public-intake.md — the public intake recipe
 
 A visitor who has no account submits a form on a public page, confirms the e-mail address through a link, attaches
-files, and asks for a new link when the first one is lost. HR reviews the records. This file is an application of its
-own (`intake`); its `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
+files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code list of
+open positions, and HR exports every candidate with an audit row. This file is an application of its own (`intake`);
+its `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
 
 Every piece lets in someone who is not signed in, so ask the human before you build it, and say what each one lets the
 visitor do. The visitor never reaches a handler without a credential:
@@ -31,15 +32,20 @@ export const vocabulary = defineVocabulary({
 		'candidates.attach': 'Attach files to a candidate record',
 		'candidates.invite': "Issue a candidate's portal link",
 		'candidates.process': 'Register candidates and send their links',
+		'positions.read': 'Read the open positions',
+		'positions.manage': 'Edit the open positions',
+		'exports.read': 'Read the log of candidate exports',
 	},
 	roles: {
-		hr: { grants: ['candidates.read', 'candidates.review'] },
+		hr: { grants: ['candidates.read', 'candidates.review', 'positions.read'] },
+		hr_lead: { grants: ['positions.read', 'positions.manage', 'exports.read'] },
 	},
 })
 ```
 
 - `candidate` is a top-level dimension with no members: a candidate is a record, not a scope people are invited to.
-- `hr` has no `member`, so an administrator grants it in IAM, usually without a scope (a global grant).
+- `hr` and `hr_lead` have no `member`, so an administrator grants them in IAM, usually without a scope (a global
+  grant). The code list and the export of every candidate need that grant: they are data of the whole application.
 - The link's holder and the job get their actions from the link mount and the job's `actions`, not from a role.
 
 ```sql db/migrations/20261013090000_intake.sql
@@ -80,6 +86,23 @@ CREATE TABLE registrations (
 );
 CREATE TABLE resend_requests (
 	email TEXT NOT NULL
+);
+```
+
+```sql db/migrations/20261013090050_application_data.sql
+-- Data of the whole application: the code list an HR lead edits, and the log of every export of all candidates.
+CREATE TABLE positions (
+	id UUID PRIMARY KEY,
+	title TEXT NOT NULL,
+	active BOOLEAN NOT NULL DEFAULT true,
+	created_by TEXT NOT NULL,
+	version INTEGER NOT NULL
+);
+CREATE TABLE candidate_exports (
+	id UUID PRIMARY KEY,
+	row_count INTEGER NOT NULL,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -143,11 +166,33 @@ export const tables = defineTables(vocabulary, columns)({
 	},
 	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
 	resend_requests: { scope: { inbox: 'resend', read: 'candidates.process' } },
+	positions: {
+		scope: { app: 'the open positions an HR lead edits' },
+		actions: {
+			read: 'positions.read',
+			insert: 'positions.manage',
+			update: 'positions.manage',
+		},
+		insert: ['title'],
+		update: ['title', 'active'],
+		version: 'version',
+		createdBy: 'created_by',
+	},
+	candidate_exports: {
+		scope: { app: 'the log of every export of all candidates' },
+		actions: { read: 'exports.read', insert: 'candidates.read' },
+		insert: ['row_count'],
+		createdBy: 'created_by',
+	},
 })
 ```
 
 - `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
   declares the reach reads it.
+- `{ app: '<why>' }` is an application table: its rows belong to no candidate. Only an endpoint declared
+  `access: { action, app: true }` reaches it, through `ctx.db.app`, with the action the operation names. A position is
+  deactivated, never deleted, so the table has no delete action. `candidate_exports` is appended with the export's own
+  action, `candidates.read`, and read with `exports.read`.
 - The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
 
 ## The contract
@@ -182,6 +227,7 @@ import { app } from './src/app-kit'
 import { candidates } from './src/candidates/endpoints'
 import { intake } from './src/intake/endpoints'
 import { portal } from './src/portal/endpoints'
+import { positions } from './src/positions/endpoints'
 import { Register, Resend } from './src/schemas'
 
 export const contract = app.contract((c) => ({
@@ -201,7 +247,7 @@ export const contract = app.contract((c) => ({
 		then: 'intake',
 	}),
 	portal,
-	api: c.rpc('/api', { candidates }),
+	api: c.rpc('/api', { candidates, positions }),
 	hr: c.spa('/hr', {
 		dir: 'dist/hr',
 		access: { action: 'candidates.read', over: 'candidate' },
@@ -586,6 +632,7 @@ export const canMove = (from: Status, to: Status): boolean =>
 
 ```ts src/candidates/endpoints.ts
 import { ConflictError, fromPage, fromRow } from '@fabrika/app'
+import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { CandidateStatus } from '../schemas'
@@ -627,6 +674,31 @@ const Decide = z.strictObject({
 	note: z.nullable(z.string().max(2000)),
 })
 const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+const ExportRow = z.strictObject({
+	id: z.uuid(),
+	name: z.string(),
+	email: z.string(),
+	status: CandidateStatus,
+})
+const CandidateFile = attachment({
+	format: 'csv',
+	filename: 'candidates.csv',
+	row: ExportRow,
+	maxBytes: 4194304,
+})
+const ExportEntry = z.strictObject({
+	rowCount: z.int(),
+	createdBy: z.string(),
+	createdAt: z.iso.datetime(),
+})
+const ExportLog = z.strictObject({
+	items: z.array(ExportEntry),
+	next: z.nullable(z.string()),
+})
+const LogPage = z.strictObject({ after: Cursor.optional() })
+
+/** The file's row limit: a larger export is refused, never cut short. */
+const MAX_EXPORT_ROWS = 10000
 
 export const candidates = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -686,15 +758,57 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 				expectVersion: input.expectVersion,
 			})
 		}),
+	export: r.mutation({
+		output: CandidateFile,
+		access: { action: 'candidates.read', app: true },
+	})
+		.handle(async ({ ctx }) => {
+			const rows: z.output<typeof ExportRow>[] = []
+			let after: string | undefined
+			do {
+				const page = await ctx.db.app.candidates.list({
+					orderBy: [['name', 'asc']],
+					limit: 500,
+					after,
+				})
+				rows.push(...page.items.map((row) => fromRow(ExportRow, row)))
+				after = page.next ?? undefined
+			} while (after !== undefined && rows.length <= MAX_EXPORT_ROWS)
+			if (rows.length > MAX_EXPORT_ROWS) {
+				throw new ConflictError(
+					`more than ${MAX_EXPORT_ROWS} candidates: export a filtered list`,
+				)
+			}
+			await ctx.db.app.candidate_exports.insert({ row_count: rows.length })
+			return rows
+		}),
+	exports: r.query({
+		input: LogPage,
+		output: ExportLog,
+		access: { action: 'exports.read', app: true },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				ExportEntry,
+				await ctx.db.app.candidate_exports.list({
+					orderBy: [['created_at', 'desc']],
+					after: input.after,
+				}),
+			)
+		),
 }))
 ```
 
 - **Application history is a table on the paved road.** `decide` writes its `candidate_events` row through the
   handle, in the invocation's one transaction: the status and its history row commit together or not at all, and
   `created_by` is the caller. There is no framework audit API; never write history from a job or after the answer.
-- **An audited export** is a mutation that inserts its log row and returns the rows of an `attachment()` output
-  (`references/endpoint.md`). Its log row needs a table that lies in the scope the export reads; a list of every
-  candidate (`over: 'candidate'`) has none, so ask the human where that log belongs before you add the export.
+- **An audited export of every candidate** is one `app` mutation. `ctx.db.app.candidates` lists every candidate,
+  because the endpoint's action is the table's read action, and the log row goes into `candidate_exports`, whose
+  insert action is that same action, in the invocation's one transaction. The file is encoded before the commit, so
+  no file leaves without its row (`references/endpoint.md`). It needs no `sql` and no `unscoped`.
+- **`app: true` is for data of the whole application.** The proxy admits the endpoint only for a caller who holds the
+  action as a global grant: an HR member granted `candidates.read` on one candidate gets 403. `list` and `get` stay
+  `over` and `on`, which serve a scoped grant too.
 - `over: 'candidate'` lists every candidate a caller holds `candidates.read` on. HR holds it globally, so
   `ctx.within.values` is `'all'`.
 - The generated case of `decide` sends the first status (`new`) to a record that is `new`, which `canMove` refuses
@@ -711,10 +825,84 @@ export const fixtures = {
 }
 ```
 
+## The code list an HR lead edits
+
+```ts src/positions/endpoints.ts
+import { fromPage } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const Position = z.strictObject({
+	id: z.uuid(),
+	title: z.string(),
+	active: z.boolean(),
+	version: z.int(),
+})
+const Positions = z.strictObject({
+	items: z.array(Position),
+	next: z.nullable(z.string()),
+})
+const Page = z.strictObject({ after: z.string().max(500).optional() })
+const NewPosition = z.strictObject({ title: z.string().min(1).max(200) })
+const EditPosition = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	title: z.string().min(1).max(200),
+	active: z.boolean(),
+})
+const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+
+export const positions = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({
+		input: Page,
+		output: Positions,
+		access: { action: 'positions.read', app: true },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Position,
+				await ctx.db.app.positions.list({
+					orderBy: [['title', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
+	add: r.mutation({
+		input: NewPosition,
+		output: Saved,
+		access: { action: 'positions.manage', app: true },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.app.positions.insert({ title: input.title })
+		),
+	edit: r.mutation({
+		input: EditPosition,
+		output: Saved,
+		access: { action: 'positions.manage', app: true },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.app.positions.update(input.id, {
+				title: input.title,
+				active: input.active,
+			}, { expectVersion: input.expectVersion })
+		),
+}))
+```
+
+- `ctx.db.app.<table>` of an application table has `list`, `count` and `aggregate` with its read action, `get(id)`
+  with any action it names, and in a mutation `getForUpdate(id)`, `insert(v)`, `update(id, v, { expectVersion })` and
+  `remove(id, { expectVersion })` with the operation's action. Its key is generated on insert.
+- The HR SPA reads the list with `positions.read`; an HR lead's page adds and edits with `positions.manage`. A
+  position that is no longer open is deactivated, so a record that names it keeps its meaning.
+- Only an `app` endpoint reads an application table. A code list that a link holder or a scoped endpoint must read
+  is a reference table instead (`references/table-and-migration.md`), changed by a migration.
+
 ## Tests
 
 - The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
-  link procedure as a holder of a key bound to a seeded candidate. They pass here because only the job issues links;
+  link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
+  its action in one candidate only is 403, and a global holder reaches it. `positions` and `candidate_exports` get a
+  policy probe of their actions, held globally and in one scope. They pass here because only the job issues links;
   an endpoint that `issues` needs IAM in its tests (`SKILL.md`, "Not built yet").
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }

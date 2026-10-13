@@ -194,8 +194,13 @@ export const tables = defineTables(vocabulary, columns)({
 ```
 
 - Every table has a policy. Its scope is one of: `{ dimension: '<d>' }` (the table owns the dimension's values),
-  `{ child: '<table>' }` (rows that belong to one row of the parent), or `{ reference: '<why>' }` (shared rows every
-  endpoint reads and none writes).
+  `{ child: '<table>' }` (rows that belong to one row of the parent), `{ app: '<why>' }` (rows of the whole
+  application, such as a code list an administrator edits) or `{ reference: '<why>' }` (shared rows every endpoint
+  reads and none writes; a migration changes them).
+- An application table takes `actions`, `insert`, `update`, `version`, `createdBy` and `columns` like a dimension
+  table, and no container. Only an `app: true` endpoint reaches it (`ctx.db.app.<table>`, `references/endpoint.md`),
+  and only a caller who holds the operation's action as a global grant. Data that a link holder or a scoped member
+  reads stays a reference table.
 - The key (`id`), the container column (`<container>_id`), a child's column (`<parent dimension>_id`) and the chain
   are derived. State `in: { column }` or `column` only off that convention.
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
@@ -205,4 +210,5 @@ export const tables = defineTables(vocabulary, columns)({
   action updates nothing else); the column is then not in `update`.
 - An audit or history table is an ordinary child table that a handler writes in its own transaction:
   `project_exports` logs each export of a project's tasks, so its insert action is the export's read action
-  (`references/endpoint.md`). There is no framework audit API.
+  (`references/endpoint.md`). The log of an export across every record is an application table instead
+  (`references/public-intake.md`). There is no framework audit API.

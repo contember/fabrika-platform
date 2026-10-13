@@ -67,6 +67,46 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "candidate_exports",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidate_exports",
+			"column_name": "row_count",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidate_exports",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidate_exports",
+			"column_name": "created_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
 			"table_name": "candidates",
 			"column_name": "id",
 			"type_name": "uuid",
@@ -690,6 +730,56 @@
 			"table_name": "fabrika_webhook_deliveries",
 			"column_name": "received_at",
 			"type_name": "int8",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "positions",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "positions",
+			"column_name": "title",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "positions",
+			"column_name": "active",
+			"type_name": "bool",
+			"type_type": "b",
+			"type_category": "B",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "positions",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "positions",
+			"column_name": "version",
+			"type_name": "int4",
 			"type_type": "b",
 			"type_category": "N",
 			"nullable": false,
