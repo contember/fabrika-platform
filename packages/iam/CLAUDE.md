@@ -220,7 +220,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   dimension is a 409 naming the grants, and a guard statement in the reconcile batch rolls it back if
   one was written after the check. Resolution is the third lock: such a grant contributes nothing.
 - **AN EXTERNAL PRINCIPAL HOLDS ONLY GRANTS OF A ROLE ITS APPLICATION DECLARES EXTERNAL (ADR-0051).**
-  `principals.affiliation` is `internal` (every service, every row before migration 0011) or `external`;
+  `principals.affiliation` is `internal` (every service, every row before migration 0012) or `external`;
   `roles.external` is 1 only on a reconciled membership role (both `CHECK`ed). Three locks, like `member.scope`:
   every grant write carries `eligibleGrantSql` in the statement that writes (`repositories/grants.ts`, and the
   membership repository's assignment, acceptance and scope creation), after `externalGrantProblem`
