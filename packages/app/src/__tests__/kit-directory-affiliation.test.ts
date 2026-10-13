@@ -4,8 +4,8 @@
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { TestCaller } from '../testing/caller'
-import { kitDirectory } from '../testing/directory'
 import { testKit } from '../testing/kit'
+import { kitDirectory } from '../testing/membership'
 import { notesApp } from './fixtures/implement/app'
 
 const W1 = { type: 'workspace', value: 'w1' } as const
@@ -33,7 +33,7 @@ describe("the kit's member directory", () => {
 			{ caller: partner, memberships: [{ role: 'editor', scope: W1 }] },
 		]
 		const directory = kitDirectory(notesArtifact, {
-			byCredential: (credential) => members.find((member) => member.caller.key === credential)?.caller,
+			byCredential: (_app, credential) => members.find((member) => member.caller.key === credential)?.caller,
 			all: () => members,
 		})
 

@@ -41,7 +41,7 @@ function callersOf(callers: readonly Held[], tokens: ReadonlyMap<string, MintedT
 }
 
 function person(id: string, perms: readonly PermissionEntry[], kind: LabelledTestCaller['kind'] = 'human'): LabelledTestCaller {
-	return { kind, app: null, link: null, id, label: `${id}@notes.test`, perms, key: `px_${id}`, cookie: null }
+	return { kind, app: null, link: null, id, label: `${id}@notes.test`, affiliation: 'internal', perms, key: `px_${id}`, cookie: null }
 }
 
 const holder: LinkTestCaller = {
@@ -50,6 +50,7 @@ const holder: LinkTestCaller = {
 	link: { mount: 'shared', chain: [NOTE, ACME] },
 	id: 'link-1',
 	label: null,
+	affiliation: 'internal',
 	perms: [entry('notes.read', NOTE)],
 	key: 'px_holder',
 	cookie: null,
@@ -151,6 +152,12 @@ describe('the stand-in assigns and revokes under members.manage, assignableBy an
 		expect(await assign(membership, owner, ACME, 'editor', { principalId: 'nobody' })).toEqual({ ok: false, reason: 'not_found' })
 		const listed = await membership.rpc.listMembers({ ...as(owner), scope: ACME })
 		expect(listed.ok ? listed.members.map((member) => member.principalId).sort() : listed.reason).toEqual(['editor', 'manager', 'owner'])
+	})
+
+	test('an external person is assigned only a role the contract declares external, as IAM does', async () => {
+		const partner: LabelledTestCaller = { ...person('partner', []), affiliation: 'external' }
+		const membership = standIn([{ caller: partner, memberships: [] }])
+		expect(await assign(membership, owner, ACME, 'editor', { principalId: 'partner' })).toMatchObject({ ok: false, reason: 'invalid_request' })
 	})
 
 	test('members.manage counts in the value itself; a holder of it without an assigning role is not_allowed', async () => {
