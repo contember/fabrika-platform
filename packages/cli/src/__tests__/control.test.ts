@@ -378,9 +378,20 @@ describe('control --help', () => {
 	})
 })
 
+/** A whole `namespaces.plan` result, shaped as the Zerops provider answers one. */
+const zeropsPlan = (payload: Record<string, unknown>, exclusiveAppId?: string) => ({
+	namespace: {
+		id: 'notes-prod',
+		env: 'prod',
+		...(exclusiveAppId === undefined ? {} : { exclusiveAppId }),
+		target: { provider: 'zerops', version: 1, payload },
+	},
+	presentation: { preset: 'mid', title: 'Mid namespace', facts: [], instructions: [] },
+})
+
 describe('control namespaces', () => {
 	test('plan sends only the placement options actually given', async () => {
-		const captured = captureFetch({ result: { namespace: { target: { provider: 'zerops', version: 1, payload: { corePackage: 'LIGHT' } } } } })
+		const captured = captureFetch({ result: zeropsPlan({ corePackage: 'LIGHT' }) })
 		await captureStdout(() =>
 			runControlCli('namespaces', ['plan', '--namespace=notes-prod', '--env=prod', '--preset=mid', '--core-package=LIGHT'], undefined, CONTROL_ENV)
 		)
@@ -475,11 +486,100 @@ describe('control namespaces', () => {
 	})
 
 	test('carries an exclusive app through both calls for the full preset', async () => {
-		const captured = captureFetch({ result: { namespace: { target: { provider: 'zerops', version: 1, payload: {} } } } })
+		const captured = captureFetch({ result: zeropsPlan({}, 'notes') })
 		await captureStdout(() =>
 			runControlCli('namespaces', ['plan', '--namespace=notes-prod', '--env=prod', '--preset=full', '--exclusive-app=notes'], undefined, CONTROL_ENV)
 		)
 		expect(captured.calls[0]?.body).toMatchObject({ input: { exclusiveAppId: 'notes' } })
+	})
+
+	const DESCRIPTOR = 'zerops:\n  - setup: proxy\n    run:\n      start: caddy run\n'
+	const cheapPlan = {
+		namespace: {
+			id: 'apps',
+			env: 'v03',
+			target: {
+				provider: 'zerops',
+				version: 1,
+				payload: {
+					proxySource: {
+						repository: { owner: 'acme', name: 'fabrika-proxy' },
+						commitSha: 'abc123',
+						descriptor: { path: 'zerops.yaml', contents: DESCRIPTOR, sha256: 'f00d' },
+					},
+					projectName: 'apps',
+					corePackage: 'LIGHT',
+					publicAccess: 'zerops-subdomain',
+					postgres: { type: 'postgresql:single@18', profile: 'oltp-staging' },
+					managed: true,
+					ready: false,
+					proxyHosts: [],
+				},
+			},
+		},
+		presentation: {
+			preset: 'cheap',
+			title: 'Cheap namespace',
+			facts: [
+				{ label: 'Project', value: 'apps' },
+				{ label: 'PostgreSQL', value: 'Shared postgresql:single@18 (oltp-staging)' },
+			],
+			instructions: ['Use the proxy Zerops subdomain only for non-production access; app services must remain private.'],
+		},
+	}
+
+	test('plan never lets a tab or a line break inside a value split a row', async () => {
+		const tabbed = { ...cheapPlan, presentation: { ...cheapPlan.presentation, facts: [{ label: 'Note', value: 'a\tb' }], instructions: ['one\rtwo'] } }
+		captureFetch({ result: tabbed })
+		const out = await captureStdout(() =>
+			runControlCli('namespaces', ['plan', '--namespace=apps', '--env=v03', '--preset=cheap'], undefined, CONTROL_ENV)
+		)
+		expect(out).toContain('presentation.fact\tNote\t(3 bytes; --json prints it)')
+		expect(out).toContain('presentation.instruction\t(7 bytes; --json prints it)')
+	})
+
+	test('plan prints one row per field and names the descriptor file by size, never by contents', async () => {
+		captureFetch({ result: cheapPlan })
+		const out = await captureStdout(() =>
+			runControlCli('namespaces', ['plan', '--namespace=apps', '--env=v03', '--preset=cheap'], undefined, CONTROL_ENV)
+		)
+
+		expect(out.split('\n')).toEqual([
+			'namespace.id\tapps',
+			'namespace.env\tv03',
+			'namespace.exclusiveAppId\t-',
+			'namespace.target.provider\tzerops',
+			'namespace.target.version\t1',
+			'namespace.target.payload.proxySource.repository.owner\tacme',
+			'namespace.target.payload.proxySource.repository.name\tfabrika-proxy',
+			'namespace.target.payload.proxySource.commitSha\tabc123',
+			'namespace.target.payload.proxySource.descriptor.path\tzerops.yaml',
+			`namespace.target.payload.proxySource.descriptor.contents\t(${DESCRIPTOR.length} bytes; --json prints it)`,
+			'namespace.target.payload.proxySource.descriptor.sha256\tf00d',
+			'namespace.target.payload.projectName\tapps',
+			'namespace.target.payload.corePackage\tLIGHT',
+			'namespace.target.payload.publicAccess\tzerops-subdomain',
+			'namespace.target.payload.postgres.type\tpostgresql:single@18',
+			'namespace.target.payload.postgres.profile\toltp-staging',
+			'namespace.target.payload.managed\ttrue',
+			'namespace.target.payload.ready\tfalse',
+			'namespace.target.payload.proxyHosts\t[]',
+			'presentation.preset\tcheap',
+			'presentation.title\tCheap namespace',
+			'presentation.fact\tProject\tapps',
+			'presentation.fact\tPostgreSQL\tShared postgresql:single@18 (oltp-staging)',
+			'presentation.instruction\tUse the proxy Zerops subdomain only for non-production access; app services must remain private.',
+		])
+		expect(out).not.toContain('caddy run')
+	})
+
+	test('plan --json still prints the procedure result verbatim', async () => {
+		captureFetch({ result: cheapPlan })
+		const out = await captureStdout(() =>
+			runControlCli('namespaces', ['plan', '--namespace=apps', '--env=v03', '--preset=cheap', '--json'], undefined, CONTROL_ENV)
+		)
+
+		expect(out).toBe(JSON.stringify(cheapPlan, null, 2))
 	})
 })
 

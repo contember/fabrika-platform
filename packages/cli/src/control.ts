@@ -18,6 +18,7 @@ import type {
 	DeploymentNamespaceDto,
 	JsonValue,
 	PlanDeploymentNamespaceRequest,
+	PlanDeploymentNamespaceResponse,
 	PutAppEnvRequest,
 	PutAppVarRequest,
 	RegisterAppRequest,
@@ -90,7 +91,9 @@ Namespace placement options, each defaulting to what the preset would choose:
   --public-access=<custom-domain|zerops-subdomain>
   --exclusive-app=<id>              required by, and only by, the \`full\` preset
 
-\`namespaces plan\` is a preview and changes nothing. \`namespaces create\` commits that exact plan — the
+\`namespaces plan\` is a preview and changes nothing. It prints one \`<path>\\t<value>\` row per field of
+the plan, keyed by its path in \`--json\`; a multi-line value such as the proxy's descriptor file is shown
+by size only. \`namespaces create\` commits that exact plan — the
 same two steps the console's form takes — and returns as soon as the placement is recorded: provisioning
 runs behind the control queue and takes minutes, so the state comes back \`pending\`. Follow it with
 \`namespaces get\` or \`namespaces list\`; nothing needs to stay connected. \`namespaces remove\` frees the id
@@ -505,6 +508,38 @@ const namespaceHostLines = (namespace: DeploymentNamespaceDetailDto): string[] =
 		`${entry.host}\t${entry.port}\t${entry.takenBy === undefined ? 'free' : `taken by ${entry.takenBy.appId}/${entry.takenBy.environment}`}`
 	)
 
+/**
+ * One `<path>\t<value>` row per scalar of a provider payload, keyed by its path in `--json`. The payload
+ * is the provider's own schema, so it is walked rather than decoded. A multi-line string — a whole
+ * descriptor file — cannot be a row cell, so its row names only its size.
+ */
+const payloadRows = (path: string, value: JsonValue): string[] => {
+	if (Array.isArray(value)) {
+		return value.length === 0 ? [`${path}\t[]`] : value.flatMap((item, index) => payloadRows(`${path}.${index}`, item))
+	}
+	if (typeof value === 'object' && value !== null) {
+		const entries = Object.entries(value)
+		return entries.length === 0 ? [`${path}\t{}`] : entries.flatMap(([key, item]) => payloadRows(`${path}.${key}`, item))
+	}
+	return [`${path}\t${value === null ? 'null' : cell(String(value))}`]
+}
+
+/** A value that would break a row — a line break or a tab — is shown by size only; `--json` prints it whole. */
+const cell = (value: string): string => /[\r\n\t]/.test(value) ? `(${new TextEncoder().encode(value).byteLength} bytes; --json prints it)` : value
+
+const namespacePlanLines = (plan: PlanDeploymentNamespaceResponse): string[] => [
+	`namespace.id\t${plan.namespace.id}`,
+	`namespace.env\t${plan.namespace.env}`,
+	`namespace.exclusiveAppId\t${plan.namespace.exclusiveAppId ?? '-'}`,
+	`namespace.target.provider\t${plan.namespace.target.provider}`,
+	`namespace.target.version\t${plan.namespace.target.version}`,
+	...payloadRows('namespace.target.payload', plan.namespace.target.payload),
+	`presentation.preset\t${plan.presentation.preset}`,
+	`presentation.title\t${cell(plan.presentation.title)}`,
+	...plan.presentation.facts.map((fact) => `presentation.fact\t${cell(fact.label)}\t${cell(fact.value)}`),
+	...plan.presentation.instructions.map((instruction) => `presentation.instruction\t${cell(instruction)}`),
+]
+
 /** The failure is a DIAGNOSTIC, so it goes to stderr and leaves the data columns above untouched. */
 const warnNamespaceFailure = (namespace: DeploymentNamespaceDto): void => {
 	// Falsy, not `=== null`: a control plane that omits the field must not print an empty diagnostic.
@@ -546,7 +581,7 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 	}
 	if (verb === 'plan') {
 		const result = await client.namespaces.plan(namespacePlan(flags))
-		emit(flags, result, () => JSON.stringify(result.namespace.target.payload))
+		emit(flags, result, () => namespacePlanLines(result).join('\n'))
 		return
 	}
 	if (verb === 'reconcile') {
