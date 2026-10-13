@@ -101,14 +101,15 @@ when the external principal is created (decision D3).
 - **Acceptance / witness.** Page tests per locale; a browser run: sign-in from the application, forgot password, reset,
   back in the application.
 
-### WU4 — Application e-mail templates (M)
+### WU4 — Application e-mail templates, an MVP (S)
 
-- **Scope.** D4: the contract declaration (files beside the contract, read at build into the artifact, size-capped),
-  the closed variables per message (application display name, recipient, inviter label, company label, personal
-  message, action URL, expiry), the validation in `@fabrika/check` and again in IAM's reconcile, rendering text and
-  HTML from one template set, the approval's review line.
-- **Acceptance / witness.** A template without `{{actionUrl}}`, with a foreign link or with a script is refused by the
-  checker and by IAM; a rendered invitation escapes a company label and a message carrying markup.
+- **Scope.** The owner cut D4 to an MVP: per message kind and locale, the contract declares an inline `subject` and a
+  plain-text `text` with `{{name}}` placeholders from the closed set (display name, recipient, inviter label, company
+  label, personal message, action URL, expiry). The checker and IAM's reconcile refuse an unknown placeholder and a
+  `text` without `{{actionUrl}}`. IAM renders the text and builds the HTML part itself (the escaped text plus its own
+  button). Application-authored HTML is deferred.
+- **Acceptance / witness.** The two refusals, escaping in the HTML part, a `cs` application's reset on its template,
+  the catalog fallback.
 
 ### WU5 — One e-mail onboards a new external person (L)
 
@@ -123,14 +124,6 @@ when the external principal is created (decision D3).
   resent link invalidates the old one; the inviter's removal before acceptance refuses it. A browser run of the whole
   path, also for a person invited by two companies.
 
-### WU6 — The paved road for a partner portal (M)
-
-- **Scope.** The skill's recipe: a company dimension, a staff role and an external partner role, invitation, resend,
-  cancel, removal (D6), the company's active flag checked where an endpoint loads the company, the templates. Backlog
-  113 first, so the recipe's generated tests boot an application that writes through IAM.
-- **Acceptance / witness.** The recipe materialized green (tsc, `fabrika-check` 0/0, its tests), and the private dogfood
-  of the driving case written on it.
-
 ## Out of scope (explicit)
 
 - Org units and groups (backlog 91); delegated administration of global roles (backlog 126).
@@ -138,15 +131,18 @@ when the external principal is created (decision D3).
 - Immediate revocation below the 300 s token TTL: it needs an ADR-0022 decision of its own.
 - Branding of IAM's pages beyond the display name; SCIM; several IdPs or account linking.
 - An IAM suspension of a company's scope value: the active flag is application data.
+- Cut by the owner to ship sooner: the skill's partner-portal recipe (was WU6; the skill gets a short note on
+  external roles and invitations with WU5), application-authored HTML templates (WU4 is an MVP), and repeated review
+  rounds (one GPT review per unit; a re-review only after a P0/P1).
 
 ## Sequencing
 
 WU1 first: every later unit depends on affiliation. WU2 and WU3 then run in parallel. WU4 needs WU3's locale; WU5 needs
-WU1, WU2 and WU4. WU6 last, with backlog 113 at its start (may run beside WU5).
+WU1, WU2 and WU4.
 
 ## Run log
 
-- **Backlog 113 (prerequisite of WU6), done.** The endpoint access kit boots with a stand-in IAM for writes
+- **Backlog 113, done.** The endpoint access kit boots with a stand-in IAM for writes
   (`kitMembership`, `packages/app/src/testing/membership.ts`): delegation, `creates` (global grant), `members.manage`
   on the value, `assignableBy`, the role's actions, `issuedBy` and the link grants on the chain. A `creates` endpoint
   gets two cases (one-scope holder 403, global holder answered). Its `assignableBy` check is today's (a membership
