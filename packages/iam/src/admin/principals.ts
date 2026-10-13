@@ -71,6 +71,7 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
 
 	const detail: PrincipalDetail = {
 		...toPrincipalListItem(row),
+		bootstrapMailbox: bootstrapMailbox(c, row),
 		grants: await toGrantDtos(grants, c.services),
 		permissions,
 		authentication: {
@@ -159,8 +160,11 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 }
 
 /**
- * Make an external user internal (ADR-0051). It grants nothing: the user keeps its grants, every one of a role declared
- * external, and from now on an OIDC login presenting its address may claim it. There is no demotion.
+ * Make an external user internal (ADR-0051). Its grant rows stay as they are, but what it may reach widens: it may then
+ * hold any role, an OIDC login presenting its address may claim it, and a mailbox listed in `IAM_BOOTSTRAP_ADMINS`
+ * becomes an installation admin at once. So the promotion revokes every session of the user and spends its pending
+ * password actions in the same transaction, and its record says whether the mailbox is a bootstrap admin. There is no
+ * demotion.
  */
 export async function promotePrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<PrincipalListItem> {
 	const id = input.principalId
@@ -170,7 +174,12 @@ export async function promotePrincipalUseCase(c: AdminContext, input: PrincipalI
 	}
 	const promoted = await c.services.repositories.principals.promoteToInternal(
 		id,
-		adminEvent(c, { action: 'iam.principal.promote', resourceType: 'principal', resourceId: id }),
+		adminEvent(c, {
+			action: 'iam.principal.promote',
+			resourceType: 'principal',
+			resourceId: id,
+			metadata: { bootstrapAdmin: bootstrapMailbox(c, row) },
+		}),
 	)
 	if (!promoted) {
 		return fail(409, 'the principal is not external')
@@ -178,4 +187,9 @@ export async function promotePrincipalUseCase(c: AdminContext, input: PrincipalI
 	const updated = await c.services.repositories.principals.getPrincipalById(id)
 	if (!updated) return fail(404, 'principal not found')
 	return toPrincipalListItem(updated)
+}
+
+/** Whether the user's mailbox is listed in `IAM_BOOTSTRAP_ADMINS`: internal, it is an installation admin. */
+function bootstrapMailbox(c: AdminContext, row: PrincipalRow): boolean {
+	return row.type === 'user' && row.email !== null && c.services.config.bootstrapAdmins.has(normalizeEmailIdentity(row.email))
 }

@@ -230,7 +230,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   bootstrap `admin` and no cross-app grant. OIDC never claims or creates an external principal: `resolveUserPrincipal`
   refuses it (`oidc_external_principal`), `claimInvitedUser` matches only an internal row, and the allowlist's
   known-principal bypass admits only an internal one. Only `principals.promote` (installation admin, audited) makes one
-  internal; there is no demotion.
+  internal, and it revokes the principal's sessions and spends its pending password actions in the same statement
+  group (`promoteToInternal`): promotion widens what it reaches, a bootstrap mailbox to installation admin. No demotion.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and

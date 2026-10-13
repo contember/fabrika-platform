@@ -400,10 +400,18 @@ function PromoteToInternal({ principal, onDone }: { principal: PrincipalDetail; 
 					title="Make user internal"
 					confirmLabel="Make internal"
 					body={
-						<p>
-							Make <strong>{principal.label}</strong>{' '}
-							internal? They may then hold any role, and an OIDC login with their address may claim the account. This cannot be undone.
-						</p>
+						<>
+							<p>
+								Make <strong>{principal.label}</strong>{' '}
+								internal? They may then hold any role, and an OIDC login with their address may claim the account. Every session they hold ends and pending
+								password links stop working. This cannot be undone.
+							</p>
+							{principal.bootstrapMailbox && (
+								<p className="error-text" role="alert">
+									This address is listed in IAM_BOOTSTRAP_ADMINS: once internal, this user is an installation admin.
+								</p>
+							)}
+						</>
 					}
 					onConfirm={promote}
 					onClose={() => setConfirming(false)}

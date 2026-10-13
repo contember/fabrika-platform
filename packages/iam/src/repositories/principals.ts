@@ -284,14 +284,29 @@ export class PrincipalRepository {
 	}
 
 	/**
-	 * Make an external principal internal (ADR-0051), an installation administrator's operation. Returns whether this
-	 * call changed it; `audit` is written only then. There is no way back: demotion is not an operation.
+	 * Make an external principal internal (ADR-0051), an installation administrator's operation, and in the same
+	 * transaction revoke every session it holds and spend every password action still pending: they were issued to an
+	 * external person, and promotion can widen what they reach (a bootstrap mailbox becomes an installation admin).
+	 * Returns whether this call promoted it; `audit` is written only then. There is no demotion.
+	 *
+	 * The revocations come first and test the affiliation themselves, so on SQLite they run before the promotion and on
+	 * Postgres, where the three are one statement, they read the same snapshot it does.
 	 */
-	promoteToInternal(id: string, audit?: AuditEventInput): Promise<boolean> {
-		return this.guardedUpdate(
+	async promoteToInternal(id: string, audit?: AuditEventInput): Promise<boolean> {
+		const now = unixNow()
+		const external = `EXISTS (SELECT 1 FROM principals WHERE id = ? AND affiliation = 'external')`
+		const promoted = await this.writer.run([
+			{
+				sql: `UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL AND ${external} RETURNING id`,
+				binds: [now, id, id],
+			},
+			{
+				sql: `UPDATE password_action_tokens SET consumed_at = ? WHERE principal_id = ? AND consumed_at IS NULL AND ${external} RETURNING id`,
+				binds: [now, id, id],
+			},
 			{ sql: `UPDATE principals SET affiliation = 'internal' WHERE id = ? AND affiliation = 'external' RETURNING id`, binds: [id] },
-			audit,
-		)
+		], audit)
+		return promoted.length > 0
 	}
 
 	private async guardedUpdate(update: SqlChange, audit: AuditEventInput | undefined): Promise<boolean> {

@@ -160,5 +160,6 @@ WU1, WU2 and WU4.
 - **WU1 (2026-10-13).** Shipped → [ADR-0051](../decisions/0051-external-principals.md). Deviations: the domain
   allowlist's known-principal bypass now admits only an internal principal (an internal invited row keeps today's
   bypass, so hybrid linking is unchanged), rather than applying the allowlist to every row with no `external_id`.
-  Promotion revokes no session: it widens nothing an external already holds. The checker's hint is
+  Review round: promotion revokes the principal's sessions and pending password actions, because it widens what
+  the principal reaches (a bootstrap mailbox becomes an installation admin). The checker's hint is
   `member-admits-external`. `resolveUserPrincipal`'s label-refresh warning no longer names the IdP mailbox.

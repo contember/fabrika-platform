@@ -77,6 +77,8 @@ export interface GrantDto {
 }
 
 export interface PrincipalDetail extends PrincipalListItem {
+	/** The mailbox is listed in `IAM_BOOTSTRAP_ADMINS`: an internal user with it is an installation admin. */
+	bootstrapMailbox: boolean
 	grants: GrantDto[]
 	/** Effective permissions with `source` (grant / bootstrap / group:<ref>). */
 	permissions: PermissionEntry[]
@@ -534,7 +536,10 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
 		invite: RpcProcedure<InviteRequest, PrincipalListItem>
 		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
-		/** Make an external user internal. There is no way back; promoting an internal principal is a 409. */
+		/**
+		 * Make an external user internal, revoking its sessions and pending password actions. A bootstrap mailbox becomes
+		 * an installation admin. There is no way back; promoting an internal principal is a 409.
+		 */
 		promote: RpcProcedure<PrincipalIdInput, PrincipalListItem>
 	}
 	/**

@@ -34,8 +34,11 @@ subsidiary.
 - **The principal.** `principals.affiliation` is `internal` or `external`. Every existing row, and every service, is
   `internal`; the column's `CHECK` keeps a service internal. Only an installation administrator creates an external
   principal (`principals.invite` with `affiliation: 'external'`). An external principal becomes internal only through
-  the administrator's `principals.promote`, which writes `iam.principal.promote` in the change's own transaction and
-  grants nothing. There is no demotion.
+  the administrator's `principals.promote`. Promotion writes no grant row, but it widens what the principal reaches:
+  it may then hold any role, OIDC may claim it, and a mailbox listed in `IAM_BOOTSTRAP_ADMINS` makes it an
+  installation admin at once. So in the change's own transaction it revokes every session the principal holds and
+  spends its pending password actions, and `iam.principal.promote` records whether the mailbox is a bootstrap admin;
+  the console warns before promoting one. There is no demotion.
 - **The role.** A contract declares `external: true` on a membership role (`member: { scope, … }`): an external
   principal may hold it. `buildArtifact` refuses it on any other role, and IAM's schema parser refuses it again. The
   artifact carries it only when declared, so existing digests stay. IAM reconciles it into `roles.external`, whose

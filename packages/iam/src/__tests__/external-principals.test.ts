@@ -338,9 +338,21 @@ for (const backend of BACKENDS) {
 			expect(row?.external_id).toBeNull()
 			expect(await f.repositories.principals.getUserByExternalId(sub)).toBeNull()
 
+			const later = Math.floor(Date.now() / 1000) + 3600
+			await f.repositories.sessions.createSession({
+				tokenHash: `session-${name}`,
+				principalId: external.id,
+				email: mailbox,
+				authenticationMethod: 'password',
+				expiresAt: later,
+			})
+			await f.repositories.passwords.issueActionToken({ principalId: external.id, purpose: 'reset', tokenHash: `reset-${name}`, expiresAt: later })
 			const promoted = await f.adminRpc('principals.promote', { principalId: external.id })
 			expect(promoted.status).toBe(200)
 			expect(await rpcBody(promoted)).toMatchObject({ result: { id: external.id, affiliation: 'internal' } })
+			// What was issued to the external person ends with the promotion.
+			expect(await f.repositories.sessions.getActiveSessionByHash(`session-${name}`)).toBeNull()
+			expect(await f.repositories.passwords.inspectActionToken(`reset-${name}`, 'reset')).toBeNull()
 			expect((await f.adminRpc('principals.promote', { principalId: external.id })).status).toBe(409)
 			const audited = await f.repositories.audit.listAuditEvents({ resourceId: external.id, limit: 10 })
 			expect(audited.map((event) => event.action)).toContain('iam.principal.promote')
