@@ -1024,3 +1024,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   in a variable, where round 5's stored literal widened `type` to `string`; `tests.md` and the CRM's tests use it. The
   loop runs tsc first and the checker once tsc is green. The checker reads the tests too (casts, skipped or
   assertion-free tests, the generated tests' hashes), so a test-only change still needs it; the skill says so.
+- **After close — the fresh-agent trial of group B, rounds 3–6.** opus-b, round 3: 3 runs (1 failing, the test caller's
+  nullable label, fixed in `aedd6992`). gpt-b: 4 runs (1 failing) in rounds 3, 4 and 5, each failure in its own test
+  code (the label, a hand-written status helper, a widened scope literal), each fixed in the kit or the skill (`aedd6992`,
+  WU25, WU26). Round 6 on `4be1549a`: gpt-b 2 runs, 0 failing, 156 tests pass, no raw SQL, no edited migration or
+  generated file. Every group has now met the cap of 3.
