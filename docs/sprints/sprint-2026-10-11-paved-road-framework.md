@@ -24,7 +24,7 @@ written by fresh agents from the skill alone, with an off-road request declared,
 map, the evidence carried over, the refs re-verified at HEAD, sequencing steps 0–6a and their Run log entries up to
 WU13b are in the [archived first part](../archive/sprint-2026-10-11-paved-road-core.md). A reference in this file to a
 shipped unit, to "Evidence" or to a verified ref points there. Still active: WU11, WU15, WU15b, WU16, WU17, WU19, WU20,
-WU10b, WU21 and WU22.
+WU10b, WU21, WU22 and WU23a.
 
 ## Target shape (WU0 fixes the signatures; WU1 the layout; WU3 the API matrix)
 
@@ -416,6 +416,80 @@ The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") i
   `packages/app/src/{contract/context.ts,contract/defaults.ts,implement/*,testing/*}`,
   `packages/check/src/{endpoint-fixtures,scaffold}.ts`, `packages/control/src/{membership-transport,approval/diff}.ts`,
   `packages/app/skill/`, `examples/zerops-app/AGENTS.md`, their tests. Not `examples/crm`: WU11 adopts it.
+
+### WU23a — Application-wide data (M–L)
+
+- **Problem.** Every access form (`over`, `in`, `on`, `creates`) and every writable table scope names a dimension, so
+  data that belongs to the whole application has no place on the paved road: a code list an administrator edits,
+  operational counters, the audit row of an export across every record. A single-tenant application, whose roles are
+  all global grants, meets it first; the private dogfood (WU21) wrote such data as `over: '<dimension>'` plus `sql`
+  into a reference table, and could not build the audited export (backlog 125).
+- **Verify first.** `satisfies` (`packages/auth-core/src/requirement.ts:13`–`:21`) is the requirement check the proxy's
+  one decision runs (`packages/proxy-core/src/authorize.ts:259`) and the framework repeats; `permits(entries, action)`
+  without a scope is met only by a global entry (`permissions.ts:41`). `over` under a global grant mints a `Within` of
+  `'all'` (`dispatch.ts:577`–`:579`), and its predicate is `true` (`store.ts:207`). A reference table is read-only
+  (`ReferencePolicy`, `packages/db/src/policy.ts:97`); an inbox is written only by its form.
+- **Decision: the access form `{ action, app: true }`.** `app` is the word the shell already uses for the whole
+  application (a job's `scope: 'app'`). The artifact's requirement is `{ kind: 'action', action, access: { form: 'app' } }`.
+  It is allowed on an RPC mount's `query` and `mutation` and on an SPA; a link procedure stays on its object, an export
+  keeps its one dimension (v1), and files, jobs and webhooks keep their own forms.
+- **Decision: the proxy checks it, once.** The requirement is the action held as a global grant: `satisfies` answers
+  `permits(perms, action)` with no scope for `form: 'app'`, so only an entry with `scope: null` meets it. The proxy's
+  decision (`@fabrika/proxy-core`) runs `satisfies` and refuses a caller who holds the action only in some scope
+  with 403, before the application sees the request; the framework repeats it as authorization, as for every form. No
+  new check exists anywhere else (ADR-0022): the access form only mints the capability.
+- **Decision: the table scope `{ app: '<why>' }`.** An application table holds rows of no dimension. Like a dimension
+  table it has `actions` (`read`, `insert`, `update`, `delete`), `insert`/`update` lists, `version`, `createdBy`,
+  column actions and a `key` (default `id`, generated as a UUIDv7 on insert); it has no container and no chain. A
+  reference table stays migration-managed and read-only, so a code list an administrator edits is an application table.
+- **Decision: the handle `ctx.db.app`, option (i).** An `app` endpoint gets `ctx.db.app.<table>` with a capability of
+  its action held application-wide. An application table: `list`, `count` and `aggregate` with its read action;
+  `get(id)` and, in a mutation, `getForUpdate(id)` with any action the table names (the columns of that action, as a
+  `Ref` reads its own target); `insert`, `update(id, …, { expectVersion })` and `remove(id, …)` with that operation's
+  action. **Every dimension and child table whose read action is the endpoint's action** is there too, read-only
+  (`list`, `count`, `aggregate`, every row), as `over` with `'all'` reads it today. So an audited export of every
+  record is one `app` mutation that reads the records and inserts its log row into an application table whose insert
+  action is the export's action, in one transaction. Option (ii) (an `over` endpoint that writes an application table
+  when its `Within` is `'all'`) is rejected: whether it may write would depend on each caller's grants at run time, and
+  a scoped caller would fail inside the handler instead of at the proxy. Option (i) adds no authority: a global holder
+  of the action already reads every such row through `over`. An application table is read only by an `app` endpoint;
+  data that every caller (a link holder, a scoped member) reads stays a reference table. A job reaches application
+  tables only through `sql` or `unscoped`, as before.
+- **Decision: approval (ADR-0050).** The new form appears in the endpoint's line ("with `<action>` (app-wide)"), and a
+  change of an endpoint's requirement, to `app: true` included, is a widening (as every requirement change is). A new
+  application table's line names its reason and each of its actions; a changed scope or action of a table widens as
+  before. Neither is a declared deviation: the form is on the paved road.
+- **Decision: the generated tests.** The endpoint access test gets two cases per `app` procedure for a person or a
+  machine: a caller who holds the action in one scope only is refused by the proxy (403), and a global holder reaches
+  the endpoint (an answer of the application, no 401/403/404/5xx). The policy isolation test of an application table
+  probes the data layer through an `app` probe contract: a global holder of the table's actions gets, lists, counts,
+  inserts, updates and removes; a holder of the same actions in one scope only is refused (403) on each; a capability
+  of the read action is refused an update or a remove the table gives another action.
+- **Scope.**
+  1. `AccessForm` and `TableScope` in `@fabrika/auth-core`; `satisfies`; the proxy manifest parser; every reader of
+     an access form's dimension (`endpointMembers`, `endpointDirectory`, the delegation) treats `app` as none.
+  2. The contract: the declaration and kit types, `buildArtifact`, `parseContractArtifact`, the static reader.
+  3. `@fabrika/db`: the `app` policy (parse, types, `DbIndex`), the app capability, `ctx.db.app` (`orm.ts`), the
+     table probe.
+  4. `@fabrika/app`: the capability class and mint, `#access`, `ctx.db.app` by access form (types and runtime).
+  5. The testing kits and `fabrika db test-scaffold`; `classifyAccess`.
+  6. ADR-0012, ADR-0022 and ADR-0050 in place; `docs/reference/application-runtime.md`; the skill's `endpoint.md`,
+     `table-and-migration.md` and `public-intake.md` (an administrator-edited code list and an audited export of
+     every candidate on the paved road, no `sql`, no `unscoped`); `examples/zerops-app/AGENTS.md`.
+- **Acceptance / witness.** The public intake recipe's code list and audited export type-check and migrate in
+  `skill-code.test.ts`, with no `sql` and no `unscoped` on them. A generated endpoint access case refuses a holder of
+  the action in one scope (403 from the proxy) and admits a global holder (`endpoint-access.test.ts`). The policy
+  isolation probe covers an application table (`policy-isolation` cases, generated by the scaffold). `satisfies` and
+  the proxy decision refuse a scoped holder of an `app` requirement (auth-core and proxy-core tests). `classifyAccess`
+  widens on a change to `app: true` and names a new application table's actions.
+- **Touch points.** `packages/auth-core/src/{contract,requirement,membership}.ts`, `packages/proxy-core/src/manifest.ts`,
+  `packages/app/src/contract/{define,declaration,kit,group,context,build,artifact-schema}.ts`,
+  `packages/app/src/implement/{capability,dispatch,invocation,boot}.ts`, `packages/db/src/{policy,orm-types,orm,store,
+  capability,testing,vocabulary-tables}.ts`, `packages/app/src/testing/{policy-isolation,endpoint-access}.ts`,
+  `packages/check/src/{scaffold.ts,reader/surface.ts}`, `packages/control/src/approval/diff.ts`, the ADRs and docs
+  above, `packages/app/skill/references/{endpoint,table-and-migration,public-intake}.md`, their tests. Backlog 125 is
+  deleted on merge. WU23b (backlog 121, 123, 124) edits `packages/check/` and the skill's checklist in parallel; the
+  second to merge rebases.
 
 ### Design review of the gap units (binding)
 
