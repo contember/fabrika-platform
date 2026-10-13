@@ -21,8 +21,7 @@ application. Effort: M; it needs a decision first.
   application cannot show a current name or list its staff.
 - **No role management in the application.** A role's `assignableBy` exists only on a membership role
   (`packages/app/src/contract/define.ts:78`–`:79`). The application's own administrator ("manages users and roles")
-  therefore has nothing to call. In-app member management needs a dimension with `members`, and its generated tests
-  cannot boot ([113](113-the-generated-endpoint-tests-cannot-boot-an-app-that-writes-through-iam.md)).
+  therefore has nothing to call. In-app member management needs a dimension with `members`.
 
 ## Approach / acceptance
 

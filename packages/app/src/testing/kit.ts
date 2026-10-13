@@ -39,7 +39,7 @@ import type { ApplicationEnvironment, ContractImplementation } from '../implemen
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import { type LabelledTestCaller, type LinkTestCaller, resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
-import { kitDirectory, type TestMembership, writesThroughIam } from './directory'
+import { type DirectoryCallers, kitDirectory, kitMembership, type TestMembership, writesThroughIam } from './membership'
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
@@ -132,6 +132,18 @@ function stripClientAsserted(headers: Headers): void {
 
 /** Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`. */
 export function testKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
+	return bootTestKit(app, options, 'refused')
+}
+
+/**
+ * The kit of the generated tests: without `options.membership`, its stand-in IAM also answers scope creation, member
+ * management and share links under IAM's rules for the caller's grants, and grants the kit's callers nothing.
+ */
+export function standInIamKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
+	return bootTestKit(app, options, 'stand-in')
+}
+
+function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions, writes: 'refused' | 'stand-in'): TestKit<C> {
 	refuseInProduction('@fabrika/app/testing')
 	const name = app.contract.vocabulary.app
 	const appId = `${name}@${TEST_ENVIRONMENT}`
@@ -198,11 +210,14 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 	const bySession = new Map<string, TestCaller>()
 	const byToken = new Map<string, TestCaller>()
 	const memberships = new Map<TestCaller, readonly TestMembership[]>()
-	// A member directory reads the kit's own callers; a contract that writes through IAM needs `options.membership`.
-	const membership = options.membership ?? (writesThroughIam(artifact) ? undefined : kitDirectory(artifact, {
+	const directoryCallers: DirectoryCallers = {
 		byCredential: (credential) => byToken.get(credential) ?? byKey.get(credential),
 		all: () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })),
-	}))
+	}
+	// A member directory reads the kit's own callers; a contract that writes through IAM needs `options.membership`,
+	// unless the kit stands in for IAM's writes too, and then it also issues the proxy's delegation grants.
+	const standIn = options.membership === undefined && writes === 'stand-in' ? kitMembership(artifact, directoryCallers).rpc : undefined
+	const membership = options.membership ?? standIn ?? (writesThroughIam(artifact) ? undefined : kitDirectory(artifact, directoryCallers))
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -320,7 +335,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		getJwks: () => jwks,
 	}
 
-	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: options.membership ?? null })
+	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: options.membership ?? standIn ?? null })
 
 	// What requests leave running: a job a form's `then` kicked, or a failure's report.
 	const background = new Set<Promise<void>>()

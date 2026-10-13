@@ -1,7 +1,7 @@
 // The handlers reach rows only through `ctx.db`, bound to the capability each access form minted.
 
 import { app } from '../app-kit'
-import { ById, ByNote, Comments, Count, Done, Named, NamedList, NewNote, Note, Notes, Rename } from '../schemas'
+import { ById, ByNote, Comments, Count, Done, Invite, Invited, Named, NamedList, NewNote, Note, Notes, Rename, Share, Shared } from '../schemas'
 
 export const organizations = app.group({ callers: ['human'] }, (r) => ({
 	get: r.query({ input: ById, output: Named, access: { action: 'organizations.read', on: 'organization', from: 'id' } })
@@ -9,6 +9,8 @@ export const organizations = app.group({ callers: ['human'] }, (r) => ({
 			const organization = await ctx.db.target.get()
 			return { id: organization.id, name: organization.name }
 		}),
+	create: r.mutation({ output: Done, access: { action: 'organizations.create', creates: 'organization' } })
+		.handle(({ ctx }) => ({ id: ctx.created.value })),
 }))
 
 export const workspaces = app.group({ callers: ['human'] }, (r) => ({
@@ -16,6 +18,11 @@ export const workspaces = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.db.within.workspaces.list({ orderBy: [['id', 'asc']] })).items.map((workspace) => ({ id: workspace.id, name: workspace.name })),
 		})),
+	invite: r.mutation({ input: Invite, output: Invited, access: { action: 'workspaces.admin', on: 'workspace', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			const invited = await ctx.members.assign(ctx.target, { email: input.email }, input.role)
+			return { invitationId: 'invited' in invited ? invited.invited.invitationId : invited.assigned.principalId }
+		}),
 }))
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
@@ -36,7 +43,27 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.db.target.note_comments.list({ orderBy: [['id', 'asc']] })).items.map((comment) => ({ id: comment.id, body: comment.body })),
 		})),
+	share: r.mutation({ input: Share, output: Shared, access: { action: 'notes.share', on: 'note', from: 'id' }, issues: 'shared' })
+		.handle(async ({ input, ctx }) => {
+			const link = await ctx.links.issue(ctx.target, { mount: 'shared', days: input.days })
+			return { id: link.id, url: link.url }
+		}),
 }))
+
+export const shared = app.link('/s', {
+	spa: 'dist/share',
+	dimension: 'note',
+	grants: ['notes.read'],
+	issuedBy: 'notes.share',
+	maxDays: 30,
+	procedures: (l) => ({
+		note: l.query({ output: Note, access: { action: 'notes.read' } })
+			.handle(async ({ ctx }) => {
+				const note = await ctx.db.target.get()
+				return { id: note.id, title: note.title }
+			}),
+	}),
+})
 
 export const ops = app.group({ callers: ['machine'] }, (r) => ({
 	count: r.query({ output: Count, access: { action: 'notes.read', over: 'workspace' } })

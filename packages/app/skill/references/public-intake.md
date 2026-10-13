@@ -922,8 +922,8 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
 - The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
   link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
   its action in one candidate only is 403, and a global holder reaches it. `positions` and `candidate_exports` get a
-  policy probe of their actions, held globally and in one scope. They pass here because only the job issues links;
-  an endpoint that `issues` needs IAM in its tests (`SKILL.md`, "Not built yet").
+  policy probe of their actions, held globally and in one scope. An endpoint that `issues` gets the cases of any `on`
+  endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.

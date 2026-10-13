@@ -49,7 +49,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [111](111-an-attachment-has-no-xlsx-format.md) — `attachment()` encodes CSV only; an export with typed cells needs `format: 'xlsx'`, a writer that the WU19 review kept out of the sprint.
 - [112](112-an-update-that-sets-no-column-answers-500.md) — An edit endpoint with only optional fields answers 500 to an empty input; its generated cases fail.
-- [113](113-the-generated-endpoint-tests-cannot-boot-an-app-that-writes-through-iam.md) — `creates`, member management or a share-link mount stops the whole generated endpoint test from booting.
 - [114](114-tests-flake-when-runs-share-one-host.md) — Four suites share a directory, a catalog row or a wall-clock budget with concurrent runs and flake.
 - [115](115-a-burst-of-postgres-batches-larger-than-the-pool-hangs.md) — A Bun SQL `batch` holds its connection idle while pool queries queue behind it; a burst larger than the pool hangs.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — Role creation by `db`, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.

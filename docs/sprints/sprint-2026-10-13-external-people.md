@@ -145,3 +145,11 @@ WU1 first: every later unit depends on affiliation. WU2 and WU3 then run in para
 WU1, WU2 and WU4. WU6 last, with backlog 113 at its start (may run beside WU5).
 
 ## Run log
+
+- **Backlog 113 (prerequisite of WU6), done.** The endpoint access kit boots with a stand-in IAM for writes
+  (`kitMembership`, `packages/app/src/testing/membership.ts`): delegation, `creates` (global grant), `members.manage`
+  on the value, `assignableBy`, the role's actions, `issuedBy` and the link grants on the chain. A `creates` endpoint
+  gets two cases (one-scope holder 403, global holder answered). Its `assignableBy` check is today's (a membership
+  role in the exact value); WU2 widens IAM's rule, and the stand-in must follow it. Gap left for WU6: an `on` endpoint
+  that cancels an invitation or revokes a link by id fails its generated cases (the stand-in answers an unknown id
+  404, as IAM does); the skill's "Not built yet" says so.

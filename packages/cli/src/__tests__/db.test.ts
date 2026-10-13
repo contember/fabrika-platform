@@ -343,7 +343,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		writeFileSync(bunfig, '[test]\npreload = ["./skip-everything.ts"]\nroot = "nowhere"\n')
 		try {
 			const output = await run(ISOLATION_APP, 'test-isolation', [], { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
-			expect(output).toBe('59 generated cases passed\n')
+			expect(output).toBe('68 generated cases passed\n')
 		} finally {
 			rmSync(bunfig, { force: true })
 			rmSync(preload, { force: true })
@@ -389,7 +389,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		await withApplication(mocked, async () => {
 			expect((await checkApplication({ root: ISOLATION_APP })).map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/app.ts mock-module')
 			const failed = await failure(testIsolation())
-			expect(failed).toContain('db test-isolation: 58 of 59 generated cases passed')
+			expect(failed).toContain('db test-isolation: 67 of 68 generated cases passed')
 			expect(failed).toContain(`${ENDPOINTS}: api.notes.get: the answer to one scope holds nothing of the scope answered before it (failed)`)
 		})
 	})
@@ -415,7 +415,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 				JSON.stringify(seen)
 			}, JSON.stringify({ environ: readEnvironment('/proc/self/environ', 'latin1'), url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '' }))\n`
 		await withApplication(recording, async () => {
-			expect(await testIsolation()).toBe('59 generated cases passed\n')
+			expect(await testIsolation()).toBe('68 generated cases passed\n')
 		}, false)
 		const recorded = z.object({ environ: z.string(), url: z.string() }).parse(JSON.parse(readFileSync(seen, 'utf8')))
 		const password = decodeURIComponent(new URL(url).password)
@@ -442,7 +442,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			writeFileSync(files[2] ?? '', "export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'not a T number' } }\n")
 			await run(ISOLATION_APP, 'test-scaffold')
 			const failed = await failure(testIsolation())
-			expect(failed).toContain('db test-isolation: 56 of 59 generated cases passed')
+			expect(failed).toContain('db test-isolation: 65 of 68 generated cases passed')
 			expect(failed).toContain(`${ENDPOINTS}: api.notes.rename: the note of another scope is 404 (failed)`)
 		} finally {
 			files.forEach((path, index) => {
@@ -454,8 +454,8 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	})
 
 	test('--verbose prints the test output locally', async () => {
-		expect(await testIsolation(['--verbose'])).toContain('59 generated cases passed')
-		expect(await testIsolation(['--verbose'])).toContain('59 pass')
+		expect(await testIsolation(['--verbose'])).toContain('68 generated cases passed')
+		expect(await testIsolation(['--verbose'])).toContain('68 pass')
 	})
 
 	test('the isolation fixture’s schema module is what codegen writes for its migrations', async () => {

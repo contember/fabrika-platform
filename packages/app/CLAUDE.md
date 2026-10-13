@@ -28,6 +28,7 @@ bun test src/__tests__/orm-types.test.ts        # the data mistakes of a kit han
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 bun test src/__tests__/scoped-database.test.ts  # a handler tree over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own target, seeds, link holder, runJob (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/membership-stand-in.test.ts  # the endpoint access kit's IAM stand-in: delegations, creates, members, links
 bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside form inboxes, a challenge and a scan (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
@@ -78,7 +79,8 @@ src/
                       the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner)
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
-    directory.ts      the default membership transport: member directories (list, find) from the kit's callers, writes refused
+    membership.ts     the stand-in IAM transports: member directories from the kit's callers; kitDirectory refuses
+                      writes, kitMembership (the endpoint access kit's) checks them as IAM does and records them
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
@@ -748,7 +750,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   same table for every credential on every kind of path. The kit's own IAM issues no
   delegation grants: `options.membership` (an `IamMembershipRpc`) is both the proxy's
   delegation issuer and `boot`'s membership transport, and without it an application that
-  creates scopes, manages members or issues links does not boot in the kit. On Bun the transport is
+  creates scopes, manages members or issues links does not boot in the kit. Only the endpoint access kit
+  (`standInIamKit`) boots without one: its `kitMembership` issues the delegation grants and answers those writes under
+  IAM's rules for the caller's grants, records them, and grants the kit's callers nothing. On Bun the transport is
   `HttpIamMembership` (`@fabrika/auth`) on `FABRIKA_IAM_RPC_URL` with the environment's own
   `FABRIKA_IAM_RPC_KEY`, both written by the platform; on Cloudflare the `IAM` binding.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
@@ -776,13 +780,14 @@ vocabulary (`packages/db/CLAUDE.md`).
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
   application. `endpointAccessKit` boots the application's own `serve(…)` through
-  `testKit`, once, because the application's layer binds once per process, with in-memory object
+  `standInIamKit`, once, because the application's layer binds once per process, with in-memory object
   storage: `kit.file` seeds one file per scope through the real upload endpoint. Its cases are `denied` (exact 404/403),
   `leaked` (`{ answered, leaked }`: answered unless a 401, 403, 404 or 5xx, so a precondition's 409 passes; `in`
   across every table that lies in the dimension), and `own` (a caller with only the endpoint's action, or a link
-  holder, reaches its own object); each takes the author's seed, the state `seedWorlds` writes into both rows. An
-  `app` procedure gets `scoped` (a holder of the action in one scope: exactly 403) and `global` (a global holder:
-  answered unless a 401, 403 or 5xx), and an application table `appPolicyIsolationKit`, whose probe procedures are
+  holder, reaches its own object; on an endpoint that manages members, also every membership role on the target's
+  value, and on one that issues links the actions they grant, as IAM requires); each takes the author's seed, the state
+  `seedWorlds` writes into both rows. An `app` or `creates` procedure gets `scoped` (a holder of the action in one
+  scope: exactly 403, from the proxy or IAM) and `global` (a global holder: answered unless a 401, 403 or 5xx), and an application table `appPolicyIsolationKit`, whose probe procedures are
   `app` endpoints over one row `seedRow` writes. A leak scans every value of
   the other row's chain, so an outer dimension's value is a leak too. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root

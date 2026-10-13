@@ -521,7 +521,7 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   read the dimension's `directory` yet. Where a stored column or an output needs text, write `member.label ?? member.principalId`
   (never `!` or a cast); that fallback is a branch no test reaches.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
-  `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
+  `revoke(ref, …)`, one change per request.
 - Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
   those as the caller's own identity (`client-identity`).
 

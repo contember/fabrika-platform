@@ -4,7 +4,14 @@
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
 import { GENERATED_MEMBER } from '@fabrika/app/contract'
-import { type ContractArtifact, endpointDirectory, type EndpointRow, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
+import {
+	type ContractArtifact,
+	endpointDirectory,
+	endpointMembers,
+	type EndpointRow,
+	type SchemaShape,
+	type TablePolicyArtifact,
+} from '@fabrika/auth-core'
 import { tablePolicies } from '@fabrika/db/tables'
 import { ContractSourceError, readContractSource, readTablesDefinition } from './contract'
 import { type EndpointFixtures, isSampleObject, NO_FIXTURES, readEndpointFixtures } from './endpoint-fixtures'
@@ -173,11 +180,10 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 	return { body, cases: [...isolation, ...hidden].map((item) => item.name) }
 }
 
-/** Whether an endpoint gets endpoint access cases: a procedure with an `on`, `in`, `over` or `app` access form, for a person or a machine. */
+/** Whether an endpoint gets endpoint access cases: a procedure with an access form, for a person or a machine. */
 const isAccessTested = (row: EndpointRow): boolean => {
 	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind !== 'action') return false
-	const { form } = row.requirement.access
-	return row.callers.some((caller) => caller === 'human' || caller === 'machine') && form !== 'creates'
+	return row.callers.some((caller) => caller === 'human' || caller === 'machine')
 }
 
 /** Whether an endpoint is a procedure of a link mount: its link holder reaches the object the key is bound to. */
@@ -203,6 +209,21 @@ const admitsString = (shape: SchemaShape | undefined): boolean =>
 /** The read action of the table that owns `dimension`, or `undefined` when no table owns it. */
 const ownerRead = (policies: Policies, dimension: string): string | undefined =>
 	Object.values(policies).find((policy) => policy.scope.mode === 'dimension' && policy.scope.dimension === dimension)?.actions.read
+
+/**
+ * What the `own` case's caller holds: the endpoint's action, plus what IAM requires of a member manager (the membership
+ * roles there) or of a link's issuer (the actions the link grants).
+ */
+const ownGrants = (row: EndpointRow, artifact: ContractArtifact, action: string, dimension: string): string => {
+	if (endpointMembers(artifact, row) === 'manage') return `${action} and the membership roles there`
+	const issues = artifact.declared?.[row.id]?.issues
+	const granted = Object.entries(artifact.mounts).flatMap(([name, mount]) =>
+		mount.kind === 'link' && mount.dimension === dimension && mount.issuedBy === action && (issues === undefined || issues === name)
+			? mount.grants
+			: []
+	)
+	return [action, ...new Set(granted)].join(', ')
+}
 
 /**
  * One endpoint's cases: an object or a value of another scope is refused; no answer holds another scope's rows unless
@@ -235,6 +256,18 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 			),
 		]),
 	]
+	if (access.form === 'creates') {
+		return [
+			testCase(
+				`${row.id}: a caller with ${action} in one ${access.dimension} only creates none (403)`,
+				`expect(await kit.scoped(${args})).toEqual({ status: 403 })`,
+			),
+			testCase(
+				`${row.id}: a caller with ${action} held globally creates one`,
+				`expect(await kit.global(${args})).toEqual({ answered: true })`,
+			),
+		]
+	}
 	if (access.form === 'app') {
 		return [
 			testCase(`${row.id}: a caller with ${action} in one scope only is 403`, `expect(await kit.scoped(${args})).toEqual({ status: 403 })`),
@@ -255,7 +288,7 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 		if (own) {
 			cases.push(
 				testCase(
-					`${row.id}: a caller with only ${action} reaches its own ${access.dimension}`,
+					`${row.id}: a caller with only ${ownGrants(row, artifact, action, access.dimension)} reaches its own ${access.dimension}`,
 					`expect(await kit.own(${seeded})).toEqual({ status: 200 })`,
 				),
 			)
@@ -407,7 +440,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 	)
 	for (const id of Object.keys(fixtures.inputs).sort()) {
 		if (!tested.some((row) => row.id === id)) {
-			findings.push(at(`${id} is no endpoint with an on, in, over or app access form`, 'a fixture of a tested endpoint, or none'))
+			findings.push(at(`${id} is no endpoint with an on, in, over, app or creates access form`, 'a fixture of a tested endpoint, or none'))
 		}
 	}
 	for (const [id, fields] of Object.entries(fixtures.members).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {

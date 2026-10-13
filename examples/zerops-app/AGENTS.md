@@ -245,9 +245,9 @@ files, HR's review with its history.
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- An application with an endpoint that issues share links, `creates` or member management fails its generated
-  endpoint tests: the test kit stands in for IAM's member directory only. Ask the human before you add one. A job that
-  issues links (`references/public-intake.md`) keeps them passing.
+- An `on` endpoint that cancels an invitation or revokes a share link by its id fails its generated cases: their
+  stand-in IAM knows only the invitations and links a case made, and answers any other id 404, as IAM does. Ask the
+  human before you add one.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
@@ -1049,7 +1049,7 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   read the dimension's `directory` yet. Where a stored column or an output needs text, write `member.label ?? member.principalId`
   (never `!` or a cast); that fallback is a branch no test reaches.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
-  `revoke(ref, …)`, one change per request (see "Not built yet" in `SKILL.md`).
+  `revoke(ref, …)`, one change per request.
 - Name a picked person's field by its role (`assignee`, `newOwner`), not `ownerId` or `userId`: the checker reads
   those as the caller's own identity (`client-identity`).
 
@@ -2401,8 +2401,8 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
 - The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
   link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
   its action in one candidate only is 403, and a global holder reaches it. `positions` and `candidate_exports` get a
-  policy probe of their actions, held globally and in one scope. They pass here because only the job issues links;
-  an endpoint that `issues` needs IAM in its tests (`SKILL.md`, "Not built yet").
+  policy probe of their actions, held globally and in one scope. An endpoint that `issues` gets the cases of any `on`
+  endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
@@ -2871,7 +2871,12 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
 - `src/db/__tests__/<table>.policy-isolation.test.ts`: the data layer keeps each table's rows in their scope.
 - `src/__tests__/endpoint-access.test.ts`: every `on` and `in` endpoint refuses another scope's object (404 or 403);
   every `on` and `over` endpoint, and every `in` endpoint that declares `sql`, answers nothing of another scope; a
-  caller with only an endpoint's write action reaches its own object (200).
+  caller with only an endpoint's write action reaches its own object (200). An `app` or `creates` endpoint refuses a
+  holder of its action in one scope only (403) and answers a global holder.
+- Their kit stands in for IAM: it creates a scope, assigns or invites a member and issues a link under IAM's rules for
+  the caller's grants, and grants nobody anything. So the caller of an endpoint with the dimension's `members.manage`
+  holds it on the object itself, with every membership role there (one of them is in the assigned role's
+  `assignableBy`); the caller of an endpoint that `issues` also holds the actions its link grants.
 
 Run them after every change of the contract or the tables. The platform runs them at every start, and the
 application is not ready until each passes. A failing generated test is a bug in the handler, the policy or the

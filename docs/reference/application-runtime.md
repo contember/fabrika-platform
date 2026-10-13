@@ -989,7 +989,8 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   (`ctx.members.list()` and `get`) from its own callers: each caller's membership roles in the scope, labels only to a
   `members.manage` holder or where the dimension declares `directory: 'labels'`, and `not_allowed` to a caller without
   the dimension's `members.list` there (a list) or the endpoint's action on the chain (a lookup). A contract that creates scopes, manages members or issues share links gets no
-  stand-in, so `boot` names the transport it lacks; pass an `IamMembershipRpc` for it.
+  stand-in, so `boot` names the transport it lacks; pass an `IamMembershipRpc` for it. Only the endpoint access kit
+  boots with a stand-in for those writes too (below).
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
   (`{ status: 'succeeded', attempts }`). It first waits for the runs a form's `then` kicked through `kit.fetch`.
@@ -1074,8 +1075,14 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   refused by an update or a remove of another action.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
-  export, `serve(…)`) through `testKit`, on the application's own data layer, once: that layer
-  binds once per process. The cases:
+  export, `serve(…)`) through the test kit, on the application's own data layer, once: that layer
+  binds once per process. Its stand-in IAM (`kitMembership`, `packages/app/src/testing/membership.ts`) also answers
+  scope creation, member management and share links, under IAM's rules for the caller's grants: a single-use
+  delegation grant per request, `members.manage` on the value itself, an assigning role there (`assignableBy`), every
+  action of the role assigned, a link mount's `issuedBy` and grants on its chain. It records each write it allowed
+  and grants the kit's callers nothing. A case's caller of an endpoint that manages members holds the action and every
+  membership role of the dimension on its target's value; one of an endpoint that issues links also holds the actions
+  the links grant. The cases:
   - **Denial.** For every procedure with an `on` or `in` access form, a caller holding the action in one scope names
     the other scope's object or value and gets 404 (`on`) or 403 (`in`), exactly.
   - **Leak.** For every `on` and `over` procedure, and every `in` procedure that declares `sql`, a caller of the other
@@ -1088,6 +1095,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   - **App form.** For every `app` procedure, a caller holding the action in one scope only is 403 (the proxy refuses
     it), and a caller holding it as a global grant gets an answer of the application: anything but 401, 403 or a 5xx,
     so a handler's 404 for the sampled id passes.
+  - **Creates.** For every `creates` procedure the same two cases: a caller holding the action in one value of the
+    dimension only is 403 (IAM creates a value only for a global holder), and a global holder gets an answer.
   - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
     (a write-only role), a caller holding only that action asks for its own object and gets 200: the capability
     reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.

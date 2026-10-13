@@ -253,9 +253,9 @@ files, HR's review with its history.
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- An application with an endpoint that issues share links, `creates` or member management fails its generated
-  endpoint tests: the test kit stands in for IAM's member directory only. Ask the human before you add one. A job that
-  issues links (`references/public-intake.md`) keeps them passing.
+- An `on` endpoint that cancels an invitation or revokes a share link by its id fails its generated cases: their
+  stand-in IAM knows only the invitations and links a case made, and answers any other id 404, as IAM does. Ask the
+  human before you add one.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.

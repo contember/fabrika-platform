@@ -9,6 +9,7 @@ import {
 	type Caller,
 	type EndpointDirectory,
 	endpointDirectory,
+	endpointMembers,
 	type EndpointMethod,
 	type FileCollectionArtifact,
 	type SchemaShape,
@@ -25,7 +26,7 @@ import type { AnyContract } from '../contract/define'
 import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { TestCaller, TestGrant } from './caller'
-import { testKit } from './kit'
+import { standInIamKit } from './kit'
 import { scopeTypeOf } from './policy-isolation'
 
 export interface DeniedOutcome {
@@ -70,13 +71,13 @@ export interface EndpointAccessKit {
 	 */
 	file(collection: string, operation: FileOperation, caller: 'own' | 'other' | 'reader'): Promise<DeniedOutcome>
 	/**
-	 * An `app` endpoint asked by a caller who holds its action in one value of a dimension only, never globally: the
-	 * proxy refuses it (403), because the app form needs the action held as a global grant.
+	 * An `app` or a `creates` endpoint asked by a caller who holds its action in one value of a dimension only, never
+	 * globally: refused (403), by the proxy for `app` and by IAM for `creates`, since both need a global grant.
 	 */
 	scoped(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
 	/**
-	 * An `app` endpoint asked by a caller who holds its action as a global grant, and nothing else: `answered` unless the
-	 * answer is a 401, a 403 or a 5xx.
+	 * An `app` or a `creates` endpoint asked by a caller who holds its action as a global grant, and nothing else:
+	 * `answered` unless the answer is a 401, a 403 or a 5xx.
 	 */
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 }
@@ -95,6 +96,10 @@ interface ActionEndpoint {
 	readonly input: SchemaShape | null
 	/** The member directory the endpoint reads, or `null`. */
 	readonly directory: EndpointDirectory | null
+	/** Its dimension when its action is the dimension's `members.manage`, which IAM checks on the value itself; else `null`. */
+	readonly manages: string | null
+	/** The actions of the link mounts it issues, which IAM requires of the issuer beside `issuedBy`. */
+	readonly linkGrants: readonly string[]
 }
 
 /** Every dimension value a target lies in, its own first: where a member directory of its scope is found. */
@@ -118,10 +123,9 @@ interface InTarget {
 	readonly chain: Chain
 }
 
-interface Grant {
-	readonly action: string
-	readonly scope: { readonly type: string; readonly value: string }
-}
+type Grant =
+	| { readonly action: string; readonly scope: { readonly type: string; readonly value: string } }
+	| { readonly role: string; readonly scope: { readonly type: string; readonly value: string } }
 
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
 
@@ -208,7 +212,7 @@ function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationE
  */
 export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract>, tables: Tables<DB, P>, postgres: TestDatabase): EndpointAccessKit {
 	// The objects of the files the cases seed live in memory; their rows are the application's own tables.
-	const kit = testKit(app, {
+	const kit = standInIamKit(app, {
 		database: postgres.database,
 		files: new MemoryFileObjects(),
 		scanner: cleanScanner,
@@ -240,13 +244,26 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			access: requirement.access,
 			input: row.input,
 			directory: endpointDirectory(kit.artifact, row),
+			manages: endpointMembers(kit.artifact, row) === 'manage' && 'dimension' in requirement.access ? requirement.access.dimension : null,
+			linkGrants: linkGrantsOf(row.id, requirement.action, requirement.access),
 		}
 	}
 
-	const appEndpointOf = (id: string): ActionEndpoint => {
+	/** The grants of the link mounts an endpoint's `Ref` issues for: its dimension's whose `issuedBy` is its action. */
+	const linkGrantsOf = (id: string, action: string, access: AccessForm): string[] => {
+		if (access.form !== 'on' && access.form !== 'in') return []
+		const issues = kit.artifact.declared?.[id]?.issues
+		return Object.entries(kit.artifact.mounts).flatMap(([name, mount]) =>
+			mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action && (issues === undefined || issues === name)
+				? mount.grants
+				: []
+		)
+	}
+
+	const globalEndpointOf = (id: string): ActionEndpoint => {
 		const row = endpointOf(id)
-		if (row.access.form !== 'app') {
-			throw new Error(`${id} has the access form ${row.access.form}; only app needs the action held globally`)
+		if (row.access.form !== 'app' && row.access.form !== 'creates') {
+			throw new Error(`${id} has the access form ${row.access.form}; only app and creates need the action held globally`)
 		}
 		return row
 	}
@@ -265,7 +282,10 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		grants: readonly Grant[],
 		global: readonly { readonly action: string }[] = [],
 	): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
-		const asGrants: TestGrant<AnyContract>[] = [...grants.map((grant) => ({ action: grant.action, scope: grant.scope })), ...global]
+		const asGrants: TestGrant<AnyContract>[] = [
+			...grants.map((grant) => ('role' in grant ? { role: grant.role, scope: grant.scope } : { action: grant.action, scope: grant.scope })),
+			...global,
+		]
 		if (row.callers.some((caller) => caller === 'human')) {
 			const caller = kit.testCaller(asGrants)
 			return { caller, fetch: kit.browser(caller) }
@@ -461,13 +481,26 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 
 	/**
 	 * The grants a case's caller holds: its side's, or, on an endpoint that reads a member directory, the action on the
-	 * directory's value, where IAM checks a lookup and a list: a caller who may read it, still only in its own scope.
+	 * directory's value, where IAM checks a lookup and a list: a caller who may read it, still only in its own scope. On
+	 * an endpoint that manages members it is the action on the target's own value, with every membership role there, so
+	 * IAM finds an assigning role and the actions of the role assigned. An endpoint that issues links adds the actions
+	 * its mounts grant, which IAM requires of the issuer.
 	 */
 	const holding = (row: ActionEndpoint, grants: readonly Grant[], chain: Chain): readonly Grant[] => {
-		const directory = row.directory
-		if (directory === null) return grants
-		const value = chain.find((link) => link.type === directory.dimension)?.value
-		return value === undefined ? grants : [{ action: row.action, scope: { type: directory.dimension, value } }]
+		const { directory, manages } = row
+		const at = (dimension: string) => chain.find((link) => link.type === dimension)?.value
+		const managed = manages === null ? undefined : at(manages)
+		const listed = directory === null ? undefined : at(directory.dimension)
+		let held = grants
+		if (manages !== null && managed !== undefined) {
+			const scope = { type: manages, value: managed }
+			const roles = Object.keys(kit.artifact.roles).sort().filter((role) => kit.artifact.roles[role]?.member?.scope === manages)
+			held = [{ action: row.action, scope }, ...roles.map((role) => ({ role, scope }))]
+		} else if (directory !== null && listed !== undefined) {
+			held = [{ action: row.action, scope: { type: directory.dimension, value: listed } }]
+		}
+		const scopes = held.flatMap((grant) => ('action' in grant ? [grant.scope] : []))
+		return [...held, ...row.linkGrants.flatMap((action) => scopes.map((scope) => ({ action, scope })))]
 	}
 
 	const addressed = (
@@ -583,15 +616,15 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			return { status: (await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).status }
 		},
 		async scoped(endpoint, input) {
-			const row = appEndpointOf(endpoint)
-			const dimension = scopeTypeOf(kit.artifact.dimensions)
+			const row = globalEndpointOf(endpoint)
+			const dimension = row.access.form === 'creates' ? row.access.dimension : scopeTypeOf(kit.artifact.dimensions)
 			const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input)
 			return { status }
 		},
 		async global(endpoint, input) {
-			const row = appEndpointOf(endpoint)
+			const row = globalEndpointOf(endpoint)
 			const { status } = await askAs(row, callerFor(row, [], [{ action: row.action }]).fetch, input)
-			// The app form refuses with 403 alone, so a 404 is the handler's own answer (a row the sampled input names is missing).
+			// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 		},
 	}
