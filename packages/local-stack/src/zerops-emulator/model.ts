@@ -26,7 +26,7 @@ export interface ServiceEnvRecord {
 	serviceStackId: string
 	key: string
 	content: string
-	/** `ENV` records come from the active version's `run.envVariables`; `/env` omits them. */
+	/** `ENV` records come from the active version's `run.envVariables`; the API reports them as `USER` and refuses to delete them. */
 	type: 'SECRET' | 'USER' | 'ENV'
 	sensitive?: boolean
 }
@@ -159,3 +159,6 @@ export const emptySnapshot = (): EmulatorSnapshot => ({
 	integrationTokens: [],
 	uploadGrants: [],
 })
+
+/** A record as the env and user-data listings report it: a descriptor variable reads as `USER` since 2026-10-13. */
+export const asReported = (record: ServiceEnvRecord): ServiceEnvRecord => record.type === 'ENV' ? { ...record, type: 'USER' } : record

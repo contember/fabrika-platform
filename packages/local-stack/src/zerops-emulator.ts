@@ -10,6 +10,7 @@ import {
 } from './local-source-contract'
 import {
 	type AppVersionRecord,
+	asReported,
 	emptySnapshot,
 	type EmulatorSnapshot,
 	type ImportDocument,
@@ -397,7 +398,7 @@ class ZeropsEmulator {
 			if (this.service(serviceId) === undefined) {
 				return serviceStackNotFound()
 			}
-			const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId && item.type !== 'ENV')
+			const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId).map(asReported)
 			return json({ list: this.page(list, url), total: list.length })
 		}
 
@@ -408,7 +409,7 @@ class ZeropsEmulator {
 			if (this.service(serviceId) === undefined) {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
 			}
-			return json({ items: this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId && item.type !== 'ENV') })
+			return json({ items: this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId).map(asReported) })
 		}
 
 		const serviceEnv = path.match(/^\/service-stack\/([^/]+)\/user-data$/)
@@ -452,9 +453,12 @@ class ZeropsEmulator {
 		const env = path.match(/^\/user-data\/([^/]+)$/)
 		if (env !== null) {
 			const envId = decodeURIComponent(env[1] ?? '')
-			const index = this.state.serviceEnv.findIndex((item) => item.id === envId && item.type !== 'ENV')
+			const index = this.state.serviceEnv.findIndex((item) => item.id === envId)
 			if (index < 0) {
 				return error(404, 'USER_DATA_NOT_FOUND', 'user data not found')
+			}
+			if (this.state.serviceEnv[index]?.type === 'ENV') {
+				return error(400, 'userDataDeleteForbidden', 'Deleting a system environment variable is forbidden.')
 			}
 			if (request.method === 'PUT') {
 				const body = userDataRequestSchema.parse(await parseJsonBody(request))
