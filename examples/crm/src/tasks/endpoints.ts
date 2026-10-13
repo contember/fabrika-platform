@@ -16,7 +16,7 @@ const Task = z.strictObject({
 	version: z.int(),
 })
 const TaskPage = z.strictObject({ items: z.array(Task), next: Next })
-const NewTask = z.strictObject({ dealId: z.uuid(), title: Name, dueOn: z.iso.date(), assignee: z.nullable(PrincipalId) })
+const NewTask = z.strictObject({ dealId: z.uuid(), title: Name, dueOn: z.iso.date(), assignee: PrincipalId.optional() })
 const CompleteTask = z.strictObject({ id: z.uuid(), done: z.boolean(), expectVersion: z.int().positive() })
 
 export const tasks = app.group({ callers: ['human'] }, (r) => ({
@@ -24,7 +24,9 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ input, ctx }) => fromPage(Task, await ctx.db.within.tasks.list({ orderBy: [['due_on', 'asc']], after: input.after }))),
 	create: r.mutation({ input: NewTask, output: Saved, access: { action: 'tasks.write', in: 'deal', from: 'dealId' } })
 		.handle(async ({ input, ctx }) => {
-			const assignee = picked(await ctx.members.get(input.assignee ?? ctx.principal.id), 'assignee')
+			const assignee = input.assignee === undefined
+				? { principalId: ctx.principal.id, label: ctx.principal.label }
+				: picked(await ctx.members.get(input.assignee), 'assignee')
 			return ctx.db.target.tasks.insert({ title: input.title, due_on: input.dueOn, assignee: assignee.principalId, assignee_label: assignee.label })
 		}),
 	complete: r.mutation({ input: CompleteTask, output: Saved, access: { action: 'tasks.write', on: 'task', from: 'id' } })

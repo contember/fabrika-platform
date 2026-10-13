@@ -2,8 +2,8 @@ import { ConflictError, fromPage, fromRow } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { picked } from '../orgs/logic'
-import { ById, DEAL_STAGES, Done, MaybeText, Name, Next, OptionalText, Page, PrincipalId, Saved, Stage, Versioned } from '../schemas'
-import { isClosed, safeTotal } from './logic'
+import { ById, ClearableText, Done, MaybeText, Name, Next, OptionalText, Page, PrincipalId, Saved, Stage, Versioned } from '../schemas'
+import { isClosed, pipelineOf } from './logic'
 
 const Deal = z.strictObject({
 	id: z.uuid(),
@@ -18,29 +18,32 @@ const Deal = z.strictObject({
 })
 const DealPage = z.strictObject({ items: z.array(Deal), next: Next })
 const NewDeal = z.strictObject({ companyId: z.uuid(), title: Name, value: z.int().min(0), stage: Stage, source: OptionalText })
-const EditDeal = z.strictObject({ id: z.uuid(), title: Name, value: z.int().min(0), source: OptionalText, expectVersion: z.int().positive() })
+const EditDeal = z.strictObject({ id: z.uuid(), title: Name, value: z.int().min(0), source: ClearableText, expectVersion: z.int().positive() })
 const MoveDeal = z.strictObject({ id: z.uuid(), stage: Stage, expectVersion: z.int().positive() })
 const AssignDeal = z.strictObject({ id: z.uuid(), newOwner: PrincipalId, expectVersion: z.int().positive() })
 const StageTotal = z.strictObject({ stage: Stage, count: z.int(), value: z.int() })
-const StageSum = z.strictObject({ stage: Stage, count: z.int(), value: z.string().regex(/^-?[0-9]+$/) })
 const Pipeline = z.strictObject({ stages: z.array(StageTotal) })
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({ input: Page, output: DealPage, access: { action: 'crm.read', over: 'company' } })
 		.handle(async ({ input, ctx }) => fromPage(Deal, await ctx.db.within.deals.list({ orderBy: [['title', 'asc']], after: input.after }))),
-	// Every stage in pipeline order, an empty one included, in one statement: the reason this report is SQL.
-	pipeline: r.query({ output: Pipeline, access: { action: 'crm.read', over: 'org' }, sql: 'read' })
+	pipeline: r.query({ output: Pipeline, access: { action: 'crm.read', over: 'company' } })
 		.handle(async ({ ctx }) => ({
-			stages: (await ctx.sql(StageSum)`
-				select s.stage, count(d.id)::int as count, coalesce(sum(d.value), 0) as value
-				from unnest(${[...DEAL_STAGES]}::deal_stage[]) as s (stage)
-				left join deals d on d.stage = s.stage and ${ctx.sql.scope(ctx.within, 'deals', 'd')}
-				group by s.stage order by s.stage`).map((row) => ({ ...row, value: safeTotal(row.value) })),
+			stages: pipelineOf(await ctx.db.within.deals.aggregate({ groupBy: ['stage'], count: true, sum: ['value'] })),
 		})),
 	get: r.query({ input: ById, output: Deal, access: { action: 'crm.read', on: 'deal', from: 'id' } })
 		.handle(async ({ ctx }) => fromRow(Deal, await ctx.db.target.get())),
 	create: r.mutation({ input: NewDeal, output: Saved, access: { action: 'deals.write', in: 'company', from: 'companyId' } })
-		.handle(({ input, ctx }) => ctx.db.target.deals.insert({ ...input, owner: ctx.principal.id, owner_label: ctx.principal.label })),
+		.handle(({ input, ctx }) =>
+			ctx.db.target.deals.insert({
+				title: input.title,
+				value: input.value,
+				stage: input.stage,
+				source: input.source ?? null,
+				owner: ctx.principal.id,
+				owner_label: ctx.principal.label,
+			})
+		),
 	edit: r.mutation({ input: EditDeal, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } })
 		.handle(({ input: { expectVersion, ...deal }, ctx }) => ctx.db.target.update(deal, { expectVersion })),
 	move: r.mutation({ input: MoveDeal, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } })

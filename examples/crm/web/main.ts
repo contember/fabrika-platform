@@ -5,7 +5,7 @@
 import { createClient, RpcError } from '@fabrika/app/client'
 import { contract } from '../fabrika.contract'
 import { DEAL_STAGES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_DEAL } from '../src/schemas'
-import { el, field, money, options, orNull } from './dom'
+import { el, field, money, options, orNull, orOmitted } from './dom'
 
 const api = createClient(contract, 'api', { bounceOnAuth: true })
 
@@ -121,7 +121,7 @@ async function dealsView(): Promise<HTMLElement> {
 					title: field(form, 'title'),
 					value: Number(field(form, 'value')),
 					stage: stageOf(field(form, 'stage')),
-					source: orNull(field(form, 'source')),
+					source: orOmitted(field(form, 'source')),
 				})
 			),
 		},
@@ -222,7 +222,7 @@ async function dealView(id: string): Promise<HTMLElement> {
 						dealId: id,
 						title: field(form, 'title'),
 						dueOn: field(form, 'dueOn'),
-						assignee: memberOf(members, field(form, 'member'))?.principalId ?? null,
+						assignee: memberOf(members, field(form, 'member'))?.principalId,
 					})
 				),
 			},
@@ -329,8 +329,8 @@ async function contactsView(): Promise<HTMLElement> {
 					api.contacts.create({
 						companyId: field(form, 'companyId'),
 						name: field(form, 'name'),
-						email: orNull(field(form, 'email')),
-						phone: orNull(field(form, 'phone')),
+						email: orOmitted(field(form, 'email')),
+						phone: orOmitted(field(form, 'phone')),
 					})
 				),
 			},
@@ -395,7 +395,7 @@ async function companiesView(): Promise<HTMLElement> {
 			{
 				id: 'new-company',
 				submit: submit((form) =>
-					api.companies.create({ orgId: field(form, 'orgId'), name: field(form, 'name'), website: orNull(field(form, 'website')) })
+					api.companies.create({ orgId: field(form, 'orgId'), name: field(form, 'name'), website: orOmitted(field(form, 'website')) })
 				),
 			},
 			el('select', { name: 'orgId', 'aria-label': 'Org' }, ...options(orgs.map((org) => ({ value: org, label: org })))),

@@ -1,8 +1,9 @@
 import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { ActivityKind, Cursor, Done, Next } from '../schemas'
+import { Cursor, Done, Next } from '../schemas'
 
+const ActivityKind = z.enum(['note', 'call', 'email', 'meeting'])
 const Activity = z.strictObject({ id: z.uuid(), kind: ActivityKind, body: z.string(), authorLabel: z.string(), createdAt: z.iso.datetime() })
 const ActivityPage = z.strictObject({ items: z.array(Activity), next: Next })
 const Body = z.string().min(1).max(5000)

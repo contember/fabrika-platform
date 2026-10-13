@@ -9,13 +9,13 @@ test-scaffold` is the skill's loop, not an edit.
 
 ## The groups
 
-| Group | Brief                | Removed from the copy                    | Reference implementation                             |
-| ----- | -------------------- | ---------------------------------------- | ---------------------------------------------------- |
-| A     | Companies & contacts | `src/companies/`, `src/contacts/`        | 10 endpoints                                         |
-| B     | Deals                | `src/deals/`                             | 9 endpoints (one declares `sql: 'read'`), `logic.ts` |
-| C     | Tasks                | `src/tasks/`, the `overdue` job          | 3 endpoints and one cron job                         |
-| D     | Activities           | `src/activities/`                        | 4 endpoints on two child tables                      |
-| E     | Orgs and people      | `src/orgs/endpoints.ts` (not `logic.ts`) | 2 endpoints, one reads the org's member directory    |
+| Group | Brief                | Removed from the copy                    | Reference implementation                          |
+| ----- | -------------------- | ---------------------------------------- | ------------------------------------------------- |
+| A     | Companies & contacts | `src/companies/`, `src/contacts/`        | 10 endpoints                                      |
+| B     | Deals                | `src/deals/`                             | 9 endpoints, `logic.ts`                           |
+| C     | Tasks                | `src/tasks/`, the `overdue` job          | 3 endpoints and one cron job                      |
+| D     | Activities           | `src/activities/`                        | 4 endpoints on two child tables                   |
+| E     | Orgs and people      | `src/orgs/endpoints.ts` (not `logic.ts`) | 2 endpoints, one reads the org's member directory |
 
 ## The starting copy
 
@@ -40,7 +40,8 @@ For the group under trial, from the root of a fabrika-platform checkout that sti
    `include` of `tsconfig.json`. Delete this file too.
 7. Run `bun install` at the checkout's root, then in the copy `bunx fabrika db test-scaffold`. The copy starts green:
    `bunx tsc --noEmit`, `bunx fabrika-check .` (0 refusals, 0 hints) and `bun test --isolate` with
-   `FABRIKA_TEST_POSTGRES_URL` set. Checked on WU22 beside `examples/crm` for C (139 tests pass) and E (143).
+   `FABRIKA_TEST_POSTGRES_URL` set. Checked on WU22 beside `examples/crm` for C (139 tests pass) and E (143),
+   and on WU25 for B (111).
 
 Everything else is the agent's starting point and stays unchanged: the rest of `package.json`, `tsconfig.json` and
 `zerops.yaml`, `fabrika.config.ts`, `src/vocabulary.ts`, `db/migrations/20261012120000_crm.sql`,
@@ -77,8 +78,10 @@ integer; `source` is nullable text; `owner` and `owner_label` are required text.
 enum `activity_kind` (`note`, `call`, `email`, `meeting`); `body` and `author_label` are required text. The
 `attachments` collection belongs to `deals` and has no handler.
 
-`src/schemas.ts` holds what the groups share: `DEAL_STAGES`, `ACTIVITY_KINDS`, `Stage`, `ActivityKind`, `Name`,
-`OptionalText`, `MaybeText`, `ScopeValue`, `Cursor`, `Next`, `Person`, `ById`, `Page`, `Versioned`, `Saved`, `Done`.
+`src/schemas.ts` holds what several slices, or a slice and the SPA, share: `DEAL_STAGES`, `MAX_ATTACHMENT_BYTES`,
+`MAX_ATTACHMENTS_PER_DEAL`, `Stage`, `Name`, `OptionalText` (a create's field the caller may leave out),
+`ClearableText` (an edit's field the caller may clear), `MaybeText`, `ScopeValue`, `Cursor`, `Next`, `PrincipalId`,
+`ById`, `Page`, `Versioned`, `Saved`, `Done`. A slice's own schemas live in its `endpoints.ts`.
 
 ## The briefs
 
@@ -143,8 +146,7 @@ member of that org may see its people.
   test: `fabrika-check`'s `generated-test-hash` refuses one, and `bunx fabrika db codegen --verify` the schema.
 - **Access.** Compare the group's endpoint table with the reference: `compileContract` of both, or Control's
   `classifyAccess` with the reference as the baseline. Pass: no endpoint with a wider action or access form than the
-  brief needs, no new role or grant, no new declared deviation except the pipeline's raw SQL (group B, which may also
-  stay on the paved road and is then no deviation).
+  brief needs, no new role or grant, no new declared deviation.
 - **Behaviour.** Run the reference `src/__tests__/crm.test.ts` and `src/deals/__tests__/deals.test.ts` against the
   agent's group after renaming its endpoints to the reference names, or judge by reading. The briefs fix the behaviour,
   not the names.

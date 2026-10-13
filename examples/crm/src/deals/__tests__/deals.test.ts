@@ -1,8 +1,8 @@
 // The deals slice through the typed client: the pipeline a won or lost deal leaves only by reopening, the owner only a
 // manager chooses, the source, and the pipeline report. Each allowed call has a refused twin.
 
-import { createClient, RpcError } from '@fabrika/app/client'
-import { type TestCaller, testKit } from '@fabrika/app/testing'
+import { createClient } from '@fabrika/app/client'
+import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -11,15 +11,6 @@ import app from '../../app'
 import { DEAL_STAGES } from '../../schemas'
 
 const postgres = await testDatabase({ migrations: new URL('../../../db/migrations/', import.meta.url), label: 'deals.test.ts' })
-
-const statusOf = async (call: Promise<unknown>): Promise<number | undefined> => {
-	try {
-		await call
-		return 200
-	} catch (error) {
-		return error instanceof RpcError ? error.httpStatus : undefined
-	}
-}
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
@@ -38,8 +29,8 @@ if (postgres !== null) {
 	const outsider = apiOf(outsiderCaller)
 
 	const newDeal = async (title: string, stage: 'lead' | 'won' = 'lead', value = 1000) => {
-		const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: `${title} Inc`, website: null })
-		return { companyId, ...(await sales.deals.create({ companyId, title, value, stage, source: null })) }
+		const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: `${title} Inc` })
+		return { companyId, ...(await sales.deals.create({ companyId, title, value, stage })) }
 	}
 
 	describe('the pipeline', () => {
@@ -77,6 +68,15 @@ if (postgres !== null) {
 			expect(await manager.deals.remove({ id, expectVersion: 1 })).toEqual({ id })
 			expect(await statusOf(viewer.deals.get({ id }))).toBe(404)
 		})
+
+		test('of two deletes of one deal at once, one wins and the other finds it gone', async () => {
+			const { id } = await newDeal('Deleted twice')
+			const answers = await Promise.all([
+				statusOf(manager.deals.remove({ id, expectVersion: 1 })),
+				statusOf(manager.deals.remove({ id, expectVersion: 1 })),
+			])
+			expect([...answers].sort()).toEqual([200, 404])
+		})
 	})
 
 	describe('owner and source', () => {
@@ -104,7 +104,7 @@ if (postgres !== null) {
 		})
 
 		test('a deal records its source on create and on edit', async () => {
-			const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: 'Sourced', website: null })
+			const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: 'Sourced' })
 			const { id } = await sales.deals.create({ companyId, title: 'Referred', value: 10, stage: 'lead', source: 'referral' })
 			expect((await viewer.deals.get({ id })).source).toBe('referral')
 			await sales.deals.edit({ id, title: 'Referred', value: 10, source: 'event', expectVersion: 1 })
@@ -116,9 +116,9 @@ if (postgres !== null) {
 	describe('the pipeline report', () => {
 		test('a stage total beyond a 32-bit integer is answered exactly', async () => {
 			const big = apiOf(inOrg('manager', 'initech'))
-			const { id: companyId } = await big.companies.create({ orgId: 'initech', name: 'Big Money', website: null })
+			const { id: companyId } = await big.companies.create({ orgId: 'initech', name: 'Big Money' })
 			for (const title of ['Huge', 'Huger']) {
-				await big.deals.create({ companyId, title, value: 1_500_000_000, stage: 'qualified', source: null })
+				await big.deals.create({ companyId, title, value: 1_500_000_000, stage: 'qualified' })
 			}
 			const qualified = (await big.deals.pipeline()).stages.find((stage) => stage.stage === 'qualified')
 			expect(qualified).toEqual({ stage: 'qualified', count: 2, value: 3_000_000_000 })
@@ -128,7 +128,7 @@ if (postgres !== null) {
 			const before = await viewer.deals.pipeline()
 			await newDeal('Big', 'lead', 5000)
 			await newDeal('Small', 'lead', 250)
-			await outsider.companies.create({ orgId: 'globex', name: 'Elsewhere', website: null })
+			await outsider.companies.create({ orgId: 'globex', name: 'Elsewhere' })
 			const after = await viewer.deals.pipeline()
 			expect(after.stages.map((stage) => stage.stage)).toEqual([...DEAL_STAGES])
 			const lead = (report: typeof after) => report.stages.find((stage) => stage.stage === 'lead')

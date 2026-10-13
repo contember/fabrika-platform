@@ -58,11 +58,11 @@ if (postgres !== null) {
 	}
 
 	test('every overdue task of every page is marked once, and a retry after a failed attempt marks none twice', async () => {
-		const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: 'Backlog Inc', website: null })
-		const { id: dealId } = await api.deals.create({ companyId, title: 'Backlog', value: 1, stage: 'lead', source: null })
+		const { id: companyId } = await manager.companies.create({ orgId: 'acme', name: 'Backlog Inc' })
+		const { id: dealId } = await api.deals.create({ companyId, title: 'Backlog', value: 1, stage: 'lead' })
 		for (let start = 0; start < TASKS; start += 26) {
 			const titles = Array.from({ length: Math.min(26, TASKS - start) }, (_, index) => `Late ${start + index}`)
-			await Promise.all(titles.map((title) => api.tasks.create({ dealId, title, dueOn: '2020-01-01', assignee: null })))
+			await Promise.all(titles.map((title) => api.tasks.create({ dealId, title, dueOn: '2020-01-01' })))
 		}
 		expect(await allTasks()).toHaveLength(TASKS)
 		const run = timingOutOnce()

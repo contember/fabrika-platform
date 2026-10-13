@@ -25,6 +25,11 @@ export function orNull(value: string): string | null {
 	return value === '' ? null : value
 }
 
+/** An empty field of a create form is left out of its input. */
+export function orOmitted(value: string): string | undefined {
+	return value === '' ? undefined : value
+}
+
 export function options(values: readonly { readonly value: string; readonly label: string }[], selected?: string): HTMLElement[] {
 	return values.map((option) => {
 		const element = el('option', { value: option.value }, option.label)
