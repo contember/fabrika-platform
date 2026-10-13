@@ -238,8 +238,9 @@ export function kitDirectory(artifact: ContractArtifact, callers: DirectoryCalle
 }
 
 /**
- * The membership roles held after the stand-in's own assignments and revocations: what a revoke removes and whether a
- * value keeps a creator. It never reaches the kit's callers, whose tokens and directory stay as the test made them.
+ * The membership roles held after the stand-in's own scope creations, assignments and revocations: the assigner's roles
+ * IAM checks, what a revoke removes and whether a value keeps a creator. It never reaches the kit's callers, whose
+ * tokens and directory stay as the test made them.
  */
 function membershipChanges(artifact: ContractArtifact, callers: DirectoryCallers) {
 	const key = (principalId: string, role: string, scope: Scope) => JSON.stringify([principalId, role, scope.type, scope.value])
@@ -312,7 +313,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (declared?.member === null || declared?.member === undefined || declared.member.scope !== scope.type) {
 			return invalid(`role '${role}' is not a membership role of scope '${scope.type}'`)
 		}
-		const held = rolesIn(artifact, membershipsOf(callers, caller.id), scope)
+		// IAM reads the assigner's live roles: the ones the test gave it, and those this stand-in assigned or created.
+		const held = changes.rolesOf(caller.id, scope)
 		if (!declared.member.assignableBy.some((assigner) => held.includes(assigner))) return NOT_ALLOWED
 		return declared.grants.every((action) => permits([...caller.perms], action, scope)) ? null : NOT_ALLOWED
 	}
@@ -345,6 +347,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		}
 		if (!permits([...caller.perms], spent.action)) return NOT_ALLOWED
 		const scope: Scope = { type: input.dimension, value: crypto.randomUUID() }
+		changes.assign(caller.id, dimension.creator, scope)
 		asked.push({ operation: 'createScope', principalId: caller.id, scope, role: dimension.creator })
 		return { ok: true, scope, role: dimension.creator }
 	}

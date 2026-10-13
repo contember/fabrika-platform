@@ -217,6 +217,26 @@ describe('the stand-in keeps the last creator, as IAM does', () => {
 		expect(await revoke(membership, owner, 'owner')).toEqual({ ok: false, reason: 'last_creator' })
 	})
 
+	test("a creator's own revoke in the value it just created is last_creator, and the directory shows nobody new", async () => {
+		const founder = person('founder', ['workspaces.create', 'notes.read', 'notes.write', 'notes.share', 'notes.admin'].map((action) => entry(action)))
+		const membership = standIn([{ caller: founder, memberships: [] }])
+		const created = await membership.rpc.createScope({
+			...as(founder),
+			delegation: await delegation(membership, founder, 'api.workspaces.create'),
+			dimension: 'workspace',
+		})
+		const scope = created.ok ? created.scope : ACME
+		expect(created).toMatchObject({ ok: true, role: 'owner' })
+		const revoked = await membership.rpc.revokeMember({
+			...as(founder),
+			delegation: await delegation(membership, founder, 'api.members.remove'),
+			scope,
+			member: { principalId: 'founder' },
+		})
+		expect(revoked).toEqual({ ok: false, reason: 'last_creator' })
+		expect(await membership.rpc.listMembers({ ...as(founder), scope })).toEqual({ ok: true, members: [], invitations: [] })
+	})
+
 	test('an owner it assigned counts as another holder, and the directory still shows nobody new', async () => {
 		const membership = standIn()
 		const assigned = await membership.rpc.assignMember({
@@ -365,6 +385,36 @@ describe('a member manager of the generated cases holds the least IAM requires',
 			{ action: 'teams.read', scope },
 			{ action: 'teams.write', scope },
 			{ role: 'editor', scope },
+		])
+	})
+
+	test('the assigner is the role that adds the fewest actions beyond those held anyway, not the one with fewest grants', () => {
+		const shop = compileContract(
+			defineContract({
+				app: 'shop',
+				dimensions: { team: { members: { manage: 'teams.admin', list: 'teams.read' } } },
+				actions: { 'teams.read': 'Read', 'teams.write': 'Write', 'teams.audit': 'Audit', 'teams.admin': 'Manage members' },
+				roles: {
+					editor: { grants: ['teams.read', 'teams.write'], member: { scope: 'team', assignableBy: ['owner', 'auditor'] } },
+					owner: { grants: ['teams.read', 'teams.write', 'teams.admin'], member: { scope: 'team', assignableBy: ['owner'] } },
+					auditor: { grants: ['teams.audit'], member: { scope: 'team', assignableBy: ['owner'] } },
+				},
+			}, (c) => ({
+				api: c.rpc('/api', { callers: ['human'] }, {
+					invite: c.mutation({
+						input: z.strictObject({ teamId: z.string(), role: z.string() }),
+						output: z.strictObject({ ok: z.boolean() }),
+						access: { action: 'teams.admin', in: 'team', from: 'teamId' },
+					}),
+				}),
+			})),
+			{},
+		)
+		expect(managerGrants(shop, 'teams.admin', { teamId: 't-1', role: 'editor' }, scope)).toEqual([
+			{ action: 'teams.admin', scope },
+			{ action: 'teams.read', scope },
+			{ action: 'teams.write', scope },
+			{ role: 'owner', scope },
 		])
 	})
 

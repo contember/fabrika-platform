@@ -212,9 +212,10 @@ function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationE
 
 /**
  * The least a member manager holds in `scope` for IAM to let it give or remove the roles a case may ask for: the
- * endpoint's action, one assigning role of each (`assignableBy`), and the actions of each as plain grants. The roles a
- * case asks for are the membership roles its input names; an input that names none may ask for any, so the caller
- * then covers every membership role of the dimension. Where one role assigns them all, it is the only role held.
+ * endpoint's action, one assigning role of each (`assignableBy`) that adds the fewest actions beyond those, and the
+ * actions of each as plain grants. The roles a case asks for are the membership roles its input names; an input that
+ * names none may ask for any, so the caller then covers every membership role of the dimension. Where one role assigns
+ * them all, it is the only role held.
  */
 export const managerGrants = (
 	artifact: Pick<ContractArtifact, 'roles'>,
@@ -227,11 +228,13 @@ export const managerGrants = (
 	const named = members.filter((role) => Object.values(input).includes(role))
 	const targets = named.length > 0 ? named : members
 	const assignersOf = (role: string): readonly string[] => roles[role]?.member?.assignableBy ?? []
+	const actions = [action, ...targets.flatMap((target) => roles[target]?.grants ?? [])]
+	// An assigner's cost is what it grants beyond the actions the caller holds anyway; a tie goes to the first name.
+	const extra = (role: string): number => (roles[role]?.grants ?? []).filter((granted) => !actions.includes(granted)).length
 	const narrowest = (candidates: readonly string[]): string | undefined =>
-		[...candidates].sort((left, right) => (roles[left]?.grants.length ?? 0) - (roles[right]?.grants.length ?? 0))[0]
+		[...candidates].sort((left, right) => extra(left) - extra(right) || (left < right ? -1 : left > right ? 1 : 0))[0]
 	const common = narrowest(members.filter((role) => targets.every((target) => assignersOf(target).includes(role))))
 	const assigners = common === undefined ? targets.flatMap((target) => narrowest(assignersOf(target)) ?? []) : [common]
-	const actions = [action, ...targets.flatMap((target) => roles[target]?.grants ?? [])]
 	return [
 		...[...new Set(actions)].map((held) => ({ action: held, scope })),
 		...[...new Set(assigners)].map((role) => ({ role, scope })),
