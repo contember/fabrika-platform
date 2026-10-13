@@ -64,7 +64,8 @@ The rule has three locks, like the membership-scope rule of
    `FOR SHARE` and holds it to the write's commit, and a reconcile rewrites that row, so the two serialize: a grant
    write after a narrowing writes nothing, and a narrowing after a grant write meets its batch guard. An acceptance
    holds the row across both its statements, and rolls back, invitation and record included, if its grant writes
-   nothing.
+   nothing. An acceptance also writes only at the schema revision its authority check read, so a reconcile committed
+   before it makes it write nothing too.
 2. **Reconcile.** A schema that declares a role not external while an external principal holds it is a 409 naming
    the grants. A guard statement in the reconcile's own batch rolls back a narrowing a concurrent grant got past.
 3. **Resolution.** In `computePermissions`, an external principal's grant that breaks the rule contributes nothing.

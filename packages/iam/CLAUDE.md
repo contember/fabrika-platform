@@ -283,9 +283,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`#token=`, never in a log) and stores its hash. `/auth/invitations/accept` accepts it, same-origin,
   for the principal signed in on IAM's host whose normalized `email` equals the invitation's — the
   token proves the mailbox, the session the principal. The inviter's authority is checked again at
-  acceptance, and its assigning role once more inside the UPDATE that consumes the invitation (`EXISTS`
-  over the inviter's assigning grant, in the value or global, `FOR SHARE` on Postgres through `createPostgresIamRepositories`; a D1 batch runs
-  alone): a removal either commits first and the acceptance is `not_allowed` with the invitation still
+  acceptance against the declarations of one schema revision (`app_schema_revisions`, read BEFORE the check; every
+  reconcile and custom-policy write increments it as its first statement), and the UPDATE that consumes the invitation
+  writes only while that authority still holds (`checkedAuthority`, `InviterCheck`): the inviter not disabled, the
+  revision unchanged, and its assigning grant in the value or global. On Postgres the batch first locks the inviter's
+  principal row, then the revision row, both `FOR SHARE`, and the conditions then hold the assigning grant and the
+  role row `FOR SHARE` (principal first, as every writer of a principal's rows starts); a D1 batch runs alone. A
+  removal, a disable or a reconcile either commits first and the acceptance is `not_allowed` with the invitation still
   open, or waits until the acceptance committed. The guarded UPDATE stamps a fresh `acceptance_id`, and the grant is written in the same
   batch only for the attempt holding it — never on a timestamp a replay can share. Without an email service, an invitation is `invitations_disabled`; assigning an existing
   principal by id still works. Invitations live `INVITATION_TTL_SECONDS` (7 days). Every acceptance names the token's
@@ -300,11 +304,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   without a password answers the set-password form and changes nothing. Its POST with the password writes in ONE batch,
   principal row first: the `external` principal (label = the invited mailbox, activated), its mailbox claim, the guarded
   acceptance, the grant, the enabled password account and verifier, and three records (`iam.principal.create`,
-  `iam.member.accept`, `iam.password.enrollment.complete`). The principal INSERT carries the open invitation under this
-  token hash, the inviter's assigning grant and the role's `external = 1` (both `FOR SHARE` on Postgres), so a refusal
-  writes nothing; a guard statement rolls the batch back if the principal ended without its grant. A mailbox claimed
+  `iam.member.accept`, `iam.password.enrollment.complete`). After the inviter's and the revision's locks, the principal
+  INSERT carries the open invitation under this token hash, the same checked authority as the acceptance and the role's
+  `external = 1` (`FOR SHARE` on Postgres), so a refusal writes nothing; a guard statement rolls the batch back if the principal ended without its grant. A mailbox claimed
   concurrently fails the unique mailbox and rolls back too (`account_exists` → sign in and accept), so two acceptances
-  create one principal. Then the IAM session (`invitation_enrollment`) and the 302 to `landingUrl`. An existing
+  create one principal. Then the IAM session (`invitation_enrollment`) and the 302 to `landingUrl`. A browser signed
+  in on IAM as anyone gets neither the form nor the creation (409, the invited address, sign out or another browser
+  profile): the new session would replace its cookie silently while its applications keep the old identity. An existing
   principal, disabled or with password disabled included, never gets a password from an invitation. An assign to an
   external role for a mailbox `organizationMailbox` names is `internal_mailbox` before anything is written.
 - **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,

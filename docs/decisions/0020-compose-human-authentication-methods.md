@@ -40,7 +40,8 @@ writes their records in one transaction, then signs the browser in. This enrollm
 7 days, instead of an action's one hour, because the invitation's own one-time token is the action token: it is mailed
 to the mailbox and stored only as a hash, its page is scanner-safe, and only the submission consumes it. It exists only
 for a principal the invitation creates. An invitation never sets, replaces or re-enables the password of an existing
-principal, a disabled one or one whose password is disabled included; such a mailbox signs in and accepts. It needs
+principal, a disabled one or one whose password is disabled included; such a mailbox signs in and accepts. A browser already signed in on IAM, as anyone, is refused this enrollment and told
+to sign out or use another browser profile, so the new account never replaces a session unnoticed. It needs
 password authentication and e-mail to be enabled, and IAM never creates a mailbox the organization names (a bootstrap
 admin, or one the human-admission allowlist names by address or domain; `*` names nobody) this way: the invitation is
 refused when it is sent.

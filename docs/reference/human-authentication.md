@@ -194,6 +194,13 @@ handoff. This enrollment lives as long as the invitation, 7 days (ADR-0020).
   `internal_mailbox`.
 - Two acceptances that would create the same mailbox create one principal; the
   other person signs in with it and accepts.
+- A browser signed in on IAM as anyone gets no set-password form: the page
+  names the invited address and asks the person to sign out or open the link
+  in another browser profile. Nothing is written and the link stays valid.
+- Every acceptance, this one and a signed-in one, writes only while the
+  inviter is still enabled and holds its assigning role, and the application's
+  schema is at the revision its check read. A reconcile, a disable or a
+  removal in between makes it write nothing, and the invitation stays open.
 
 ## First administrator
 

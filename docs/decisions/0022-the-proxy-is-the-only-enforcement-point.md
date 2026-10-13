@@ -492,7 +492,9 @@ still refuses any `Authorization` header, as authorization.
   the dimension's `members.manage` there, every action of that role there, and a role that the role's `assignableBy`
   names. `assignableBy` names membership roles of the same dimension, held in that value, or application-wide roles
   (roles with no `member`), held in that value or globally. So a staff member with a global role invites into any
-  value. IAM checks the inviter again when an invitation is accepted, inside the write that consumes it.
+  value. IAM checks the inviter again when an invitation is accepted, and the write that consumes it requires what
+  that check relied on: the inviter still enabled, still holding the assigning role, and the application's schema at
+  the revision the check read, so a reconcile or a disable between the check and the write makes it write nothing.
 - **A membership write may lead to an external principal.** An invitation by e-mail to a role declared `external`
   ([ADR-0051](0051-external-principals.md)) for a mailbox no principal holds creates the external principal when its
   owner accepts, with the password chosen there ([ADR-0020](0020-compose-human-authentication-methods.md)), in the
