@@ -234,7 +234,9 @@ not describe its rules. Array order has no meaning. The proxy makes one pass ove
 4. **No key.** When `human` is a caller, the proxy uses the session, or answers with the login
    redirect of rule 4. When `human` is not a caller, the answer is 401, never a login redirect.
 5. **Requirement.** The token must satisfy the endpoint's requirement: `member` (any permission of this
-   application), or the action in some scope. Otherwise the answer is 403.
+   application), the action in some scope, or, for the `app` access form, the action held as a global grant (an
+   entry without a scope), because the endpoint reaches data of the whole application. Otherwise the answer is 403.
+   This is `satisfies` of `@fabrika/auth-core`; the application repeats it as authorization and adds no check.
 6. **Admission.** A session-authenticated request that is not `GET` must carry
    `Sec-Fetch-Site: same-origin`. An RPC request must carry `Content-Type: application/json`. An upload
    admits only its declared content types. A request with a bearer is not session-authenticated, cookie or

@@ -174,11 +174,11 @@ Per request, after the proxy has admitted it, the framework runs these steps in 
 2. Verify the proxy-injected token with the shared verifier
    ([ADR-0040](0040-share-one-token-verifier.md)).
 3. Check that the token's principal kind is one of the mount's callers.
-4. Check the endpoint's requirement: `member` (any permission of this application), or the action in
-   some scope.
+4. Check the endpoint's requirement: `member` (any permission of this application), the action in
+   some scope, or, for the `app` form, the action held as a global grant.
 5. For a session request that is not `GET`, require `Sec-Fetch-Site: same-origin`, and
    `Content-Type: application/json` for RPC.
-6. Parse the input strictly, run the access form (`on`, `in`, `over`, `creates`), remove the `from`
+6. Parse the input strictly, run the access form (`on`, `in`, `over`, `creates`, `app`), remove the `from`
    field, call the handler, and project the output through its schema.
 
 The caller-kind check (step 3), the requirement check (step 4) and the access form (step 6) are
@@ -238,7 +238,12 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
 
 - **The mini-ORM is scoped by the endpoint's capability.** `ctx.db.target` is the handle bound to `ctx.target` (its
   row, its child tables and the tables it contains), `ctx.db.within.<table>` lists under a `Within` in keyset pages,
-  `ctx.db.created` inserts into a scope IAM just made, and `ctx.db.reference.<table>` reads reference tables. A
+  `ctx.db.created` inserts into a scope IAM just made, and `ctx.db.reference.<table>` reads reference tables. Data of
+  the whole application has a form of its own: an endpoint declared `{ action, app: true }` is admitted only for a
+  global grant of its action, and `ctx.db.app.<table>` reads and writes the application tables (`scope: { app:
+  '<why>' }`) with that action and reads every row of each dimension and child table whose read action it is, as
+  `over` with `'all'` would. So a code list an administrator edits and the log row of an export across every record
+  stay on the road; a reference table stays migration-managed and read-only. A
   capability reads its own target, except a column that declares another action's read
   ([ADR-0050](0050-approved-access.md) §3). Writes answer `{ id, version }`; `update` and `remove` take
   `expectVersion`; `getForUpdate()` is the precondition read a concurrent write waits behind. `fromRow(Schema, row)`
@@ -381,6 +386,12 @@ damage to the application's own schema.
 - **Declared operations** (`c.read`/`c.update` with `when`, `set`, `inc`): every data operation declared in the
   contract, so the platform could read what each endpoint does. Rejected as too declarative: business logic is
   TypeScript, and only the reach off the road is declared.
+- **Application-wide data as `over` of a dimension, or an `over` endpoint that writes an application table when its
+  `Within` is `'all'`.** Rejected: the approver reads "over candidate" for data that belongs to no candidate, and
+  whether such an endpoint may write would depend on each caller's grants at run time, so a scoped caller would fail
+  inside the handler. The `app` form puts the requirement where the proxy checks it: the action held as a global
+  grant. Its reads of the dimension tables add no authority, because that holder already lists every row through
+  `over`.
 - **Deriving zod inputs from table rows.** Rejected: a spike lost bounds silently and turned a migration into an API
   change. `fromRow` covers outputs.
 - **Refuse raw SQL and add declared report kinds to the scoped builder instead.** Rejected: every report shape

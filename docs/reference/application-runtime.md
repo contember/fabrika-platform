@@ -302,7 +302,7 @@ Per request, in this order:
 5. the token's caller kind must be one of the mount's callers: a user token is
    `human`, a service token `machine`, an anonymous token (a share link) `link` (403);
 6. the requirement: `member` is any permission, an action is that action in some
-   scope (403);
+   scope, and under the `app` form that action held as a global grant (403);
 7. admission: a request without `Authorization` that is not a `GET` needs
    `Sec-Fetch-Site: same-origin` (403), and RPC needs `Content-Type: application/json`
    (400);
@@ -314,13 +314,14 @@ Per request, in this order:
    transaction commits; a file over its `maxBytes` or `maxRows` is a 500 with no file and
    no commit.
 
-| Form                   | Hands the handler                         | Refuses with                                            |
-| ---------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `{ member: true }`     | nothing                                   | —                                                       |
-| `{ action, over }`     | `ctx.within`, or `all` for a global grant | 403 when no value holds the action, or over 1000 values |
-| `{ action, in, from }` | `ctx.target` with its containment chain   | 403 not held, 404 missing                               |
-| `{ action, on, from }` | `ctx.target` with its containment chain   | 404 when missing or not held                            |
-| `{ action, creates }`  | `ctx.created`, the value IAM generated    | 503 without the proxy's delegation grant; IAM's refusal |
+| Form                    | Hands the handler                         | Refuses with                                            |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `{ member: true }`      | nothing                                   | —                                                       |
+| `{ action, over }`      | `ctx.within`, or `all` for a global grant | 403 when no value holds the action, or over 1000 values |
+| `{ action, in, from }`  | `ctx.target` with its containment chain   | 403 not held, 404 missing                               |
+| `{ action, on, from }`  | `ctx.target` with its containment chain   | 404 when missing or not held                            |
+| `{ action, creates }`   | `ctx.created`, the value IAM generated    | 503 without the proxy's delegation grant; IAM's refusal |
+| `{ action, app: true }` | `ctx.app`, the action application-wide    | 403 (at the proxy) unless the action is a global grant  |
 
 A grant on a container reaches every value inside it. `on` and `in` read where the
 object or scope lies from the database on every request, with a locator generated from
@@ -350,14 +351,15 @@ declaration. `serve` puts each site into the handler tree as a `siteHandler(hand
 a site runs with is the approved artifact's (`ContractArtifact.declared`, which the contract's digest covers); a leaf
 whose own `declared` differs does not boot. The API matrix:
 
-| Access form | query                                                                                                                                      | mutation (adds)                                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `on`        | `ctx.db.target.get()`; child tables `list`/`get`                                                                                           | `getForUpdate()`, `update(v, { expectVersion })`, `remove({ expectVersion })`; child `insert`/`update`/`remove`            |
-| `in`        | `ctx.db.target.get()` (the container); `.<table>.list`                                                                                     | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's |
-| `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`; every table whose chain holds the dimension | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
-| `creates`   | —                                                                                                                                          | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                               |
-| `member`    | no application data                                                                                                                        | no application data                                                                                                        |
-| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` on, in or below a dimension with members (management for `manage`)        | —                                                                                                                          |
+| Access form | query                                                                                                                                                                                                                                                 | mutation (adds)                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `on`        | `ctx.db.target.get()`; child tables `list`/`get`                                                                                                                                                                                                      | `getForUpdate()`, `update(v, { expectVersion })`, `remove({ expectVersion })`; child `insert`/`update`/`remove`                                         |
+| `in`        | `ctx.db.target.get()` (the container); `.<table>.list`                                                                                                                                                                                                | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's                              |
+| `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`; every table whose chain holds the dimension                                                                                                            | — (a list write is not on the road: `unscoped` or `sql`)                                                                                                |
+| `creates`   | —                                                                                                                                                                                                                                                     | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                                                            |
+| `app`       | `ctx.db.app.<table>`: an application table's `list`, `count`, `aggregate` (read action) and `get(id)` (any action it names); every dimension and child table's `list`, `count`, `aggregate`, all rows, where the endpoint's action is its read action | an application table's `getForUpdate(id)`, `insert(v)`, `update(id, v, { expectVersion })`, `remove(id, { expectVersion })` with the operation's action |
+| `member`    | no application data                                                                                                                                                                                                                                   | no application data                                                                                                                                     |
+| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` on, in or below a dimension with members (management for `manage`)                                                                                                                   | —                                                                                                                                                       |
 
 "Target subtree" is the target's child tables and the dimension tables it contains. An `over` lists every table whose
 containment chain holds its dimension, through the stamped chain column: `over: 'org'` lists tasks two levels down by
@@ -370,6 +372,13 @@ names the same fix at runtime.
   subtree; every column that declares a read action other than exactly the capability's is left out of the
   statement, as it is out of the row type. A `Within` lists by the table's read action. A `Ref` of an action the
   table does not name reads nothing of it.
+- **Application-wide data is the `app` form's.** An application table (`scope: { app: '<why>' }`, key `id` unless
+  `key` names another, generated on insert) belongs to no dimension: no chain, no container, every other policy field
+  as a dimension table's. Only an `app` endpoint reaches it on the road, because the proxy admits that endpoint only
+  for a global grant of its action; `ctx.app` is that capability, and `ctx.sql.scope(ctx.app, table)` is every row.
+  The same handle reads every dimension and child table whose read action is the endpoint's, so an audited export of
+  every record is one `app` mutation that lists the records and inserts its log row into an application table whose
+  insert action is the export's. A reference table stays read-only and migration-managed.
 - **Writes answer `{ id, version }`** (`{ id }` for a table without a version), never row data. A versioned table's
   `update` and `remove` take `{ expectVersion }`: a row that changed since is 409, a missing one 404. `update` takes any
   non-empty subset of the columns its action updates; one that sets no column is refused.
@@ -1045,7 +1054,7 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   A required foreign key outside the containment chain cannot be filled, so such a column
   needs a default or must be nullable.
 - **Policy isolation tests**, `src/db/__tests__/<table>.policy-isolation.test.ts` for
-  every dimension and child table, from the policies alone. They prove that the data
+  every dimension, child and application table, from the policies alone. They prove that the data
   layer enforces the declared policy, not that the application uses it:
   `policyIsolationKit` serves the table through a probe contract over the
   application's vocabulary, booted by `testKit` on a data layer of its own, so a request
@@ -1057,7 +1066,11 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   through the caller's own parent with the other key; a `Ref` for the read action is
   refused by update and remove; a column with its own read action is never returned.
   Insert into a top-level table is checked only for the other scope: the `in` form
-  answers 404 for an object that does not exist yet.
+  answers 404 for an object that does not exist yet. An application table's probe
+  (`appPolicyIsolationKit`) uses `app` endpoints: a holder of the table's actions as
+  global grants gets, lists, inserts, updates and removes a seeded row; a holder of the
+  same actions in one scope only is 403 for each; a capability of the read action is
+  refused by an update or a remove of another action.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
   export, `serve(…)`) through `testKit`, on the application's own data layer, once: that layer
@@ -1071,6 +1084,9 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
     (`{ answered: true, leaked: [] }`). The scanned values are every key, parent, dimension value of the row's chain and
     text marker of the other scope. An endpoint that declares `unscoped` reaches across scopes by design and has no
     leak case; it keeps its denial.
+  - **App form.** For every `app` procedure, a caller holding the action in one scope only is 403 (the proxy refuses
+    it), and a caller holding it as a global grant gets an answer of the application: anything but 401, 403 or a 5xx,
+    so a handler's 404 for the sampled id passes.
   - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
     (a write-only role), a caller holding only that action asks for its own object and gets 200: the capability
     reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.

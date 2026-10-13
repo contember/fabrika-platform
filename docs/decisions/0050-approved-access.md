@@ -150,9 +150,10 @@ Control compares the normalized access data of the candidate snapshot with the e
 snapshot. An environment with no published run has the empty snapshot as its baseline. The comparison
 covers:
 
-- endpoint callers, access forms, input domains and output shapes;
+- endpoint callers, access forms (the `app` form named as a global grant), input domains and output shapes;
 - containment, roles and their actions, membership rules;
-- table and column policies, with the actions each column is read and written with;
+- table and column policies, with the actions each column is read and written with; a new application table
+  (`scope: { app }`) is shown with its reason and every action;
 - anonymous kinds (a new public SPA, or an SPA that becomes public, widens), link mounts and link-reachable file collections;
 - a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
@@ -187,6 +188,11 @@ whole table or a whole column stays a removal.
   declares a read action other than exactly the capability's is left out, of the statement and of the row type
   alike. A `Within` lists by the table's read action. So giving a table an action, or changing one, widens: that
   action's holders now read the rows it reaches.
+- **An `app` endpoint's capability is its action held as a global grant.** It reads every row of an application
+  table with the table's read action (one row with any action the table names), writes it with the operation's
+  action, and reads every row of each dimension and child table whose read action is its own. The proxy admits only a
+  global holder, so the form is a requirement change like any other: an endpoint that becomes `app: true`, or stops
+  being one, widens. An application table's actions are compared as any table's are.
 - **A column read action** (`columns: { c: { read } }`) is the only action that reads, filters and sorts that
   column. A new one narrows; a removed one widens (above).
 - **A column write action** (`columns: { c: { write } }`) lets a capability of that action update exactly its
