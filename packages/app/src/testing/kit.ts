@@ -291,7 +291,7 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 			: Object.freeze({ ...credentials, kind, app: consumer, label: callerOptions.label ?? `${kind}-${issued}@${name}.test`, link: null })
 		memberships.set(
 			caller,
-			grants.flatMap((grant) => ('role' in grant && grant.scope !== undefined ? [{ role: grant.role, scope: grant.scope }] : [])),
+			grants.flatMap((grant) => ('role' in grant ? [{ role: grant.role, scope: grant.scope ?? null }] : [])),
 		)
 		if (caller.key !== null) {
 			byKey.set(caller.key, caller)

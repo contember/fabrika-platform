@@ -215,7 +215,8 @@ function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationE
  * endpoint's action, one assigning role of each (`assignableBy`) that adds the fewest actions beyond those, and the
  * actions of each as plain grants. The roles a case asks for are the membership roles its input names; an input that
  * names none may ask for any, so the caller then covers every membership role of the dimension. Where one role assigns
- * them all, it is the only role held.
+ * them all, it is the only role held. Every role is held in `scope`, an application-wide assigner too: IAM counts any
+ * assigning role held there, and a grant in `scope` reaches no other value.
  */
 export const managerGrants = (
 	artifact: Pick<ContractArtifact, 'roles'>,
@@ -233,7 +234,7 @@ export const managerGrants = (
 	const extra = (role: string): number => (roles[role]?.grants ?? []).filter((granted) => !actions.includes(granted)).length
 	const narrowest = (candidates: readonly string[]): string | undefined =>
 		[...candidates].sort((left, right) => extra(left) - extra(right) || (left < right ? -1 : left > right ? 1 : 0))[0]
-	const common = narrowest(members.filter((role) => targets.every((target) => assignersOf(target).includes(role))))
+	const common = narrowest(Object.keys(roles).sort().filter((role) => targets.every((target) => assignersOf(target).includes(role))))
 	const assigners = common === undefined ? targets.flatMap((target) => narrowest(assignersOf(target)) ?? []) : [common]
 	return [
 		...[...new Set(actions)].map((held) => ({ action: held, scope })),

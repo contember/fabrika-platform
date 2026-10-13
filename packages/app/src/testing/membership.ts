@@ -44,10 +44,10 @@ import {
 } from '@fabrika/auth-core'
 import type { LabelledTestCaller, TestCaller, TestScope } from './caller'
 
-/** A membership role a test caller holds in one scope value. */
+/** A role a test caller holds in one scope value, or globally (`null`). */
 export interface TestMembership {
 	readonly role: string
-	readonly scope: TestScope
+	readonly scope: TestScope | null
 }
 
 export interface DirectoryCallers {
@@ -56,7 +56,7 @@ export interface DirectoryCallers {
 	 * none for a credential of another application or an expired token.
 	 */
 	byCredential(app: string, credential: string): TestCaller | undefined
-	/** Every caller with its membership roles. */
+	/** Every caller with its role grants. */
 	all(): readonly { readonly caller: TestCaller; readonly memberships: readonly TestMembership[] }[]
 }
 
@@ -163,7 +163,7 @@ function dimensionOf(artifact: ContractArtifact, type: string) {
 /** The membership roles held in exactly `scope`, as IAM counts a member of its dimension. */
 function rolesIn(artifact: ContractArtifact, memberships: readonly TestMembership[], scope: Scope): string[] {
 	return memberships
-		.filter((held) => held.scope.type === scope.type && held.scope.value === scope.value && artifact.roles[held.role]?.member?.scope === scope.type)
+		.filter((held) => held.scope !== null && sameScope(held.scope, scope) && artifact.roles[held.role]?.member?.scope === scope.type)
 		.map(({ role }) => role)
 }
 
@@ -319,14 +319,20 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return invalid(`an external principal holds only a role its application declares external, and '${role}' is not one`)
 	}
 
-	/** Could `caller` give `role` in `scope`: it holds an assigning role there and every action the role grants there. */
+	/**
+	 * Could `caller` give `role` in `scope`: it holds an assigning role — there, or an application-wide role globally —
+	 * and every action the role grants there.
+	 */
 	const roleProblem = (caller: TestCaller, scope: Scope, role: string): MembershipFailure | null => {
 		const declared = Object.hasOwn(artifact.roles, role) ? artifact.roles[role] : undefined
 		if (declared?.member === null || declared?.member === undefined || declared.member.scope !== scope.type) {
 			return invalid(`role '${role}' is not a membership role of scope '${scope.type}'`)
 		}
 		// IAM reads the assigner's live roles: the ones the test gave it, and those this stand-in assigned or created.
-		const held = changes.rolesOf(caller.id, scope)
+		const assigning = membershipsOf(callers, caller.id).filter((held) =>
+			held.scope === null ? artifact.roles[held.role]?.member === null : sameScope(held.scope, scope)
+		)
+		const held = [...changes.rolesOf(caller.id, scope), ...assigning.map((grant) => grant.role)]
 		if (!declared.member.assignableBy.some((assigner) => held.includes(assigner))) return NOT_ALLOWED
 		return declared.grants.every((action) => permits([...caller.perms], action, scope)) ? null : NOT_ALLOWED
 	}

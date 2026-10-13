@@ -435,3 +435,63 @@ describe('a member manager of the generated cases holds the least IAM requires',
 		])
 	})
 })
+
+describe('an application-wide role in assignableBy assigns as IAM counts it: held globally, or in the value', () => {
+	const staffed = compileContract(
+		defineContract({
+			app: 'teams',
+			dimensions: { team: { members: { manage: 'teams.admin', list: 'teams.read' } } },
+			actions: { 'teams.read': 'Read', 'teams.write': 'Write', 'teams.audit': 'Audit', 'teams.admin': 'Manage members' },
+			roles: {
+				editor: { grants: ['teams.read', 'teams.write'], member: { scope: 'team', assignableBy: ['lead', 'staff'] } },
+				lead: { grants: ['teams.read', 'teams.write', 'teams.audit', 'teams.admin'], member: { scope: 'team', assignableBy: ['lead'] } },
+				staff: { grants: ['teams.read', 'teams.write', 'teams.admin'] },
+			},
+		}, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				invite: c.mutation({
+					input: z.strictObject({ teamId: z.string(), role: z.string() }),
+					output: z.strictObject({ ok: z.boolean() }),
+					access: { action: 'teams.admin', in: 'team', from: 'teamId' },
+				}),
+			}),
+		})),
+		{},
+	)
+	const T1: Scope = { type: 'team', value: 't-1' }
+	const T2: Scope = { type: 'team', value: 't-2' }
+	const staffActions = ['teams.read', 'teams.write', 'teams.admin']
+	const globalStaff = person('global-staff', staffActions.map((action) => entry(action)))
+	const otherStaff = person('other-staff', staffActions.map((action) => entry(action, T2)))
+	const membership = kitMembership(
+		staffed,
+		callersOf([
+			{ caller: globalStaff, memberships: [{ role: 'staff', scope: null }] },
+			{ caller: otherStaff, memberships: [{ role: 'staff', scope: T2 }] },
+		]),
+	).rpc
+	const assign = async (caller: TestCaller, scope: Scope, role: string) => {
+		const granted = await membership.requestDelegation({ ...as(caller), endpoint: 'api.invite' })
+		const grant = granted.ok ? granted.grant : granted.reason
+		return membership.assignMember({ ...as(caller), delegation: grant, scope, role, member: { email: 'ann@example.test' } })
+	}
+
+	test('a global holder assigns in every value, a role assignableBy does not name excepted', async () => {
+		expect(await assign(globalStaff, T1, 'editor')).toMatchObject({ ok: true, invited: { role: 'editor' } })
+		expect(await assign(globalStaff, T1, 'lead')).toEqual({ ok: false, reason: 'not_allowed' })
+	})
+
+	test('a holder in another value assigns there and not here', async () => {
+		expect(await assign(otherStaff, T2, 'editor')).toMatchObject({ ok: true })
+		expect(await assign(otherStaff, T1, 'editor')).toEqual({ ok: false, reason: 'not_allowed' })
+	})
+
+	test('the generated cases hold the application-wide assigner in the value where it adds the fewest actions', () => {
+		expect(managerGrants(staffed, 'teams.admin', { teamId: 't-1', role: 'editor' }, T1)).toEqual([
+			{ action: 'teams.admin', scope: T1 },
+			{ action: 'teams.read', scope: T1 },
+			{ action: 'teams.write', scope: T1 },
+			{ role: 'staff', scope: T1 },
+		])
+	})
+})
