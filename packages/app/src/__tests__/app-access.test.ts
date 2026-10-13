@@ -4,8 +4,8 @@
 // (`app-wide-fixture/src/**/__tests__/`) are committed and current. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
 import { createClient, download, RpcError } from '@fabrika/app/client'
-import { compileContract } from '@fabrika/app/contract'
-import { serve } from '@fabrika/app/implement'
+import { type App, compileContract, type Declared, type EndpointContext, type KitTypes, type Unavailable } from '@fabrika/app/contract'
+import { type AppCapability, serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { appPolicyIsolationKit, endpointAccessKit } from '@fabrika/app/testing/isolation'
 import { checkApplication } from '@fabrika/check'
@@ -14,7 +14,28 @@ import { testDatabase } from '@fabrika/db/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { contract } from './app-wide-fixture/fabrika.contract'
+import type { app } from './app-wide-fixture/src/app-kit'
 import { tables } from './app-wide-fixture/src/db/tables'
+
+type Equal<A, B> = (<X>() => X extends A ? 1 : 2) extends <X>() => X extends B ? 1 : 2 ? true : false
+type Expect<T extends true> = T
+type Kit = typeof app extends App<infer K extends KitTypes> ? K : never
+type AppMutation = EndpointContext<
+	Kit,
+	'human',
+	'mutation',
+	{ readonly action: 'candidates.read'; readonly app: true },
+	Declared<never, never, never, never>
+>
+type Reached<H> = { [P in keyof H]: H[P] extends Unavailable<string> ? never : P }[keyof H]
+
+/** The types of an `app` endpoint: its capability, every table of the application in its handle, and no target. */
+export type AppContext = [
+	Expect<Equal<AppMutation['app'], AppCapability<'candidates.read'>>>,
+	Expect<Equal<Reached<AppMutation['db']['app']>, 'candidates' | 'exports' | 'positions'>>,
+	Expect<AppMutation['target'] extends Unavailable<string> ? true : false>,
+	Expect<AppMutation['members'] extends Unavailable<string> ? true : false>,
+]
 
 const fixtureRoot = join(import.meta.dir, 'app-wide-fixture')
 const postgres = await testDatabase({ migrations: join(fixtureRoot, 'db', 'migrations'), label: 'app-access.test.ts' })
