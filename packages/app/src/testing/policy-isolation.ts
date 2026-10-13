@@ -10,11 +10,11 @@ import { tablePolicies } from '@fabrika/db/tables'
 import { type IsolationWorlds, type SampleValue, tableProbe, type TestDatabase, withoutInboxes } from '@fabrika/db/testing'
 import { z } from 'zod/v4'
 import { createClient } from '../client/contract'
-import { RpcError } from '../client/transport'
 import { type AnyContract, defineContract, type Vocabulary } from '../contract/define'
 import { implement } from '../implement/implement'
 import type { TestGrant } from './caller'
 import { testKit } from './kit'
+import { refusalStatus, statusOf } from './status'
 
 /** Which of the two seeded rows a request names: the caller's own, or the one in the scope it holds nothing in. */
 export type IsolationRow = 'own' | 'other'
@@ -111,28 +111,17 @@ function isCapabilityError(error: unknown): boolean {
 	return error instanceof Error && error.name === 'CapabilityError'
 }
 
-/** The status a refused request got, or the error when it was not an answer of the application. */
-function statusOf(error: unknown): number {
-	if (error instanceof RpcError && error.httpStatus !== undefined) {
-		return error.httpStatus
-	}
-	throw error
-}
-
 async function attempt<T extends object>(run: () => Promise<T>, failed: (status: number) => T): Promise<T> {
 	try {
 		return await run()
 	} catch (error) {
-		return failed(statusOf(error))
+		return failed(refusalStatus(error))
 	}
 }
 
 /** A write's outcome: 200 when it ran, the status otherwise. */
-function wrote(run: () => Promise<unknown>): Promise<IsolationOutcome> {
-	return attempt(async () => {
-		await run()
-		return { status: 200 }
-	}, (status) => ({ status }))
+async function wrote(run: () => Promise<unknown>): Promise<IsolationOutcome> {
+	return { status: await statusOf(run()) }
 }
 
 function dimensionProbe(vocabulary: Vocabulary<string, string, string>, dimension: string, list: string, actions: ProbeActions) {

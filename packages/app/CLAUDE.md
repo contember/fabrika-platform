@@ -85,6 +85,7 @@ src/
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
     runner.ts         the test functions the generated tests register through
+    status.ts         statusOf: the status an application's own test asserts (200, or the refusal's); the kits' too
   contract/           @fabrika/app/contract — browser-safe
     vocabulary.ts     defineVocabulary: the first module of the staged kit
     kit.ts            defineApp(vocabulary, tables): App (group, cron, webhook, link, export, contract), ContractKit
