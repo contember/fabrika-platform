@@ -207,14 +207,16 @@ class SurfaceReader {
 	}
 
 	#role(name: string, value: LiteralValue): RoleDef<string, string, string> {
-		const fields = strictFields(value, `role '${name}'`, ['grants'], ['member'])
+		const fields = strictFields(value, `role '${name}'`, ['grants'], ['member', 'external'])
 		const member = fields.get('member')
 		const memberFields = member === undefined ? undefined : strictFields(member, `role '${name}' member`, ['scope', 'assignableBy'], [])
+		const external = fields.get('external')
 		return {
 			grants: texts(fields.get('grants'), value, 'grants'),
 			member: memberFields === undefined
 				? undefined
 				: { scope: text(memberFields.get('scope'), value, 'scope'), assignableBy: texts(memberFields.get('assignableBy'), value, 'assignableBy') },
+			...(external === undefined ? {} : { external: externalOf(external) }),
 		}
 	}
 
@@ -772,6 +774,14 @@ function localeOf(value: LiteralValue, owner: Owner): Locale {
 		throw new Refused(value.at, `locale is '${locale}'`, LOCALES.map((allowed) => `locale: '${allowed}'`).join(' or '))
 	}
 	return locale
+}
+
+/** A role's `external`, which only `true` is. */
+function externalOf(value: LiteralValue): true {
+	if (!boolean(value, 'external')) {
+		throw new Refused(value.at, 'external is false', 'external: true, or no external')
+	}
+	return true
 }
 
 /** A dimension's `directory`, which only `'labels'` is. */

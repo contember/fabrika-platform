@@ -218,6 +218,27 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
+		rule: 'member-admits-external',
+		bad: {
+			...CLEAN_APPLICATION,
+			'fabrika.contract.ts': CLEAN_CONTRACT.replace(
+				"assignableBy: ['owner'] } } },",
+				"assignableBy: ['owner'] } }, partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true } },",
+			).replace(
+				'\t\tget: c.query(',
+				'\t\tme: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true } }),\n\t\tget: c.query(',
+			),
+		},
+		expected: ['fabrika.contract.ts:5:25'],
+		good: {
+			...CLEAN_APPLICATION,
+			'fabrika.contract.ts': CLEAN_CONTRACT.replace(
+				"assignableBy: ['owner'] } } },",
+				"assignableBy: ['owner'] } }, partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true } },",
+			),
+		},
+	},
+	{
 		rule: 'sql-undeclared',
 		bad: {
 			'src/deals/endpoints.ts': [

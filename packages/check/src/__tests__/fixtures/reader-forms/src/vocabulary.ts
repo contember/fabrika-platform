@@ -23,5 +23,5 @@ export default {
 		grants: ['tasks.read', 'tasks.write', 'tasks.delete', 'tasks.share', 'tasks.admin'],
 		member: { scope: 'project', assignableBy: ['maintainer'] },
 	},
-	contributor: { grants: ['tasks.read', 'tasks.write'], member: { scope: 'project', assignableBy: ['maintainer'] } },
+	contributor: { grants: ['tasks.read', 'tasks.write'], member: { scope: 'project', assignableBy: ['maintainer'] }, external: true },
 } as const
