@@ -57,6 +57,16 @@ export interface DelegatedEndpointRow {
 	purpose: 'members' | 'creates'
 }
 
+/**
+ * How IAM names an application (the `app_presentation` table). `locale` is stored as reconciled and parsed at read
+ * (`presentationFor`); NULL is "not declared".
+ */
+export interface AppPresentationRow {
+	app: string
+	locale: string | null
+	display_name: string | null
+}
+
 /** An action-catalog row (the `app_actions` table). */
 export interface AppActionRow {
 	app: string
@@ -83,6 +93,11 @@ export class AppSchemaRepository {
 				ORDER BY app`)
 			.all<{ app: string }>()
 		return results.map((r) => r.app)
+	}
+
+	/** The app's declared locale and display name, or null when it declares neither. */
+	async getPresentation(app: string): Promise<AppPresentationRow | null> {
+		return this.db.prepare('SELECT * FROM app_presentation WHERE app = ?').bind(app).first<AppPresentationRow>()
 	}
 
 	/** True when the app's schema was compiled from a contract (ADR-0022 rule 6). */
@@ -256,6 +271,8 @@ export class AppSchemaRepository {
 		links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
 		delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
 		workloads?: { kind: WorkloadKind; name: string; actions: string[]; issues?: string }[]
+		/** How IAM names the app; a field left out is "not declared", and both left out remove the row. */
+		presentation?: { locale: string | null; displayName: string | null }
 	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -266,7 +283,16 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM app_link_mounts WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_delegated_endpoints WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_workloads WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_presentation WHERE app = ?').bind(app),
 		]
+		const presentation = input.presentation
+		if (presentation !== undefined && (presentation.locale !== null || presentation.displayName !== null)) {
+			statements.push(
+				this.db
+					.prepare('INSERT INTO app_presentation (app, locale, display_name) VALUES (?, ?, ?)')
+					.bind(app, presentation.locale, presentation.displayName),
+			)
+		}
 		if (input.contract === true) {
 			statements.push(this.db.prepare('INSERT INTO contract_apps (app, created_at) VALUES (?, ?)').bind(app, unixNow()))
 		}

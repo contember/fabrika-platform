@@ -1,5 +1,6 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { z } from 'zod'
+import { type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
 import { type AuditEventInput } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 
@@ -103,6 +104,7 @@ export async function handlePasswordLogin(
 	const handoff = handoffOf(reading)
 	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
 	const retry = {
+		presentation: await presentationFor(services, handoff?.app ?? null),
 		redirect,
 		oidcEnabled: services.config.authentication.oidc.enabled,
 		forgotEnabled: services.email !== null,
@@ -112,7 +114,7 @@ export async function handlePasswordLogin(
 		return refuseLogin(
 			services,
 			{ requestId, principalId: null, reason: 'password_malformed' },
-			() => loginPage({ ...retry, error: 'Invalid email or password.' }),
+			() => loginPage({ ...retry, invalidCredentials: true }),
 		)
 	}
 	const { email, password } = login.data
@@ -178,7 +180,7 @@ export async function handlePasswordLogin(
 			principalId: lookup.status === 'found' ? lookup.principal.id : null,
 			reason: blocked ? 'password_throttled' : 'password_invalid',
 		},
-		() => loginPage({ ...retry, error: 'Invalid email or password.' }),
+		() => loginPage({ ...retry, invalidCredentials: true }),
 	)
 }
 
@@ -199,13 +201,19 @@ export async function handleForgotPassword(
 	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
-	if (request.method === 'GET') return forgotPasswordPage({})
+	if (request.method === 'GET') {
+		return forgotPasswordPage({ presentation: await presentationFor(services, new URL(request.url).searchParams.get('app')) })
+	}
 	if (request.method !== 'POST') return methodNotAllowed()
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const form = await readForm(request)
 	if (form === null) return authError('invalid form', 400)
+	// The application the sign-in came from: the action keeps it, so the mail and the pages speak its language and the
+	// completed reset lands in it.
+	const presentation = await presentationFor(services, stringValue(form.get('app')))
+	const sent = forgotPasswordPage({ presentation, sent: true })
 	const parsedEmail = emailSchema.safeParse(form.get('email'))
-	if (services.email === null || !parsedEmail.success) return forgotPasswordPage({ sent: true })
+	if (services.email === null || !parsedEmail.success) return sent
 	const email = parsedEmail.data
 	const accountKey = await hashToken(`password-recovery:account:${email}`)
 	const globalKey = await hashToken('password-recovery:global')
@@ -216,17 +224,17 @@ export async function handleForgotPassword(
 	])
 	const now = Math.floor(Date.now() / 1000)
 	if (clientOverLimit || (accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now) {
-		return forgotPasswordPage({ sent: true })
+		return sent
 	}
 	await Promise.all([
 		recordLoginFailure(services, accountKey, RECOVERY_ACCOUNT_MAX_ATTEMPTS),
 		recordLoginFailure(services, globalKey, RECOVERY_GLOBAL_MAX_ATTEMPTS),
 	])
-	ctx.waitUntil(runForgotPassword(services, email, requestId).catch(() => console.error('Password recovery request failed')))
-	return forgotPasswordPage({ sent: true })
+	ctx.waitUntil(runForgotPassword(services, email, requestId, presentation).catch(() => console.error('Password recovery request failed')))
+	return sent
 }
 
-async function runForgotPassword(services: Services, email: string, requestId: string): Promise<void> {
+async function runForgotPassword(services: Services, email: string, requestId: string, presentation: AppPresentation): Promise<void> {
 	let lookup = await services.repositories.passwords.lookupActionUser(email)
 	if (
 		lookup.status === 'missing'
@@ -246,7 +254,7 @@ async function runForgotPassword(services: Services, email: string, requestId: s
 			&& matchingBootstrapEmail(email, services.config) !== null
 		if (bootstrap) purpose = 'enrollment'
 		if (purpose !== null) {
-			const action = await issuePasswordAction(services, { principal: lookup.principal, purpose }, {
+			const action = await issuePasswordAction(services, { principal: lookup.principal, purpose, presentation }, {
 				audit: recoveryEvent(requestId, lookup.principal.id, `iam.password.${purpose}.issue`),
 				enableEnrollment: bootstrap,
 			})
@@ -283,34 +291,40 @@ export async function handlePasswordAction(
 	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
-	if (request.method === 'GET') return setPasswordPage({ purpose })
+	// The link's `?app=` is a hint for the page's words and its `form-action`; the stored action decides where it lands.
+	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
+	if (request.method === 'GET') return setPasswordPage({ presentation: linked, purpose })
 	if (request.method !== 'POST') return methodNotAllowed()
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const form = await readForm(request)
 	if (form === null) return authError('invalid form', 400)
 	const submitted = passwordActionFormSchema.safeParse({ token: form.get('token'), password: form.get('password') })
-	if (!submitted.success) return invalidActionPage()
+	if (!submitted.success) return invalidActionPage(linked)
 	const { token: submittedToken, password } = submitted.data
 	const tokenHash = await hashToken(submittedToken)
 	const action = await services.repositories.passwords.inspectActionToken(tokenHash, purpose)
-	if (action === null) return invalidActionPage()
+	if (action === null) return invalidActionPage(linked)
+	const presentation = await presentationFor(services, action.app)
 	const principal = await services.repositories.principals.getPrincipalById(action.principal_id)
-	if (principal === null || principal.disabled_at !== null) return invalidActionPage()
+	if (principal === null || principal.disabled_at !== null) return invalidActionPage(presentation)
 	const policy = validatePassword(password, { email: principal.email, label: principal.label })
-	if (!policy.ok) return setPasswordPage({ token: submittedToken, purpose, error: policy.message })
+	if (!policy.ok) return setPasswordPage({ presentation, token: submittedToken, purpose, problem: policy.problem })
 	const completed = await services.repositories.passwords.completeAction({
 		tokenHash,
 		purpose,
 		password: await services.passwordHasher.hash(policy.password),
 	}, selfEvent(requestId, principal.id, `iam.password.${purpose}.complete`))
-	if (completed === null) return invalidActionPage()
+	if (completed === null) return invalidActionPage(presentation)
 	const completedPrincipal = await services.repositories.principals.getPrincipalById(completed.principalId)
-	if (completedPrincipal === null || completedPrincipal.disabled_at !== null) return invalidActionPage()
+	if (completedPrincipal === null || completedPrincipal.disabled_at !== null) return invalidActionPage(presentation)
+	// An action that keeps an application lands on its registered origin; the application's proxy then signs the
+	// browser in through the normal handoff, which the session issued here makes silent.
+	const landing = landingUrl(presentation)
 	return issueSession(request, services, ctx, {
 		principalId: completedPrincipal.id,
 		email: completedPrincipal.email,
 		authenticationMethod: 'password',
-		redirect: services.config.issuer,
+		redirect: landing ?? services.config.issuer,
 		reason: purpose === 'enrollment' ? 'password_enrollment' : 'password_reset',
 		requestId,
 	})

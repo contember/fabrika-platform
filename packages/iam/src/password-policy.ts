@@ -15,24 +15,27 @@ export interface PasswordPolicyContext {
 	readonly label?: string | null
 }
 
+/** Why a chosen password is refused; the page words it in the person's language. */
+export type PasswordProblem = 'too_short' | 'too_long' | 'guessable'
+
 export type PasswordPolicyResult =
 	| { readonly ok: true; readonly password: string }
-	| { readonly ok: false; readonly message: string }
+	| { readonly ok: false; readonly problem: PasswordProblem }
 
 /** Validate only length and whole-password blocklists; do not impose composition rules. */
 export function validatePassword(raw: string, context: PasswordPolicyContext = {}): PasswordPolicyResult {
 	const password = raw.normalize('NFC')
 	const length = Array.from(password).length
 	if (length < PASSWORD_MIN_CODE_POINTS) {
-		return { ok: false, message: `Use at least ${PASSWORD_MIN_CODE_POINTS} characters.` }
+		return { ok: false, problem: 'too_short' }
 	}
 	if (length > PASSWORD_MAX_CODE_POINTS) {
-		return { ok: false, message: `Use at most ${PASSWORD_MAX_CODE_POINTS} characters.` }
+		return { ok: false, problem: 'too_long' }
 	}
 
 	const comparable = password.toLocaleLowerCase('en-US')
 	if (COMMON_PASSWORDS.has(comparable) || contextPasswords(context).has(comparable)) {
-		return { ok: false, message: 'Choose a password that is not based on your account details or a common password.' }
+		return { ok: false, problem: 'guessable' }
 	}
 	return { ok: true, password }
 }

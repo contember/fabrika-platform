@@ -72,6 +72,10 @@ Enrollment and reset share one action-token flow:
 5. The same-origin `POST` validates the password and atomically consumes the
    token, stores the verifier, activates the principal, and revokes older
    password sessions.
+6. The answer signs the browser in to IAM. An action that keeps an application
+   (below) then lands on that application's registered return origin, whose
+   proxy completes the sign-in through the normal handoff. Any other action
+   lands on IAM's own origin.
 
 Reset requests from `/auth/forgot-password` always return the same browser
 response. They do not reveal whether the address exists, is disabled, has a
@@ -108,6 +112,27 @@ stream limit, safe redirect
 validation, no-referrer and no-store headers, a restrictive CSP, and
 frame-ancestor protection.
 
+## Language and the application
+
+IAM renders its pages (sign-in, forgot password, set password, invitation and
+their outcomes) and its own e-mails from a catalog in `en` and `cs`. An
+application chooses the language and its display name with `locale` and
+`displayName` in its contract's vocabulary; IAM reconciles both with the schema.
+The words stay IAM's, and every inserted value is escaped.
+
+The application of a request is:
+
+- a handoff sign-in's `?app=`; its forgot-password link carries the same app;
+- an invitation's application, named in the mailed link;
+- a password action's stored application: the one its forgot-password request
+  came from.
+
+An application IAM does not know, or one without a `locale`, gets the
+installation's default language, `en`. An administrator's action and IAM's own
+forgot-password page also use the default. A link's `?app=` only picks words;
+where a completed action or invitation lands is decided by the stored
+application and its registered return origin.
+
 ## Membership invitations
 
 An application invites an address to a membership role through IAM's
@@ -126,6 +151,8 @@ An application invites an address to a membership role through IAM's
    signed-in principal's mailbox is the invited one, checks again that the
    inviter can still give the role, and then marks the invitation accepted and
    writes the grant in one transaction.
+5. An accepted invitation lands on the application's registered return origin.
+   Without one, IAM answers its outcome page.
 
 ## First administrator
 

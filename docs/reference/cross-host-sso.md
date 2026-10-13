@@ -178,6 +178,8 @@ a session is created, a code is issued and immediately wasted, and the browser s
 login page with no error anywhere. The login page widens the directive by exactly one origin — the
 app's REGISTERED return origin, taken from the same value the 302 will use — so a page rendered for no
 handoff stays at `'self'` and the registry remains the only authority on where a browser may be sent.
+The set-password and invitation pages widen it the same way, by the registered origin a completed action
+or an accepted invitation of their application lands on.
 
 ## Where redemption lives, and how much that protects
 

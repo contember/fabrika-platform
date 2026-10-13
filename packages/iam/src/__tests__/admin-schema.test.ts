@@ -176,6 +176,31 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 		expect(dto.roles['editor']?.permissions).toEqual(['project.read', 'project.write'])
 	})
 
+	test('the locale and the display name are reconciled, read back, and dropped by a schema without them', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const named = { ...SCHEMA, locale: 'cs', displayName: 'Opice' }
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, named))).status).toBe(200)
+		const dto: AppSchemaDto = await (await run(h, req('/admin/apps/opice/schema', 'GET', token))).json()
+		expect([dto.locale, dto.displayName]).toEqual(['cs', 'Opice'])
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))).status).toBe(200)
+		const dropped: AppSchemaDto = await (await run(h, req('/admin/apps/opice/schema', 'GET', token))).json()
+		expect('locale' in dropped || 'displayName' in dropped).toBe(false)
+	})
+
+	test('a locale IAM does not speak and a display name of two lines are refused, naming the field (400)', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const locale = await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, locale: 'de' }))
+		expect(locale.status).toBe(400)
+		const localeBody: { error: string } = await locale.json()
+		expect(localeBody.error).toBe("locale must be one of 'en', 'cs'")
+		const name = await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, displayName: 'Opice\nBcc: x' }))
+		expect(name.status).toBe(400)
+		const nameBody: { error: string } = await name.json()
+		expect(nameBody.error).toBe('the display name contains a control character')
+	})
+
 	test('rejects a schema whose role references an unknown action (400)', async () => {
 		const h = createHarness()
 		const token = await asAdmin(h)

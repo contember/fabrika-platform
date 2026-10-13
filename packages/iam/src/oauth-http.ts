@@ -1,3 +1,4 @@
+import { DEFAULT_LOCALE } from '@fabrika/auth-core'
 import {
 	type OAuthAuthorizationRequest,
 	type OAuthAuthorizationServerMetadata,
@@ -11,10 +12,11 @@ import { readForm, redirectHeaders, sameOrigin } from './auth/http'
 import { currentSession } from './auth/sessions'
 import { principalStatus } from './db'
 import type { Env } from './env'
+import { escapeHtml } from './html'
 import { establishClient, type EstablishedClient, exchangeOAuthToken, grantAuthorization, revokeOAuthToken, scopeCeiling } from './oauth'
 import type { OAuthConfig } from './oauth-config'
 import { normalizeOrigin } from './origin'
-import { escapeHtml, htmlPage } from './password-pages'
+import { htmlPage } from './password-pages'
 import type { Services } from './services'
 
 export const OAUTH_METADATA_PATH = '/.well-known/oauth-authorization-server'
@@ -153,9 +155,10 @@ function consentPage(check: Extract<AuthorizationCheck, { kind: 'valid' }>, sign
 		['code_challenge_method', request.code_challenge_method],
 	]
 	const hidden = fields.flatMap(([name, value]) => value === undefined ? [] : [`<input type="hidden" name="${name}" value="${escapeHtml(value)}">`])
-	return htmlPage(
-		'Authorize application',
-		`<h1>Authorize ${escapeHtml(clientName)}</h1>
+	return htmlPage({
+		locale: DEFAULT_LOCALE,
+		title: 'Authorize application',
+		content: `<h1>Authorize ${escapeHtml(clientName)}</h1>
 		<p>Signed in as <strong>${escapeHtml(signedInAs)}</strong>.</p>
 		<p><strong>${escapeHtml(clientName)}</strong> asks to act as you in <strong>${escapeHtml(resource.app)}</strong>.</p>
 		<p>Client: <code>${escapeHtml(client.registration.clientId)}</code></p>
@@ -167,10 +170,9 @@ function consentPage(check: Extract<AuthorizationCheck, { kind: 'valid' }>, sign
 		<form method="post" action="${AUTHORIZE_PATH}">${hidden.join('')}
 		<button name="decision" value="approve">Allow</button>
 		<button name="decision" value="deny">Deny</button></form>`,
-		200,
 		// Chromium applies `form-action` to the redirect a submission answers with (see CLAUDE.md).
-		normalizeOrigin(request.redirect_uri) ?? undefined,
-	)
+		formActionOrigin: normalizeOrigin(request.redirect_uri) ?? undefined,
+	})
 }
 
 function clientRedirect(target: Pick<OAuthAuthorizationRequest, 'redirect_uri' | 'state'>, parameters: Record<string, string>): Response {
@@ -191,7 +193,12 @@ function singleValued(params: URLSearchParams): Record<string, string> | null {
 }
 
 function errorPage(message: string, status: number): Response {
-	return htmlPage('Authorization failed', `<h1>Authorization failed</h1><p>${escapeHtml(message)}</p>`, status)
+	return htmlPage({
+		locale: DEFAULT_LOCALE,
+		title: 'Authorization failed',
+		content: `<h1>Authorization failed</h1><p>${escapeHtml(message)}</p>`,
+		status,
+	})
 }
 
 function protocolError(error: string, status: number): Response {

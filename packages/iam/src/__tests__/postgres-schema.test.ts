@@ -74,6 +74,7 @@ async function reset(): Promise<void> {
 			'membership_scopes',
 			'delegation_grants',
 			'membership_invitations',
+			'app_presentation',
 		]
 	) {
 		await raw.prepare(`DELETE FROM ${table}`).run()
@@ -103,6 +104,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0008_durable_audit.sql' },
 			{ bundle: 'iam', name: '0009_member_lookups.sql' },
 			{ bundle: 'iam', name: '0010_workload_issues.sql' },
+			{ bundle: 'iam', name: '0011_app_presentation.sql' },
 		])
 	})
 
@@ -148,6 +150,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'delegation_grants',
 				'membership_invitations',
 				'membership_transport_keys',
+				'app_presentation',
 			]
 		) {
 			expect(names).toContain(table)
@@ -449,6 +452,17 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.appSchema.getRole('notes@prod', 'owner'))?.member_scope).toBe('workspace')
 		await db.appSchema.reconcileAppSchema({ app: 'notes@prod', scopes: [], actions: [{ action: 'note.read' }], roles: [] })
 		expect(await db.appSchema.isContractApp('notes@prod')).toBe(false)
+	})
+
+	test('app vocabulary: the presentation travels with the reconcile, and a vocabulary without one drops it', async () => {
+		await reset()
+		const vocabulary = { app: 'notes@prod', scopes: [], actions: [{ action: 'note.read' }], roles: [] }
+		await db.appSchema.reconcileAppSchema({ ...vocabulary, presentation: { locale: 'cs', displayName: 'Poznámky' } })
+		expect(await db.appSchema.getPresentation('notes@prod')).toEqual({ app: 'notes@prod', locale: 'cs', display_name: 'Poznámky' })
+		await db.appSchema.reconcileAppSchema({ ...vocabulary, presentation: { locale: null, displayName: 'Notes' } })
+		expect(await db.appSchema.getPresentation('notes@prod')).toEqual({ app: 'notes@prod', locale: null, display_name: 'Notes' })
+		await db.appSchema.reconcileAppSchema(vocabulary)
+		expect(await db.appSchema.getPresentation('notes@prod')).toBeNull()
 	})
 
 	test('app vocabulary: a membership declaration over a global grant of that role rolls the batch back', async () => {
@@ -821,7 +835,9 @@ describe.skipIf(!hasPostgres)('password repository on Postgres', () => {
 			purpose: 'enrollment',
 			tokenHash: 'postgres-action-token',
 			expiresAt: now() + 3_600,
+			app: 'notes@prod',
 		})
+		expect((await db.passwords.inspectActionToken('postgres-action-token', 'enrollment'))?.app).toBe('notes@prod')
 		await db.sessions.createSession({
 			tokenHash: 'postgres-oidc-session',
 			principalId: principal.id,

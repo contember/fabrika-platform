@@ -1,4 +1,5 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
+import { presentationFor } from '../app-presentation'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 
 import { type RequestContext } from '../env'
@@ -50,6 +51,7 @@ export async function handleLogin(
 	}
 	if (services.config.authentication.password.enabled) {
 		return loginPage({
+			presentation: await presentationFor(services, handoff?.app ?? null),
 			redirect,
 			oidcEnabled: services.config.authentication.oidc.enabled,
 			forgotEnabled: services.email !== null,

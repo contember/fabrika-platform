@@ -153,3 +153,11 @@ WU1, WU2 and WU4. WU6 last, with backlog 113 at its start (may run beside WU5).
   role in the exact value); WU2 widens IAM's rule, and the stand-in must follow it. Gap left for WU6: an `on` endpoint
   that cancels an invitation or revokes a link by id fails its generated cases (the stand-in answers an unknown id
   404, as IAM does); the skill's "Not built yet" says so.
+- WU3: `locale` and `displayName` sit beside `app` in the vocabulary (the artifact carries each only when declared, so
+  digests stay; a change is a widening approval line, because the name stands beside a password field). IAM stores
+  them in `app_presentation` and the forgot-password app in `password_action_tokens.app` (migration 0011, both
+  dialects). No `principals.locale`: an app-less action speaks the installation default, `en`, which is a constant, not
+  a deploy variable. A completed action or an accepted invitation lands on the app's first registered return origin;
+  the set-password and invitation pages widen `form-action` by that one origin, as the login page does for a handoff.
+  WU4 replaces `messageTemplatesFor` (`packages/iam/src/messages.ts`) with the application's templates over the same
+  `MessageValues`. A browser run of sign-in → forgot → reset → back in the application is still owed.

@@ -1,6 +1,7 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
 import { describe, expect, test } from 'bun:test'
+import { INSTALLATION_PRESENTATION } from '../app-presentation'
 import { handleAuth, safeRedirect } from '../auth/routes'
 import type { RequestContext } from '../env'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
@@ -338,7 +339,7 @@ describe('forgot password and one-time actions', () => {
 		await h.repositories.passwords.enableEnrollment(principalId)
 		const principal = await h.repositories.principals.getPrincipalById(principalId)
 		if (principal === null) throw new Error('missing seeded principal')
-		const action = await issuePasswordAction(services, { principal, purpose: 'enrollment' }, {
+		const action = await issuePasswordAction(services, { principal, purpose: 'enrollment', presentation: INSTALLATION_PRESENTATION }, {
 			audit: { requestId: 'seed', principalId: null, principalLabel: 'seed', app: 'propustka', action: 'seed.issue', resourceType: 'principal' },
 			enableEnrollment: false,
 		})
@@ -394,7 +395,7 @@ describe('an action token is bound to its purpose', () => {
 		await h.repositories.passwords.enableEnrollment(principalId)
 		const principal = await h.repositories.principals.getPrincipalById(principalId)
 		if (principal === null) throw new Error('missing seeded principal')
-		const action = await issuePasswordAction(services, { principal, purpose }, {
+		const action = await issuePasswordAction(services, { principal, purpose, presentation: INSTALLATION_PRESENTATION }, {
 			audit: { requestId: 'seed', principalId: null, principalLabel: 'seed', app: 'propustka', action: 'seed.issue', resourceType: 'principal' },
 			enableEnrollment: false,
 		})

@@ -351,7 +351,25 @@ fails if that stops being true — it is the guard, not documentation of one.
   the 302 to `<app>/__fabrika/auth/callback` — the login succeeds, a code is issued and spent, and the
   browser never leaves the form. `loginHandoffFields` widens the directive by exactly one origin, and
   that origin comes from the REGISTERED return URL, so widening the CSP can never widen where a
-  browser may be sent. A page rendered for no handoff stays at `'self'`.
+  browser may be sent. A page rendered for no handoff stays at `'self'`. The set-password and
+  invitation pages widen it the same way, by the one registered origin their application lands on
+  (`AppPresentation.landing`), and stay at `'self'` without one.
+- **IAM SPEAKS THE APPLICATION'S LANGUAGE, AND THE APPLICATION CHOOSES ONLY THE LANGUAGE AND THE NAME**
+  (`src/app-presentation.ts`, `src/catalog/`). The contract's `locale` and `displayName` are reconciled into
+  `app_presentation`; every page and IAM e-mail takes its words from the catalog of that locale, so a missing
+  translation fails the typecheck, and escapes every value it inserts. The application of a request is a handoff
+  login's `?app=`, a link's or a form's `?app=`/`app`, an invitation's app, or a password action's stored
+  `password_action_tokens.app`; `presentationFor` names one only when IAM knows it (a presentation row or a
+  registered return origin) and answers the installation's (`DEFAULT_LOCALE`, no name) otherwise, a stored locale
+  IAM no longer speaks included. A hint picks words and a registered landing, never authority. There is no
+  `principals.locale`: an app-less action (IAM's own forgot-password, an administrator's) speaks the default.
+  `messageTemplatesFor` is the one place a message's templates are chosen.
+- **A PASSWORD ACTION AND AN INVITATION THAT KEEP AN APPLICATION END IN IT.** A forgot-password request carries the
+  sign-in's app; the issued action stores it, its link names it, and the completed action's 302 goes to the app's
+  first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the
+  same for its app. The application's proxy then signs the browser in through the normal handoff, which the IAM
+  session just issued makes silent; `readHandoff` and `safeRedirect` are unchanged. Without a registered origin the
+  action lands on the issuer and the invitation answers its outcome page.
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
   `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
   expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the

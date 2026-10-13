@@ -15,6 +15,7 @@ import type {
 	AppLinkMountDef,
 	AppSchema,
 	AppScopeDef,
+	Locale,
 	PermissionEntry,
 	PermissionSource,
 	PrincipalType,
@@ -170,6 +171,10 @@ export interface AppSchemaDto {
 	links?: Record<string, AppLinkMountDef>
 	/** Endpoints that may spend membership authority; absent when the app declares none. */
 	delegations?: Record<string, AppDelegationDef>
+	/** The language IAM speaks to the app's people; absent when the app declares none. */
+	locale?: Locale
+	/** The name IAM shows for the app; absent when the app declares none. */
+	displayName?: string
 }
 
 // ── Policies (origin='custom' roles, admin-composed) ──────────────────────────

@@ -1,0 +1,112 @@
+import { escapeHtml } from '../html'
+import type { Catalog, RenderedMessage } from './index'
+
+export const cs: Catalog = {
+	pages: {
+		showPassword: 'Zobrazit',
+		hidePassword: 'Skrýt',
+		email: 'E-mail',
+		signIn: {
+			title: (appName) => (appName === null ? 'Přihlášení' : `Přihlášení do aplikace ${appName}`),
+			password: 'Heslo',
+			submit: 'Přihlásit se',
+			forgot: 'Zapomenuté heslo?',
+			singleSignOn: 'Pokračovat přes jednotné přihlášení',
+			invalidCredentials: 'Neplatný e-mail nebo heslo.',
+		},
+		forgot: {
+			title: 'Obnovení hesla',
+			intro: (appName) =>
+				appName === null
+					? 'Zadejte adresu, kterou se přihlašujete.'
+					: `Zadejte adresu, kterou se přihlašujete do aplikace ${appName}.`,
+			submit: 'Pokračovat',
+			sentTitle: 'Žádost přijata',
+			sentText: 'Pokud účet může používat přihlášení heslem a e-mail se podaří doručit, přijde vám jednorázový odkaz.',
+			back: 'Zpět na přihlášení',
+		},
+		setPassword: {
+			title: (purpose) => (purpose === 'enrollment' ? 'Nastavte si heslo' : 'Obnovte si heslo'),
+			rule: (min, max) => `Použijte ${min}–${max} znaků. Dlouhé fráze jsou vítány.`,
+			shared: (appName) =>
+				appName === null
+					? 'Heslo patří k vašemu účtu v této přihlašovací službě a platí pro všechny aplikace, které ji používají.'
+					: `Heslo patří k vašemu účtu v této přihlašovací službě a platí pro všechny aplikace, které ji používají, nejen pro aplikaci ${appName}.`,
+			newPassword: 'Nové heslo',
+			problem: (problem, min, max) => {
+				switch (problem) {
+					case 'too_short':
+						return `Použijte alespoň ${min} znaků.`
+					case 'too_long':
+						return `Použijte nejvýše ${max} znaků.`
+					case 'guessable':
+						return 'Zvolte heslo, které nevychází z údajů vašeho účtu a není běžně používané.'
+				}
+			},
+		},
+		invalidLink: {
+			title: 'Odkaz není k dispozici',
+			text: 'Tento odkaz je neplatný, vypršel, nebo už byl použit.',
+			requestNew: 'Vyžádat nový odkaz',
+		},
+		logout: {
+			title: 'Odhlášení',
+			text: 'Tím ukončíte přihlášení ve všech aplikacích, do kterých jste přihlášeni.',
+			submit: 'Odhlásit se',
+		},
+		invitation: {
+			title: 'Přijetí pozvánky',
+			text: 'Přijměte pozvánku účtem, kterým jste zde přihlášeni. Musí používat pozvanou adresu.',
+			submit: 'Přijmout pozvánku',
+			signInFirstTitle: 'Nejprve se přihlaste',
+			signInFirstText: 'Přihlaste se pozvanou adresou a potom znovu otevřete odkaz z pozvánky.',
+			signIn: 'Přihlásit se',
+			unavailableTitle: 'Pozvánka není k dispozici',
+			accountCannotAccept: 'Tento účet nemůže přijímat pozvánky.',
+			wrongAddressTitle: 'Pozvánka pro jinou adresu',
+			wrongAddressText: 'Jste přihlášeni adresou, na kterou tato pozvánka nebyla poslána. Přihlaste se pozvanou adresou.',
+			inviterCannotGrant: 'Osoba, která pozvánku poslala, už tuto roli nemůže udělit. Požádejte o novou pozvánku.',
+			acceptedTitle: 'Pozvánka přijata',
+			acceptedText: ({ role, scope, appName }) => `V aplikaci ${appName} teď máte roli ${role} (${scope}).`,
+			invalidTitle: 'Odkaz není k dispozici',
+			invalidText: 'Tato pozvánka je neplatná, vypršela, byla zrušena, nebo už byla použita.',
+		},
+	},
+	messages: {
+		invitation: ({ appName, role, scope, actionUrl }) => {
+			const what = `do aplikace ${appName} s rolí ${role} (${scope})`
+			return {
+				subject: `Pozvánka do aplikace ${appName}`,
+				text:
+					`Dostali jste pozvánku ${what}.\n\nPřihlaste se touto adresou a potom pozvánku přijměte tímto jednorázovým odkazem:\n\n${actionUrl}\n\nPokud jste pozvánku nečekali, můžete tento e-mail ignorovat.`,
+				html: `<p>Dostali jste pozvánku ${
+					escapeHtml(what)
+				}.</p><p>Přihlaste se touto adresou a potom pozvánku přijměte tímto jednorázovým odkazem:</p><p><a href="${
+					escapeHtml(actionUrl)
+				}">Přijmout pozvánku</a></p><p>Pokud jste pozvánku nečekali, můžete tento e-mail ignorovat.</p>`,
+			}
+		},
+		enrollment: ({ appName, actionUrl }) =>
+			passwordMessage(
+				appName === null ? 'Nastavení hesla' : `Nastavení hesla pro aplikaci ${appName}`,
+				'si nastavíte heslo',
+				actionUrl,
+			),
+		reset: ({ appName, actionUrl }) =>
+			passwordMessage(
+				appName === null ? 'Obnovení hesla' : `Obnovení hesla pro aplikaci ${appName}`,
+				'si obnovíte heslo',
+				actionUrl,
+			),
+	},
+}
+
+function passwordMessage(subject: string, action: string, actionUrl: string): RenderedMessage {
+	return {
+		subject,
+		text: `Tímto jednorázovým odkazem ${action}:\n\n${actionUrl}\n\nPokud jste o to nežádali, můžete tento e-mail ignorovat.`,
+		html: `<p>Tímto jednorázovým odkazem ${escapeHtml(action)}:</p><p><a href="${escapeHtml(actionUrl)}">${
+			escapeHtml(subject)
+		}</a></p><p>Pokud jste o to nežádali, můžete tento e-mail ignorovat.</p>`,
+	}
+}

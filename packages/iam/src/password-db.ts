@@ -34,6 +34,18 @@ export interface PasswordActionTokenRow {
 	consumed_at: number | null
 	consumption_id: string | null
 	created_at: number
+	/** The application the action keeps (`presentationFor`), or NULL for one on the installation itself. */
+	app: string | null
+}
+
+/** A new action token: only its hash is stored. */
+export interface ActionTokenInput {
+	principalId: string
+	purpose: PasswordActionPurpose
+	tokenHash: string
+	issuedBy?: string | null
+	expiresAt: number
+	app?: string | null
 }
 
 export interface PasswordLoginThrottleRow {
@@ -195,13 +207,7 @@ export class PasswordRepository {
 	}
 
 	/** Supersede active tokens for the same action, then persist only the new token hash. */
-	async issueActionToken(input: {
-		principalId: string
-		purpose: PasswordActionPurpose
-		tokenHash: string
-		issuedBy?: string | null
-		expiresAt: number
-	}, issuance?: ActionIssuance): Promise<string> {
+	async issueActionToken(input: ActionTokenInput, issuance?: ActionIssuance): Promise<string> {
 		const id = uuidv7()
 		const now = unixNow()
 		try {
@@ -216,13 +222,7 @@ export class PasswordRepository {
 	private async replaceActionToken(
 		id: string,
 		now: number,
-		input: {
-			principalId: string
-			purpose: PasswordActionPurpose
-			tokenHash: string
-			issuedBy?: string | null
-			expiresAt: number
-		},
+		input: ActionTokenInput,
 		issuance: ActionIssuance | undefined,
 	): Promise<void> {
 		await this.db.batch([
@@ -230,9 +230,9 @@ export class PasswordRepository {
 			this.db.prepare(`UPDATE password_action_tokens SET consumed_at = ?
 				WHERE principal_id = ? AND purpose = ? AND consumed_at IS NULL`).bind(now, input.principalId, input.purpose),
 			this.db.prepare(`INSERT INTO password_action_tokens
-				(id, principal_id, purpose, token_hash, issued_by, expires_at, consumed_at, consumption_id, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`)
-				.bind(id, input.principalId, input.purpose, input.tokenHash, input.issuedBy ?? null, input.expiresAt, now),
+				(id, principal_id, purpose, token_hash, issued_by, expires_at, consumed_at, consumption_id, created_at, app)
+				VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
+				.bind(id, input.principalId, input.purpose, input.tokenHash, input.issuedBy ?? null, input.expiresAt, now, input.app ?? null),
 			...(issuance === undefined ? [] : [auditEventStatement(this.db, issuance.audit)]),
 		])
 	}

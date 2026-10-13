@@ -1,5 +1,5 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import type { AppDelegationDef, AppLinkMountDef, RoleDef } from '@fabrika/auth-core'
+import { type AppDelegationDef, type AppLinkMountDef, LOCALES, type RoleDef } from '@fabrika/auth-core'
 
 import {
 	type AppDto,
@@ -11,6 +11,7 @@ import {
 	type SetReturnOriginsRequest,
 } from '@fabrika/iam-contract'
 import type { z } from 'zod'
+import { parsePresentation } from '../app-presentation'
 import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
 import { parseStoredPermissions } from '../stored-permissions'
@@ -86,6 +87,8 @@ function appSchemaError(issues: readonly z.ZodIssue[]): string {
 			? "each workload needs a kind of 'job' or 'webhook', a name and an array of exact actions"
 			: 'workloads must be an array'
 	}
+	if (field === 'locale') return `locale must be one of ${LOCALES.map((locale) => `'${locale}'`).join(', ')}`
+	if (field === 'displayName') return issue?.code === 'custom' ? issue.message : 'displayName must be a string'
 	if (key === undefined) return 'scopes and actions must be arrays'
 	return field === 'scopes'
 		? 'each scope needs a non-empty `type` and, when present, a non-empty `label`, `in`, `creator` and `members`'
@@ -166,6 +169,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),
 			delegations: Object.entries(schema.delegations ?? {}).map(([endpoint, delegation]) => ({ endpoint, ...delegation })),
 			workloads: schema.workloads ?? [],
+			presentation: { locale: schema.locale ?? null, displayName: schema.displayName ?? null },
 		},
 		adminEvent(c, {
 			action: 'iam.app.schema.reconcile',
@@ -179,6 +183,8 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				links: Object.keys(schema.links ?? {}),
 				delegations: Object.keys(schema.delegations ?? {}),
 				workloads: (schema.workloads ?? []).map((workload) => `${workload.kind}:${workload.name}`),
+				locale: schema.locale ?? null,
+				displayName: schema.displayName ?? null,
 			},
 		}),
 	)
@@ -202,6 +208,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 	for (const row of await c.services.repositories.appSchema.listDelegatedEndpoints(app)) {
 		delegations[row.endpoint] = { action: row.action, dimension: row.dimension, purpose: row.purpose }
 	}
+	const presentation = parsePresentation(await c.services.repositories.appSchema.getPresentation(app))
 	return {
 		app,
 		scopes: scopeRows.map((r) => ({
@@ -217,6 +224,8 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 		roles,
 		...(Object.keys(links).length > 0 ? { links } : {}),
 		...(Object.keys(delegations).length > 0 ? { delegations } : {}),
+		...(presentation.locale === null ? {} : { locale: presentation.locale }),
+		...(presentation.displayName === null ? {} : { displayName: presentation.displayName }),
 	}
 }
 

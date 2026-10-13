@@ -1,5 +1,6 @@
 import { type OkResponse, type PasswordActionDelivery, type PrincipalIdInput } from '@fabrika/iam-contract'
 
+import { INSTALLATION_PRESENTATION } from '../app-presentation'
 import { type PrincipalRow } from '../db'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { type AdminContext, adminEvent, fail } from './context'
@@ -23,7 +24,8 @@ async function passwordDelivery(
 ): Promise<PasswordActionDelivery> {
 	const delivery = c.services.email === null ? 'manual' : 'email'
 	// The token, the enrollment opt-in and the record commit together; the email is an effect after that.
-	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id }, {
+	// An administrator's action belongs to the installation: its page and mail speak IAM's default language.
+	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id, presentation: INSTALLATION_PRESENTATION }, {
 		audit: adminEvent(c, { action: `iam.password.${purpose}.issue`, resourceType: 'principal', resourceId: principal.id, metadata: { delivery } }),
 		enableEnrollment: purpose === 'enrollment',
 	})

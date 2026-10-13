@@ -41,6 +41,7 @@ import {
 	type Scope,
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
+import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
 import { contractGrantProblem } from './contract-rules'
 import {
@@ -54,8 +55,8 @@ import {
 	type RoleRow,
 } from './db'
 import type { Env, RequestContext } from './env'
-import { invitationEmail } from './invitation-email'
 import { logError } from './log'
+import { renderEmail } from './messages'
 import { randomToken } from './oidc'
 import { unixNow } from './repositories/sql'
 import { resolvePermissionsAt } from './resolve'
@@ -410,16 +411,17 @@ async function invite(
 			metadata: { invitationId, role: role.role_key },
 		}))
 	if (created) {
-		const url = new URL(INVITATION_ACCEPT_PATH, services.config.issuer)
-		// A fragment never reaches an access log; the page copies it into its POST form in the browser.
+		const presentation = await presentationFor(services, caller.app)
+		// The query names the application for the page's language; the fragment never reaches an access log, and the
+		// page copies it into its POST form in the browser.
+		const url = new URL(`${INVITATION_ACCEPT_PATH}${appQuery(presentation)}`, services.config.issuer)
 		url.hash = new URLSearchParams({ token }).toString()
 		try {
-			await services.email.send(invitationEmail({
+			await services.email.send(renderEmail({
 				to: email,
-				app: caller.app,
-				role: role.role_key,
-				dimension: input.scope.type,
-				acceptUrl: url.toString(),
+				presentation,
+				kind: 'invitation',
+				values: { appName: presentation.displayName ?? caller.app, role: role.name, scope: input.scope.type, actionUrl: url.toString() },
 				idempotencyKey: `iam-invitation-${invitation.id}`,
 			}))
 		} catch (err) {

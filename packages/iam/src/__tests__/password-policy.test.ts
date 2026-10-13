@@ -8,9 +8,9 @@ describe('password policy', () => {
 	})
 
 	test('rejects short, oversized, common, and account-context passwords', () => {
-		expect(validatePassword('too short').ok).toBe(false)
-		expect(validatePassword('x'.repeat(PASSWORD_MAX_CODE_POINTS + 1)).ok).toBe(false)
-		expect(validatePassword('passwordpassword').ok).toBe(false)
-		expect(validatePassword('person@example.test', { email: 'person@example.test' }).ok).toBe(false)
+		expect(validatePassword('too short')).toEqual({ ok: false, problem: 'too_short' })
+		expect(validatePassword('x'.repeat(PASSWORD_MAX_CODE_POINTS + 1))).toEqual({ ok: false, problem: 'too_long' })
+		expect(validatePassword('passwordpassword')).toEqual({ ok: false, problem: 'guessable' })
+		expect(validatePassword('person@example.test', { email: 'person@example.test' })).toEqual({ ok: false, problem: 'guessable' })
 	})
 })
