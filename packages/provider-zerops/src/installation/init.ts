@@ -23,11 +23,14 @@
 import {
 	action as consoleAction,
 	configureEnvironment,
+	type Confirmations,
+	confirmations,
 	type EnvironmentConfig,
 	ghRepoExists,
 	info as consoleInfo,
 	ok as consoleOk,
 	scaffoldSidecarRepository,
+	shellWord,
 	type SidecarScaffoldInput,
 	type SidecarScaffoldResult,
 	step as consoleStep,
@@ -36,13 +39,12 @@ import {
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
 import { createZeropsApi, type ZeropsApi, type ZeropsService } from '../index'
-import { type Confirmations, confirmations } from './confirmations'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
 import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import type { InitInput } from './init-options'
 import type { InitLog } from './log'
 import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
-import { defaultCheckoutDir, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
+import { materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
 
 /** Everything `runInit` does outside the operator's own disk. Every one of them is confirmed first. */
 export interface InitEffects {
@@ -194,14 +196,18 @@ const environmentConfig = (installation: string, input: InitInput): EnvironmentC
 /** The command that repeats this run, with every value but the two credentials, which stay in the environment. */
 const rerunCommand = (input: InitInput): string =>
 	[
-		`fabrika platform init --provider=zerops ${input.installation}`,
-		`--repo=${input.repo}`,
-		`--tag=${input.fabrikaRef}`,
-		`--project-id=${input.projectId}`,
-		`--env=${input.environmentName}`,
-		...(input.hosts === undefined
-			? []
-			: [`--iam-host=${input.hosts.iam}`, `--console-host=${input.hosts.control}`, `--operations-host=${input.hosts.operations}`]),
+		'fabrika platform init --provider=zerops',
+		...[
+			input.installation,
+			`--repo=${input.repo}`,
+			`--checkout=${input.checkoutDir}`,
+			`--tag=${input.fabrikaRef}`,
+			`--project-id=${input.projectId}`,
+			`--env=${input.environmentName}`,
+			...(input.hosts === undefined
+				? []
+				: [`--iam-host=${input.hosts.iam}`, `--console-host=${input.hosts.control}`, `--operations-host=${input.hosts.operations}`]),
+		].map(shellWord),
 	].join(' ')
 
 /** Read the project back, so a wrong token or a mistyped id fails here rather than in someone's CI. */
@@ -265,10 +271,9 @@ const scaffold = async (input: InitInput, { log, prompts, effects }: InitCollabo
 		])
 		return undefined
 	}
-	const dir = defaultCheckoutDir(input.installation)
 	const result = await effects.scaffold({
 		repo: input.repo,
-		dir,
+		dir: input.checkoutDir,
 		files: [...SIDECAR_FILES],
 		materialize: (target) =>
 			materializeSidecarScaffold(target, {

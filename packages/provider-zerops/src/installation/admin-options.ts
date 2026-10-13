@@ -8,7 +8,7 @@
 // and prompts for nothing — and a missing required value is an error naming both the flag and the
 // variable that would supply it.
 
-import { readEnv, required, setting } from './cli-options'
+import { describeArgument, readEnv, requiredSetting, setting } from '@fabrika/installation-init'
 import { parsePlatformHostname, parsePlatformScheme } from './placement-options'
 
 /** Every input `runPlatformAdmin` takes from the operator. */
@@ -45,7 +45,7 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 		const name = arg.split('=')[0] ?? arg
 		if (!FLAGS.some((flag) => flag === name) || !arg.includes('=')) {
 			throw new Error(
-				`unexpected argument \`${arg}\`. Credentials are read from the environment and have no flag; run `
+				`unexpected argument ${describeArgument(arg)}. Credentials are read from the environment and have no flag; run `
 					+ '`fabrika platform admin --provider=zerops --help` for the surface',
 			)
 		}
@@ -64,7 +64,7 @@ const readScheme = (argv: readonly string[], env: Record<string, string | undefi
  * composed from it and `--scheme`, so a value carrying either would compose a second one.
  */
 const readIamHost = (argv: readonly string[], env: Record<string, string | undefined>): string => {
-	const host = required(setting(argv, env, '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST'), '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST')
+	const host = requiredSetting(setting(argv, env, '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST'), '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST')
 	return parsePlatformHostname(host)
 }
 
@@ -91,7 +91,7 @@ export const parsePlatformAdminArgs = (
 ): PlatformAdminInput => {
 	assertKnownArguments(argv)
 	return {
-		email: required(setting(argv, env, '--email', 'FABRIKA_PLATFORM_ADMIN_EMAIL'), '--email', 'FABRIKA_PLATFORM_ADMIN_EMAIL'),
+		email: requiredSetting(setting(argv, env, '--email', 'FABRIKA_PLATFORM_ADMIN_EMAIL'), '--email', 'FABRIKA_PLATFORM_ADMIN_EMAIL'),
 		iamHost: readIamHost(argv, env),
 		scheme: readScheme(argv, env),
 		provisioningKey: provisioningKey(env),

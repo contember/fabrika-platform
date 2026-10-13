@@ -7,12 +7,13 @@
 // and what never reaches a log line.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { UNATTENDED_FLAG } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { deployPlatform, PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
-import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput, UNATTENDED_FLAG } from '../install-options'
+import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { recordingInitLog } from '../log'
 import { generateInstallationSecrets } from '../secrets'
 import { generatedArtifacts } from '../topology/artifacts'

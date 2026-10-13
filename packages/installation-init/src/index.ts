@@ -9,6 +9,8 @@ export {
 	type IamAdminClient,
 	type IamAdminConnection,
 } from './admin'
+export { CHECKOUT_FLAG, sidecarCheckoutDir } from './checkout'
+export { type Confirmations, confirmations, UNATTENDED_FLAG } from './confirmations'
 export {
 	configureEnvironment,
 	type EnvironmentConfig,
@@ -19,7 +21,8 @@ export {
 } from './environment'
 export { ghRepoExists, hasGhCli } from './gh'
 export { action, detail, fail, info, ok, step, url, warn } from './log'
-export { confirm, required, retry, secret, secretOrEnv, select, text } from './prompt'
+export { type CommandEnv, describeArgument, readEnv, readFlag, requiredSetting, setting, shellWord } from './options'
+export { confirm } from './prompt'
 export {
 	branchProtectionCommand,
 	DEPLOYMENT_BRANCH_POLICY,

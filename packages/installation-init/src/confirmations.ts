@@ -1,4 +1,4 @@
-import { confirm as promptConfirm } from '@fabrika/installation-init'
+import { confirm as promptConfirm } from './prompt'
 
 /** The one question `install` and `init` ask. Injected so a flow can be exercised without a TTY. */
 export interface Confirmations {

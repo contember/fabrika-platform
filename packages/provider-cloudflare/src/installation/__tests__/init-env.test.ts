@@ -4,16 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { envPath, openEnvFile } from '../envfile'
-import {
-	type Collected,
-	ensureRunnerKey,
-	ensureVaultKey,
-	environmentPayload,
-	finalNotes,
-	readInstallerAuthMethods,
-	readInstallerEmailProvider,
-	readResumeValue,
-} from '../init'
+import { type Collected, ensureRunnerKey, ensureVaultKey, environmentPayload, finalNotes, readResumeValue } from '../init'
 
 const RESUMED_NAMES: readonly string[] = [
 	'FABRIKA_CONTROL_VAULT_KEY',
@@ -105,41 +96,6 @@ describe('Cloudflare installer resume reads', () => {
 		}
 		expect(persisted).toEqual([{ name: 'FABRIKA_CONTROL_VAULT_KEY', value: key }])
 		expect(output.join('\n')).not.toContain(key)
-	})
-})
-
-describe('Cloudflare installer IAM method resume', () => {
-	test('requires both authentication switches and at least one method', () => {
-		expect(readInstallerAuthMethods({})).toBeUndefined()
-		expect(() => readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'true' })).toThrow('must be configured together')
-		expect(() =>
-			readInstallerAuthMethods({
-				FABRIKA_IAM_OIDC_ENABLED: 'false',
-				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
-			})
-		).toThrow('At least one IAM authentication method must be enabled')
-	})
-
-	test('restores OIDC-only, password-only, and hybrid selections', () => {
-		expect(readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'true', FABRIKA_IAM_PASSWORD_ENABLED: 'false' })).toEqual({
-			oidcEnabled: true,
-			passwordEnabled: false,
-		})
-		expect(readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'false', FABRIKA_IAM_PASSWORD_ENABLED: 'true' })).toEqual({
-			oidcEnabled: false,
-			passwordEnabled: true,
-		})
-		expect(readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'true', FABRIKA_IAM_PASSWORD_ENABLED: 'true' })).toEqual({
-			oidcEnabled: true,
-			passwordEnabled: true,
-		})
-	})
-
-	test('validates the optional email provider', () => {
-		expect(readInstallerEmailProvider({})).toBeUndefined()
-		expect(readInstallerEmailProvider({ FABRIKA_EMAIL_PROVIDER: 'none' })).toBe('none')
-		expect(readInstallerEmailProvider({ FABRIKA_EMAIL_PROVIDER: 'resend' })).toBe('resend')
-		expect(() => readInstallerEmailProvider({ FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('must be none or resend')
 	})
 })
 

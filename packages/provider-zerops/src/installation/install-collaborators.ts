@@ -1,6 +1,6 @@
+import type { Confirmations } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { Sleeper, ZeropsApi } from '../index'
-import type { Confirmations } from './confirmations'
 import type { PlatformSourcePreparer } from './installation-source'
 import type { InitLog } from './log'
 import type { PlatformUploadFetch } from './platform-upload'

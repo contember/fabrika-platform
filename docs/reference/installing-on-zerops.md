@@ -116,7 +116,11 @@ fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=
 
 `<installation>` names the GitHub Environment, the default repository
 `contember/fabrika-zerops-<installation>`, and the local checkout directory. Pass
-`--repo=<owner>/<name>` for a different repository.
+`--repo=<owner>/<name>` for a different repository. The local checkout is `./fabrika-zerops-<installation>`,
+or `--checkout=<dir>`; `init` refuses a checkout inside another git repository, so run it from a
+directory outside any repository (a home directory that is itself a dotfiles repository counts) or
+pass `--checkout`. `platform upgrade` looks for the default directory; after a custom `--checkout`,
+pass it the same path with `--sidecar=<dir>`.
 
 `init` prompts for nothing. Every value is a flag or the environment variable beside it, flag first:
 `--tag` (`FABRIKA_PLATFORM_TAG`, the published tag to pin), `--project-id` (`FABRIKA_ZEROPS_PROJECT_ID`),

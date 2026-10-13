@@ -37,7 +37,15 @@ a safe redeploy.
 
 ## First bring-up
 
-Run `fabrika platform init --provider=cloudflare {{ACCOUNT}}` from a laptop with the Cloudflare API token in hand. It creates this repo,
+Run init with the Cloudflare API token in `CLOUDFLARE_API_TOKEN`:
+
+```sh
+fabrika platform init --provider=cloudflare {{ACCOUNT}} \
+  --console-host=<host> --operations-host=<host> --iam-host=<host> \
+  --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend>
+```
+
+`fabrika platform init --provider=cloudflare --help` lists the optional flags. It creates this repo,
 the Environment with its secrets and variables, and triggers the workflow. The run builds and pushes the
 runner container image into the account.
 

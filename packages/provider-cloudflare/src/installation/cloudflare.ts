@@ -1,14 +1,12 @@
 /**
  * Cloudflare API helpers for the fabrika CLI — token verification, account resolution, and zone lookup.
- * These run from the operator's laptop against the public CF API with the token the operator just
- * pasted; the token VALUE is never logged here (only pass/fail + names).
+ * These run from the operator's machine against the public CF API with the token from the environment;
+ * the token VALUE is never logged here (only pass/fail + names).
  *
  * Local schemas validate the consumed fields while tolerating upstream additions.
  */
 
-import { required, select } from '@fabrika/installation-init'
 import { z } from 'zod'
-import { fromEnv } from './envfile'
 
 const CF_API = 'https://api.cloudflare.com/client/v4'
 const envelopeSchema = z.object({ success: z.boolean(), result: z.unknown(), errors: z.unknown() })
@@ -108,52 +106,28 @@ export async function listAccounts(token: string): Promise<CfAccount[]> {
 }
 
 /**
- * Resolve the CF account to deploy into. If `preferred` is given and valid, use it; if the token can
- * act on exactly one account, use it; otherwise prompt the operator to pick. Throws if the token can
- * reach no account at all.
+ * The CF account to deploy into, from the accounts the token lists. An explicit id wins and does not
+ * need to be listed — an account-owned token typically cannot list its own account. Without one, the
+ * token must act on exactly one account; otherwise the error names them and the flag that picks one.
  */
-export async function resolveAccountId(token: string, preferred?: string): Promise<CfAccount> {
-	let accounts: CfAccount[] = []
-	try {
-		accounts = await listAccounts(token)
-	} catch {
-		accounts = []
-	}
-	// An explicit override wins: a `preferred` arg or CLOUDFLARE_ACCOUNT_ID from the environment.
-	const wanted = preferred !== undefined && preferred !== '' ? preferred : fromEnv('CLOUDFLARE_ACCOUNT_ID')
-	if (wanted !== undefined && wanted !== '') {
-		return accounts.find((a) => a.id === wanted) ?? { id: wanted, name: '(from CLOUDFLARE_ACCOUNT_ID)' }
+export function selectAccount(accounts: readonly CfAccount[], accountId: string | undefined): CfAccount {
+	if (accountId !== undefined) {
+		return accounts.find((a) => a.id === accountId) ?? { id: accountId, name: '(from --account-id / CLOUDFLARE_ACCOUNT_ID)' }
 	}
 	const only = accounts[0]
 	if (accounts.length === 1 && only !== undefined) {
 		return only
 	}
 	if (accounts.length > 1) {
-		return select(
-			'Which Cloudflare account should fabrika deploy into?',
-			accounts.map((a) => ({ label: `${a.name} (${a.id})`, value: a })),
+		throw new Error(
+			`the token can act on ${accounts.length} Cloudflare accounts — pick one with --account-id=<id> or CLOUDFLARE_ACCOUNT_ID: `
+				+ accounts.map((a) => `${a.name} (${a.id})`).join(', '),
 		)
 	}
-	// The token can't list any account (typical for an account-owned token) — ask for the id directly.
-	const id = await required('Cloudflare account id (from the dashboard URL / Account Home)')
-	return { id, name: '(entered)' }
-}
-
-/**
- * List the account's zones (`GET /zones?account.id=<id>`), used to SUGGEST a control-plane domain
- * (`fabrika.<zone>`). Best-effort: returns [] on any error (the token may lack Zone:Read), so the
- * caller then prompts for the domain with no default.
- */
-export async function listZones(token: string, accountId: string): Promise<CfZone[]> {
-	try {
-		const response = await fetch(`${CF_API}/zones?account.id=${encodeURIComponent(accountId)}&per_page=50`, {
-			headers: authHeaders(token),
-		})
-		const result = await cfJson(response, 'Listing zones')
-		return namedResources(result)
-	} catch {
-		return []
-	}
+	throw new Error(
+		'the token lists no Cloudflare account (typical for an account-owned token) — pass --account-id=<id> or set '
+			+ 'CLOUDFLARE_ACCOUNT_ID to the id in the dashboard URL',
+	)
 }
 
 /**

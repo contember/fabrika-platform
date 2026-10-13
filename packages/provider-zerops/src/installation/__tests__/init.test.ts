@@ -1,7 +1,10 @@
 import type { EnvironmentConfig, SidecarScaffoldInput, SidecarScaffoldResult } from '@fabrika/installation-init'
+import { confirmations } from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
-import { confirmations } from '../confirmations'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { type InitCollaborators, inspectPlatform, runInit, sourceConnectionSettingsUrl } from '../init'
 import { checkedEnvironmentName, type InitInput, parseInitArgs } from '../init-options'
 import { recordingInitLog } from '../log'
@@ -16,6 +19,8 @@ const LIVE_PROVISIONING_KEY = 'px_live-value-that-must-never-be-printed'
 
 const CREDENTIALS = { FABRIKA_ZEROPS_ACCESS_TOKEN: ACCESS_TOKEN, FABRIKA_IAM_PROVISIONING_KEY: PROVISIONING_KEY }
 const ARGV = ['test', '--tag=v0.1.0', '--project-id=project-id-1']
+/** Outside any repository, so the default sidecar checkout is accepted. */
+const CWD = realpathSync(mkdtempSync(join(tmpdir(), 'zerops-init-')))
 const CUSTOM_HOSTS = ['--iam-host=iam.example.com', '--console-host=console.example.com', '--operations-host=errors.example.com']
 
 interface Recorder {
@@ -37,7 +42,7 @@ const recorder = (options: {
 	readonly controlEnvironment?: Readonly<Record<string, string>>
 	readonly proxyPublished?: boolean
 }): Recorder => {
-	const input = parseInitArgs([...ARGV, ...(options.custom === true ? CUSTOM_HOSTS : [])], CREDENTIALS)
+	const input = parseInitArgs([...ARGV, ...(options.custom === true ? CUSTOM_HOSTS : [])], CREDENTIALS, CWD)
 	const asked: string[] = []
 	const effects: string[] = []
 	const environments: EnvironmentConfig[] = []
@@ -224,7 +229,9 @@ describe('fabrika platform init --provider=zerops', () => {
 		await repository.run()
 		expect(repository.effects).toEqual(['describe: project-id-1', 'inspect: project-id-1', 'exists: contember/fabrika-zerops-test'])
 		expect(repository.lines.join('\n')).toContain(
-			'fabrika platform init --provider=zerops test --repo=contember/fabrika-zerops-test --tag=v0.1.0 --project-id=project-id-1 --env=test',
+			`fabrika platform init --provider=zerops test --repo=contember/fabrika-zerops-test --checkout=${
+				join(CWD, 'fabrika-zerops-test')
+			} --tag=v0.1.0 --project-id=project-id-1 --env=test`,
 		)
 
 		const environment = recorder({
@@ -283,9 +290,10 @@ describe('fabrika platform init --provider=zerops', () => {
 
 describe('parseInitArgs', () => {
 	test('reads every value from a flag or the environment, flag first, and nothing from a prompt', () => {
-		expect(parseInitArgs([...ARGV, '--repo=acme/sidecar', '--yes'], CREDENTIALS)).toEqual({
+		expect(parseInitArgs([...ARGV, '--repo=acme/sidecar', '--yes'], CREDENTIALS, CWD)).toEqual({
 			installation: 'test',
 			repo: 'acme/sidecar',
+			checkoutDir: join(CWD, 'fabrika-zerops-test'),
 			fabrikaRef: 'v0.1.0',
 			projectId: 'project-id-1',
 			environmentName: 'test',
@@ -299,14 +307,15 @@ describe('parseInitArgs', () => {
 			FABRIKA_ZEROPS_PROJECT_ID: 'project-id-2',
 			FABRIKA_PLATFORM_ENVIRONMENT: 'prod',
 			FABRIKA_ZEROPS_API_URL: 'https://api.example.com',
-		})
+		}, CWD)
 		expect(fromEnv).toMatchObject({ repo: 'contember/fabrika-zerops-test', fabrikaRef: 'v0.2.0', projectId: 'project-id-2', environmentName: 'prod' })
 		expect(fromEnv.apiBaseUrl).toBe('https://api.example.com')
 		expect(
-			parseInitArgs([...ARGV, '--tag=v0.3.0'].filter((arg) => arg !== '--tag=v0.1.0'), { ...CREDENTIALS, FABRIKA_PLATFORM_TAG: 'v0.1.0' }).fabrikaRef,
+			parseInitArgs([...ARGV, '--tag=v0.3.0'].filter((arg) => arg !== '--tag=v0.1.0'), { ...CREDENTIALS, FABRIKA_PLATFORM_TAG: 'v0.1.0' }, CWD)
+				.fabrikaRef,
 		)
 			.toBe('v0.3.0')
-		expect(parseInitArgs([...ARGV, ...CUSTOM_HOSTS], CREDENTIALS).hosts).toEqual({
+		expect(parseInitArgs([...ARGV, ...CUSTOM_HOSTS], CREDENTIALS, CWD).hosts).toEqual({
 			iam: 'iam.example.com',
 			control: 'console.example.com',
 			operations: 'errors.example.com',
@@ -314,18 +323,22 @@ describe('parseInitArgs', () => {
 	})
 
 	test('refuses what is missing, malformed or a credential on the command line, naming the flag and the variable', () => {
-		expect(() => parseInitArgs(['test', '--project-id=p'], CREDENTIALS)).toThrow('--tag=<value> or FABRIKA_PLATFORM_TAG is required')
-		expect(() => parseInitArgs(['test', '--tag=v0.1.0'], CREDENTIALS)).toThrow('--project-id=<value> or FABRIKA_ZEROPS_PROJECT_ID is required')
-		expect(() => parseInitArgs(['test', '--tag=main', '--project-id=p'], CREDENTIALS)).toThrow('is not a published tag')
-		expect(() => parseInitArgs(ARGV, { FABRIKA_IAM_PROVISIONING_KEY: PROVISIONING_KEY })).toThrow('FABRIKA_ZEROPS_ACCESS_TOKEN is required')
-		expect(() => parseInitArgs(ARGV, { FABRIKA_ZEROPS_ACCESS_TOKEN: ACCESS_TOKEN })).toThrow('FABRIKA_IAM_PROVISIONING_KEY is required')
-		expect(() => parseInitArgs([...ARGV, '--env=local'], CREDENTIALS)).toThrow('is refused')
+		expect(() => parseInitArgs(['test', '--project-id=p'], CREDENTIALS, CWD)).toThrow('--tag=<value> or FABRIKA_PLATFORM_TAG is required')
+		expect(() => parseInitArgs(['test', '--tag=v0.1.0'], CREDENTIALS, CWD)).toThrow('--project-id=<value> or FABRIKA_ZEROPS_PROJECT_ID is required')
+		expect(() => parseInitArgs(['test', '--tag=main', '--project-id=p'], CREDENTIALS, CWD)).toThrow('is not a published tag')
+		expect(() => parseInitArgs(ARGV, { FABRIKA_IAM_PROVISIONING_KEY: PROVISIONING_KEY }, CWD)).toThrow('FABRIKA_ZEROPS_ACCESS_TOKEN is required')
+		expect(() => parseInitArgs(ARGV, { FABRIKA_ZEROPS_ACCESS_TOKEN: ACCESS_TOKEN }, CWD)).toThrow('FABRIKA_IAM_PROVISIONING_KEY is required')
+		expect(() => parseInitArgs([...ARGV, '--env=local'], CREDENTIALS, CWD)).toThrow('is refused')
 		expect(() => checkedEnvironmentName('local')).toThrow('is refused')
-		expect(() => parseInitArgs([...ARGV, '--iam-host=iam.example.com'], CREDENTIALS)).toThrow('name every platform host or none')
-		expect(() => parseInitArgs([...ARGV, '--token=secret'], CREDENTIALS)).toThrow('unexpected argument')
-		expect(() => parseInitArgs([...ARGV, 'second'], CREDENTIALS)).toThrow('name ONE installation')
-		expect(() => parseInitArgs([...ARGV, '--repo=nope'], CREDENTIALS)).toThrow('is not a <owner>/<name> repository')
-		expect(() => parseInitArgs(['--tag=v0.1.0'], CREDENTIALS)).toThrow('requires an installation name')
+		expect(() => parseInitArgs([...ARGV, '--iam-host=iam.example.com'], CREDENTIALS, CWD)).toThrow('name every platform host or none')
+		expect(() => parseInitArgs([...ARGV, '--token=secret'], CREDENTIALS, CWD)).toThrow('unexpected argument')
+		expect(() => parseInitArgs([...ARGV, 'second'], CREDENTIALS, CWD)).toThrow('name ONE installation')
+		expect(() => parseInitArgs([...ARGV, '--repo=nope'], CREDENTIALS, CWD)).toThrow('is not a <owner>/<name> repository')
+		expect(() => parseInitArgs(['--tag=v0.1.0'], CREDENTIALS, CWD)).toThrow('requires an installation name')
+		const repository = join(CWD, 'operator-repository')
+		mkdirSync(join(repository, '.git'), { recursive: true })
+		expect(() => parseInitArgs(ARGV, CREDENTIALS, repository)).toThrow('--checkout=<dir> outside it')
+		expect(parseInitArgs([...ARGV, `--checkout=${join(CWD, 'sidecar')}`], CREDENTIALS, repository).checkoutDir).toBe(join(CWD, 'sidecar'))
 	})
 })
 

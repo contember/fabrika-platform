@@ -184,8 +184,9 @@ with the commit pinned in the namespace
 ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)).
 
 The registered descriptor retains its original text and SHA-256. Validation accepts one mapping
-document with uniquely named setups and checks decoded keys and values across every setup for foreign
-service references. Multiple setups require an explicit selector. Tags, anchors/aliases, merge or
+document with uniquely named setups. Multiple setups require an explicit selector. The selected setup
+and every setup it `extends` are checked for foreign service references, and only they are sent to
+Zerops, so a sibling setup for another placement never reaches this app's service. Tags, anchors/aliases, merge or
 duplicate keys, non-string keys, ambiguous plain scalars and unsupported raw Unicode are rejected;
 quoted equivalents of ambiguous scalars remain supported. The same canonicalization runs on recovered
 builds. See [ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md).
@@ -455,10 +456,10 @@ checkpointed lifecycle.
 `InstallationCli` from `@fabrika/provider-contract/installation`:
 
 ```text
-fabrika platform init --provider=cloudflare <account>
+fabrika platform init --provider=cloudflare <account> --console-host=<host> --operations-host=<host> --iam-host=<host> --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend> [--yes]
 fabrika platform plan --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform deploy --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
-fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=<id> [--repo=<owner>/<name>] [--yes]
+fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=<id> [--repo=<owner>/<name>] [--checkout=<dir>] [--yes]
 fabrika platform plan --provider=zerops
 fabrika platform install --provider=zerops --client-id=<id> --env=<name> [--project-id=<id> | --create-project [--project-name=<name>]]
 fabrika platform deploy --provider=zerops [options]
