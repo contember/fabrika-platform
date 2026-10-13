@@ -1097,8 +1097,8 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   `fabrika-check` 0/0, 44 tests, and a probe: `{ result: { received: true } }`, a replayed token 400, a camelCase
   field 400, the job drains `full_name` into the candidate's name. The deps entry stays documentation: `testKit` gets
   no `deps` override. Not fixed here: an unscoped `get(id)` of a reference or inbox table still fails at run time
-  (`row_address`), and `sql: 'write'` still writes a reference table (a code list an administrator edits is an application table,
-  WU23a).
+  (`row_address`), and `sql: 'write'` still writes a reference table (a code list an administrator edits is an
+  application table, WU23a).
 - **WU23b review round 1.** (1) An options object typed apart from its call widened `honeypot` to `string`, which
   exempted every field, and `appendTo: string` skipped the check: `appendTo` and `honeypot` are now one literal each,
   and `appendTo` names an inbox table of the kit (kit mistakes 36–38, a literal honeypot compiles). Mistake 32 moved
