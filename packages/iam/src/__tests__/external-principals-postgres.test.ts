@@ -1,5 +1,6 @@
 // The external-role rule against concurrent writers on a REAL Postgres (ADR-0051): a grant write and a reconcile that
-// narrows the role, in both orders, and an invitation's acceptance with a narrowing between its statements. A
+// narrows the role, in both orders, an invitation's acceptance with a narrowing between its statements, and a
+// promotion against a password action's completion, which both lock the principal row first. A
 // test-only trigger on `audit_events` pauses one transaction after its change and before its commit, and the other
 // runs on a second connection; the trigger decides only the schedule, both sides run their shipped SQL. SQLite and D1
 // run one writer at a time, so only the batch guard of an acceptance is witnessed there. Skips cleanly when
@@ -190,6 +191,64 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 		expect(await accepting).toBe('not_eligible')
 		expect((await repositories.membership.getInvitationById(invitation.id))?.accepted_at).toBeNull()
 		expect(await repositories.grants.listGrants(external.id)).toEqual([])
+	}, 20000)
+})
+
+describe.skipIf(!hasPostgres)('a promotion and a password action completion on Postgres', () => {
+	const password = { algorithm: 'test', parameters: '{}', salt: 'salt', passwordHash: 'hash' }
+
+	async function enrolling(repositories: IamRepositories) {
+		const external = await repositories.principals.inviteUser('ext@race.test', 'ext@race.test', undefined, 'external')
+		await repositories.passwords.enableEnrollment(external.id)
+		const expiresAt = Math.floor(Date.now() / 1000) + 600
+		await repositories.passwords.issueActionToken({ principalId: external.id, purpose: 'enrollment', tokenHash: 'race-enrollment', expiresAt })
+		return external
+	}
+
+	async function actions(repositories: IamRepositories, principalId: string): Promise<string[]> {
+		return (await repositories.audit.listAuditEvents({ resourceId: principalId, limit: 10 })).map((row) => row.action).sort()
+	}
+
+	test('a completion first: the promotion waits for it, then both commit', async () => {
+		const { repositories, concurrent, fixture } = await race()
+		const external = await enrolling(repositories)
+		const pause = await pauseAt(fixture, 'race.complete', 1051105)
+		open.push(() => pause.release())
+		const completing = repositories.passwords.completeAction(
+			{ tokenHash: 'race-enrollment', purpose: 'enrollment', password },
+			{ ...event('race.complete', external.id), resourceId: external.id },
+		)
+		await pause.reached()
+		const promoting = concurrent.principals.promoteToInternal(external.id, { ...event('race.promote', external.id), resourceId: external.id })
+		await pause.blocked()
+		await pause.release()
+
+		expect(await completing).toEqual({ principalId: external.id })
+		expect(await promoting).toBe(true)
+		expect((await repositories.principals.getPrincipalById(external.id))?.affiliation).toBe('internal')
+		expect((await repositories.passwords.getAccount(external.id))?.state).toBe('enabled')
+		expect(await actions(repositories, external.id)).toEqual(['race.complete', 'race.promote'])
+	}, 20000)
+
+	test('a promotion first: the completion waits for it and finds its action spent', async () => {
+		const { repositories, concurrent, fixture } = await race()
+		const external = await enrolling(repositories)
+		const pause = await pauseAt(fixture, 'race.promote', 1051106)
+		open.push(() => pause.release())
+		const promoting = concurrent.principals.promoteToInternal(external.id, { ...event('race.promote', external.id), resourceId: external.id })
+		await pause.reached()
+		const completing = repositories.passwords.completeAction(
+			{ tokenHash: 'race-enrollment', purpose: 'enrollment', password },
+			{ ...event('race.complete', external.id), resourceId: external.id },
+		)
+		await pause.blocked()
+		await pause.release()
+
+		expect(await promoting).toBe(true)
+		expect(await completing).toBeNull()
+		expect((await repositories.principals.getPrincipalById(external.id))?.affiliation).toBe('internal')
+		expect(await repositories.passwords.getCredential(external.id)).toBeNull()
+		expect(await actions(repositories, external.id)).toEqual(['race.promote'])
 	}, 20000)
 })
 

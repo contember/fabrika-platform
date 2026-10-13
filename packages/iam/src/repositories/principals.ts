@@ -1,7 +1,7 @@
 import type { PrincipalAffiliation } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from '../email-identity'
-import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange, type SqlDialect } from './audit'
 import { firstRow, unixNow } from './sql'
 
 export interface PrincipalRow {
@@ -43,6 +43,18 @@ export function principalStatus(row: PrincipalRow): PrincipalStatus {
  * backend). This class is the single place that applies `normalizeEmailIdentity`: callers hand over
  * whatever spelling they hold, the mailbox lands in `email` and the spelling in `label`.
  */
+/**
+ * On Postgres, the first statement of a transaction that writes a principal's password actions, sessions or password
+ * state together with other rows of it: it takes the principal row `FOR NO KEY UPDATE`, so every such writer waits at
+ * the same row before it locks anything else, and two of them never hold each other's rows. `FOR NO KEY UPDATE` leaves
+ * a foreign-key check (an inserted session, token or grant) unblocked. `principalId` is SQL that yields the id, with
+ * its binds. SQLite and D1 run one writer at a time and need none.
+ */
+export function principalLockStatements(db: SqlDatabase, dialect: SqlDialect, principalId: SqlChange): SqlStatement[] {
+	if (dialect !== 'postgres') return []
+	return [db.prepare(`SELECT id FROM principals WHERE id = (${principalId.sql}) FOR NO KEY UPDATE`).bind(...principalId.binds)]
+}
+
 export class PrincipalRepository {
 	constructor(
 		protected readonly db: SqlDatabase,
@@ -289,13 +301,15 @@ export class PrincipalRepository {
 	 * external person, and promotion can widen what they reach (a bootstrap mailbox becomes an installation admin).
 	 * Returns whether this call promoted it; `audit` is written only then. There is no demotion.
 	 *
-	 * The revocations come first and test the affiliation themselves, so on SQLite they run before the promotion and on
-	 * Postgres, where the three are one statement, they read the same snapshot it does.
+	 * On Postgres the principal row is locked first (`principalLockStatements`), as a password action's completion does,
+	 * because the three changes are one statement whose parts lock rows in no order of their own. The revocations test
+	 * the affiliation themselves, so on SQLite, where they run in order, they come before the promotion.
 	 */
 	async promoteToInternal(id: string, audit?: AuditEventInput): Promise<boolean> {
 		const now = unixNow()
 		const external = `EXISTS (SELECT 1 FROM principals WHERE id = ? AND affiliation = 'external')`
-		const promoted = await this.writer.run([
+		const lock = principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [id] })
+		const promotion = this.writer.changed([
 			{
 				sql: `UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL AND ${external} RETURNING id`,
 				binds: [now, id, id],
@@ -306,7 +320,8 @@ export class PrincipalRepository {
 			},
 			{ sql: `UPDATE principals SET affiliation = 'internal' WHERE id = ? AND affiliation = 'external' RETURNING id`, binds: [id] },
 		], audit)
-		return promoted.length > 0
+		const results = await this.db.batch([...lock, ...promotion.statements])
+		return promotion.rows(results, lock.length).length > 0
 	}
 
 	private async guardedUpdate(update: SqlChange, audit: AuditEventInput | undefined): Promise<boolean> {

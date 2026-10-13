@@ -2,7 +2,7 @@ import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from './email-identity'
 import type { StoredPasswordHash } from './password-crypto'
 import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './repositories/audit'
-import type { PrincipalRow } from './repositories/principals'
+import { principalLockStatements, type PrincipalRow } from './repositories/principals'
 
 export type PasswordActionPurpose = 'enrollment' | 'reset'
 export type PasswordAccountState = 'disabled' | 'pending' | 'enabled'
@@ -184,6 +184,8 @@ export class PasswordRepository {
 	async disableCredential(principalId: string, audit?: AuditEventInput): Promise<void> {
 		const now = unixNow()
 		await this.db.batch([
+			// It writes the account, the tokens and the sessions a completion writes: the principal first, as that does.
+			...principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [principalId] }),
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
 				VALUES (?, 'disabled', ?, ?)
 				ON CONFLICT (principal_id) DO UPDATE SET state = 'disabled', updated_at = excluded.updated_at`)
@@ -280,7 +282,13 @@ export class PasswordRepository {
 			binds: [now, consumptionId, input.tokenHash, input.purpose, now],
 		}
 		const consumed = this.writer.changed([consume], audit)
+		// The principal before the token, as a promotion locks it (`principalLockStatements`).
+		const lock = principalLockStatements(this.db, this.writer.dialect, {
+			sql: 'SELECT principal_id FROM password_action_tokens WHERE token_hash = ?',
+			binds: [input.tokenHash],
+		})
 		const results = await this.db.batch<PasswordActionTokenRow>([
+			...lock,
 			...consumed.statements,
 			this.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at)
 				SELECT principal_id, 'enabled', ?, ? FROM password_action_tokens WHERE consumption_id = ?
@@ -303,7 +311,7 @@ export class PasswordRepository {
 				WHERE principal_id = (SELECT principal_id FROM password_action_tokens WHERE consumption_id = ?)
 					AND authentication_method = 'password' AND revoked_at IS NULL`).bind(now, consumptionId),
 		])
-		const principalId = consumed.rows(results)[0]?.principal_id
+		const principalId = consumed.rows(results, lock.length)[0]?.principal_id
 		return principalId === undefined ? null : { principalId }
 	}
 
