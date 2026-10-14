@@ -33,7 +33,8 @@ bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' ki
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot, a built SPA, the stand-in IAM
 bun test src/__tests__/test-kit-links.test.ts   # a share link the app issued opens as its holder until revoked; devKit (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
+bun test src/__tests__/client-types.test.ts     # the client, hook and test-kit mistakes, compiled by tsc
+bun test --isolate src/react                    # the React hooks: cache, invalidation, the error union, the caller (DOM)
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
 bun test src/__tests__/file-scan.test.ts        # scan: true and the scan job (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_CLAMSCAN_BIN adds a real ClamAV)
@@ -83,6 +84,13 @@ src/
     caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope or a file
+  react/              @fabrika/app/react — browser-safe; React is an optional peer dependency (ADR-0052)
+    provider.tsx      FabrikaProvider: the clients by mount, the cache, the caller document; a procedure's input checked first
+    hooks.ts          useQuery, useInfiniteQuery, useMutation, useAction, useInvalidate, skip
+    store.ts          the cache without React: entries by procedure and input, pages, sequence numbers, invalidation
+    errors.ts         FabrikaError: the union every refusal maps to; fieldError
+    caller.tsx        useCaller and <Can> over the caller document
+    types.ts          ProcedureInput, ProcedureResult, PagedProcedure: the types read off a client procedure
   testing/            @fabrika/app/testing — no test-runner dependency
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM; the module re-exports
                       the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner)
@@ -198,7 +206,7 @@ src/
   updates the skill in the same change, and regenerates the template's `examples/zerops-app/AGENTS.md`
   (`agent-skill.test.ts` fails until it is the rendered file). The frontmatter `version` is this package's; the
   release rewrites it in the tarball.
-- **Every `ts`, `sql` and `json` block of the skill names its file** (`` ```ts src/tasks/endpoints.ts ``).
+- **Every `ts`, `tsx`, `sql` and `json` block of the skill names its file** (`` ```ts src/tasks/endpoints.ts ``).
   `skill-code.test.ts` compiles the blocks as one application against the workspace (the base files: `SKILL.md`,
   `app-setup.md`, `table-and-migration.md`, `endpoint.md`, `tests.md`; each other reference file is a variant over
   it, except a `STANDALONE` one such as `public-intake.md`, an application of its own over the base's `package.json`,
@@ -830,7 +838,19 @@ vocabulary (`packages/db/CLAUDE.md`).
   `X-Request-Id` and `UNTRUSTED_FORWARD_HEADERS` before the decision, the `__Host-px_*`
   cookies before the application. The proxy's token and request id are then set.
 - The client and test-kit type witnesses live in `src/__tests__/client-mistakes/`,
-  compiled by `client-types.test.ts` like the contract mistakes.
+  compiled by `client-types.test.ts` like the contract mistakes; the hooks' witnesses (`15`–`21`) too.
+- **A client keeps what each value is beside it** (`clientNodeOf`, a `WeakMap`): a procedure's mount, path, type and
+  input schema, a group's prefix. A procedure function also carries its output schema as `output` (part of
+  `ProcedureCall`'s type), which `coversTree` checks.
+- **`@fabrika/app/react` names a call by a client procedure and runs it on the provider's client of that mount**, so a
+  test hands the provider a client over the test kit. Every answer is read back through the procedure's `output`
+  schema, never cast; a cached value the schema refuses is an error. A procedure's input is checked with its own
+  schema before it is sent (a refused one is a 400 `validation` `RpcError`, unsent). `toFabrikaError` reads the
+  refusal structurally (`httpStatus`, `type`, `issues`, `loginUrl`), never by `instanceof`. A mutation invalidates
+  its own group unless `invalidates` says otherwise; an invalidation refetches the entries a view shows and forgets
+  the rest. `useCaller` and `<Can>` read the caller document and decide nothing.
+- The hook tests are DOM tests (`src/react/__tests__/*.test.tsx`, happy-dom through `dom.ts`, which keeps Bun's
+  `fetch`): run them with `bun test --isolate src/react`. The root `bun run test` runs them in `test:dom`.
 - **The generated tests' kits (`@fabrika/app/testing/isolation`) add no second pipeline.**
   `policyIsolationKit` defines a probe contract over the application's vocabulary whose
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by

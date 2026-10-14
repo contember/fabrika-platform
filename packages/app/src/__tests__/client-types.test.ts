@@ -1,5 +1,5 @@
-// The type half of the typed client and the test kit: each file in client-mistakes/ is refused on the line after its `// mistake:`
-// marker with the diagnostic text below.
+// The type half of the typed client, its React hooks and the test kit: each file in client-mistakes/ is refused on the line
+// after its `// mistake:` marker with the diagnostic text below.
 
 import { describe } from 'bun:test'
 import { join } from 'node:path'
@@ -20,6 +20,13 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'12-link-files-of-a-collection-without-link.ts': "Property 'attachments' does not exist",
 	'13-result-of-is-the-output.ts': "Type 'string' is not assignable to type 'number'.",
 	'14-input-of-is-the-input.ts': "Property 'expectVersion' is missing",
+	'15-query-input-field.ts': "'noteId' does not exist in type '{ id: string; }'",
+	'16-query-data-before-success.ts': "'note.data' is possibly 'undefined'.",
+	'17-query-answer-field.ts': "Property 'body' does not exist on type '{ id: string; title: string; }'.",
+	'18-mutation-input-field.ts': "Property 'workspaceId' is missing in type '{ title: string; }'",
+	'19-infinite-query-of-no-page.ts': "is not assignable to parameter of type 'PagedProcedure<",
+	'20-query-without-input.ts': "Type 'Record<never, never> | undefined' is not assignable to type '{ id: string; }'.",
+	'21-mutation-result-field.ts': "Property 'data' does not exist on type 'MutationResult<{ id: string; title: string; }>'.",
 }
 
 describe('client and test kit mistakes are type errors', () => {

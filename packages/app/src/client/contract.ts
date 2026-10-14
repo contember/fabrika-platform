@@ -5,7 +5,7 @@
 
 import { z } from 'zod/v4'
 import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
-import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
+import { isProcedure, type ProcedureTreeDeclaration, type ProcedureType, SURFACE_SECTIONS } from '../contract/declaration'
 import { joinPath, LINK_API_SEGMENT } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
 import { type FileClient, type FileTransport, type LinkCollections, type LinkFileClient, linkFiles, sessionFiles } from './files'
@@ -18,9 +18,13 @@ export type ClientMount<C> =
 	& { [M in keyof SurfaceOf<C>]: SurfaceOf<C>[M] extends { readonly kind: 'rpc' | 'link' } ? M : never }[keyof SurfaceOf<C>]
 	& string
 
-/** One procedure: its input as the caller writes it (defaults optional), its output as parsed. */
-export type ProcedureCall<I, O extends Schema> = [I] extends [InputSchema] ? (input: z.input<I>) => Promise<z.output<O>>
-	: (input?: Record<never, never>) => Promise<z.output<O>>
+/**
+ * One procedure: its input as the caller writes it (defaults optional), its output as parsed, and the output schema
+ * it parses with (`@fabrika/app/react` reads a cached answer back through it).
+ */
+export type ProcedureCall<I, O extends Schema> =
+	& ([I] extends [InputSchema] ? (input: z.input<I>) => Promise<z.output<O>> : (input?: Record<never, never>) => Promise<z.output<O>>)
+	& { readonly output: O }
 
 export type ClientTree<T> = {
 	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, unknown>
@@ -80,7 +84,27 @@ type OptionsFor<C, M> = SurfaceOf<C>[M & keyof SurfaceOf<C>] extends { readonly 
 interface CallTarget {
 	readonly id: string
 	readonly url: string
+	readonly type: ProcedureType
+	readonly input: Schema | null
 	readonly output: Schema
+}
+
+/**
+ * What a value of a client tree is, kept beside it so the value stays a plain function or record: a procedure's
+ * `<mount>.<path>`, its type and input schema, or a group's prefix. `@fabrika/app/react` keys its cache by it.
+ */
+export interface ClientNode {
+	readonly mount: string
+	/** The dotted path below the mount; `''` for the client itself. */
+	readonly path: string
+	readonly procedure: { readonly type: ProcedureType; readonly input: Schema | null } | null
+}
+
+const clientNodes = new WeakMap<object, ClientNode>()
+
+/** The node a value of a client tree is, or `null` for any other value. */
+export function clientNodeOf(value: unknown): ClientNode | null {
+	return (typeof value === 'function' || (typeof value === 'object' && value !== null)) ? (clientNodes.get(value) ?? null) : null
 }
 
 /** The request of one procedure call: its input as JSON, with the key as a bearer or the page's session. */
@@ -94,8 +118,8 @@ function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 	}
 }
 
-function caller(target: CallTarget, options: ClientOptions, bounce: BounceConfig | null) {
-	return async (input?: unknown): Promise<unknown> => {
+function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: BounceConfig | null) {
+	const call = async (input?: unknown): Promise<unknown> => {
 		const result = await exchange(options.fetch ?? fetch, target.url, requestOf(options, input), bounce)
 		const parsed = z.safeParse(target.output, result)
 		if (!parsed.success) {
@@ -103,6 +127,9 @@ function caller(target: CallTarget, options: ClientOptions, bounce: BounceConfig
 		}
 		return parsed.data
 	}
+	Object.defineProperty(call, 'output', { value: target.output, enumerable: true })
+	clientNodes.set(call, { mount: at.mount, path: at.path, procedure: { type: target.type, input: target.input } })
+	return call
 }
 
 interface TreeAt {
@@ -113,15 +140,24 @@ interface TreeAt {
 	readonly path: string
 }
 
-function clientTree(tree: ProcedureTreeDeclaration<Schema, unknown>, at: TreeAt, make: (target: CallTarget) => unknown): Record<string, unknown> {
+function clientTree(
+	tree: ProcedureTreeDeclaration<Schema, unknown>,
+	at: TreeAt,
+	make: (target: CallTarget, at: TreeAt) => unknown,
+): Record<string, unknown> {
 	const client: Record<string, unknown> = {}
 	for (const [name, node] of Object.entries(tree)) {
 		const path = at.path === '' ? name : `${at.path}.${name}`
 		client[name] = isProcedure(node)
-			? make({ id: `${at.mount}.${path}`, url: `${at.origin}${joinPath(at.base, path)}`, output: node.output })
+			? make({ id: `${at.mount}.${path}`, url: `${at.origin}${joinPath(at.base, path)}`, type: node.type, input: node.input, output: node.output }, {
+				...at,
+				path,
+			})
 			: clientTree(node, { ...at, path }, make)
 	}
-	return Object.freeze(client)
+	const group = Object.freeze(client)
+	clientNodes.set(group, { mount: at.mount, path: at.path, procedure: null })
+	return group
 }
 
 declare const attachmentInput: unique symbol
@@ -194,7 +230,9 @@ function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unkno
 		if (!isProcedure(node)) {
 			return coversTree(member, node)
 		}
-		return attachmentOf(node.output) === null ? typeof member === 'function' : typeof member === 'object' && member !== null && downloads.has(member)
+		return attachmentOf(node.output) === null
+			? typeof member === 'function' && Reflect.get(member, 'output') === node.output
+			: typeof member === 'object' && member !== null && downloads.has(member)
 	})
 }
 
@@ -243,9 +281,9 @@ export function createClient<const C extends AnyContract, const M extends Client
 	if (options.key !== undefined && page !== null && origin !== '' && new URL(origin, page).origin !== page) {
 		throw new Error(`a client with a key in a browser calls only ${page}; baseUrl '${origin}' is another origin`)
 	}
-	const procedures = clientTree(node.procedures, { mount, origin, base, path: '' }, (target) => {
+	const procedures = clientTree(node.procedures, { mount, origin, base, path: '' }, (target, at) => {
 		const mark = attachmentOf(target.output)
-		return mark === null ? caller(target, options, bounce) : attachmentProcedure(target, mark.declaration.filename, options, bounce)
+		return mark === null ? caller(target, at, options, bounce) : attachmentProcedure(target, mark.declaration.filename, options, bounce)
 	})
 	const transport: FileTransport = { origin, fetch: options.fetch ?? fetch, key: options.key, bounce }
 	const collections = Object.entries(surface.files ?? {}).flatMap(([name, collection]): (readonly [string, FileClient | LinkFileClient])[] => {
@@ -259,6 +297,8 @@ export function createClient<const C extends AnyContract, const M extends Client
 		throw new Error(`'${mount}' has a procedure group named files, which the client of its file collections takes`)
 	}
 	const client = collections.length === 0 ? procedures : Object.freeze({ ...procedures, files: Object.freeze(Object.fromEntries(collections)) })
+	// The client with its file collections is the mount's root too: `@fabrika/app/react` keys a provider by it.
+	if (client !== procedures) clientNodes.set(client, { mount, path: '', procedure: null })
 	// The tree was built from this mount's declaration; the check ties the value to the type the contract derives.
 	const names = collections.map(([name]) => name)
 	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures) && coversFiles(value, names)
