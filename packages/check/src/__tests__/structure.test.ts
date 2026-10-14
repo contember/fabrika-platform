@@ -160,6 +160,21 @@ describe('a break of platform integrity is a refusal', () => {
 		])
 	})
 
+	test('the SPA loads the paved road: the client, its React hooks, the component kit and React; nothing else of the framework', async () => {
+		const findings = await structureFindings({
+			...ARCHITECTURE_APP,
+			'web/start.tsx': "import '@fabrika/ui/styles.css'\n"
+				+ "import { createClient } from '@fabrika/app/client'\n"
+				+ "import { FabrikaProvider, useQuery } from '@fabrika/app/react'\n"
+				+ "import { AppShell, Button } from '@fabrika/ui'\n"
+				+ "import { createRoot } from 'react-dom/client'\n"
+				+ "import { serve } from '@fabrika/app/implement'\n"
+				+ "import { compileContract } from '@fabrika/app/contract'\n"
+				+ 'export const parts = [createClient, FabrikaProvider, useQuery, AppShell, Button, createRoot, serve, compileContract]\n',
+		})
+		expect(findings).toEqual(['web/start.tsx:6:1 refusal spa-server-import', 'web/start.tsx:7:1 refusal spa-server-import'])
+	})
+
 	test('a shared module imports nothing but zod/v4 and other shared modules', async () => {
 		const findings = await structureFindings({
 			...ARCHITECTURE_APP,

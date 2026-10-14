@@ -130,8 +130,17 @@ const isDataPackage = (specifier: string): boolean => specifier === '@fabrika/db
 /** The framework modules logic and queries may import; the rest of `@fabrika/*` is the framework's own composition. */
 const LAYER_PACKAGES: ReadonlySet<string> = new Set(['@fabrika/app', '@fabrika/db'])
 
+/** The framework modules an SPA loads: the typed client, its React hooks and the component kit. */
+const SPA_PACKAGES: ReadonlySet<string> = new Set([
+	'@fabrika/app/client',
+	'@fabrika/app/react',
+	'@fabrika/ui',
+	'@fabrika/ui/styles.css',
+	'@fabrika/ui/theme.css',
+])
+
 const SPA_ALLOWED =
-	'@fabrika/app/client, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
+	'@fabrika/app/client, @fabrika/app/react, @fabrika/ui, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
 
 const isSchemaModule = (path: string): boolean => path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR)
 
@@ -145,7 +154,7 @@ const isSpaModule = (path: string): boolean =>
 	path.startsWith(SPA_DIR) || path === CONTRACT_FILE || isSchemaModule(path) || isSharedModule(path) || !isSourceFile(path)
 
 /** A runtime package the browser has not: the framework's server side, Bun, and Node's builtins in either spelling. */
-const isServerPackage = (specifier: string): boolean => specifier.startsWith('@fabrika/') ? specifier !== '@fabrika/app/client' : isBuiltin(specifier)
+const isServerPackage = (specifier: string): boolean => specifier.startsWith('@fabrika/') ? !SPA_PACKAGES.has(specifier) : isBuiltin(specifier)
 
 /** Names what `reference` loads, directly or through the local modules it loads. */
 const viaMessage = (reference: ModuleReference, loaded: string, what: string, into: string): string =>
