@@ -25,6 +25,10 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
 - `src/schemas.ts` holds what several slices, or a slice and the SPA, share, as literal consts only. A slice declares
   its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
+- A pure function both the server and the SPA run (a template fill, a label) lives in `src/shared/<name>.ts`, once: a
+  handler and a `web/` module import the same function, so the preview and the e-mail cannot drift. A shared module
+  imports only `zod/v4` and other modules of `src/shared/` (`shared-import`); no slice, no `src/db/`, no `@fabrika/*`,
+  no global object, no environment.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
   `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). On an edit, a field the caller must send is required (`EditTask.title`), one the caller may

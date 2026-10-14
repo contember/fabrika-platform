@@ -261,8 +261,8 @@ if (!built.success) {
 }
 ```
 
-- The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts` and its own modules; never a slice,
-  `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
+- The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts`, `src/shared/` and its own modules;
+  never a slice, `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
 - Set text with `textContent`, never `innerHTML`. Same-origin calls carry the session cookie.
 - **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
   `{ label, email, actions: { app, scopes } }`, read by `parsePageCaller` (`@fabrika/app/client`). `app` lists the

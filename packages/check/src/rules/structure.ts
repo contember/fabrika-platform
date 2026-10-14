@@ -10,6 +10,7 @@ import {
 	resolveRelative,
 	SCHEMAS_DIR,
 	SCHEMAS_FILE,
+	SHARED_DIR,
 	SLICE_ENDPOINTS_FILE,
 	SLICE_LOGIC_FILE,
 	SLICE_QUERIES_FILE,
@@ -20,8 +21,8 @@ import { type ImportMappings, mappedTargets } from '../resolution'
 import { isTestKit } from './modules'
 import { isGeneratedTestPath } from './tests'
 
-/** The rules of the application architecture (docs/reference/application-architecture.md): three refusals and the hints. */
-export const STRUCTURE_RULE_IDS = ['spa-server-import', 'layer-import', 'generated-test-import', ...STRUCTURE_HINT_RULE_IDS] as const
+/** The rules of the application architecture (docs/reference/application-architecture.md): four refusals and the hints. */
+export const STRUCTURE_RULE_IDS = ['spa-server-import', 'layer-import', 'generated-test-import', 'shared-import', ...STRUCTURE_HINT_RULE_IDS] as const
 
 type SlicePart = 'endpoints' | 'logic' | 'queries'
 
@@ -32,7 +33,7 @@ const SLICE_PARTS: ReadonlyMap<string, SlicePart> = new Map([
 ])
 
 /** Directories under `src/` the layout gives another role; every other `src/<name>/` is the slice `<name>`. */
-const NOT_SLICES: ReadonlySet<string> = new Set([DATABASE_DIR, SCHEMAS_DIR, 'src/__tests__/'])
+const NOT_SLICES: ReadonlySet<string> = new Set([DATABASE_DIR, SCHEMAS_DIR, SHARED_DIR, 'src/__tests__/'])
 
 /** The slice a file lies in: the directory `src/<slice>/` it is under. */
 const sliceOf = (path: string): string | undefined => {
@@ -129,12 +130,19 @@ const isDataPackage = (specifier: string): boolean => specifier === '@fabrika/db
 /** The framework modules logic and queries may import; the rest of `@fabrika/*` is the framework's own composition. */
 const LAYER_PACKAGES: ReadonlySet<string> = new Set(['@fabrika/app', '@fabrika/db'])
 
-const SPA_ALLOWED = '@fabrika/app/client, fabrika.contract.ts, src/schemas.ts and modules under web/; a type-only import of anything else'
+const SPA_ALLOWED =
+	'@fabrika/app/client, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
 
 const isSchemaModule = (path: string): boolean => path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR)
 
-/** The application modules a bundle of the SPA may load; `fabrika.contract.ts` is loaded without its handlers. */
-const isSpaModule = (path: string): boolean => path.startsWith(SPA_DIR) || path === CONTRACT_FILE || isSchemaModule(path) || !isSourceFile(path)
+const isSharedModule = (path: string): boolean => path.startsWith(SHARED_DIR)
+
+/**
+ * The application modules a bundle of the SPA may load; `fabrika.contract.ts` is loaded without its handlers. A shared
+ * module is checked on its own (`checkSharedReference`), so it is not followed.
+ */
+const isSpaModule = (path: string): boolean =>
+	path.startsWith(SPA_DIR) || path === CONTRACT_FILE || isSchemaModule(path) || isSharedModule(path) || !isSourceFile(path)
 
 /** A runtime package the browser has not: the framework's server side, Bun, and Node's builtins in either spelling. */
 const isServerPackage = (specifier: string): boolean => specifier.startsWith('@fabrika/') ? specifier !== '@fabrika/app/client' : isBuiltin(specifier)
@@ -148,6 +156,21 @@ const checkSpaReference = (graph: StructureGraph, reference: ModuleReference, ta
 	const reached = runtimeClosure(graph, targets, isSchemaModule)
 	const server = reached.packages.find(isServerPackage) ?? reached.files.find((path) => !isSpaModule(path))
 	if (server !== undefined) report(reference.node, 'spa-server-import', viaMessage(reference, server, 'server code', 'the SPA'), SPA_ALLOWED)
+}
+
+/** The one package shared code loads; everything else it needs is in other modules of `src/shared/`. */
+const SHARED_PACKAGE = 'zod/v4'
+
+/** A shared module runs in the SPA and in every slice, so it loads nothing either side lacks. */
+const checkSharedReference = (reference: ModuleReference, targets: Targets, report: Report): void => {
+	const outside = targets.packages.find((specifier) => specifier !== SHARED_PACKAGE) ?? targets.files.find((path) => !isSharedModule(path))
+	if (outside === undefined) return
+	report(
+		reference.node,
+		'shared-import',
+		viaMessage(reference, outside, 'outside src/shared/', 'shared code'),
+		'zod/v4 and other modules under src/shared/; a type-only import of anything else',
+	)
 }
 
 const isLayerModule = (path: string): boolean => {
@@ -202,6 +225,7 @@ export const checkStructureReferences = (graph: StructureGraph, place: Structure
 		}
 		if (reference.typeOnly) continue
 		if (place.file.startsWith(SPA_DIR) && !place.exempt) checkSpaReference(graph, reference, targets, report)
+		if (isSharedModule(place.file) && !place.exempt) checkSharedReference(reference, targets, report)
 		if (isLayerModule(place.file)) checkLayerReference(graph, place, reference, targets, report)
 		if (place.exempt) continue
 		if (place.part === 'logic') checkLogicReference(reference, targets, report)

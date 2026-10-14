@@ -15,6 +15,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `src/db/tables.ts`         | `defineTables(vocabulary, columns)({ … })`: the scope and the actions of each table      |
 | `src/app-kit.ts`           | `export const app = defineApp(vocabulary, tables)`                                       |
 | `src/schemas.ts`           | the `zod/v4` schemas several slices, or a slice and the SPA, share                       |
+| `src/shared/*.ts`          | pure functions the SPA and the slices both run; they import only `zod/v4` and each other |
 | `src/<slice>/endpoints.ts` | `app.group(…)`, a `.handle(…)` beside each endpoint, and the slice's jobs and webhooks   |
 | `src/<slice>/logic.ts`     | business rules as pure functions: no `ctx`, no data access                               |
 | `src/<slice>/queries.ts`   | data access that the slice's handlers share, over a handle they pass in                  |
@@ -557,8 +558,8 @@ if (!built.success) {
 }
 ```
 
-- The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts` and its own modules; never a slice,
-  `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
+- The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts`, `src/shared/` and its own modules;
+  never a slice, `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
 - Set text with `textContent`, never `innerHTML`. Same-origin calls carry the session cookie.
 - **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
   `{ label, email, actions: { app, scopes } }`, read by `parsePageCaller` (`@fabrika/app/client`). `app` lists the
@@ -612,6 +613,10 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   `preprocess`, `passthrough`, `lazy` or `custom`: the shell is read without running it.
 - `src/schemas.ts` holds what several slices, or a slice and the SPA, share, as literal consts only. A slice declares
   its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
+- A pure function both the server and the SPA run (a template fill, a label) lives in `src/shared/<name>.ts`, once: a
+  handler and a `web/` module import the same function, so the preview and the e-mail cannot drift. A shared module
+  imports only `zod/v4` and other modules of `src/shared/` (`shared-import`); no slice, no `src/db/`, no `@fabrika/*`,
+  no global object, no environment.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
   `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). On an edit, a field the caller must send is required (`EditTask.title`), one the caller may
@@ -1201,24 +1206,25 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                  | Means                                                                                                                                                            | Fix                                                                                    |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
-| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                | the message names the field                                                            |
-| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                | another name; a registry range such as `^0.0.4`                                        |
-| `generated-test-hash` | a generated test is missing, edited or stale                                                                                                                     | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member, invitation or link field no endpoint that reads, cancels or revokes one | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
-| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                            |
-| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                     | the handles, a file collection, a connector                                            |
-| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id  |
-| `env-read`            | `process.env`, `Bun.env`                                                                                                                                         | `defineDeps(build)`, which receives the application's variables                        |
-| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
-| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                              |
-| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                              |
-| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                           |
-| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                                                              | import them only from `*.test.ts` or `__tests__/`                                      |
-| `spa-server-import`   | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
-| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                           |
+| Rule                  | Means                                                                                                                                                            | Fix                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)`  |
+| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                | the message names the field                                                             |
+| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                | another name; a registry range such as `^0.0.4`                                         |
+| `generated-test-hash` | a generated test is missing, edited or stale                                                                                                                     | `bunx fabrika db test-scaffold`, and commit what it writes                              |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member, invitation or link field no endpoint that reads, cancels or revokes one | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)        |
+| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                             |
+| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                     | the handles, a file collection, a connector                                             |
+| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id   |
+| `env-read`            | `process.env`, `Bun.env`                                                                                                                                         | `defineDeps(build)`, which receives the application's variables                         |
+| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy              |
+| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                               |
+| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                               |
+| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                            |
+| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                                                              | import them only from `*.test.ts` or `__tests__/`                                       |
+| `spa-server-import`   | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract, `src/schemas.ts` and `src/shared/` |
+| `shared-import`       | a module under `src/shared/` loads a slice, `src/db/`, `@fabrika/*` or a builtin                                                                                 | a shared module imports `zod/v4` and other shared modules only                          |
+| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                            |
 
 The hints:
 

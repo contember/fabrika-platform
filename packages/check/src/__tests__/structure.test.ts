@@ -45,6 +45,23 @@ describe('the clean layout', () => {
 	})
 })
 
+describe('shared pure code', () => {
+	test('a function under src/shared/ that a slice and the SPA both use reports nothing', async () => {
+		const files = {
+			...ARCHITECTURE_APP,
+			'src/shared/stage.ts': "import { z } from 'zod/v4'\nimport { titled } from './text'\n\n"
+				+ "export const Stage = z.enum(['open', 'won', 'lost'])\n"
+				+ 'export const stageLabel = (stage: z.infer<typeof Stage>): string => titled(stage)\n',
+			'src/shared/text.ts': 'export const titled = (word: string): string => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`\n',
+			'src/deals/logic.ts': withImport('src/deals/logic.ts', "import { stageLabel } from '../shared/stage'")
+				+ "export const reopenedLabel = (stage: string): string => (canReopen(stage) ? stageLabel('open') : stage)\n",
+			'web/view.ts': withImport('web/view.ts', "import { stageLabel } from '../src/shared/stage'")
+				+ "export const label = (): string => stageLabel('won')\n",
+		}
+		expect(await check(files)).toEqual([])
+	})
+})
+
 describe('a step out of the structure is a hint', () => {
 	test('logic that reaches data', async () => {
 		const findings = await structureFindings({
@@ -141,6 +158,38 @@ describe('a break of platform integrity is a refusal', () => {
 			'web/main.ts:4:1 refusal spa-server-import',
 			'web/main.ts:5:1 refusal spa-server-import',
 		])
+	})
+
+	test('a shared module imports nothing but zod/v4 and other shared modules', async () => {
+		const findings = await structureFindings({
+			...ARCHITECTURE_APP,
+			'src/shared/greeting.ts': "import { lockedStage } from '../deals/queries'\n"
+				+ "import { scoped } from '@fabrika/db'\n"
+				+ "import { canReopen } from '../deals/logic'\n"
+				+ "import { readFileSync } from 'node:fs'\n"
+				+ "import type { DB } from '../db/schema.generated'\n"
+				+ "import { z } from 'zod/v4'\n"
+				+ "import { fill } from './template'\n\n"
+				+ 'export const greeting = (name: string) => fill(name)\n',
+			'src/shared/template.ts': 'export const fill = (name: string) => `Hello, ${name}`\n',
+			// A test of shared code imports what it likes.
+			'src/shared/__tests__/greeting.test.ts': "import { expect, test } from 'bun:test'\nimport { tables } from '../../db/tables'\n\n"
+				+ "test('tables', () => expect(tables).toBeDefined())\n",
+		})
+		expect(findings).toEqual([
+			'src/shared/greeting.ts:1:1 refusal shared-import',
+			'src/shared/greeting.ts:2:1 refusal shared-import',
+			'src/shared/greeting.ts:3:1 refusal shared-import',
+			'src/shared/greeting.ts:4:1 refusal shared-import',
+		])
+	})
+
+	test('a shared module reaches no global object', async () => {
+		const findings = (await check({
+			...ARCHITECTURE_APP,
+			'src/shared/viewport.ts': 'export const width = () => window.innerWidth\n',
+		})).filter((finding) => finding.file === 'src/shared/viewport.ts').map((finding) => `${finding.line}:${finding.column} ${finding.rule}`)
+		expect(findings).toEqual(['1:28 forbidden-global'])
 	})
 
 	test('logic and queries import no framework internal', async () => {

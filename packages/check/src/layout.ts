@@ -22,6 +22,8 @@ export const APP_KIT_FILE = 'src/app-kit.ts'
 /** The shared zod schemas the shell and the SPA import: one module, or a directory of them once it grows. */
 export const SCHEMAS_FILE = 'src/schemas.ts'
 export const SCHEMAS_DIR = 'src/schemas/'
+/** Pure code the SPA and every slice may import: it loads nothing but `zod/v4` and other modules of its own directory. */
+export const SHARED_DIR = 'src/shared/'
 /** `src/db/`: the tables, the generated schema and their generated tests; never a slice. */
 export const DATABASE_DIR = 'src/db/'
 /** A slice is a directory `src/<slice>/` that holds these modules, each optional. */

@@ -37,6 +37,7 @@ export const REFUSAL_RULE_IDS = [
 	'spa-server-import',
 	'layer-import',
 	'generated-test-import',
+	'shared-import',
 ] as const
 
 /** Rules that report a step out of the application architecture. */

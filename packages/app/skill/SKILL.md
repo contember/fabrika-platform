@@ -23,6 +23,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `src/db/tables.ts`         | `defineTables(vocabulary, columns)({ … })`: the scope and the actions of each table      |
 | `src/app-kit.ts`           | `export const app = defineApp(vocabulary, tables)`                                       |
 | `src/schemas.ts`           | the `zod/v4` schemas several slices, or a slice and the SPA, share                       |
+| `src/shared/*.ts`          | pure functions the SPA and the slices both run; they import only `zod/v4` and each other |
 | `src/<slice>/endpoints.ts` | `app.group(…)`, a `.handle(…)` beside each endpoint, and the slice's jobs and webhooks   |
 | `src/<slice>/logic.ts`     | business rules as pure functions: no `ctx`, no data access                               |
 | `src/<slice>/queries.ts`   | data access that the slice's handlers share, over a handle they pass in                  |
