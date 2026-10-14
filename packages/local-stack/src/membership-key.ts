@@ -36,14 +36,34 @@ export const writeNotesMembershipTransport = async (transport: { readonly url: s
 }
 
 /**
- * Issue `.state/notes-membership.env` a fresh key while the Notes contract manages members. Each issuance deletes the
- * environment's other keys, so the container is recreated with this one. Called once IAM knows the Notes schema.
+ * Whether IAM's membership transport accepts `key`. An empty `listMembers` call changes nothing: IAM answers 401 for an
+ * unknown or expired key before it reads the body, and 400 for the body once the key holds. Anything else throws.
+ */
+export const membershipKeyAccepted = async (key: string): Promise<boolean> => {
+	const response = await fetch(new URL('/membership/listMembers', IAM_ORIGIN), {
+		method: 'POST',
+		headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+		body: '{}',
+		redirect: 'manual',
+	})
+	if (response.status === 401) return false
+	if (response.status === 400) return true
+	throw new Error(`IAM answered the membership key check with ${response.status}`)
+}
+
+/**
+ * Make sure `.state/notes-membership.env` holds a key IAM accepts while the Notes contract manages members. A stored
+ * key is kept, because it may be the one a deploy wrote and Control still records: issuing deletes the environment's
+ * other keys, so a fresh one would revoke Control's. Called once IAM knows the Notes schema.
  */
 export const ensureNotesMembershipKey = async (): Promise<void> => {
 	if (!needsMembershipTransport(notesContract)) {
 		await writeNotesMembershipTransport(null)
 		return
 	}
+	const path = resolve(STATE_DIR, NOTES_MEMBERSHIP_ENV_FILE)
+	const stored = readStateEnv(path, MEMBERSHIP_KEY_VARIABLE)
+	if (stored !== null && readStateEnv(path, MEMBERSHIP_URL_VARIABLE) === IAM_ORIGIN && await membershipKeyAccepted(stored)) return
 	const provisioningKey = readStateEnv(resolve(STATE_DIR, 'iam.env'), 'FABRIKA_IAM_PROVISIONING_KEY')
 	if (provisioningKey === null) {
 		throw new Error('FABRIKA_IAM_PROVISIONING_KEY is missing from the generated local credentials')

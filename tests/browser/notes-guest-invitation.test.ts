@@ -72,15 +72,16 @@ browserTest(
 			expect(await inviteGuest({ workspaceId: firstWorkspace, email: guestEmail, label: 'Acme', message: 'Vítejte v Notes.' })).toBe(200)
 			const invitation = await waitForMail({ to: guestEmail, since: invitedAt })
 			expect(invitation.subject).toMatch(/^Pozvánka do aplikace /)
-			expect(invitation.text).toContain(' za Acme')
-			expect(invitation.text).toContain('Vítejte v Notes.')
+			// Booleans, so a failure never prints the body and its link.
+			expect(invitation.text.includes(' za Acme')).toBe(true)
+			expect(invitation.text.includes('Vítejte v Notes.')).toBe(true)
 			replacedLink = actionLinkOf(invitation)
 
 			const resentAt = Date.now()
 			expect(await inviteGuest({ workspaceId: firstWorkspace, email: guestEmail, resend: true })).toBe(200)
 			const resent = await waitForMail({ to: guestEmail, since: resentAt })
 			firstLink = actionLinkOf(resent)
-			expect(firstLink).not.toBe(replacedLink)
+			expect(firstLink === replacedLink).toBe(false)
 		})
 
 		await step('the link the resend replaced is refused', {
@@ -97,7 +98,7 @@ browserTest(
 		}, async () => {
 			await acceptFromLink(firstLink)
 			await expect(byRole('heading', 'Jste přihlášeni jiným účtem', { exact: true, level: 1 })).toBeVisible()
-			await expect(getPage().getByText(guestEmail)).toBeVisible()
+			expect((await getPage().locator('main').innerText()).includes(guestEmail)).toBe(true)
 			await expect(getPage().locator('input[type="password"]')).toHaveCount(0)
 			expect(await readNotesPrincipal(guestEmail)).toBeNull()
 		})

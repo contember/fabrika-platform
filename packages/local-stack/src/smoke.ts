@@ -35,7 +35,7 @@ import { approveInConsole, signInToConsole } from './console-approval'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY, type LocalSourceManifest } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
-import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, writeNotesMembershipTransport } from './membership-key'
+import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, membershipKeyAccepted, writeNotesMembershipTransport } from './membership-key'
 import {
 	CONTROL_ORIGIN,
 	controlRequest,
@@ -396,6 +396,7 @@ const proveWorkloadKeys = async (): Promise<void> => {
 		throw new Error(`Zerops emulator service variable ${MEMBERSHIP_URL_VARIABLE} is not IAM's public origin`)
 	}
 	const membershipKey = soleSecret(snapshot, serviceId, MEMBERSHIP_KEY_VARIABLE, `${MEMBERSHIP_KEY_VARIABLE} on the Notes service`)
+	if (!await membershipKeyAccepted(membershipKey)) throw new Error(`IAM does not accept the key the deploy wrote as ${MEMBERSHIP_KEY_VARIABLE}`)
 	await writeNotesMembershipTransport({ url: IAM_ORIGIN, key: membershipKey })
 	await compose(['up', '--detach', '--wait', 'notes'])
 }

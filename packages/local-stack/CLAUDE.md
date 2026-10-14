@@ -69,7 +69,8 @@ bun run test:browser  # the opice suites in tests/browser/
 - **The composed Notes container holds IAM's membership transport before it starts.** Notes manages workspace members,
   so a deploy writes `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY`, and `boot` refuses to start without them. `up`
   makes Control's own `membershipKeys.issue` call into `.state/notes-membership.env` (`src/membership-key.ts`), and
-  `followNotesDeploy` and `local:smoke` hand the container the pair the deploy wrote instead.
+  `followNotesDeploy` and `local:smoke` hand the container the pair the deploy wrote instead. `up` keeps a stored key
+  IAM still accepts: an issuance deletes the environment's other keys, so a fresh one would revoke the key Control records.
 - **A script needs a `px_` service key, not the provisioning key.** `local:up` provisions one through
   IAM and writes `.state/machine.env`; `mintFromKey` cannot resolve `FABRIKA_IAM_PROVISIONING_KEY`
   (it has no `credentials` row), so the proxy refuses it before control sees the bearer.

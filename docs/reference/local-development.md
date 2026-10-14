@@ -112,7 +112,8 @@ Notes manages the members of a workspace (`people.guests.invite`), so a deploy a
 membership transport: `FABRIKA_IAM_RPC_URL` (IAM's public origin) and the environment's
 `FABRIKA_IAM_RPC_KEY`. `up` issues that key through IAM's `membershipKeys.issue` with the
 provisioning key, as Control does, into `notes-membership.env` (`src/membership-key.ts`), after
-IAM knows the Notes schema and before the container starts; each issuance ends the previous key.
+IAM knows the Notes schema and before the container starts. Each issuance ends the environment's
+other keys, so `up` keeps a stored key IAM still accepts, which after a deploy is the one Control records.
 
 The database URL in `notes.env` is the `apps-db` superuser's, and it is only the
 provisioning credential: `fabrika db migrate` creates the role family with it and
