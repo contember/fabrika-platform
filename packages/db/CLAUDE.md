@@ -302,7 +302,9 @@ and the target `Ref`, so no handler can call it.
   depth, and `ON CONFLICT … DO UPDATE` is an `UPDATE` of its `INSERT`'s target. A fragment whose table and alias are
   the relation its own block's `UPDATE` or `DELETE` writes needs that operation's own action (`checkWriteTarget`), or
   for an `UPDATE` a column's own write action that every column its `SET` assigns declares (`assignedColumns` in
-  `sql.ts` reads them; `updatingRef`'s rule for the handles), and
+  `sql.ts` reads them to the list's end, a clause word inside brackets, a `CASE` or `IS [NOT] DISTINCT FROM` being the
+  expression's, and a `SET` it cannot read with certainty assigns no column a column action writes; `updatingRef`'s
+  rule for the handles), and
   an `app` capability writes application tables only, a `Ref` or `Within` never one. Any other fragment reads (another
   occurrence of the written table too), with an action the handles read the table with: any action it
   names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it for with an `app` capability

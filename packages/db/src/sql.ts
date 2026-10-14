@@ -46,7 +46,8 @@ export type ScopeUse = 'read' | 'update' | 'delete'
 
 /**
  * The scope of `capability` on `table` for `use`, as the data layer predicates its handles; throws when it does not
- * reach it for that use. `assigned` is the columns an UPDATE's SET names, and `undefined` before a statement is known.
+ * reach it for that use. `assigned` is the columns an UPDATE's SET names (none when the SET cannot be read with
+ * certainty), and `undefined` before a statement is known.
  */
 export type ScopeOf = (capability: unknown, table: string, use: ScopeUse, assigned?: readonly string[]) => ScopeTerms
 
@@ -481,48 +482,122 @@ function statementWrites(tokens: readonly SqlToken[]): StatementWrites {
 	return { targets, blocks }
 }
 
-/** Words that end an UPDATE's SET list at its own depth. */
+/** Words that end an UPDATE's SET list at its own depth, outside a CASE; `IS [NOT] DISTINCT FROM` does not. */
 const SET_ENDS: ReadonlySet<string> = new Set(['FROM', 'WHERE', 'RETURNING'])
 
 /**
  * The columns the SET of the UPDATE whose target starts at `from` assigns: `a = …` and `(a, b) = …` items, a column's
- * subfield or subscript by the column. Nothing when the SET cannot be found at the UPDATE's depth.
+ * subfield or subscript by the column. A SET it cannot read to its end with certainty assigns no column it can name,
+ * which refuses a column's own write action: an item that is not a name, an unmatched bracket, a CASE without END.
  */
 function assignedColumns(tokens: readonly SqlToken[], from: number): readonly string[] {
-	let index = from
+	const set = setKeyword(tokens, from)
+	if (set === undefined) return []
+	const columns: string[] = []
+	let index = set + 1
+	for (;;) {
+		const item = assignmentTarget(tokens, index)
+		const end = item === undefined ? undefined : expressionEnd(tokens, item.equals + 1)
+		if (item === undefined || end === undefined) return []
+		columns.push(...item.columns)
+		if (!isPunct(tokens[end], ',')) return columns
+		index = end + 1
+	}
+}
+
+/**
+ * The index of what ends the assigned expression that starts at `index`: the `,` before the next item, or the end of the
+ * SET list (`FROM`, `WHERE`, `RETURNING`, the `)` around the statement, `;`, the end of the text). A clause word inside
+ * brackets or a CASE, and the `FROM` of `IS [NOT] DISTINCT FROM`, belong to the expression. `undefined` when a bracket
+ * or a CASE does not close before the end.
+ */
+function expressionEnd(tokens: readonly SqlToken[], index: number): number | undefined {
 	let depth = 0
-	while (index < tokens.length && !(depth === 0 && upperWord(tokens[index]) === 'SET')) {
+	let cases = 0
+	for (let position = index; position < tokens.length; position++) {
+		const token = tokens[position]
+		const word = upperWord(token)
+		if (isPunct(token, '(') || isPunct(token, '[')) {
+			depth++
+		} else if (isPunct(token, ')') || isPunct(token, ']')) {
+			if (--depth < 0) return cases === 0 && isPunct(token, ')') ? position : undefined
+		} else if (depth > 0) {
+			continue
+		} else if (word === 'CASE') {
+			cases++
+		} else if (word === 'END') {
+			if (--cases < 0) return undefined
+		} else if (isPunct(token, ',') || isPunct(token, ';')) {
+			return cases === 0 ? position : undefined
+		} else if (cases === 0 && word !== undefined && SET_ENDS.has(word) && !distinctFrom(tokens, position)) {
+			return position
+		}
+	}
+	return depth === 0 && cases === 0 ? tokens.length : undefined
+}
+
+/** The index of the SET of the UPDATE whose target starts at `from`, at the UPDATE's depth. */
+function setKeyword(tokens: readonly SqlToken[], from: number): number | undefined {
+	let depth = 0
+	for (let index = from; index < tokens.length; index++) {
 		const token = tokens[index]
+		const word = upperWord(token)
+		if (depth === 0 && word === 'SET') return index
 		if (isPunct(token, '(')) depth++
-		if (isPunct(token, ')') && --depth < 0) return []
-		if (depth === 0 && SET_ENDS.has(upperWord(token) ?? '')) return []
-		index++
+		if (isPunct(token, ')') && --depth < 0) return undefined
+		if (depth === 0 && word !== undefined && SET_ENDS.has(word)) return undefined
+	}
+	return undefined
+}
+
+/** Whether the `FROM` at `index` ends `IS [NOT] DISTINCT FROM`, a comparison, not a clause. */
+function distinctFrom(tokens: readonly SqlToken[], index: number): boolean {
+	if (upperWord(tokens[index]) !== 'FROM' || upperWord(tokens[index - 1]) !== 'DISTINCT') return false
+	const before = upperWord(tokens[index - 2])
+	return before === 'IS' || (before === 'NOT' && upperWord(tokens[index - 3]) === 'IS')
+}
+
+/**
+ * The columns one SET item at `index` assigns and the index of its `=`: a name with any `.field` and `[…]` after it,
+ * or a parenthesized list of them. `undefined` when the item has no such form.
+ */
+function assignmentTarget(tokens: readonly SqlToken[], index: number): { readonly columns: readonly string[]; readonly equals: number } | undefined {
+	if (!isPunct(tokens[index], '(')) {
+		const name = nameText(tokens[index])
+		if (name === undefined) return undefined
+		const equals = afterIndirection(tokens, index + 1)
+		return equals !== undefined && isPunct(tokens[equals], '=') ? { columns: [name], equals } : undefined
 	}
 	const columns: string[] = []
-	let expectColumn = true
-	depth = 0
-	for (index++; index < tokens.length; index++) {
-		const token = tokens[index]
-		if (depth === 0 && expectColumn) {
-			expectColumn = false
-			if (isPunct(token, '(')) {
-				for (index++; index < tokens.length && !isPunct(tokens[index], ')'); index++) {
-					const name = nameText(tokens[index])
-					if (name !== undefined) columns.push(name)
-				}
-				continue
+	let position = index
+	do {
+		const name = nameText(tokens[position + 1])
+		const next = name === undefined ? undefined : afterIndirection(tokens, position + 2)
+		if (name === undefined || next === undefined) return undefined
+		columns.push(name)
+		position = next
+	} while (isPunct(tokens[position], ','))
+	return isPunct(tokens[position], ')') && isPunct(tokens[position + 1], '=') ? { columns, equals: position + 1 } : undefined
+}
+
+/** The index past a column's `.field` and `[…]` subscripts from `index`, or `undefined` when a bracket never closes. */
+function afterIndirection(tokens: readonly SqlToken[], index: number): number | undefined {
+	let position = index
+	for (;;) {
+		if (isPunct(tokens[position], '.') && nameText(tokens[position + 1]) !== undefined) {
+			position += 2
+		} else if (isPunct(tokens[position], '[')) {
+			let depth = 0
+			for (; position < tokens.length; position++) {
+				if (isPunct(tokens[position], '[')) depth++
+				if (isPunct(tokens[position], ']') && --depth === 0) break
 			}
-			const name = nameText(token)
-			if (name !== undefined) columns.push(name)
-			continue
+			if (position >= tokens.length) return undefined
+			position++
+		} else {
+			return position
 		}
-		if (isPunct(token, '(') || isPunct(token, '[')) depth++
-		else if (isPunct(token, ')') || isPunct(token, ']')) {
-			if (--depth < 0) break
-		} else if (depth === 0 && isPunct(token, ',')) expectColumn = true
-		else if (depth === 0 && SET_ENDS.has(upperWord(token) ?? '')) break
 	}
-	return columns
 }
 
 /** What a fragment on `table` under `alias` is to its block: the relation its UPDATE or DELETE writes, or else read. */
