@@ -10,7 +10,6 @@ import {
 	type CredentialedEndpoint,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
-	type EndpointDirectory,
 	type EndpointPlan,
 	type EndpointRow,
 	type ExportDescription,
@@ -58,7 +57,15 @@ import { ACCEPTED_BUCKET, clientBucket, type SubmissionFields, submissionOf } fr
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { endpointData, Invocation, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
-import { createScope, type IssuableLink, linkIssuing, memberDirectory, memberManagement, type MembershipRequest } from './membership'
+import {
+	createScope,
+	type IssuableLink,
+	linkIssuing,
+	memberDirectory,
+	memberManagement,
+	type MembershipRequest,
+	type ReadDirectory,
+} from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
@@ -80,7 +87,7 @@ export interface Facilities {
 	 * `ctx.members`: management where the action is the dimension's `members.manage`; otherwise the member directory of the
 	 * nearest dimension, the endpoint's own or one containing it, that declares members (`endpointDirectory`).
 	 */
-	readonly members: 'manage' | EndpointDirectory | null
+	readonly members: 'manage' | ReadDirectory | null
 	/** The link mounts whose dimension and issuing action are the endpoint's. */
 	readonly links: readonly IssuableLink[]
 }

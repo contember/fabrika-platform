@@ -4,7 +4,7 @@ import { ScopeValue } from '../schemas'
 
 const OrgList = z.strictObject({ orgs: z.array(z.string()) })
 const OrgInput = z.strictObject({ orgId: ScopeValue })
-const Members = z.strictObject({ items: z.array(z.strictObject({ principalId: z.string(), label: z.nullable(z.string()) })) })
+const Members = z.strictObject({ items: z.array(z.strictObject({ principalId: z.string(), label: z.string() })) })
 
 export const orgs = app.group({ callers: ['human'] }, (r) => ({
 	mine: r.query({ output: OrgList, access: { action: 'crm.read', over: 'org' } })

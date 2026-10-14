@@ -7,7 +7,7 @@
 import type { App, Declared, EndpointContext, KitTypes, Unavailable } from '@fabrika/app/contract'
 import { GENERATED_MEMBER } from '@fabrika/app/contract'
 import { type Member, type MemberDirectory, type MemberLookup, serve } from '@fabrika/app/implement'
-import { testKit } from '@fabrika/app/testing'
+import { type IamMembershipRpc, testKit } from '@fabrika/app/testing'
 import { endpointAccessKit } from '@fabrika/app/testing/isolation'
 import { checkApplication } from '@fabrika/check'
 import { scoped } from '@fabrika/db'
@@ -27,19 +27,22 @@ type KitOf<A> = A extends App<infer Kit extends KitTypes> ? Kit : never
 type None = Declared<never, never, never, never>
 type Members<A, Acc> = EndpointContext<KitOf<A>, 'human', 'mutation', Acc, None>['members']
 
-/** The types: a deal endpoint reads the org's directory; a note endpoint of an application without members has none. */
+/**
+ * The types: a deal endpoint reads the org's directory, whose `directory: 'labels'` gives every member a `string` label;
+ * a note endpoint of an application without members has none.
+ */
 export type NestedMembers = [
-	Expect<Equal<Members<typeof membersApp, { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }>, MemberDirectory>>,
+	Expect<Equal<Members<typeof membersApp, { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }>, MemberDirectory<string>>>,
 	Expect<
 		Equal<
 			Members<typeof membersApp, { readonly action: 'deals.assign'; readonly on: 'deal'; readonly from: 'id' }>,
-			MemberLookup & { readonly list: Unavailable<"listing the members of org needs the action 'crm.read'; get(principalId) checks one"> }
+			MemberLookup<string> & { readonly list: Unavailable<"listing the members of org needs the action 'crm.read'; get(principalId) checks one"> }
 		>
 	>,
 	Expect<
 		Equal<
 			Members<typeof membersApp, { readonly action: 'deals.write'; readonly in: 'company'; readonly from: 'companyId' }>['get'],
-			(principalId: string) => Promise<Member | null>
+			(principalId: string) => Promise<Member<string> | null>
 		>
 	>,
 	Expect<
@@ -49,6 +52,12 @@ export type NestedMembers = [
 		>
 	>,
 ]
+
+/** The line `kit-mistakes/43-member-label-without-a-labels-directory.ts` is refused for compiles under a labels directory. */
+export async function labelledLookup(members: Members<typeof membersApp, { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }>) {
+	const member = await members.get('ann')
+	return { label: member === null ? '' : member.label.toLowerCase() }
+}
 
 const fixtureRoot = join(import.meta.dir, 'members-fixture')
 const postgres = await testDatabase({ migrations: new URL('./members-fixture/db/migrations/', import.meta.url), label: 'members-lookup.test.ts' })
@@ -137,6 +146,36 @@ describe.skipIf(postgres === null)("a deal endpoint's ctx.members in the test ki
 		expect(await on.leaked('api.deals.candidate', { id: UUID, principalId: GENERATED_MEMBER })).toEqual({ answered: true, leaked: marked })
 		const inCompany = endpointAccessKit(caching(), tables, postgres)
 		expect(await inCompany.leaked('api.deals.check', { companyId: 'x', principalId: GENERATED_MEMBER })).toEqual({ answered: true, leaked: marked })
+	})
+
+	test('under a labels directory an IAM answer without a label is a server fault, never a null label', async () => {
+		const worlds = await postgres.seedWorlds(tables, 'deals')
+		const org = { type: 'org', value: worlds.own.chain.find((link) => link.type === 'org')?.value ?? '' } as const
+		const refused = () => Promise.resolve({ ok: false, reason: 'not_allowed' } as const)
+		/** An IAM that answers one member, `ann`, with `label`. */
+		const answering = (label: string | null): IamMembershipRpc => {
+			const ann = { principalId: 'ann', label, disabled: false, affiliation: 'internal' } as const
+			return {
+				findMember: () => Promise.resolve({ ok: true, member: ann }),
+				listMembers: () => Promise.resolve({ ok: true, members: [{ ...ann, email: null, roles: ['viewer'] }], invitations: [] }),
+				requestDelegation: refused,
+				createScope: refused,
+				assignMember: refused,
+				revokeMember: refused,
+				issueLink: refused,
+				revokeLink: refused,
+			}
+		}
+		const statuses = async (label: string | null) => {
+			const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database, membership: answering(label) })
+			const ask = kit.browser(kit.testCaller([{ role: 'manager', scope: org }]))
+			const status = async (procedure: string, input: object) =>
+				(await ask(`/api/deals.${procedure}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }))
+					.status
+			return [await status('candidate', { id: worlds.own.key, principalId: 'ann' }), await status('team', { id: worlds.own.key })]
+		}
+		expect(await statuses('Ann')).toEqual([200, 200])
+		expect(await statuses(null)).toEqual([500, 500])
 	})
 
 	test("a generated case's member field is a real member: without it, the handler's refusal fails the case and names members", async () => {

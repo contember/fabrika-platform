@@ -57,6 +57,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 		"registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
 	'41-unscoped-get-of-a-reference-table.ts': 'countries is a reference table, which has no key: read it with list',
 	'42-unscoped-get-of-an-inbox.ts': "registrations is a form's inbox, which has no key: read it with list",
+	'43-member-label-without-a-labels-directory.ts': "'member.label' is possibly 'null'.",
 }
 
 /**

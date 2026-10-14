@@ -65,6 +65,7 @@ import type { SubmissionFields } from './form-admission'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
+import type { ReadDirectory } from './membership'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
@@ -442,8 +443,17 @@ function facilitiesOf(artifact: ContractArtifact, row: EndpointRow): Facilities 
 	const links = Object.entries(artifact.mounts).flatMap(([name, mount]) =>
 		mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action ? [{ name, prefix: mount.prefix }] : []
 	)
-	const members = endpointMembers(artifact, row) === 'manage' ? 'manage' : endpointDirectory(artifact, row)
-	return Object.freeze({ members, links: Object.freeze(links) })
+	return Object.freeze({ members: endpointMembers(artifact, row) === 'manage' ? 'manage' : readDirectory(artifact, row), links: Object.freeze(links) })
+}
+
+/** The member directory the endpoint reads, and whether its dimension shows labels. */
+function readDirectory(artifact: ContractArtifact, row: EndpointRow): ReadDirectory | null {
+	const directory = endpointDirectory(artifact, row)
+	if (directory === null) {
+		return null
+	}
+	const dimension = Object.hasOwn(artifact.dimensions, directory.dimension) ? artifact.dimensions[directory.dimension] : undefined
+	return Object.freeze({ ...directory, labels: dimension?.directory === 'labels' })
 }
 
 /**

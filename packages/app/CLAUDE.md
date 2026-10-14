@@ -522,7 +522,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   (`directories`, written by `buildArtifact` through `directoryReach`, read by `endpointDirectory`, all of
   `@fabrika/auth-core`): `get(principalId)` of the value the `Ref`'s chain holds everywhere (IAM's `findMember`
   checks the endpoint's own action, one of the dimension's `lookups`, on that value), `list()` only for its
-  `members.list` (ids, roles and affiliation; labels only where the dimension declares `directory: 'labels'`, never emails); and
+  `members.list` (ids, roles and affiliation; labels only where the dimension declares `directory: 'labels'`, never emails;
+  there the label's type is `string` and a null from IAM is the `iam_answer_unlabelled` fault); and
   `ctx.links` only where the `Ref`'s action is a link mount's `issuedBy` for its
   dimension: the types (`ContractContext`) and `facilitiesOf` in `boot.ts` decide the
   same, so change them together. A `Ref` passed to IAM must be this request's, for the

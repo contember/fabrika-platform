@@ -1052,9 +1052,9 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   itself too.
 - `label` is `null` unless the caller also holds `members.manage` there, or the dimension opts in with
   `directory: 'labels'`, which widens like any other access change: then every endpoint below it reads labels too.
-- Under `directory: 'labels'` IAM answers a label for every member, but the type stays `string | null`: it does not
-  read the dimension's `directory` yet. Where a stored column or an output needs text, write `member.label ?? member.principalId`
-  (never `!` or a cast); that fallback is a branch no test reaches.
+- Under `directory: 'labels'` IAM answers every member's label, so `label` is a `string` in `get` and `list()` of every
+  endpoint below it (an IAM answer without one is a 500). Elsewhere it is `string | null`: store it in a nullable column
+  or output, never with `!` or a cast.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
   `revoke(ref, …)`, one change per request.
 - A partner company's people: a role with `external: true` whose `assignableBy` names an app-wide staff role.
@@ -1169,6 +1169,7 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | `a job writes inside ctx.transaction((tx) => …): use tx.db there`               | move the write into the transaction                                     |
 | `listing the members of org needs the action '…'; get(principalId) checks one`  | `ctx.members.get(id)`, or an endpoint of the directory's `members.list` |
 | `neither task nor a dimension containing it declares members`                   | declare `members` on the dimension whose people the endpoint picks      |
+| `'member.label' is possibly 'null'`                                             | a nullable column or output; only `directory: 'labels'` makes it text   |
 | `admin is a role IAM defines itself for every application (reserved: admin)`    | another role name                                                       |
 | `Property 'id' does not exist on type 'Ref<…>'`                                 | `ctx.target.value`                                                      |
 | `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |

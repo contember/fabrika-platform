@@ -5,6 +5,7 @@
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import type {
+	EndpointDirectory,
 	InvitationItem,
 	InvitationOptions,
 	IssueLinkResult,
@@ -47,10 +48,13 @@ export interface MemberManagement<D extends string, A extends string, R extends 
 }
 
 /** One member of the target, as a member directory lists it. */
-export interface DirectoryMember {
+export interface DirectoryMember<L extends string | null = string | null> {
 	readonly principalId: string
-	/** The principal's display label (a user's spelling of its address); null from an IAM that shows it only to `members.manage`. */
-	readonly label: string | null
+	/**
+	 * The principal's display label (a user's spelling of its address): `string` where the directory's dimension declares
+	 * `directory: 'labels'`, since IAM then answers it to every caller; elsewhere null unless the caller manages its members.
+	 */
+	readonly label: L
 	/** Its membership roles in the target. */
 	readonly roles: readonly string[]
 	readonly disabled: boolean
@@ -59,10 +63,10 @@ export interface DirectoryMember {
 }
 
 /** One member a lookup found: never its email, and its label only where the directory shows labels. */
-export interface Member {
+export interface Member<L extends string | null = string | null> {
 	readonly principalId: string
-	/** The principal's display label; null unless the dimension declares `directory: 'labels'` or the caller manages its members. */
-	readonly label: string | null
+	/** The principal's display label, as `DirectoryMember.label`. */
+	readonly label: L
 	readonly disabled: boolean
 	readonly affiliation: PrincipalAffiliation
 }
@@ -71,17 +75,17 @@ export interface Member {
  * `ctx.members` of an endpoint on or in a dimension below a member directory (its own dimension's, or the nearest one
  * containing it): the members of the value its object lies in. IAM checks the endpoint's own action on that value.
  */
-export interface MemberLookup {
+export interface MemberLookup<L extends string | null = string | null> {
 	/** The principal, when it is a member of the directory's value; null otherwise, an unknown id included. */
-	get(principalId: string): Promise<Member | null>
+	get(principalId: string): Promise<Member<L> | null>
 }
 
 /**
  * `ctx.members` of an endpoint whose action is the directory's `members.list`: also every member, read from IAM, which
  * checks that action live on the directory's value. No emails and no invitations: those stay with `members.manage`.
  */
-export interface MemberDirectory extends MemberLookup {
-	list(): Promise<readonly DirectoryMember[]>
+export interface MemberDirectory<L extends string | null = string | null> extends MemberLookup<L> {
+	list(): Promise<readonly DirectoryMember<L>[]>
 }
 
 export interface IssuedLink {
@@ -220,11 +224,14 @@ function invitationOptionsOf(options: InvitationOptions | undefined): Invitation
 	}
 }
 
-/** The directory an endpoint reads: the dimension that declares it, and whether the endpoint may list it. */
-export interface DirectoryReach {
+/** The directory an endpoint reads (`endpointDirectory`), and whether its dimension declares `directory: 'labels'`. */
+export interface ReadDirectory extends EndpointDirectory {
+	readonly labels: boolean
+}
+
+/** The directory an endpoint reads, with the endpoint a fault names. */
+export interface DirectoryReach extends ReadDirectory {
 	readonly endpoint: string
-	readonly dimension: string
-	readonly lists: boolean
 }
 
 /**
@@ -247,6 +254,13 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 		}
 		return { request, scope: { type: reach.dimension, value } }
 	}
+	// IAM answers every member's label under a labels directory, and the type promises one: a null there is a fault.
+	const labelOf = (label: string | null): string | null => {
+		if (reach.labels && label === null) {
+			throw new ServerFault('iam_answer_unlabelled', `IAM answered a member of ${reach.dimension} without a label, and its directory shows labels`)
+		}
+		return label
+	}
 	const lookup: MemberLookup = {
 		async get(principalId: string): Promise<Member | null> {
 			const { request, scope } = directoryOf()
@@ -262,7 +276,7 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 			}
 			return Object.freeze({
 				principalId: found.member.principalId,
-				label: found.member.label,
+				label: labelOf(found.member.label),
 				disabled: found.member.disabled,
 				affiliation: found.member.affiliation,
 			})
@@ -280,7 +294,7 @@ export function memberDirectory(request: MembershipRequest | null, target: unkno
 				listed.members.map((member) =>
 					Object.freeze({
 						principalId: member.principalId,
-						label: member.label,
+						label: labelOf(member.label),
 						roles: Object.freeze([...member.roles]),
 						disabled: member.disabled,
 						affiliation: member.affiliation,

@@ -64,10 +64,9 @@ function stageOf(value: string): Stage {
 const isClosed = (stage: Stage): boolean => stage === 'won' || stage === 'lost'
 const companyName = (companies: readonly Company[], id: string): string => companies.find((company) => company.id === id)?.name ?? '?'
 
-/** The members of an org who have a label: the people a deal's owner or a task's assignee is picked from. */
-async function membersOf(orgId: string): Promise<Member[]> {
-	const { items } = await api.orgs.members({ orgId })
-	return items.flatMap((member) => (member.label === null ? [] : [{ principalId: member.principalId, label: member.label }]))
+/** The members of an org: the people a deal's owner or a task's assignee is picked from. */
+async function membersOf(orgId: string): Promise<readonly Member[]> {
+	return (await api.orgs.members({ orgId })).items
 }
 
 function memberOf(members: readonly Member[], principalId: string): Member | null {

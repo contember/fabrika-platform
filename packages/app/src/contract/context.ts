@@ -247,12 +247,17 @@ type DirectoryOf<K extends KitTypes, D extends string> = [MembersOf<K, D>] exten
 	? D extends keyof K['dimensions'] ? K['dimensions'][D] extends { readonly in: infer P extends string } ? DirectoryOf<K, P> : never : never
 	: D
 
+/** A member's label in the directory of `N`: IAM answers one to every caller where `N` declares `directory: 'labels'`. */
+type LabelOf<K extends KitTypes, N extends string> = N extends keyof K['dimensions']
+	? K['dimensions'][N] extends { readonly directory: 'labels' } ? string : string | null
+	: string | null
+
 /** `ctx.members` below a directory `N`: the list where the action is its `members.list`, the lookup of one member everywhere. */
 type DirectoryContext<K extends KitTypes, N extends string, A extends string> = A extends MembersOf<K, N>['list']
-	? { readonly members: MemberDirectory }
+	? { readonly members: MemberDirectory<LabelOf<K, N>> }
 	: {
 		readonly members:
-			& MemberLookup
+			& MemberLookup<LabelOf<K, N>>
 			& { readonly list: Unavailable<`listing the members of ${N} needs the action '${MembersOf<K, N>['list']}'; get(principalId) checks one`> }
 	}
 

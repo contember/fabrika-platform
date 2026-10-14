@@ -620,7 +620,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   holds it only below (on a company) is refused 403. No delegation grant, no email, no
   invitation. `label` is `null` unless the dimension declares `directory: 'labels'` in
   the vocabulary (a user's label spells its address); that declaration is in the contract,
-  and adding it widens for closer review.
+  and adding it widens for closer review. Under it the type is `string`, and the framework
+  refuses an IAM answer without a label (`iam_answer_unlabelled`, 500).
 - `ctx.links.issue(ref, { mount, days })` and `ctx.links.revoke(id)` exist on an endpoint
   that declares `issues: '<mount>'` and whose `Ref` carries the mount's `issuedBy` for its
   dimension. IAM binds the key to the object's whole chain; the answer is

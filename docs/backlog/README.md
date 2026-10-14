@@ -52,7 +52,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [115](115-a-burst-of-postgres-batches-larger-than-the-pool-hangs.md) — A Bun SQL `batch` holds its connection idle while pool queries queue behind it; a burst larger than the pool hangs.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — Role creation by `db`, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
-- [118](118-member-labels-are-nullable-under-a-labels-directory.md) — `ctx.members` labels are `string | null` even under `directory: 'labels'`.
 - [119](119-the-test-kit-cannot-make-a-disabled-member.md) — The kit's directory answers `disabled: false` for everyone.
 - [120](120-a-job-attempt-reports-a-refused-statement-as-handler-failed.md) — A job attempt reports a data-layer refusal as `handler_failed`, without its reason.
 - [122](122-the-generated-tests-cannot-seed-a-foreign-key-outside-the-chain-or-name-a-child-row.md) — The seed marks a nullable text foreign key, and no fixture names a seeded child row.
