@@ -108,6 +108,12 @@ the browser report errors. The bucket `notes-files` is on `apps-storage`, a Seaw
 of the `apps-prod` network only, so the application never reaches the platform's
 storage. A `.state` from before the contract application asks for `local:reset`.
 
+Notes manages the members of a workspace (`people.guests.invite`), so a deploy also writes IAM's
+membership transport: `FABRIKA_IAM_RPC_URL` (IAM's public origin) and the environment's
+`FABRIKA_IAM_RPC_KEY`. `up` issues that key through IAM's `membershipKeys.issue` with the
+provisioning key, as Control does, into `notes-membership.env` (`src/membership-key.ts`), after
+IAM knows the Notes schema and before the container starts; each issuance ends the previous key.
+
 The database URL in `notes.env` is the `apps-db` superuser's, and it is only the
 provisioning credential: `fabrika db migrate` creates the role family with it and
 migrates as `app_notes`, the server connects as `run_notes`, and `local:smoke` checks
@@ -119,7 +125,7 @@ starts it over.
 Nothing deploys the container, and the emulator runs no code. `followNotesDeploy`
 (`src/notes-follow.ts`) makes the composition serve what the emulator's active Notes
 version deployed: the endpoint table Control published on the namespace proxy, the
-contract digest and workload keys the deploy wrote, and the source of that commit. The
+contract digest, workload keys and membership transport the deploy wrote, and the source of that commit. The
 browser stack uses it: its `notes-agent-change` seed deploys and approves the pinned
 commit, follows it, and pushes the agent change commit through the notes connection's
 webhook, where it waits for approval. The scenario
@@ -243,9 +249,18 @@ Opening the console therefore runs the real round trip:
 That session is a **global admin** — `LOCAL_DEV_LOGIN` resolves the fixed
 `admin@local.test` bootstrap admin and nothing else. Everything else about an
 identity is done in IAM, through the console's Access plane: `principals.invite`
-creates one, and `passwords.issueEnrollment` answers with the enrolment URL
-directly (`FABRIKA_EMAIL_PROVIDER` is `none`, so delivery is `manual`) — that
+creates one, and `passwords.issueEnrollment` mails the enrolment link — that
 principal can then sign in with a password.
+
+IAM's mail is captured, not delivered. The composition starts IAM through
+`packages/local-stack/src/iam-server.ts`, the production server with a
+`DirectoryEmailSender` (`@fabrika/email/directory`) as a composition input: each message is
+a JSON file in `packages/local-stack/.state/mail/`, keyed by its idempotency key.
+`FABRIKA_EMAIL_PROVIDER` stays `none`, and IAM refuses such a sender outside
+`ENVIRONMENT=local`. So forgot-password, invitations and an administrator's enrollment
+and reset all work here, and `waitForMail` (`src/mail-capture.ts`) reads a mailbox's
+newest message back for the browser suites. The files hold one-time links; they live in
+the disposable `.state/` and nothing prints them.
 
 That is the production round trip verbatim, including the handoff, because since
 [ADR-0023](../decisions/0023-one-session-per-host.md) there is no other way for a

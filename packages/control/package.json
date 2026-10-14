@@ -49,6 +49,11 @@
 			"types": "./src/workload-credentials.ts",
 			"default": "./src/workload-credentials.ts"
 		},
+		"./membership-transport": {
+			"bun": "./src/membership-transport.ts",
+			"types": "./src/membership-transport.ts",
+			"default": "./src/membership-transport.ts"
+		},
 		"./vault": {
 			"bun": "./src/vault.ts",
 			"types": "./src/vault.ts",

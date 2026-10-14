@@ -78,7 +78,8 @@ services:
 
   iam:
     <<: *bun
-    command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/iam/src/node/server.ts"]
+    # The production server with its mail written to `.state/mail/` instead of delivered (`src/iam-server.ts`).
+    command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/local-stack/src/iam-server.ts"]
     # `iam-oauth.env` is rewritten by every prepare: empty unless FABRIKA_LOCAL_MCP_CLIENTS_JSON is set.
     env_file:
       - path: .state/iam.env
@@ -93,6 +94,7 @@ services:
       LOCAL_DEV_LOGIN: "true"
       FABRIKA_IAM_OIDC_ENABLED: "false"
       FABRIKA_IAM_PASSWORD_ENABLED: "true"
+      # The captured mail replaces a provider, which IAM then requires to stay none.
       FABRIKA_EMAIL_PROVIDER: none
       HUMAN_EMAIL_DOMAINS: "[]"
       HUMAN_EMAILS: "[]"
@@ -257,11 +259,14 @@ services:
         bun /workspace/packages/cli/src/index.ts db codegen --verify &&
         bun /workspace/packages/cli/src/index.ts db test-isolation &&
         exec bun fabrika/entry.generated.ts
-    # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`); `up` writes it before Notes starts.
+    # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`), `notes-membership.env` IAM's
+    # membership transport (`membership-key.ts`); `up` writes both before Notes starts.
     env_file:
       - .state/notes.env
       - .state/notes-contract.env
       - path: .state/notes-workloads.env
+        required: false
+      - path: .state/notes-membership.env
         required: false
     environment:
       PORT: "3000"

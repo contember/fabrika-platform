@@ -26,6 +26,7 @@ import { resolve } from 'node:path'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { applicationFixtureRoot } from './local-source-fixtures/generate'
+import { MAIL_DIRECTORY } from './mail-capture'
 import { ensureLocalGitHubApps } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -370,6 +371,8 @@ const run = async (command: string[]): Promise<void> => {
 
 export const prepareLocalStack = async (): Promise<void> => {
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+	// Made here, by the host's user, so a reset can remove the messages the IAM container writes as root.
+	mkdirSync(MAIL_DIRECTORY, { recursive: true, mode: 0o700 })
 	// Plain `bun run`, never wrapped in the developer's core-leasing helper: this also runs where that
 	// helper is not on PATH, and wrapping it once failed with `Executable not found in $PATH: "cpu-lease"`.
 	//

@@ -19,7 +19,8 @@ directly.
 | `src/app-kit.ts`                                             | `defineApp(vocabulary, tables)`: the kit every endpoint is built with.                             |
 | `src/schemas.ts`                                             | The inputs, outputs and limits the shell and the SPA share.                                        |
 | `src/notes/endpoints.ts`                                     | The notes slice: each endpoint with its `.handle(…)`, and the `purge` job.                         |
-| `fabrika.contract.ts`                                        | Who may call what: the `/api` mount, the SPA, `attachments`, `purge`, the health check.            |
+| `src/guests/endpoints.ts`                                    | Staff invite a guest, a person from outside the organization, into a workspace by e-mail.          |
+| `fabrika.contract.ts`                                        | Who may call what: the `/api` and `/people` mounts, the SPA, `attachments`, `purge`, the health.   |
 | `src/app.ts`                                                 | `serve(contract, { database: scoped(tables) })`, which the generated entrypoint boots.             |
 | `db/migrations/`                                             | Plain SQL of the application's schema, the file collection's table included.                       |
 | `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                          |
@@ -49,9 +50,9 @@ the platform's: the database URL from `notesdb`, the storage from `notesfiles`, 
 secret, the contract digest and the Operations DSN.
 
 The SPA reports its uncaught errors to Operations: `web/operations.ts` reads the DSN and the release from the
-framework's `/__fabrika-config.json` and starts `@sentry/browser`. This example has no
-`creates`, members or share links; an application that has them gets IAM's membership transport (`FABRIKA_IAM_RPC_URL`,
-`FABRIKA_IAM_RPC_KEY`) from the platform.
+framework's `/__fabrika-config.json` and starts `@sentry/browser`. Because `guests.invite` manages the members of a
+workspace, the platform also gives the process IAM's membership transport (`FABRIKA_IAM_RPC_URL`, `FABRIKA_IAM_RPC_KEY`),
+and IAM sends the invitation; `guest` is the one role declared `external`, and `staff` may assign it in any workspace.
 
 ## Running it
 

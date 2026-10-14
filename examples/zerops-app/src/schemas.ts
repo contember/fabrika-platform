@@ -12,3 +12,11 @@ export const Versioned = z.strictObject({ id: z.uuid(), expectVersion: z.int().p
 export const NewNote = z.strictObject({ workspaceId: z.string().min(1).max(100), title: z.string().min(1).max(200) })
 export const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
 export const Done = z.strictObject({ id: z.uuid() })
+export const InviteGuest = z.strictObject({
+	workspaceId: z.string().min(1).max(100),
+	email: z.email(),
+	label: z.string().max(200).optional(),
+	message: z.string().max(1000).optional(),
+	resend: z.boolean().optional(),
+})
+export const Invited = z.strictObject({ invitationId: z.string() })

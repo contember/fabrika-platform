@@ -1,6 +1,7 @@
 // The composed Notes container and the apps proxy follow the deploy the Zerops emulator activated. The emulator runs no
 // code, so after a deploy the composition stands in for the platform: it takes the endpoint table Control published on
-// the namespace proxy, the contract digest and workload keys the deploy wrote, and the source of the deployed commit.
+// the namespace proxy, the contract digest, workload keys and membership transport the deploy wrote, and the source of
+// the deployed commit.
 // Nothing here decides access: an approved snapshot is the only thing Control publishes (ADR-0050).
 
 import { FABRIKA_CONTRACT_DIGEST } from '@fabrika/auth-core'
@@ -12,6 +13,7 @@ import { compose, type ComposeOptions } from './compose'
 import { LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY, LOCAL_SOURCE_FIXTURE_DIRECTORY } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
+import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, writeNotesMembershipTransport } from './membership-key'
 import { controlRequest, type EmulatorSnapshot, emulatorSnapshot, notesServiceId } from './notes-deploy'
 import { buildNotesSpa, LOCAL_NOTES_IAM_APP_ID, localAppsProxyManifest, STATE_DIR, writeAppsProxyConfig, writeNotesContractDigest } from './prepare'
 import { completedRunSchema } from './smoke-schemas'
@@ -23,10 +25,17 @@ const CONTAINER_STATE_DIR = '/workspace/packages/local-stack/.state'
 
 /** The one value of `key` the emulator holds on `serviceId`; it may be a secret, so it is never printed. */
 function soleVariable(snapshot: EmulatorSnapshot, serviceId: string, key: string): string {
+	const value = optionalVariable(snapshot, serviceId, key)
+	if (value === null) throw new Error(`the Zerops emulator holds no single ${key}`)
+	return value
+}
+
+/** The value of `key` on `serviceId`, or null when the deploy wrote none. More than one is never a deploy's. */
+function optionalVariable(snapshot: EmulatorSnapshot, serviceId: string, key: string): string | null {
 	const records = snapshot.serviceEnv.filter((record) => record.serviceStackId === serviceId && record.key === key)
-	const record = records[0]
-	if (records.length !== 1 || record === undefined || record.content === '') throw new Error(`the Zerops emulator holds no single ${key}`)
-	return record.content
+	if (records.length > 1) throw new Error(`the Zerops emulator holds more than one ${key}`)
+	const content = records[0]?.content ?? ''
+	return content === '' ? null : content
 }
 
 /**
@@ -76,6 +85,10 @@ export async function followNotesDeploy(options: Pick<ComposeOptions, 'browser'>
 	const keys = new Map<string, string>()
 	for (const variable of notesWorkloadKeys().keys()) keys.set(variable, soleVariable(snapshot, serviceId, variable))
 	await writeNotesWorkloadKeys(keys)
+	const membershipUrl = optionalVariable(snapshot, serviceId, MEMBERSHIP_URL_VARIABLE)
+	const membershipKey = optionalVariable(snapshot, serviceId, MEMBERSHIP_KEY_VARIABLE)
+	if ((membershipUrl === null) !== (membershipKey === null)) throw new Error('the Notes deploy wrote half of the membership transport')
+	await writeNotesMembershipTransport(membershipUrl === null || membershipKey === null ? null : { url: membershipUrl, key: membershipKey })
 	await writeNotesContractDigest(digest)
 	const { endpoints, reservedPrefixes, snapshot: tableSnapshot, csp } = entry
 	await writeAppsProxyConfig(localAppsProxyManifest({ endpoints, reservedPrefixes, snapshot: tableSnapshot, csp }))

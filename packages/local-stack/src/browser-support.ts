@@ -20,6 +20,7 @@ import {
 } from './response-schemas'
 import { upLocalComposition } from './up'
 
+export { actionLinkOf, waitForMail, waitForMailLink } from './mail-capture'
 export {
 	issueNotesKey,
 	NOTES_AGENT_CHANGE_WORKSPACE,
@@ -29,7 +30,7 @@ export {
 	waitForNotesDeploy,
 } from './notes-agent-change'
 export { followNotesDeploy } from './notes-follow'
-export { createPasswordPerson, issuePasswordLink, type PasswordPerson } from './password-person'
+export { createPasswordPerson, issuePasswordLink, type NotesPrincipal, type PasswordPerson, readNotesPrincipal } from './password-person'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'

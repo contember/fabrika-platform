@@ -35,6 +35,7 @@ import { approveInConsole, signInToConsole } from './console-approval'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY, type LocalSourceManifest } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
+import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, writeNotesMembershipTransport } from './membership-key'
 import {
 	CONTROL_ORIGIN,
 	controlRequest,
@@ -353,6 +354,8 @@ const proveManagedOperationsEnvironment = async (
 		FABRIKA_PROXY_SECRET,
 		STORAGE_PROVENANCE_VARIABLE,
 		...notesWorkloadKeys().keys(),
+		MEMBERSHIP_URL_VARIABLE,
+		MEMBERSHIP_KEY_VARIABLE,
 	])
 	const unexpected = records.filter((record) =>
 		record.key.startsWith('FABRIKA_')
@@ -375,7 +378,8 @@ const soleSecret = (snapshot: EmulatorSnapshot, serviceId: string, key: string, 
 
 /**
  * Control issued each Notes job and webhook its own key and wrote it as a sensitive service variable, which IAM
- * exchanges. The composed container then holds those keys, as the deployed version does.
+ * exchanges, and wrote the membership transport `guests.invite` needs. The composed container then holds those keys,
+ * as the deployed version does.
  */
 const proveWorkloadKeys = async (): Promise<void> => {
 	const snapshot = await emulatorSnapshot()
@@ -387,6 +391,12 @@ const proveWorkloadKeys = async (): Promise<void> => {
 		keys.set(variable, key)
 	}
 	await writeNotesWorkloadKeys(keys)
+	const membershipUrls = snapshot.serviceEnv.filter((record) => record.serviceStackId === serviceId && record.key === MEMBERSHIP_URL_VARIABLE)
+	if (membershipUrls.length !== 1 || membershipUrls[0]?.content !== IAM_ORIGIN) {
+		throw new Error(`Zerops emulator service variable ${MEMBERSHIP_URL_VARIABLE} is not IAM's public origin`)
+	}
+	const membershipKey = soleSecret(snapshot, serviceId, MEMBERSHIP_KEY_VARIABLE, `${MEMBERSHIP_KEY_VARIABLE} on the Notes service`)
+	await writeNotesMembershipTransport({ url: IAM_ORIGIN, key: membershipKey })
 	await compose(['up', '--detach', '--wait', 'notes'])
 }
 

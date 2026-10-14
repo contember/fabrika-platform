@@ -39,7 +39,9 @@
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
-		"@fabrika/platform-node": "workspace:*"
+		"@fabrika/platform-node": "workspace:*",
+		"@fabrika/email": "workspace:*",
+		"@fabrika/iam": "workspace:*"
 	},
 	"devDependencies": {
 		"@fabrika/check": "workspace:*",
