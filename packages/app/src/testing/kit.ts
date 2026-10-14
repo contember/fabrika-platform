@@ -50,15 +50,7 @@ import {
 	type TestGrant,
 	type TestScope,
 } from './caller'
-import {
-	credentialCallers,
-	kitDirectory,
-	type KitMembership,
-	kitMembership,
-	type MintedToken,
-	type TestMembership,
-	writesThroughIam,
-} from './membership'
+import { credentialCallers, type KitMembership, kitMembership, type MintedToken, type TestMembership } from './membership'
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
@@ -81,8 +73,8 @@ export interface TestKitOptions {
 	/** The scanner of the scan job of `scan: true` collections; without it, the job leaves every upload quarantined. */
 	readonly scanner?: FileScanner
 	/**
-	 * IAM's membership operations, for an application that creates scopes, manages members or issues share links:
-	 * `boot` asks it as the adapter's transport, and the kit's proxy obtains each delegation grant from it.
+	 * IAM's membership operations in place of the kit's own stand-in: `boot` asks it as the adapter's transport, and the
+	 * kit's proxy obtains each delegation grant from it. Without it the kit's IAM answers them under IAM's rules.
 	 */
 	readonly membership?: IamMembershipRpc
 	/**
@@ -124,6 +116,12 @@ export interface TestKit<C extends AnyContract> {
 	/** The test IAM as the proxy calls it: it mints for the credentials `testCaller` issued and serves their key set. */
 	readonly iam: IamGateway
 	/**
+	 * The addressee of an invitation the kit's IAM holds open accepts it, as IAM's onboarding does: `person` holds the
+	 * invited role in its scope from now on, or, without one, a new person labelled by the invited address does. Answers
+	 * that person. Throws for an invitation that is not open, and in a kit given its own `membership`.
+	 */
+	acceptInvitation(invitationId: string, person?: LabelledTestCaller): LabelledTestCaller
+	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
 	 * its key, its writes fenced. It first waits for the runs a form's `then` kicked, so it never races them.
 	 * `FILE_SCAN_JOB` runs the scan of `scan: true` collections with the kit's `scanner`. Needs the application's data
@@ -160,7 +158,7 @@ function stripClientAsserted(headers: Headers): void {
 
 /** Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`. */
 export function testKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
-	return bootTestKit(app, options, 'refused').kit
+	return bootTestKit(app, options).kit
 }
 
 /** The kit of the generated tests, and its stand-in IAM, which seeds the invitations and links a case names. */
@@ -169,22 +167,22 @@ export interface StandInIamKit<C extends AnyContract> {
 	readonly standIn: KitMembership
 }
 
-/**
- * The kit of the generated tests: its stand-in IAM also answers scope creation, member management and share links
- * under IAM's rules for the caller's grants, and grants the kit's callers nothing.
- */
+/** The kit of the generated tests, with a handle on its stand-in IAM to seed what a case names. */
 export function standInIamKit<C extends AnyContract>(
 	app: ContractImplementation<C>,
 	options: Omit<TestKitOptions, 'membership'> = {},
 ): StandInIamKit<C> {
-	return bootTestKit(app, options, 'stand-in')
+	const { kit, standIn } = bootTestKit(app, options)
+	if (standIn === null) {
+		throw new Error('a kit without its own membership transport stands in for IAM')
+	}
+	return { kit, standIn }
 }
 
 function bootTestKit<C extends AnyContract>(
 	app: ContractImplementation<C>,
 	options: TestKitOptions,
-	writes: 'refused' | 'stand-in',
-): StandInIamKit<C> {
+): { readonly kit: TestKit<C>; readonly standIn: KitMembership | null } {
 	refuseInProduction('@fabrika/app/testing')
 	const name = app.contract.vocabulary.app
 	const appId = `${name}@${TEST_ENVIRONMENT}`
@@ -252,11 +250,10 @@ function bootTestKit<C extends AnyContract>(
 	const byToken = new Map<string, MintedToken>()
 	const memberships = new Map<TestCaller, readonly TestMembership[]>()
 	const directoryCallers = credentialCallers(appId, byKey, byToken, () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })))
-	// A member directory reads the kit's own callers; a contract that writes through IAM needs `options.membership`,
-	// unless the kit stands in for IAM's writes too, and then it also issues the proxy's delegation grants.
-	const standIn = kitMembership(artifact, directoryCallers)
-	const writer = options.membership ?? (writes === 'stand-in' ? standIn.rpc : undefined)
-	const membership = writer ?? (writesThroughIam(artifact) ? undefined : kitDirectory(artifact, directoryCallers))
+	// The stand-in answers the member directory from the kit's own callers and the writes under IAM's rules; it also
+	// issues the proxy's delegation grants.
+	const standIn = options.membership === undefined ? kitMembership(artifact, directoryCallers) : null
+	const membership = options.membership ?? standIn?.rpc
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -290,6 +287,11 @@ function bootTestKit<C extends AnyContract>(
 	): LabelledTestCaller
 	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
 	function testCaller(grants: readonly TestGrant<C>[], callerOptions: TestCallerOptions = {}): TestCaller {
+		return issue(grants, callerOptions)
+	}
+
+	/** `testCaller` over the contract's names as plain strings, which `acceptInvitation` reads from its stand-in IAM. */
+	function issue(grants: readonly TestGrant<AnyContract>[], callerOptions: TestCallerOptions): TestCaller {
 		const kind = callerOptions.kind ?? 'human'
 		const via = kind === 'human' ? (callerOptions.via ?? 'session') : 'key'
 		issued += 1
@@ -328,7 +330,7 @@ function bootTestKit<C extends AnyContract>(
 			id: callerOptions.id ?? `${kind}-${issued}`,
 			affiliation,
 			disabled,
-			perms: Object.freeze(resolveGrants(app.contract, grants)),
+			perms: Object.freeze(resolveGrants<AnyContract>(app.contract, grants)),
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,
 		}
@@ -372,7 +374,7 @@ function bootTestKit<C extends AnyContract>(
 			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
 			...(caller.email === null ? {} : { email: caller.email }),
-			permissions: [...caller.perms],
+			permissions: [...(standIn?.permsOf(caller) ?? caller.perms)],
 			issuedAt: now,
 			expiresAt: now + TOKEN_TTL_SECONDS,
 		})
@@ -403,7 +405,7 @@ function bootTestKit<C extends AnyContract>(
 		getJwks: () => jwks,
 	}
 
-	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: writer ?? null })
+	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: membership ?? null })
 
 	// What requests leave running: a job a form's `then` kicked, or a failure's report.
 	const background = new Set<Promise<void>>()
@@ -467,5 +469,28 @@ function bootTestKit<C extends AnyContract>(
 		return application.jobs.run(name, runOptions)
 	}
 
-	return { kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob }), standIn }
+	const acceptInvitation = (invitationId: string, person?: LabelledTestCaller): LabelledTestCaller => {
+		if (standIn === null) {
+			throw new Error('this kit was given its own membership transport, so its IAM holds no invitation to accept')
+		}
+		if (person !== undefined && (person.kind !== 'human' || !memberships.has(person))) {
+			throw new Error('an invitation is accepted by a person of this kit: kit.testCaller(grants)')
+		}
+		const accepted = standIn.accept(invitationId, person?.id)
+		if (person !== undefined) return person
+		const external = app.contract.vocabulary.roles[accepted.role]?.external === true
+		const invitee = issue([{ role: accepted.role, scope: accepted.scope }], {
+			label: accepted.email,
+			email: accepted.email,
+			affiliation: external ? 'external' : 'internal',
+		})
+		if (invitee.kind === 'link') {
+			throw new Error('an invitation is accepted by a person')
+		}
+		return invitee
+	}
+	return {
+		kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob, acceptInvitation }),
+		standIn,
+	}
 }

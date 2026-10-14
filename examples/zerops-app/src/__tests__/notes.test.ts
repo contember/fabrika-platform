@@ -3,7 +3,7 @@
 // generated endpoint access test boots the same application, and its data layer binds once per process.
 
 import { createClient } from '@fabrika/app/client'
-import { type IamMembershipRpc, statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
+import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -15,31 +15,10 @@ const postgres = await testDatabase({ migrations: new URL('../../db/migrations/'
 
 const Uploaded = z.strictObject({ result: z.strictObject({ id: z.string() }) })
 
-type Invitation = Parameters<IamMembershipRpc['assignMember']>[0]
-
-/** IAM's membership operations as these tests need them: each delegation is granted, and an invitation is recorded. */
-function recordingMembership(invitations: Invitation[]): IamMembershipRpc {
-	const refused = async (): Promise<{ ok: false; reason: 'not_allowed' }> => ({ ok: false, reason: 'not_allowed' })
-	return {
-		requestDelegation: async () => ({ ok: true, grant: `grant-${crypto.randomUUID()}`, expiresAt: Math.floor(Date.now() / 1000) + 60 }),
-		assignMember: async (input) => {
-			invitations.push(input)
-			return { ok: true, invited: { invitationId: `invitation-${invitations.length}`, role: input.role, expiresAt: 0 } }
-		},
-		createScope: refused,
-		revokeMember: refused,
-		listMembers: refused,
-		findMember: refused,
-		issueLink: refused,
-		revokeLink: refused,
-	}
-}
-
 if (postgres !== null) {
 	afterAll(() => postgres.close())
 	const objects = new MemoryFileObjects()
-	const invitations: Invitation[] = []
-	const kit = testKit(app, { database: postgres.database, files: objects, membership: recordingMembership(invitations) })
+	const kit = testKit(app, { database: postgres.database, files: objects })
 	const inW1 = (role: 'reader' | 'author' | 'editor') => kit.testCaller([{ role, scope: { type: 'workspace', value: 'w1' } }])
 	const author = inW1('author')
 	const authorApi = createClient(contract, 'api', { fetch: kit.browser(author) })
@@ -99,20 +78,23 @@ if (postgres !== null) {
 	})
 
 	describe('guests', () => {
-		test('staff invite a guest into any workspace by e-mail; a reader of the workspace invites nobody', async () => {
+		test('staff invite a guest into any workspace by e-mail; the guest accepts and reads it; a guest or a reader invites nobody', async () => {
 			const staff = createClient(contract, 'people', { fetch: kit.browser(kit.testCaller([{ role: 'staff' }])) })
 			const invite = { workspaceId: 'w1', email: 'guest@example.test', label: 'Acme', message: 'Welcome to Notes.', resend: true }
-			expect(await staff.guests.invite(invite)).toEqual({ invitationId: 'invitation-1' })
-			expect(invitations.map(({ scope, member, role, invitation }) => ({ scope, member, role, invitation }))).toEqual([{
-				scope: { type: 'workspace', value: 'w1' },
-				member: { email: 'guest@example.test' },
-				role: 'guest',
-				invitation: { label: 'Acme', message: 'Welcome to Notes.', resend: true },
-			}])
+			const { invitationId } = await staff.guests.invite(invite)
+			expect(await staff.guests.invite(invite)).toEqual({ invitationId })
 
+			const guest = kit.acceptInvitation(invitationId)
+			expect(guest).toMatchObject({ label: 'guest@example.test', affiliation: 'external' })
+			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'For the guest' })
+			const guestApi = createClient(contract, 'api', { fetch: kit.browser(guest) })
+			expect((await guestApi.notes.get({ id })).title).toBe('For the guest')
+			expect(await statusOf(guestApi.notes.create({ workspaceId: 'w1', title: 'No' }))).toBe(403)
+
+			const asGuest = createClient(contract, 'people', { fetch: kit.browser(guest) })
+			expect(await statusOf(asGuest.guests.invite({ workspaceId: 'w1', email: 'other@example.test' }))).toBe(403)
 			const reader = createClient(contract, 'people', { fetch: kit.browser(inW1('reader')) })
 			expect(await statusOf(reader.guests.invite({ workspaceId: 'w1', email: 'other@example.test' }))).toBe(403)
-			expect(invitations).toHaveLength(1)
 		})
 	})
 

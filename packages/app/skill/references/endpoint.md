@@ -514,6 +514,17 @@ const Member = z.strictObject({
 })
 const Members = z.strictObject({ items: z.array(Member) })
 const MyOrgs = z.strictObject({ all: z.boolean(), orgs: z.array(z.string()) })
+const Invite = z.strictObject({
+	orgId: z.string().min(1).max(100),
+	email: z.email(),
+	role: z.enum(['owner', 'member']),
+})
+const Invited = z.strictObject({ invitationId: z.string() })
+const Remove = z.strictObject({
+	orgId: z.string().min(1).max(100),
+	principalId: z.string(),
+})
+const Removed = z.strictObject({ ok: z.boolean() })
 
 export const members = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -538,6 +549,32 @@ export const members = app.group({ callers: ['human'] }, (r) => ({
 				? { all: true, orgs: [] }
 				: { all: false, orgs: [...ctx.within.values].sort() }
 		),
+	invite: r.mutation({
+		input: Invite,
+		output: Invited,
+		access: { action: 'members.manage', in: 'org', from: 'orgId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const result = await ctx.members.assign(
+				ctx.target,
+				{ email: input.email },
+				input.role,
+			)
+			return {
+				invitationId: 'invited' in result
+					? result.invited.invitationId
+					: result.assigned.principalId,
+			}
+		}),
+	remove: r.mutation({
+		input: Remove,
+		output: Removed,
+		access: { action: 'members.manage', in: 'org', from: 'orgId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.members.revoke(ctx.target, { principalId: input.principalId })
+			return { ok: true }
+		}),
 }))
 ```
 

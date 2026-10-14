@@ -1097,6 +1097,17 @@ const Member = z.strictObject({
 })
 const Members = z.strictObject({ items: z.array(Member) })
 const MyOrgs = z.strictObject({ all: z.boolean(), orgs: z.array(z.string()) })
+const Invite = z.strictObject({
+	orgId: z.string().min(1).max(100),
+	email: z.email(),
+	role: z.enum(['owner', 'member']),
+})
+const Invited = z.strictObject({ invitationId: z.string() })
+const Remove = z.strictObject({
+	orgId: z.string().min(1).max(100),
+	principalId: z.string(),
+})
+const Removed = z.strictObject({ ok: z.boolean() })
 
 export const members = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({
@@ -1121,6 +1132,32 @@ export const members = app.group({ callers: ['human'] }, (r) => ({
 				? { all: true, orgs: [] }
 				: { all: false, orgs: [...ctx.within.values].sort() }
 		),
+	invite: r.mutation({
+		input: Invite,
+		output: Invited,
+		access: { action: 'members.manage', in: 'org', from: 'orgId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const result = await ctx.members.assign(
+				ctx.target,
+				{ email: input.email },
+				input.role,
+			)
+			return {
+				invitationId: 'invited' in result
+					? result.invited.invitationId
+					: result.assigned.principalId,
+			}
+		}),
+	remove: r.mutation({
+		input: Remove,
+		output: Removed,
+		access: { action: 'members.manage', in: 'org', from: 'orgId' },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.members.revoke(ctx.target, { principalId: input.principalId })
+			return { ok: true }
+		}),
 }))
 ```
 
@@ -2491,8 +2528,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
-- The job asks IAM to issue and revoke links, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an
-  `IamMembershipRpc` of your own that answers `issueLink` and `revokeLink`. A test of a form passes `env: {
+- The job asks IAM to issue and revoke links, and the kit's own IAM answers only the credentials of its callers, not a
+  job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
+  answers `issueLink` and `revokeLink`. A test of a form passes `env: {
   TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
   `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step): the next run must leave exactly one live, e-mailed link.
@@ -3047,8 +3085,8 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   every `on` and `over` endpoint, and every `in` endpoint that declares `sql`, answers nothing of another scope; a
   caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
   `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder.
-- Their kit stands in for IAM: it creates a scope, assigns or invites a member and issues a link under IAM's rules for
-  the caller's grants, and grants nobody anything. A repeated invitation answers the open one, `resend` restarts its
+- Their kit stands in for IAM, as `testKit` does (below): it creates a scope, assigns or invites a member and issues a
+  link under IAM's rules for the caller's grants. A repeated invitation answers the open one, `resend` restarts its
   7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
   holds it on the object itself, with one role the assigned role's `assignableBy` names and the assigned role's
   actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
@@ -3236,13 +3274,63 @@ if (postgres !== null) {
   label, email and actions in the kit as in production (`kit.browser(caller)('/__fabrika-me.json')`).
 - `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
   path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
-- A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`
-  gave a membership role in that scope, labels only where the dimension declares `directory: 'labels'` (or to a
-  `members.manage` holder). To list someone, make them a caller:
-  `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. For share links, `creates` or member
-  management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
-- `@fabrika/app/testing` exports the types of those options: `IamMembershipRpc` (`membership`), `ChallengeFetch`
-  (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
+- The kit stands in for IAM's membership operations. A member directory (`ctx.members.list()` and `get(id)`) answers
+  from the kit's own callers: everyone `testCaller` gave a membership role in that scope, labels only where the
+  dimension declares `directory: 'labels'` (or to a `members.manage` holder). To list someone, make them a caller:
+  `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. A `creates` endpoint, member
+  management and share links answer under IAM's rules for the caller's grants, and a role they give or remove is live
+  from the caller's next request, as in IAM: the creator of a value holds its creator role, a removed member is
+  refused and no longer listed.
+- `kit.acceptInvitation(invitationId)` is the invited person accepting an invitation your handler opened
+  (`ctx.members.assign(ctx.target, { email }, role)`): it answers a new caller labelled by the address, holding the
+  role in that scope (an `external` person for an external role). Pass a caller to make an existing person the
+  member: `kit.acceptInvitation(invitationId, member)`. An invitation that is not open throws.
+
+```ts src/members/__tests__/members.test.ts
+import { createClient } from '@fabrika/app/client'
+import { statusOf, testKit } from '@fabrika/app/testing'
+import { testDatabase } from '@fabrika/db/testing'
+import { afterAll, expect, test } from 'bun:test'
+import { contract } from '../../../fabrika.contract'
+import app from '../../app'
+
+const postgres = await testDatabase({
+	migrations: new URL('../../../db/migrations/', import.meta.url),
+	label: 'members.test.ts',
+})
+
+if (postgres !== null) {
+	afterAll(() => postgres.close())
+	const kit = testKit(app, { database: postgres.database })
+	const owner = kit.testCaller([{
+		role: 'owner',
+		scope: kit.scope('org', 'acme'),
+	}])
+	const ownerApi = createClient(contract, 'api', { fetch: kit.browser(owner) })
+
+	test('an invited person accepts and is listed; once removed, it is refused', async () => {
+		const { invitationId } = await ownerApi.members.invite({
+			orgId: 'acme',
+			email: 'ann@example.test',
+			role: 'member',
+		})
+		const ann = kit.acceptInvitation(invitationId)
+		const annApi = createClient(contract, 'api', { fetch: kit.browser(ann) })
+		expect(
+			(await annApi.members.list({ orgId: 'acme' })).items.map((item) =>
+				item.principalId
+			),
+		)
+			.toContain(ann.id)
+		await ownerApi.members.remove({ orgId: 'acme', principalId: ann.id })
+		expect(await statusOf(annApi.members.list({ orgId: 'acme' }))).toBe(403)
+	})
+}
+```
+
+- `testKit(app, { membership })` replaces the stand-in with your own `IamMembershipRpc`; that kit accepts no
+  invitation. `@fabrika/app/testing` exports the types of the options: `IamMembershipRpc` (`membership`),
+  `ChallengeFetch` (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
 - `kit.testCaller(grants, { disabled: true })` is a person an operator disabled: the directory lists and finds them
   with `disabled: true`, so an assignment of them answers your handler's 400, and their own requests are refused (401 for
   a session, 403 for a key).

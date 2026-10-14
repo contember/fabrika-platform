@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { TestCaller } from '../testing/caller'
 import { testKit } from '../testing/kit'
-import { kitDirectory } from '../testing/membership'
+import { kitMembership } from '../testing/membership'
 import { notesApp } from './fixtures/implement/app'
 
 const W1 = { type: 'workspace', value: 'w1' } as const
@@ -34,10 +34,10 @@ describe("the kit's member directory", () => {
 			{ caller: owner, memberships: [{ role: 'owner', scope: W1 }] },
 			{ caller: partner, memberships: [{ role: 'editor', scope: W1 }] },
 		]
-		const directory = kitDirectory(notesArtifact, {
+		const directory = kitMembership(notesArtifact, {
 			byCredential: (_app, credential) => members.find((member) => member.caller.key === credential)?.caller,
 			all: () => members,
-		})
+		}).rpc
 
 		const listed = await directory.listMembers({ app: 'notes', credential: 'px_owner', requestId: 'r1', scope: W1 })
 		if (!listed.ok) throw new Error(`no list: ${listed.reason}`)

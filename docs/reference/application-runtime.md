@@ -995,12 +995,22 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   A human signs in with a session (`cookie`) or a `px_` key; `machine` and `link`
   callers present a key. A `link` caller's key is bound to one object with
   `{ kind: 'link', link: { mount, chain } }`: the object first, then each value containing it.
-- `options.membership` is IAM's membership transport. Without it the kit answers a member directory
-  (`ctx.members.list()` and `get`) from its own callers: each caller's membership roles in the scope, labels only to a
-  `members.manage` holder or where the dimension declares `directory: 'labels'`, and `not_allowed` to a caller without
-  the dimension's `members.list` there (a list) or the endpoint's action on the chain (a lookup). A contract that creates scopes, manages members or issues share links gets no
-  stand-in, so `boot` names the transport it lacks; pass an `IamMembershipRpc` for it. Only the endpoint access kit
-  boots with a stand-in for those writes too (below).
+- The kit boots with a stand-in for IAM's membership transport (`kitMembership`,
+  `packages/app/src/testing/membership.ts`), whatever the contract declares, so an application that creates scopes,
+  manages members or issues share links tests them without a transport of its own, and so does the policy isolation
+  kit's probe. It answers a member directory (`ctx.members.list()` and `get`) from the kit's callers: each caller's
+  membership roles in the scope, labels only to a `members.manage` holder or where the dimension declares
+  `directory: 'labels'`, and `not_allowed` to a caller without the dimension's `members.list` there (a list) or the
+  endpoint's action on the chain (a lookup). It answers the writes under IAM's rules for the caller's grants: a
+  single-use delegation grant per request, `members.manage` on the value itself, an assigning role (`assignableBy`)
+  there or, an application-wide one, globally, every action of the role assigned, a link mount's `issuedBy` and grants
+  on its chain, the last creator's revoke (`last_creator`), IAM's input bounds, a credential of another application,
+  an expired token and a connector. A role it assigns or revokes, and the creator role of a value it creates, is live
+  as in IAM: the directory, its own checks and the next token the kit signs for that principal read it.
+  `kit.acceptInvitation(invitationId, person?)` is IAM's onboarding as a test step: the invitation closes, and
+  `person`, or a new person labelled by the invited address (`external` for an external role), holds the invited
+  role from then on. `options.membership` replaces the stand-in with the test's own `IamMembershipRpc`; that kit
+  accepts no invitation.
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
   (`{ status: 'succeeded', attempts }`). It first waits for the runs a form's `then` kicked through `kit.fetch`.
@@ -1086,16 +1096,11 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
   export, `serve(…)`) through the test kit, on the application's own data layer, once: that layer
-  binds once per process. Its stand-in IAM (`kitMembership`, `packages/app/src/testing/membership.ts`) also answers
-  scope creation, member management and share links, under IAM's rules for the caller's grants: a single-use
-  delegation grant per request, `members.manage` on the value itself, an assigning role (`assignableBy`) there or, an
-  application-wide one, globally, every
-  action of the role assigned, a link mount's `issuedBy` and grants on its chain. It records each write it allowed
-  and grants the kit's callers nothing. A case's caller of an endpoint that manages members holds, on its target's
+  binds once per process. It boots with the kit's stand-in IAM (above), which records each write it allowed and
+  seeds the invitations and links a case names. A case's caller of an endpoint that manages members holds, on its target's
   value, the action, one assigning role of each role the input names (every membership role of the dimension when it
   names none) and those roles' actions; one of an endpoint that issues links also holds the actions the links grant.
-  The stand-in also refuses the last creator's revoke (`last_creator`), IAM's input bounds, a credential of another
-  application, an expired token and a connector. The cases:
+  Each case asks as new callers, so no write of another case reaches them. The cases:
   - **Denial.** For every procedure with an `on` or `in` access form, a caller holding the action in one scope names
     the other scope's object or value and gets 404 (`on`) or 403 (`in`), exactly.
   - **Leak.** For every `on` and `over` procedure, and every `in` procedure that declares `sql`, a caller of the other

@@ -10,11 +10,13 @@ import {
 	Done,
 	Invite,
 	Invited,
+	Members,
 	Named,
 	NamedList,
 	NewNote,
 	Note,
 	Notes,
+	RemoveMember,
 	Rename,
 	Share,
 	Shared,
@@ -41,6 +43,13 @@ export const workspaces = app.group({ callers: ['human'] }, (r) => ({
 			const invited = await ctx.members.assign(ctx.target, { email: input.email }, input.role)
 			return { invitationId: 'invited' in invited ? invited.invited.invitationId : invited.assigned.principalId }
 		}),
+	remove: r.mutation({ input: RemoveMember, output: Done, access: { action: 'workspaces.admin', on: 'workspace', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			await ctx.members.revoke(ctx.target, { principalId: input.principalId })
+			return { id: ctx.target.value }
+		}),
+	members: r.query({ input: ById, output: Members, access: { action: 'workspaces.read', on: 'workspace', from: 'id' } })
+		.handle(async ({ ctx }) => ({ items: (await ctx.members.list()).map(({ principalId, roles }) => ({ principalId, roles: [...roles] })) })),
 	cancel: r.mutation({ input: CancelInvitation, output: Done, access: { action: 'workspaces.admin', on: 'workspace', from: 'id' } })
 		.handle(async ({ input, ctx }) => {
 			await ctx.members.revoke(ctx.target, { invitationId: input.invitationId })

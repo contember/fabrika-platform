@@ -1,5 +1,5 @@
-// The endpoint access kit's stand-in for IAM's membership writes: each operation answers under IAM's rules for the
-// caller's grants and spends one delegation grant, and none of them grants the kit's callers anything.
+// The test kit's stand-in for IAM's membership writes: each operation answers under IAM's rules for the caller's grants
+// and spends one delegation grant. A role it assigns or revokes is live: the directory and its own checks read it.
 
 import { defineContract } from '@fabrika/app/contract'
 import {
@@ -165,7 +165,7 @@ describe('the stand-in assigns and revokes under members.manage, assignableBy an
 		member: MemberTarget = { email: 'ann@example.test' },
 	) => membership.rpc.assignMember({ ...as(caller), delegation: await delegation(membership, caller, 'api.members.invite'), scope, role, member })
 
-	test('an owner invites an address and assigns a known person; neither changes the directory', async () => {
+	test('an owner invites an address, which changes no directory, and assigns a known person, who is listed from then on', async () => {
 		const membership = standIn()
 		expect(await assign(membership, owner, ACME, 'editor')).toMatchObject({ ok: true, invited: { role: 'editor' } })
 		expect(await assign(membership, owner, ACME, 'owner', { principalId: 'starter' })).toMatchObject({
@@ -174,7 +174,8 @@ describe('the stand-in assigns and revokes under members.manage, assignableBy an
 		})
 		expect(await assign(membership, owner, ACME, 'editor', { principalId: 'nobody' })).toEqual({ ok: false, reason: 'not_found' })
 		const listed = await membership.rpc.listMembers({ ...as(owner), scope: ACME })
-		expect(listed.ok ? listed.members.map((member) => member.principalId).sort() : listed.reason).toEqual(['editor', 'manager', 'owner'])
+		expect(listed.ok ? listed.members.map((member) => member.principalId).sort() : listed.reason).toEqual(['editor', 'manager', 'owner', 'starter'])
+		expect(membership.permsOf(starter)).toEqual([entry('workspaces.create'), ...roleEntries('owner', ACME)])
 	})
 
 	test('an external person is assigned only a role the contract declares external, as IAM does', async () => {
@@ -247,20 +248,16 @@ describe('the stand-in keeps the last creator, as IAM does', () => {
 		expect(await revoke(membership, owner, 'owner')).toEqual({ ok: false, reason: 'last_creator' })
 	})
 
-	test('an owner it revoked assigns nothing more, as IAM reads the live grants', async () => {
+	test('an owner it revoked holds none of the role, so it is granted no delegation to assign, as IAM reads the live grants', async () => {
 		const membership = standIn([{ caller: coOwner, memberships: [{ role: 'owner', scope: ACME }] }])
 		expect(await revoke(membership, owner, 'co-owner')).toEqual({ ok: true })
-		const invited = await membership.rpc.assignMember({
-			...as(coOwner),
-			delegation: await delegation(membership, coOwner, 'api.members.invite'),
-			scope: ACME,
-			role: 'editor',
-			member: { email: 'ann@example.test' },
-		})
-		expect(invited).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(membership.permsOf(coOwner)).toEqual([])
+		expect(await delegation(membership, coOwner, 'api.members.invite')).toBe('not_allowed')
+		const listed = await membership.rpc.listMembers({ ...as(owner), scope: ACME })
+		expect(listed.ok ? listed.members.map((member) => member.principalId) : listed.reason).not.toContain('co-owner')
 	})
 
-	test("a creator's own revoke in the value it just created is last_creator, and the directory shows nobody new", async () => {
+	test("a creator's own revoke in the value it just created is last_creator, and the directory lists the creator", async () => {
 		const founder = person('founder', ['workspaces.create', 'notes.read', 'notes.write', 'notes.share', 'notes.admin'].map((action) => entry(action)))
 		const membership = standIn([{ caller: founder, memberships: [] }])
 		const created = await membership.rpc.createScope({
@@ -277,10 +274,11 @@ describe('the stand-in keeps the last creator, as IAM does', () => {
 			member: { principalId: 'founder' },
 		})
 		expect(revoked).toEqual({ ok: false, reason: 'last_creator' })
-		expect(await membership.rpc.listMembers({ ...as(founder), scope })).toEqual({ ok: true, members: [], invitations: [] })
+		const listed = await membership.rpc.listMembers({ ...as(founder), scope })
+		expect(listed.ok ? listed.members.map((member) => [member.principalId, member.roles]) : listed.reason).toEqual([['founder', ['owner']]])
 	})
 
-	test('an owner it assigned counts as another holder, and the directory still shows nobody new', async () => {
+	test('an owner it assigned counts as another holder, and the directory shows the assigned owner in place of the revoked one', async () => {
 		const membership = standIn()
 		const assigned = await membership.rpc.assignMember({
 			...as(owner),
@@ -291,8 +289,9 @@ describe('the stand-in keeps the last creator, as IAM does', () => {
 		})
 		expect(assigned).toMatchObject({ ok: true })
 		expect(await revoke(membership, owner, 'owner')).toEqual({ ok: true })
-		const listed = await membership.rpc.listMembers({ ...as(owner), scope: ACME })
-		expect(listed.ok ? listed.members.map((member) => member.principalId).sort() : listed.reason).toEqual(['editor', 'manager', 'owner'])
+		expect(await membership.rpc.listMembers({ ...as(owner), scope: ACME })).toEqual({ ok: false, reason: 'not_allowed' })
+		const listed = await membership.rpc.listMembers({ ...as(editor), scope: ACME })
+		expect(listed.ok ? listed.members.map((member) => member.principalId).sort() : listed.reason).toEqual(['editor', 'manager', 'starter'])
 	})
 })
 

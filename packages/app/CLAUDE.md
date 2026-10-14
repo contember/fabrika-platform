@@ -28,7 +28,7 @@ bun test src/__tests__/orm-types.test.ts        # the data mistakes of a kit han
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 bun test src/__tests__/scoped-database.test.ts  # a handler tree over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own target, seeds, link holder, runJob (needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/membership-stand-in.test.ts  # the endpoint access kit's IAM stand-in: delegations, creates, members, links
+bun test src/__tests__/membership-stand-in.test.ts  # the kit's IAM stand-in: delegations, creates, members, links, live roles
 bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside form inboxes, a challenge and a scan (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
@@ -80,9 +80,9 @@ src/
                       the types its options take (IamMembershipRpc, ChallengeFetch, FileScanner)
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
-    membership.ts     the stand-in IAM transports: member directories from the kit's callers; kitDirectory refuses
-                      writes, kitMembership (the endpoint access kit's) checks them as IAM does, records them, and seeds
-                      the invitations and links a generated case cancels or revokes
+    membership.ts     kitMembership, every kit's stand-in IAM transport: member directories from the kit's callers,
+                      the writes checked as IAM checks them, live in the directory and the next token; it records them,
+                      accepts an invitation, and seeds the invitations and links a generated case cancels or revokes
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
@@ -760,12 +760,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   `X-Fabrika-Endpoint` — and drops `Authorization` on an anonymous endpoint. There is
   one decision and no option to swap it. Never re-implement proxy semantics here:
   `test-kit-differential.test.ts` holds the kit to proxy-core's `Authorizer` over the
-  same table for every credential on every kind of path. The kit's own IAM issues no
-  delegation grants: `options.membership` (an `IamMembershipRpc`) is both the proxy's
-  delegation issuer and `boot`'s membership transport, and without it an application that
-  creates scopes, manages members or issues links does not boot in the kit. Only the endpoint access kit
-  (`standInIamKit`) boots without one: its `kitMembership` issues the delegation grants and answers those writes under
-  IAM's rules for the caller's grants, records them, and grants the kit's callers nothing. On Bun the transport is
+  same table for every credential on every kind of path. The kit's IAM is `kitMembership`
+  unless a test passes `options.membership` (an `IamMembershipRpc`): either one is both the proxy's delegation issuer
+  and `boot`'s membership transport. `kitMembership` answers the writes under IAM's rules for the caller's grants and
+  records them; a role it gives or removes is live, in its directory and in the next token the kit signs
+  (`permsOf`), as in IAM. `kit.acceptInvitation` closes an invitation it holds and gives its role. The endpoint
+  access kit (`standInIamKit`) keeps a handle on it to seed what a case names. On Bun the transport is
   `HttpIamMembership` (`@fabrika/auth`) on `FABRIKA_IAM_RPC_URL` with the environment's own
   `FABRIKA_IAM_RPC_KEY`, both written by the platform; on Cloudflare the `IAM` binding.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as

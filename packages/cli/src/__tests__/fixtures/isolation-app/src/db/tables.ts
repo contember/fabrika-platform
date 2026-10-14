@@ -29,5 +29,10 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['body'],
 		update: ['body'],
 	},
+	workspace_events: {
+		scope: { child: 'workspaces', key: 'id', column: 'workspace_id', inherit: ['organization_id'] },
+		actions: { read: 'workspaces.read', insert: 'workspaces.admin', delete: 'workspaces.admin' },
+		insert: ['summary'],
+	},
 	countries: { scope: { reference: 'lookup data' }, actions: { read: 'notes.read' } },
 })

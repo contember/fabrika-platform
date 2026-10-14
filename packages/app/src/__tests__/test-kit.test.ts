@@ -4,7 +4,7 @@
 
 import { createClient, RpcError } from '@fabrika/app/client'
 import { defineContract } from '@fabrika/app/contract'
-import { testKit } from '@fabrika/app/testing'
+import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -346,7 +346,104 @@ describe('the kit serves the IAM membership operations it is given', () => {
 		expect(created?.method === 'createScope' ? created.input.delegation : null).toBe(`grant-for-${asked?.requestId}`)
 	})
 
-	test('without it, an application that creates scopes does not boot', () => {
-		expect(() => testKit(app)).toThrow('the runtime adapter supplies no IAM membership transport')
+	test("without it, the kit's own IAM creates the value for a global holder only, and makes the creator its owner", async () => {
+		const kit = testKit(app)
+		const response = await kit.browser(kit.testCaller([{ action: 'workspaces.create' }]))('/api/start', post({}))
+		expect(response.status).toBe(200)
+		const scoped = kit.testCaller([{ action: 'workspaces.create', scope: { type: 'workspace', value: 'w1' } }])
+		expect((await kit.browser(scoped)('/api/start', post({}))).status).toBe(403)
+	})
+})
+
+describe("the kit's own IAM: an invitation accepted, a member removed, each live from the next request", () => {
+	const people = defineContract({
+		app: 'notes',
+		dimensions: { workspace: { creator: 'owner', members: { manage: 'members.manage', list: 'notes.read' } } },
+		actions: { 'notes.read': 'Read', 'members.manage': 'Invite and remove', 'workspaces.create': 'Start' },
+		roles: {
+			owner: { grants: ['notes.read', 'members.manage'], member: { scope: 'workspace', assignableBy: ['owner'] } },
+			guest: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true },
+		},
+	}, (c) => ({
+		api: c.rpc('/api', { callers: ['human'] }, {
+			start: c.mutation({ output: z.strictObject({ workspace: z.string() }), access: { action: 'workspaces.create', creates: 'workspace' } }),
+			invite: c.mutation({
+				input: z.strictObject({ workspaceId: z.string(), email: z.email() }),
+				output: z.strictObject({ invitationId: z.string() }),
+				access: { action: 'members.manage', in: 'workspace', from: 'workspaceId' },
+			}),
+			remove: c.mutation({
+				input: z.strictObject({ workspaceId: z.string(), principalId: z.string() }),
+				output: z.strictObject({ ok: z.boolean() }),
+				access: { action: 'members.manage', in: 'workspace', from: 'workspaceId' },
+			}),
+			members: c.query({
+				input: z.strictObject({ workspaceId: z.string() }),
+				output: z.strictObject({ items: z.array(z.strictObject({ principalId: z.string(), roles: z.array(z.string()), affiliation: z.string() })) }),
+				access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' },
+			}),
+		}),
+	}))
+	const app = implement(people, {
+		database: null,
+		deps: () => null,
+		handlers: () => ({
+			api: {
+				start: ({ ctx }) => ({ workspace: ctx.created.value }),
+				invite: async ({ input, ctx }) => {
+					const result = await ctx.members.assign(ctx.target, { email: input.email }, 'guest')
+					return { invitationId: 'invited' in result ? result.invited.invitationId : result.assigned.principalId }
+				},
+				remove: async ({ input, ctx }) => {
+					await ctx.members.revoke(ctx.target, { principalId: input.principalId })
+					return { ok: true }
+				},
+				members: async ({ ctx }) => ({
+					items: (await ctx.members.list()).map(({ principalId, roles, affiliation }) => ({ principalId, roles: [...roles], affiliation })),
+				}),
+			},
+		}),
+	})
+	const kit = testKit(app)
+	const w1 = kit.scope('workspace', 'w1')
+	const apiOf = (caller: TestCaller) => createClient(people, 'api', { fetch: kit.browser(caller) })
+
+	test('a creator holds the owner role of the value it created from its next request', async () => {
+		const starter = kit.testCaller([{ action: 'workspaces.create' }])
+		const { workspace } = await apiOf(starter).start()
+		expect((await apiOf(starter).members({ workspaceId: workspace })).items).toEqual([{
+			principalId: starter.id,
+			roles: ['owner'],
+			affiliation: 'internal',
+		}])
+	})
+
+	test('the addressee accepts as a new person who is listed and reads; once removed, it is refused and no longer listed', async () => {
+		const owner = kit.testCaller([{ role: 'owner', scope: w1 }])
+		const ownerApi = apiOf(owner)
+		const { invitationId } = await ownerApi.invite({ workspaceId: 'w1', email: 'Ann@Example.test' })
+		const ann = kit.acceptInvitation(invitationId)
+		expect(ann).toMatchObject({ kind: 'human', label: 'ann@example.test', affiliation: 'external' })
+		expect((await apiOf(ann).members({ workspaceId: 'w1' })).items).toContainEqual({ principalId: ann.id, roles: ['guest'], affiliation: 'external' })
+		expect(() => kit.acceptInvitation(invitationId)).toThrow(`no open invitation ${invitationId}`)
+
+		expect(await ownerApi.remove({ workspaceId: 'w1', principalId: ann.id })).toEqual({ ok: true })
+		expect(await statusOf(apiOf(ann).members({ workspaceId: 'w1' }))).toBe(403)
+		expect((await ownerApi.members({ workspaceId: 'w1' })).items.map((item) => item.principalId)).toEqual([owner.id])
+	})
+
+	test('a person of the kit accepts into its own grants; a guest invites nobody; an unknown invitation is not accepted', async () => {
+		const owner = kit.testCaller([{ role: 'owner', scope: w1 }])
+		const bob = kit.testCaller([{ role: 'owner', scope: kit.scope('workspace', 'w2') }])
+		const { invitationId } = await apiOf(owner).invite({ workspaceId: 'w1', email: 'bob@example.test' })
+		expect(kit.acceptInvitation(invitationId, bob)).toBe(bob)
+		expect((await apiOf(bob).members({ workspaceId: 'w1' })).items.map((item) => item.principalId)).toContain(bob.id)
+		expect(await statusOf(apiOf(bob).invite({ workspaceId: 'w1', email: 'eve@example.test' }))).toBe(403)
+		expect(() => kit.acceptInvitation('invitation-unknown')).toThrow('no open invitation invitation-unknown')
+	})
+
+	test('a kit given its own membership transport holds no invitation to accept', () => {
+		const own = testKit(app, { membership: new RecordingMembership() })
+		expect(() => own.acceptInvitation('invitation-1')).toThrow('given its own membership transport')
 	})
 })

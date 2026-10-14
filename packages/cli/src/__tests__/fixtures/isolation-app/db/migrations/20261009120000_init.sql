@@ -34,6 +34,15 @@ create table note_comments (
 	foreign key (note_id, workspace_id, organization_id) references notes (id, workspace_id, organization_id) on update cascade on delete cascade
 );
 
+-- The workspace's member log: written by a holder of the workspace's members.manage.
+create table workspace_events (
+	id text primary key,
+	workspace_id text not null,
+	organization_id uuid not null,
+	summary text not null,
+	foreign key (workspace_id, organization_id) references workspaces (id, organization_id) on update cascade on delete cascade
+);
+
 create table countries (
 	code text primary key,
 	name text not null

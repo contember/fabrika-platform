@@ -978,8 +978,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
-- The job asks IAM to issue and revoke links, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an
-  `IamMembershipRpc` of your own that answers `issueLink` and `revokeLink`. A test of a form passes `env: {
+- The job asks IAM to issue and revoke links, and the kit's own IAM answers only the credentials of its callers, not a
+  job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
+  answers `issueLink` and `revokeLink`. A test of a form passes `env: {
   TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
   `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step): the next run must leave exactly one live, e-mailed link.

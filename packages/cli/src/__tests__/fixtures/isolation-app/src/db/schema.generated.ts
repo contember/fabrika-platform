@@ -32,6 +32,13 @@ export interface OrganizationsTable {
 	name: string
 }
 
+export interface WorkspaceEventsTable {
+	id: string
+	workspace_id: string
+	organization_id: string
+	summary: string
+}
+
 export interface WorkspacesTable {
 	id: string
 	organization_id: string
@@ -43,6 +50,7 @@ export interface DB {
 	note_comments: NoteCommentsTable
 	notes: NotesTable
 	organizations: OrganizationsTable
+	workspace_events: WorkspaceEventsTable
 	workspaces: WorkspacesTable
 }
 
@@ -96,6 +104,21 @@ export const columns: TypedColumnList<DB> = {
 			'name',
 		],
 		foreignKeys: [],
+	},
+	'workspace_events': {
+		columns: [
+			'id',
+			'workspace_id',
+			'organization_id',
+			'summary',
+		],
+		foreignKeys: [
+			{
+				columns: ['workspace_id', 'organization_id'],
+				table: 'workspaces',
+				references: ['id', 'organization_id'],
+			},
+		],
 	},
 	'workspaces': {
 		columns: [
