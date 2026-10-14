@@ -48,6 +48,7 @@ import type { RequestExecutionContext } from '../fetch'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
+import type { BrowserConfig } from './browser-config'
 import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
@@ -118,9 +119,9 @@ export type ServedEndpoint =
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
-	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string }
+	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string; readonly config: BrowserConfig }
 	/** An SPA anyone opens: anonymous, served without a token. */
-	| { readonly kind: 'public-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
+	| { readonly kind: 'public-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string; readonly config: BrowserConfig }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
 	| {
 		/** A file collection's upload or download, served by `src/files` once the access form minted its target. */
@@ -199,16 +200,8 @@ export interface RuntimeParts {
 	readonly failures: FailureReports
 	/** Kicks a contract job under its own key, in the background (`BoundJobs.kick`); it never rejects. */
 	readonly kick: (job: string) => Promise<void>
-	/** What every SPA mount answers at `<prefix>/__fabrika-config.json`, and nothing else of the environment. */
-	readonly browserConfig: BrowserConfig
 	/** The contract's actions, sorted: what a caller document lists a pattern grant as. */
 	readonly actions: readonly string[]
-}
-
-/** The browser-safe Operations settings: the ingest DSN (a public key) and the release, or `null` without them. */
-export interface BrowserConfig {
-	readonly dsn: string | null
-	readonly release: string | null
 }
 
 interface Caller {
@@ -321,14 +314,18 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * An SPA mount's files, at `<prefix>/__fabrika-config.json` the browser's Operations settings, and at
+	 * An SPA mount's files, at `<prefix>/__fabrika-config.json` its browser config (`browser-config.ts`), and at
 	 * `<prefix>/__fabrika-me.json` the caller document of the person the mount admitted. A public mount admits no one:
 	 * the proxy forwards no token there, so it cannot say whether the visitor is signed in.
 	 */
-	async #spaFile(served: { readonly prefix: string; readonly dir: string }, request: Request, caller: Caller | null): Promise<Response> {
+	async #spaFile(
+		served: { readonly prefix: string; readonly dir: string; readonly config: BrowserConfig },
+		request: Request,
+		caller: Caller | null,
+	): Promise<Response> {
 		const path = rawRequestTarget(request.url).pathname
 		if (path === joinPath(served.prefix, BROWSER_CONFIG_FILE)) {
-			return jsonResponse(this.#parts.browserConfig, 200)
+			return jsonResponse(served.config, 200)
 		}
 		if (path === joinPath(served.prefix, PAGE_CALLER_FILE)) {
 			if (caller === null || caller.principal.kind !== 'user') {

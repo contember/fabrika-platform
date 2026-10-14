@@ -14,6 +14,7 @@ import {
 	endpointMembers,
 	type EndpointRow,
 	type FileCollectionArtifact,
+	type FormMountArtifact,
 	isAttachmentShape,
 	JOB_SITE_PREFIX,
 	LOCALES,
@@ -112,7 +113,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		if (!Object.hasOwn(baseline.roles, name)) changes.add(...externalChange(name, undefined, role.external))
 	}
 	compareKeyed(changes, record(baseline.mounts), record(candidate.mounts), {
-		added: (name, mount) => `New ${mount.kind} mount \`${name}\``,
+		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}`,
 		removed: (name) => `Mount \`${name}\` is removed`,
 		changed: mountChanges,
 	})
@@ -874,15 +875,49 @@ function directoryChange(name: string, before: 'labels' | undefined, after: 'lab
 		: [removal(`Holders of the members.list action of \`${name}\` and the endpoints below \`${name}\` no longer see member labels`)]
 }
 
+/** The public variables a new mount hands its pages: an SPA's own list, a challenge's site key. */
+function servedVariables(mount: MountArtifact): string {
+	const names = mount.kind === 'spa' ? (mount.public ?? []) : mount.kind === 'form' ? siteKeyOf(mount) : []
+	return names.length === 0 ? '' : `, serving the public variable${names.length === 1 ? '' : 's'} ${listOf(names, 'none')} to every page`
+}
+
 /**
  * A form's `then` reaches only a job of the same approved contract, which runs under its own declared actions and
- * coalesces on its lease, so a change of it alone widens nothing. The rest of a mount is compared as a value.
+ * coalesces on its lease, so a change of it alone widens nothing. An SPA's public variables and a form's site key
+ * get a line each, by name. The rest of a mount is compared as a value.
  */
 function mountChanges(name: string, from: MountArtifact, to: MountArtifact): AccessChange[] {
+	if (from.kind === 'spa' && to.kind === 'spa') {
+		const { public: before = [], ...fromRest } = from
+		const { public: after = [], ...toRest } = to
+		return [
+			...valueChange(`Mount \`${name}\``, fromRest, toRest),
+			...setChanges(`Mount \`${name}\``, before, after, 'serves its pages the public variable', 'no longer serves the public variable'),
+		]
+	}
 	if (from.kind !== 'form' || to.kind !== 'form') return valueChange(`Mount \`${name}\``, from, to)
-	const { then: before, ...fromRest } = from
-	const { then: after, ...toRest } = to
-	return [...valueChange(`Mount \`${name}\``, fromRest, toRest), ...kickChange(name, before, after)]
+	const { then: before, ...fromRest } = withoutSiteKey(from)
+	const { then: after, ...toRest } = withoutSiteKey(to)
+	return [
+		...valueChange(`Mount \`${name}\``, fromRest, toRest),
+		...setChanges(
+			`Form \`${name}\``,
+			siteKeyOf(from),
+			siteKeyOf(to),
+			'serves every page its challenge site key from',
+			'no longer serves its site key from',
+		),
+		...kickChange(name, before, after),
+	]
+}
+
+const siteKeyOf = (form: FormMountArtifact): readonly string[] => (form.challenge?.siteKey === undefined ? [] : [form.challenge.siteKey])
+
+/** A form without its challenge's site key, which `mountChanges` shows on a line of its own. */
+function withoutSiteKey(form: FormMountArtifact): FormMountArtifact {
+	if (form.challenge === undefined) return form
+	const { siteKey: _siteKey, ...challenge } = form.challenge
+	return { ...form, challenge }
 }
 
 function kickChange(name: string, before: string | undefined, after: string | undefined): AccessChange[] {

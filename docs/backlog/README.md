@@ -55,7 +55,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [120](120-a-job-attempt-reports-a-refused-statement-as-handler-failed.md) — A job attempt reports a data-layer refusal as `handler_failed`, without its reason.
 - [122](122-a-generated-case-cannot-seed-a-child-rows-state-or-a-row-under-an-in-target.md) — `rows` seeds no child row state and no row under an `in` target; the own case expects exactly 200.
 - [126](126-a-global-grant-application-has-no-people-of-its-own.md) — Global roles give no member directory and no in-app role management.
-- [128](128-a-public-page-cannot-read-a-public-configuration-value.md) — A public page has no per-environment public value, such as a challenge site key.
 - [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
 - [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.

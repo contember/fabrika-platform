@@ -117,6 +117,30 @@ describe('style and font origins in the approval diff', () => {
 	})
 })
 
+describe('public variables in the approval diff', () => {
+	const tables = { applications: INBOX }
+	const SPA = "app: c.spa('/', { dir: 'dist/app', access: { member: true } }),"
+
+	test("an SPA mount's public variable is shown by name, and so is a challenge's site key", () => {
+		const listed = snapshot(edited(SPA, "app: c.spa('/', { dir: 'dist/app', access: { member: true }, public: ['SIGNUP_URL'] }),"))
+		expect(classifyAccess(snapshot(), listed).changes).toEqual([
+			{ widens: true, line: 'Mount `app` serves its pages the public variable `SIGNUP_URL`' },
+		])
+		expect(classifyAccess(listed, snapshot()).changes).toEqual([{
+			widens: false,
+			line: 'Mount `app` no longer serves the public variable `SIGNUP_URL`',
+		}])
+		const challenge = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"
+		const withSiteKey = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }"
+		const changes = classifyAccess(snapshot(FORM(challenge), tables), snapshot(FORM(withSiteKey), tables)).changes
+		expect(changes).toEqual([{ widens: true, line: 'Form `apply` serves every page its challenge site key from `TURNSTILE_SITE_KEY`' }])
+		expect(classifyAccess(snapshot(), snapshot(FORM(withSiteKey), tables)).changes).toContainEqual({
+			widens: true,
+			line: 'New form mount `apply`, serving the public variable `TURNSTILE_SITE_KEY` to every page',
+		})
+	})
+})
+
 describe("a form's admission in the approval diff", () => {
 	const tables = { applications: INBOX }
 

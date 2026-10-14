@@ -45,6 +45,7 @@ import { fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
+import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
 import { type ConnectFetch, wireImports } from './connect'
@@ -606,6 +607,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		bindings: options.connectBindings ?? {},
 		fallback: (request) => fetch(request),
 	}, problems)
+	const configs = browserConfigs(artifact, options.environment, {
+		dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
+		release: options.environment.framework['FABRIKA_RELEASE']?.trim() || null,
+	}, problems)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -625,10 +630,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			}
 		} else if (mount.kind === 'spa') {
 			const row = rows.get(name)
-			if (isCredentialed(row)) {
-				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir })
-			} else if (row?.kind === 'public-spa') {
-				endpoints.set(name, { kind: 'public-spa', row, prefix: mount.prefix, dir: mount.dir })
+			const config = configs.get(name)
+			if (config !== undefined && isCredentialed(row)) {
+				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir, config })
+			} else if (config !== undefined && row?.kind === 'public-spa') {
+				endpoints.set(name, { kind: 'public-spa', row, prefix: mount.prefix, dir: mount.dir, config })
 			}
 		} else if (mount.kind === 'rpc' || mount.kind === 'link') {
 			if (mount.kind === 'link') {
@@ -787,10 +793,6 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		data,
 		failures: new FailureReports(reporterFor('fabrika.requests')),
 		kick: jobs.kick,
-		browserConfig: Object.freeze({
-			dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
-			release: options.environment.framework['FABRIKA_RELEASE']?.trim() || null,
-		}),
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 	})
 	return Object.freeze({ fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec), jobs: jobs.jobs })

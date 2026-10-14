@@ -46,7 +46,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	procedure: { options: ['input', 'output', 'access'], owned: ['~kind', 'type'] },
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
-	spa: { options: ['dir', 'access'], owned: ['kind', 'prefix'] },
+	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
 	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
@@ -203,6 +203,8 @@ export interface SpaMountDeclaration extends OptionsRecord {
 	readonly prefix: string
 	readonly dir: string
 	readonly access: SpaAccessDeclaration
+	/** Application variables whose values the mount's pages read from `<prefix>/__fabrika-config.json`. */
+	readonly public?: readonly string[]
 }
 
 export interface HealthMountDeclaration {
@@ -220,8 +222,11 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly rate?: { readonly perClient?: number; readonly perForm?: number }
 	/** An input field that must stay empty. */
 	readonly honeypot?: string
-	/** A challenge verified on the server; `secret` names the application variable that holds the provider's secret. */
-	readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string }
+	/**
+	 * A challenge verified on the server; `secret` names the application variable that holds the provider's secret,
+	 * `siteKey` the one that holds the widget's public site key.
+	 */
+	readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string; readonly siteKey?: string }
 	/** The cron job of the contract that each accepted submission kicks. */
 	readonly then?: string
 }

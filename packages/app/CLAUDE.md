@@ -244,8 +244,10 @@ src/
   the one into the other, so both paths share `@fabrika/db`'s one policy parse.
 - Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; an SPA serves
   `GET <prefix>/*`, anonymous (kind `public-spa`, no token) with `access: { public: true }`,
-  which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release }` (the
-  browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset) and nothing else of the environment, and
+  which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release, public }` (the
+  browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset; `public`, present only when non-empty, the values of
+  every form challenge's `siteKey` and of the mount's own `public` list, `browserConfigs` in `browser-config.ts`, each one
+  required at boot) and nothing else of the environment, and
   `<prefix>/__fabrika-me.json` (`PAGE_CALLER_FILE`) with the caller document (`pageCallerOf` in `principal.ts`) under
   the mount's own access, 401 on a public SPA; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;

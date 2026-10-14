@@ -86,6 +86,8 @@ function canonicalMount(mount: MountArtifact): MountArtifact {
 			return { ...mount, grants: sorted(mount.grants) }
 		case 'webhook':
 			return { ...mount, actions: sorted(mount.actions) }
+		case 'spa':
+			return mount.public === undefined ? mount : { ...mount, public: sorted(mount.public) }
 		default:
 			return mount
 	}

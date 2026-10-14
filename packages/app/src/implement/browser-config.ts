@@ -1,0 +1,53 @@
+// What an SPA mount answers at `<prefix>/__fabrika-config.json`: the browser's Operations settings and the public
+// values the contract names, and nothing else of the environment.
+
+import type { ContractArtifact } from '@fabrika/auth-core'
+import type { CapturedEnvironment } from './environment'
+
+export interface BrowserConfig {
+	/** The Operations ingest DSN (a public key), or `null` without one. */
+	readonly dsn: string | null
+	readonly release: string | null
+	/**
+	 * Every form challenge's site key, and the variables the mount lists in `public`, by variable name. Absent when
+	 * there is none, so the file of an application without them holds the two Operations values only.
+	 */
+	readonly public?: Readonly<Record<string, string>>
+}
+
+/**
+ * The browser config of each SPA mount, by mount name: the Operations settings, and the public variables the contract
+ * names. A named variable that is not set is a boot problem.
+ */
+export function browserConfigs(
+	artifact: ContractArtifact,
+	environment: CapturedEnvironment,
+	operations: Pick<BrowserConfig, 'dsn' | 'release'>,
+	problems: string[],
+): ReadonlyMap<string, BrowserConfig> {
+	const valueOf = (name: string): string | null => {
+		const value: unknown = environment.application[name]
+		return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+	}
+	const siteKeys: Record<string, string> = {}
+	for (const [form, mount] of Object.entries(artifact.mounts)) {
+		const challenge = mount.kind === 'form' ? mount.challenge : undefined
+		if (challenge?.siteKey === undefined) continue
+		const value = valueOf(challenge.siteKey)
+		if (value === null) problems.push(`form '${form}' names its ${challenge.provider} site key in ${challenge.siteKey}, which is not set`)
+		else siteKeys[challenge.siteKey] = value
+	}
+	const configs = new Map<string, BrowserConfig>()
+	for (const [name, mount] of Object.entries(artifact.mounts)) {
+		if (mount.kind !== 'spa') continue
+		const own: Record<string, string> = {}
+		for (const variable of mount.public ?? []) {
+			const value = valueOf(variable)
+			if (value === null) problems.push(`mount '${name}' serves the public variable ${variable}, which is not set`)
+			else own[variable] = value
+		}
+		const served = { ...siteKeys, ...own }
+		configs.set(name, Object.freeze(Object.keys(served).length === 0 ? { ...operations } : { ...operations, public: Object.freeze(served) }))
+	}
+	return configs
+}

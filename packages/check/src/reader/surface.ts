@@ -345,6 +345,7 @@ class SurfaceReader {
 					prefix: text(prefix, at, 'the prefix'),
 					dir: text(options.get('dir'), at, 'dir'),
 					access: spaAccessDeclaration(options.get('access'), at),
+					public: options.has('public') ? texts(options.get('public'), at, 'public') : undefined,
 					unknownOptions: optionKeys(options, 'spa'),
 				}
 			}
@@ -1025,17 +1026,19 @@ function formRate(value: LiteralValue | undefined): { perClient?: number; perFor
 	return { ...(perClient === undefined ? {} : { perClient }), ...(perForm === undefined ? {} : { perForm }) }
 }
 
-/** A form's `challenge`: a provider of the closed list and the name of the application variable with its secret. */
-function formChallenge(value: LiteralValue | undefined): { provider: 'turnstile'; secret: string } | undefined {
+/** A form's `challenge`: a provider of the closed list and the names of the application variables with its secret and site key. */
+function formChallenge(value: LiteralValue | undefined): { provider: 'turnstile'; secret: string; siteKey?: string } | undefined {
 	if (value === undefined) {
 		return undefined
 	}
-	const fields = strictFields(value, 'challenge', ['provider', 'secret'], [])
+	const fields = strictFields(value, 'challenge', ['provider', 'secret'], ['siteKey'])
 	const provider = fields.get('provider')
 	if (provider?.kind !== 'string' || provider.value !== 'turnstile') {
 		throw new Refused(provider?.at ?? value.at, 'challenge needs a known provider', "provider: 'turnstile'")
 	}
-	return { provider: provider.value, secret: text(fields.get('secret'), value, 'secret') }
+	const secret = text(fields.get('secret'), value, 'secret')
+	const siteKey = fields.get('siteKey')
+	return siteKey === undefined ? { provider: provider.value, secret } : { provider: provider.value, secret, siteKey: text(siteKey, value, 'siteKey') }
 }
 
 function cspDeclaration(value: LiteralValue): CspDeclaration {

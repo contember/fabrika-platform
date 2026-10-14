@@ -43,7 +43,10 @@ the SPA is added with it.
 - `build:web` builds the SPA: add it, `build-web.ts`, `web/`, the contract's `site` mount and the `bun run build:web`
   line of `zerops.yaml` when the application gets an SPA, and not before.
 - `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
-  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`.
+  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`. The same file carries
+  `public: { <VARIABLE>: <value> }`: each form challenge's `siteKey`, and the variables the SPA mount lists in
+  `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
+  target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
   `@fabrika/*` import fails and tsc reports a cascade of implicit `any`s that are not your bugs.
 
@@ -124,11 +127,12 @@ export default serve(contract, { database: scoped(tables) })
 - A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
   every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
   field the page hides; a filled one gets the same answer and writes nothing) and
-  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }`. A challenge needs the input field
+  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. A challenge needs the input field
   `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set to the
   form's mount name; the framework verifies it on the server (a failed token 400, an unreachable provider 503, no
   row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
-  never the value; without it the application does not boot. Neither field reaches the inbox, so neither is a
+  never the value; without it the application does not boot. `siteKey` names the variable with the widget's public
+  site key, which every SPA mount serves its pages (below). Neither field reaches the inbox, so neither is a
   column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
   per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks

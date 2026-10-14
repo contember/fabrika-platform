@@ -340,7 +340,10 @@ the SPA is added with it.
 - `build:web` builds the SPA: add it, `build-web.ts`, `web/`, the contract's `site` mount and the `bun run build:web`
   line of `zerops.yaml` when the application gets an SPA, and not before.
 - `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
-  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`.
+  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`. The same file carries
+  `public: { <VARIABLE>: <value> }`: each form challenge's `siteKey`, and the variables the SPA mount lists in
+  `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
+  target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
   `@fabrika/*` import fails and tsc reports a cascade of implicit `any`s that are not your bugs.
 
@@ -421,11 +424,12 @@ export default serve(contract, { database: scoped(tables) })
 - A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
   every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
   field the page hides; a filled one gets the same answer and writes nothing) and
-  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }`. A challenge needs the input field
+  `challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }`. A challenge needs the input field
   `challengeToken: z.string()`, which the page fills from the Turnstile widget rendered with `action` set to the
   form's mount name; the framework verifies it on the server (a failed token 400, an unreachable provider 503, no
   row either way) and adds Turnstile's origin to the CSP. `secret` names an application variable the human sets,
-  never the value; without it the application does not boot. Neither field reaches the inbox, so neither is a
+  never the value; without it the application does not boot. `siteKey` names the variable with the widget's public
+  site key, which every SPA mount serves its pages (below). Neither field reaches the inbox, so neither is a
   column. On Zerops every visitor still shares one client address (the balancer), so `perClient` acts as a second
   per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
@@ -1865,7 +1869,11 @@ export const contract = app.contract((c) => ({
 		appendTo: 'registrations',
 		maxBytes: 4096,
 		honeypot: 'website',
-		challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' },
+		challenge: {
+			provider: 'turnstile',
+			secret: 'TURNSTILE_SECRET',
+			siteKey: 'TURNSTILE_SITE_KEY',
+		},
 		then: 'intake',
 	}),
 	resend: c.form('/resend', {
@@ -1906,6 +1914,11 @@ export const contract = app.contract((c) => ({
   answer and writes no row. `challenge` makes the framework verify the Turnstile token in `challengeToken` before it
   writes the row (a failed token 400, an unreachable provider 503, no row either way) and adds Turnstile's origin to
   the CSP. `TURNSTILE_SECRET` is an application variable the human sets; without it the application does not boot.
+  `siteKey` names the variable with the widget's public site key, which every SPA mount serves its pages; without it
+  the application does not boot either. Another public value a page needs per environment (a link target) goes in
+  the SPA mount's own list: `c.spa('/', { …, public: ['SIGNUP_URL'] })`. Both reach the page in
+  `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each name. Never name
+  a secret there: the contract refuses a variable that is both.
   `rate: { perClient, perForm }` (per minute, 10 and 100 by default) answers 429 past either limit.
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
@@ -2231,6 +2244,23 @@ export const attach = async (file: File): Promise<string> => {
 }
 ```
 
+The public page reads its site key from the config the framework serves it, so one build serves every environment.
+
+```ts web/site/config.ts
+import { z } from 'zod/v4'
+
+const SiteConfig = z.object({
+	public: z.object({ TURNSTILE_SITE_KEY: z.string() }),
+})
+
+/** The Turnstile widget's site key, or `null` when the config is unreadable. */
+export const siteKey = async (): Promise<string | null> => {
+	const response = await fetch('/__fabrika-config.json')
+	const config = SiteConfig.safeParse(response.ok ? await response.json() : null)
+	return config.success ? config.data.public.TURNSTILE_SITE_KEY : null
+}
+```
+
 The public page sends the form with a plain `fetch`: a form has no typed client, and its answer never depends on the
 data.
 
@@ -2258,7 +2288,7 @@ export const register = async (
 }
 ```
 
-- The page renders the Turnstile widget with its public site key and `action` set to the form's mount name
+- The page renders the Turnstile widget with the site key `siteKey()` reads and `action` set to the form's mount name
   (`register`), and passes the widget's token. Say "check your inbox" on success whatever the address was.
 - The resend form is the same call to `/resend` with `{ email }`. It answers the same for an unknown, a verified and a
   rate-limited address; the job decides.
@@ -2690,7 +2720,7 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 - The job asks IAM to issue and revoke links, and the kit's own IAM answers only the credentials of its callers, not a
   job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
   answers `issueLink` and `revokeLink`. A test of a form passes `env: {
-  TURNSTILE_SECRET: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
+  TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
   `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step): the next run must leave exactly one live, e-mailed link.
 - A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
@@ -2770,6 +2800,7 @@ if (postgres !== null) {
 			MAIL_API_KEY: 'test',
 			INTAKE_ORIGIN: 'https://intake.test',
 			TURNSTILE_SECRET: 'test',
+			TURNSTILE_SITE_KEY: 'test-site-key',
 		},
 	})
 	let restore = () => {}

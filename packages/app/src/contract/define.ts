@@ -273,10 +273,12 @@ export type FormJobs<S> = {
 		: unknown
 }
 
-/** A form's challenge: the provider and the application variable that holds its secret. */
+/** A form's challenge: the provider and the application variables that hold its secret and its public site key. */
 export interface FormChallengeOption {
 	readonly provider: ChallengeProvider
 	readonly secret: string
+	/** Served by every SPA mount at `<prefix>/__fabrika-config.json`, so the page renders the widget with it. */
+	readonly siteKey?: string
 }
 
 /** What `c.form(path, options)` takes. */
@@ -330,7 +332,12 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 	/** The SPA under `prefix`: for signed-in people, or for anyone with `access: { public: true }`. */
 	spa<const Acc extends MemberAccess | OverAccess<A, D> | AppAccess<A> | PublicAccess>(
 		prefix: Path,
-		options: { readonly dir: string; readonly access: Acc } & Owned<'kind' | 'prefix'>,
+		options: {
+			readonly dir: string
+			readonly access: Acc
+			/** Application variables whose values the pages read from `<prefix>/__fabrika-config.json`: public values only. */
+			readonly public?: readonly [string, ...string[]]
+		} & Owned<'kind' | 'prefix'>,
 	): SpaMount<Acc>
 	health(path: Path): HealthMount
 	form<I extends InputSchema, const T extends string = never>(path: Path, options: FormOptions<I, T>): FormMount<I, NoInfer<T>>
@@ -432,7 +439,14 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			procedures: options.procedures(linkKit()),
 			unknownOptions: unknownOptions(options, 'link'),
 		}),
-		spa: (prefix, options) => ({ kind: 'spa', prefix, dir: options.dir, access: options.access, unknownOptions: unknownOptions(options, 'spa') }),
+		spa: (prefix, options) => ({
+			kind: 'spa',
+			prefix,
+			dir: options.dir,
+			access: options.access,
+			public: options.public,
+			unknownOptions: unknownOptions(options, 'spa'),
+		}),
 		health: (path) => ({ kind: 'health', path }),
 		form: (path, options) => ({
 			kind: 'form',

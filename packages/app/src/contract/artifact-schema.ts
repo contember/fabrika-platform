@@ -159,6 +159,7 @@ const scopeBinding = z.discriminatedUnion('kind', [
 ])
 
 const formRate = z.int().positive().max(FORM_LIMITS.maxPerMinute)
+const applicationVariable = z.string().regex(/^[A-Z][A-Z0-9_]*$/)
 
 const mount = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('rpc'), prefix: name, callers: z.tuple([rpcCaller], rpcCaller) }),
@@ -171,7 +172,7 @@ const mount = z.discriminatedUnion('kind', [
 		issuedBy: action,
 		maxDays: z.int().positive(),
 	}),
-	z.strictObject({ kind: z.literal('spa'), prefix: name, dir: name }),
+	z.strictObject({ kind: z.literal('spa'), prefix: name, dir: name, public: z.array(applicationVariable).nonempty().optional() }),
 	z.strictObject({ kind: z.literal('health'), path: name }),
 	z.strictObject({
 		kind: z.literal('form'),
@@ -179,7 +180,7 @@ const mount = z.discriminatedUnion('kind', [
 		appendTo: name,
 		rate: z.strictObject({ perClient: formRate.optional(), perForm: formRate.optional() }).optional(),
 		honeypot: name.optional(),
-		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: z.string().regex(/^[A-Z][A-Z0-9_]*$/) }).optional(),
+		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() }).optional(),
 		then: name.optional(),
 	}),
 	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions }),

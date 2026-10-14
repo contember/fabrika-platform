@@ -161,6 +161,8 @@ covers:
 - a form's `then` (the job a submission kicks): shown, and it widens nothing, because it reaches only a job of the same
   approved contract, which runs under its own declared actions;
 - CSP extensions, `script-src`, `frame-src`, `style-src` and `font-src` included;
+- each public variable a page reads from its browser config (an SPA mount's `public` list, a form challenge's
+  `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.
 

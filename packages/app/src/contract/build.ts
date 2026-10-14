@@ -210,8 +210,10 @@ class ArtifactBuilder {
 	#kit = false
 	/** The endpoints that declare `connect`, by the import they name. */
 	readonly #connected = new Map<string, string[]>()
-	/** The forms that declare a challenge: their provider's fixed origins join the CSP. */
-	readonly #challenges: { readonly form: string; readonly provider: ChallengeProvider }[] = []
+	/** The forms that declare a challenge: their provider's fixed origins join the CSP, and their secret stays private. */
+	readonly #challenges: { readonly form: string; readonly provider: ChallengeProvider; readonly secret: string }[] = []
+	/** Each variable a browser config serves, and where the contract names it. */
+	readonly #publicVariables: { readonly where: string; readonly field: string; readonly name: string }[] = []
 
 	constructor(
 		contract: ContractDeclaration<SchemaShape>,
@@ -242,6 +244,7 @@ class ArtifactBuilder {
 				}
 			}
 		}
+		this.#checkPublicVariables()
 		const files = this.#files(dimensions)
 		const jobs = this.#jobs()
 		const exports = this.#exports()
@@ -488,7 +491,8 @@ class ArtifactBuilder {
 						output: null,
 					})
 				}
-				return { kind: 'spa', prefix: mount.prefix, dir: mount.dir }
+				const publicVariables = this.#spaPublic(where, mount.public)
+				return { kind: 'spa', prefix: mount.prefix, dir: mount.dir, ...(publicVariables.length === 0 ? {} : { public: publicVariables }) }
 			}
 			case 'health':
 				this.#prefix(where, mount.path)
@@ -588,9 +592,10 @@ class ArtifactBuilder {
 	}
 
 	#formChallenge(name: string, where: string, challenge: object, fields: Readonly<Record<string, SchemaShape>>): FormChallenge | undefined {
-		this.#keys(`${where} challenge`, challenge, ['provider', 'secret'])
+		this.#keys(`${where} challenge`, challenge, ['provider', 'secret', 'siteKey'])
 		const provider: unknown = Reflect.get(challenge, 'provider')
 		const secret: unknown = Reflect.get(challenge, 'secret')
+		const siteKey: unknown = Reflect.get(challenge, 'siteKey')
 		if (provider !== 'turnstile') {
 			this.#problem(where, `challenge provider ${JSON.stringify(provider)} is not one the framework verifies (allowed: 'turnstile')`)
 			return undefined
@@ -611,8 +616,50 @@ class ArtifactBuilder {
 		if (token === undefined || token.type !== 'string') {
 			this.#problem(where, `declares a challenge, so its input needs the required field ${FORM_CHALLENGE_FIELD}: z.string(), the widget's token`)
 		}
-		this.#challenges.push({ form: name, provider })
-		return { provider, secret }
+		this.#challenges.push({ form: name, provider, secret })
+		if (siteKey === undefined || !this.#applicationVariable(where, 'challenge siteKey', siteKey, 'TURNSTILE_SITE_KEY')) {
+			return { provider, secret }
+		}
+		this.#publicVariables.push({ where, field: 'challenge siteKey', name: siteKey })
+		return { provider, secret, siteKey }
+	}
+
+	/** The variables an SPA mount serves its pages; `[]` when it declares none. */
+	#spaPublic(where: string, declared: readonly string[] | undefined): readonly string[] {
+		if (declared === undefined) {
+			return []
+		}
+		if (declared.length === 0) {
+			this.#problem(where, "public names no variable (allowed: public: ['SIGNUP_URL'], or no public)")
+		}
+		this.#unique(where, 'public', declared)
+		const names = declared.filter((name) => this.#applicationVariable(where, 'public', name, 'SIGNUP_URL'))
+		for (const name of names) {
+			this.#publicVariables.push({ where, field: 'public', name })
+		}
+		return names
+	}
+
+	/** Whether `name` names an application variable: a value or a framework variable is refused. */
+	#applicationVariable(where: string, field: string, name: unknown, example: string): name is string {
+		if (typeof name === 'string' && APPLICATION_VARIABLE.test(name) && !name.startsWith('FABRIKA_')) {
+			return true
+		}
+		this.#problem(
+			where,
+			`${field} ${JSON.stringify(name)} is not the name of an application variable (allowed: '${example}'; never a value, never FABRIKA_*)`,
+		)
+		return false
+	}
+
+	/** A browser config serves every public variable to anyone who opens a page, so none of them may hold a secret. */
+	#checkPublicVariables(): void {
+		for (const variable of this.#publicVariables) {
+			const owner = this.#challenges.find((challenge) => challenge.secret === variable.name)
+			if (owner !== undefined) {
+				this.#problem(variable.where, `${variable.field} '${variable.name}' is the secret of form '${owner.form}'; a secret is never public`)
+			}
+		}
 	}
 
 	/** A holder of the dimension's `members.manage` there binds a provider account to one value, and unbinds it. */

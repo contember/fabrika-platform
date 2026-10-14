@@ -294,6 +294,8 @@ export interface SpaMountArtifact {
 	readonly kind: 'spa'
 	readonly prefix: string
 	readonly dir: string
+	/** The application variables whose values the mount's pages read from its browser config; present only when declared. */
+	readonly public?: readonly string[]
 }
 
 export interface HealthMountArtifact {
@@ -328,6 +330,8 @@ export interface FormChallenge {
 	readonly provider: ChallengeProvider
 	/** The application variable holding the provider's secret: a name, never the value. */
 	readonly secret: string
+	/** The application variable holding the widget's public site key, which every SPA mount's browser config serves. */
+	readonly siteKey?: string
 }
 
 export interface WebhookMountArtifact {

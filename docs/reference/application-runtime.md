@@ -722,7 +722,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   then records its digest in `fabrika_form_challenges`, so a second use is a replay: a failed or
   replayed token is 400, an unreachable provider or a refused secret 503, and neither writes a row.
   The secret is the application variable the contract names; without it the application does not
-  boot. Turnstile's origin joins `script-src` and `frame-src` (`frame-src 'self' <origins>`, so a
+  boot. `siteKey: '<VARIABLE>'` names the widget's public site key, which every SPA mount's
+  `__fabrika-config.json` serves (Operations, below). Turnstile's origin joins `script-src` and `frame-src` (`frame-src 'self' <origins>`, so a
   declared frame origin only extends the same-origin frames `default-src 'self'` allows).
 - `then: '<job>'` on `c.form` names a cron job of the same contract (the build, the checker and the
   compiler refuse any other name). Once a submission's row committed, the form kicks that job: the
@@ -1372,8 +1373,12 @@ runtime values:
 - `FABRIKA_RELEASE` is the current deploy-scoped release name.
 
 Every SPA mount of a contract application (`c.spa`, member or public) serves
-`<prefix>/__fabrika-config.json` with exactly these two values, `{ "dsn": …, "release": … }`
-(`null` when unset), and nothing else of the environment; a member SPA's answer needs a
+`<prefix>/__fabrika-config.json` with these two values, `{ "dsn": …, "release": … }`
+(`null` when unset), and under `public` (present only when there is one) the public values the contract names: each form challenge's
+`siteKey` on every SPA mount, and the variables the mount lists in `c.spa(prefix, { public: […] })`
+on that mount only, by variable name. Nothing else of the environment reaches it. A named variable
+that is not set refuses the boot, and the contract refuses a variable that is both a challenge's
+secret and public; a member SPA's answer needs a
 member's session like every file of its mount. The Zerops example's SPA
 (`examples/zerops-app/web/operations.ts`) initializes `@sentry/browser` **10.69.0** from it
 with only the global error handlers, and `tests/browser/operations-sdk-ingest.test.ts`

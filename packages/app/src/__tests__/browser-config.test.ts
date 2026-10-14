@@ -1,5 +1,6 @@
-// Every SPA mount serves `<prefix>/__fabrika-config.json`: the browser's Operations DSN and the release, and nothing
-// else of the environment. A member SPA's answer needs the member's token, a public SPA's none.
+// Every SPA mount serves `<prefix>/__fabrika-config.json`: the browser's Operations DSN and the release, the public
+// values the contract names (none here; `public-config.test.ts` holds them), and nothing else of the environment. A
+// member SPA's answer needs the member's token, a public SPA's none.
 
 import { defineContract } from '@fabrika/app/contract'
 import { describe, expect, test } from 'bun:test'
