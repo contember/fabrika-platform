@@ -301,9 +301,5 @@ if (postgres !== null) {
 
 ## Clicking through the screens
 
-`bunx fabrika app dev` serves the application on `http://127.0.0.1:3000/` through the same kit: the proxy decision,
-the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, and each SPA from its build (run
-`bun run build:web` first). Open `/__fabrika/dev` and pick who the browser is: a role, and for a membership role the
-scope value it is held in (`member` in `acme`). The choice stays in a cookie; pick again to switch. The data is gone
-when the command stops. It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port),
-and runs no cron job: test those with `kit.runJob`. Use it to look at the screens, never in place of a test.
+`bunx fabrika app dev` serves the application through the same kit, seeded by `dev/seed.ts`, with a caller picker at
+`/__fabrika/dev` and a toolbar on every SPA page: `references/dev.md`.

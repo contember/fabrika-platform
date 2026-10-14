@@ -275,13 +275,19 @@ repository configures, or none, and never add a configuration unasked; tsc and `
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
 "allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
+## Previewing the screens
+
+`bunx fabrika app dev` serves the application on a loopback port through its test kit, filled by `dev/seed.ts`
+through the endpoints. Pick a persona at `/__fabrika/dev`; the toolbar on every page switches it and lists the mail IAM
+sent. Write the seed and use it as `references/dev.md` says; it never replaces a test.
+
 ## References
 
 Read the one you need before you write that part. Together they are one application to copy from: `app-setup.md`
 (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`, `endpoint.md`
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
-`errors.md` (checker findings, type errors, runtime answers), `jobs.md` (which dimension `ctx.within` names, the UTC
+`errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
 day), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
 this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's
@@ -371,7 +377,7 @@ the SPA is added with it.
 		"noEmit": true,
 		"types": ["@types/bun"]
 	},
-	"include": ["src/**/*", "web/**/*", "*.ts"]
+	"include": ["src/**/*", "web/**/*", "dev/**/*", "*.ts"]
 }
 ```
 
@@ -595,6 +601,76 @@ export const signedIn = async (action: string) => {
 ## Ignored files
 
 `.gitignore`: `node_modules/`, `fabrika.manifest.json`, `/fabrika/entry.generated.ts`, `/dist/`.
+
+---
+
+# references/dev.md — previewing the application with `fabrika app dev`
+
+`bunx fabrika app dev` serves the application on `http://127.0.0.1:3000/` through its test kit: the proxy decision,
+the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, and each SPA from its build (run
+`bun run build:web` first). Use it to look at the screens, never in place of a test.
+
+## The seed
+
+`dev/seed.ts` runs once, before the first request. It receives the kit, the API the tests use, writes through the
+endpoints, and answers whom and what the picker offers. `--seed=<module>` names another file.
+
+```ts dev/seed.ts
+import { createClient } from '@fabrika/app/client'
+import type { DevSeed } from '@fabrika/app/testing'
+import { contract } from '../fabrika.contract'
+
+const seed: DevSeed<typeof contract> = async (dev) => {
+	const acme = dev.scope('org', 'acme')
+	const ada = dev.testCaller([{ role: 'owner', scope: acme }], {
+		label: 'Ada Lovelace',
+		email: 'ada@acme.example',
+	})
+	const ben = dev.testCaller([{ role: 'member', scope: acme }], {
+		label: 'Ben Okafor',
+		email: 'ben@acme.example',
+	})
+	const api = createClient(contract, 'api', { fetch: dev.browser(ada) })
+	await api.projects.create({ orgId: acme.value, name: 'Website relaunch' })
+	await api.members.invite({
+		orgId: acme.value,
+		email: 'cleo@acme.example',
+		role: 'member',
+	})
+	return {
+		personas: [
+			{ name: 'Ada', description: 'Owns Acme: invites and assigns', caller: ada },
+			{ name: 'Ben', description: 'A member who works the tasks', caller: ben },
+		],
+		scopes: { org: [{ value: acme.value, label: 'Acme' }] },
+	}
+}
+
+export default seed
+```
+
+- A persona is a person the seed made with `dev.testCaller` (a session, never `via: 'key'`), with a unique `name` and
+  a one-line `description`. The picker shows its roles, the scope values it holds them in, and `external`.
+- `links` lists pages a link holder opens: `{ title, description, url }`, where `url` is what the application's own
+  endpoint answered from `ctx.links.issue` (`/s/#<key>`). Never build a link URL by hand.
+- `scopes` names the values the seed made, by dimension, with the label a person knows them by; the picker offers
+  them for a membership role.
+- Check every call the seed makes: an endpoint that refuses answers a status, and the seed goes on without its data.
+  A seed that throws stops `app dev` with `seed_failed` and no message, because the message may carry a credential;
+  run the same calls in a test to see why.
+- Mail the application sends through its own stand-ins is the seed's business. The invitations IAM would e-mail are
+  listed by `app dev` itself.
+
+## In the browser
+
+- `/__fabrika/dev` is the picker: the personas, another role of the vocabulary (a membership role with a scope value),
+  anonymous, the link pages, and the mail IAM sent. It speaks the vocabulary's `locale` and shows its `displayName`.
+- Every SPA page carries a toolbar in the bottom corner: who you are, the personas to switch to (the page reloads as
+  that caller), the picker, the link pages, and the mail. An invitation's link accepts it; the browser is the invited
+  person from then on.
+- The choice stays in a cookie the application never sees. The data is gone when the command stops.
+- It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
+  addressed to another host name, and runs no cron job: test those with `kit.runJob`.
 
 ---
 
@@ -3899,12 +3975,8 @@ if (postgres !== null) {
 
 ## Clicking through the screens
 
-`bunx fabrika app dev` serves the application on `http://127.0.0.1:3000/` through the same kit: the proxy decision,
-the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, and each SPA from its build (run
-`bun run build:web` first). Open `/__fabrika/dev` and pick who the browser is: a role, and for a membership role the
-scope value it is held in (`member` in `acme`). The choice stays in a cookie; pick again to switch. The data is gone
-when the command stops. It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port),
-and runs no cron job: test those with `kit.runJob`. Use it to look at the screens, never in place of a test.
+`bunx fabrika app dev` serves the application through the same kit, seeded by `dev/seed.ts`, with a caller picker at
+`/__fabrika/dev` and a toolbar on every SPA page: `references/dev.md`.
 
 ---
 

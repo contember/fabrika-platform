@@ -283,13 +283,19 @@ repository configures, or none, and never add a configuration unasked; tsc and `
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
 "allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
 
+## Previewing the screens
+
+`bunx fabrika app dev` serves the application on a loopback port through its test kit, filled by `dev/seed.ts`
+through the endpoints. Pick a persona at `/__fabrika/dev`; the toolbar on every page switches it and lists the mail IAM
+sent. Write the seed and use it as `references/dev.md` says; it never replaces a test.
+
 ## References
 
 Read the one you need before you write that part. Together they are one application to copy from: `app-setup.md`
 (`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`, `endpoint.md`
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
-`errors.md` (checker findings, type errors, runtime answers), `jobs.md` (which dimension `ctx.within` names, the UTC
+`errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
 day), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
 this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's

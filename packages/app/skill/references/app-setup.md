@@ -73,7 +73,7 @@ the SPA is added with it.
 		"noEmit": true,
 		"types": ["@types/bun"]
 	},
-	"include": ["src/**/*", "web/**/*", "*.ts"]
+	"include": ["src/**/*", "web/**/*", "dev/**/*", "*.ts"]
 }
 ```
 
