@@ -44,7 +44,7 @@ export interface LinkFileClient {
 /** The collections the holders of link mount `M` reach: those with `link: true`, and those whose `link` names `M`. */
 export type LinkCollections<F, M> = {
 	[N in keyof F]: F[N] extends FileCollection<string, infer L>
-		? true extends L ? N : L extends readonly (infer Named)[] ? M extends Named ? N : never : never
+		? [L] extends [true] ? N : [L] extends [readonly (infer Named)[]] ? M extends Named ? N : never : never
 		: never
 }[keyof F]
 
