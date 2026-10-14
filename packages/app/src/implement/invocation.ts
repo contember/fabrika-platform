@@ -4,7 +4,15 @@
 // is bound to the invocation: called from another request, another `boot`, or after it ended, it refuses.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
-import type { DataAccess, DataHandles, DataSite, InvocationTransaction, Session, SqlTag } from '@fabrika/db/framework'
+import {
+	type DataAccess,
+	type DataHandles,
+	type DataSite,
+	type InvocationTransaction,
+	QueryRefusedError,
+	type Session,
+	type SqlTag,
+} from '@fabrika/db/framework'
 import type { DataKind, UnscopedMode } from '@fabrika/db/tables'
 import type { SqlMode } from '../contract/context'
 import { CapabilityRefusedError, isActiveRequest, type RequestFrame } from './capability'
@@ -285,6 +293,19 @@ export function jobHandles(
 	ended: () => boolean,
 ): DataHandles {
 	return data.handles({ kind, unscoped: declaration.unscoped, principal, check: boundTo(frame, ended), session })
+}
+
+/**
+ * `ctx.sql` (a job's `tx.sql`) of a site that does not declare `sql`. The types already refuse it; at run time it exists
+ * only to refuse by name, so an untyped call reports the declaration it needs rather than a `TypeError`.
+ */
+export function undeclaredSql(site: string, kind: DataKind): SqlTag {
+	const member = kind === 'job' ? 'tx.sql' : 'ctx.sql'
+	const declaration = kind === 'query' ? "sql: 'read'" : "sql: 'read' (or 'write' to write)"
+	const refuse = (): never => {
+		throw new QueryRefusedError('undeclared_reach', `${site} does not declare sql, so it has no ${member}; add ${declaration} to it`)
+	}
+	return Object.freeze(Object.assign(() => refuse(), { scope: () => refuse() }))
 }
 
 /** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */

@@ -22,6 +22,7 @@ import {
 	jobSql,
 	siteData,
 	type SiteDeclaration,
+	undeclaredSql,
 } from '../implement/invocation'
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
 import type { WorkloadCredential } from '../implement/workload'
@@ -616,7 +617,7 @@ function jobContext(
 		runId: frame.id,
 		attempt,
 		signal,
-		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, job.site, principal.id)),
+		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, job.name, job.site, principal.id)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
@@ -671,7 +672,13 @@ function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, fram
  * What a staged-kit job adds: `ctx.db`, whose reads run each on its own, and `ctx.transaction(work)`, the one place it
  * writes and runs `tx.sql` — fenced by the attempt's lease, so an attempt that timed out or lost it commits nothing.
  */
-function kitJobContext(frame: RequestFrame, data: DataAccess, site: SiteDeclaration, principal: string): Readonly<Record<string, unknown>> {
+function kitJobContext(
+	frame: RequestFrame,
+	data: DataAccess,
+	name: string,
+	site: SiteDeclaration,
+	principal: string,
+): Readonly<Record<string, unknown>> {
 	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false)
 	return {
 		db: siteData(reads),
@@ -682,8 +689,8 @@ function kitJobContext(frame: RequestFrame, data: DataAccess, site: SiteDeclarat
 				let open = true
 				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
 				try {
-					const sql = site.sql === null ? {} : { sql: jobSql(frame, data, site.sql, session, () => !open) }
-					return await work(Object.freeze({ db: siteData(writes), ...sql }))
+					const sql = site.sql === null ? undeclaredSql(`job '${name}'`, 'job') : jobSql(frame, data, site.sql, session, () => !open)
+					return await work(Object.freeze({ db: siteData(writes), sql }))
 				} finally {
 					open = false
 				}

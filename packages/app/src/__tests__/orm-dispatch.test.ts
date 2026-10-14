@@ -176,6 +176,16 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
 	})
 
+	test('ctx.sql of a site that does not declare sql refuses by name before anything is sent', async () => {
+		const { app, hooks } = start()
+		const id = await seedDeal()
+		hooks.rename = 'undeclared sql'
+		const log = await failed(async () => send(app, '/api/deals.rename', { token: await writer(), body: { id, title: 'written', expectVersion: 1 } }))
+		expect(log).toContain('fabrika: api.deals.rename: query_refused: undeclared_reach')
+		expect(hooks.kept.refusal).toBe("api.deals.rename does not declare sql, so it has no ctx.sql; add sql: 'read' (or 'write' to write) to it")
+		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
+	})
+
 	test('boot refuses a query that declares a write, and a declaration of a table outside src/db/tables.ts', () => {
 		const declared = (declaration: unknown) => ({
 			...ormApp(ormHooks()),
@@ -296,6 +306,20 @@ describe.skipIf(!hasPostgres)('a job writes only in its fenced transaction', () 
 		const inside = start()
 		expect(await inside.app.jobs.run('close', { clock, reporter })).toEqual({ status: 'succeeded', attempts: 1 })
 		expect((await deal(lead))?.['stage']).toBe('lost')
+	})
+
+	test('tx.sql of a job that does not declare sql refuses by name, and the attempt writes nothing', async () => {
+		const { app, hooks } = start()
+		hooks.job = 'undeclared sql'
+		const lead = await seedDeal('lead')
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect(await app.jobs.run('close', { clock, reporter })).toEqual({ status: 'failed', attempts: 1, code: 'handler_failed' })
+		} finally {
+			log.mockRestore()
+		}
+		expect(hooks.kept.refusal).toBe("job 'close' does not declare sql, so it has no tx.sql; add sql: 'read' (or 'write' to write) to it")
+		expect((await deal(lead))?.['stage']).toBe('lead')
 	})
 
 	test("a job's captured handles are refused once its attempt ended", async () => {

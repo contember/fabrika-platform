@@ -57,7 +57,7 @@ import { ServerFault } from './faults'
 import { ACCEPTED_BUCKET, clientBucket, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { endpointData, Invocation, siteData, type SiteDeclaration } from './invocation'
+import { endpointData, Invocation, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
 import { createScope, type IssuableLink, linkIssuing, memberDirectory, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
@@ -768,7 +768,10 @@ export class ContractRuntime {
 					const delivery = Object.freeze({ key })
 					const data = site === undefined || invocation === null
 						? {}
-						: { db: siteData(invocation.handles('mutation', site, subject)), ...(site.sql === null ? {} : { sql: invocation.sql(site.sql) }) }
+						: {
+							db: siteData(invocation.handles('mutation', site, subject)),
+							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
+						}
 					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs, delivery, ...data }) })
 				})
 			} finally {
@@ -812,7 +815,7 @@ export class ContractRuntime {
 	}
 }
 
-/** `ctx.db` (by the access form) and the declared `ctx.sql` of a staged-kit endpoint. */
+/** `ctx.db` (by the access form) and `ctx.sql` of a staged-kit endpoint: the declared tag, or one that refuses. */
 function siteContext(
 	row: CredentialedEndpoint,
 	site: ServedSite,
@@ -827,7 +830,7 @@ function siteContext(
 		created: access['created'],
 		app: access['app'],
 	})
-	return site.declaration.sql === null ? { db } : { db, sql: invocation.sql(site.declaration.sql) }
+	return { db, sql: site.declaration.sql === null ? undeclaredSql(row.id, site.kind) : invocation.sql(site.declaration.sql) }
 }
 
 /** Whether the caller holds `action` on the value or on any container of its chain; IAM evaluates each as a flat scope. */

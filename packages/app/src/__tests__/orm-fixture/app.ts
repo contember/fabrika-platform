@@ -5,6 +5,7 @@
 import { ConflictError } from '@fabrika/app'
 import type { ContractImplementation } from '@fabrika/app/implement'
 import { scoped } from '@fabrika/db'
+import { z } from 'zod/v4'
 import { siteHandler } from '../../implement/invocation'
 import { tables } from '../kit-fixture/src/db/tables'
 import { contract } from './fabrika.contract'
@@ -12,14 +13,14 @@ import { contract } from './fabrika.contract'
 export interface OrmHooks {
 	/** Runs while `deals.reopen` holds its row's lock. */
 	afterLock: () => Promise<void>
-	/** What `deals.rename` does after its write. */
-	rename: 'answer' | 'throw' | 'refused output'
+	/** What `deals.rename` does after its write, or `'undeclared sql'`: calls `ctx.sql` first, which it does not declare. */
+	rename: 'answer' | 'throw' | 'refused output' | 'undeclared sql'
 	/** Runs while `deals.keep` and the job keep their handles live. */
 	whileKept: () => Promise<void>
 	/** The handles a handler kept past its invocation. */
-	kept: { target?: unknown; jobData?: unknown; jobRef?: unknown }
-	/** What the job does with the lead deals it lists. */
-	job: 'in its transaction' | 'outside its transaction'
+	kept: { target?: unknown; jobData?: unknown; jobRef?: unknown; refusal?: string }
+	/** What the job does with the lead deals it lists; `'undeclared sql'` calls `tx.sql.scope` first, which it does not declare. */
+	job: 'in its transaction' | 'outside its transaction' | 'undeclared sql'
 	/** Each delivery's company name, as the webhook handler saw it. */
 	readonly deliveries: string[]
 	failNextDelivery: boolean
@@ -37,9 +38,14 @@ export function ormHooks(): OrmHooks {
 	}
 }
 
+/** An object or a function, such as `ctx.sql` with its `scope`. */
+function isHolder(value: unknown): value is object {
+	return (typeof value === 'object' && value !== null) || typeof value === 'function'
+}
+
 /** `path` of `node`, read through own and prototype properties alike, as a handler's `ctx.db.target.get` reads. */
 function at(node: unknown, path: string): unknown {
-	return path.split('.').reduce<unknown>((value, part) => (typeof value === 'object' && value !== null ? Reflect.get(value, part) : undefined), node)
+	return path.split('.').reduce<unknown>((value, part) => (isHolder(value) ? Reflect.get(value, part) : undefined), node)
 }
 
 /** Calls the method at `path`, with its holder as `this`. */
@@ -47,11 +53,21 @@ async function call(node: unknown, path: string, ...args: unknown[]): Promise<un
 	const parts = path.split('.')
 	const name = parts.pop() ?? ''
 	const holder = parts.length === 0 ? node : at(node, parts.join('.'))
-	const method = typeof holder === 'object' && holder !== null ? Reflect.get(holder, name) : undefined
+	const method = isHolder(holder) ? Reflect.get(holder, name) : undefined
 	if (typeof method !== 'function') {
 		throw new TypeError(`${path} is not a method`)
 	}
 	return Reflect.apply(method, holder, args)
+}
+
+/** Runs `work` and keeps the message of what it threw, which the server log never shows, then throws it on. */
+async function kept(hooks: OrmHooks, work: () => Promise<unknown>): Promise<void> {
+	try {
+		await work()
+	} catch (error) {
+		hooks.kept.refusal = error instanceof Error ? error.message : String(error)
+		throw error
+	}
 }
 
 function field(value: unknown, name: string): unknown {
@@ -81,6 +97,9 @@ export function ormApp(hooks: OrmHooks): ContractImplementation<typeof contract>
 					return call(ctx, 'db.target.update', { stage: 'proposal' }, { expectVersion: field(input, 'expectVersion') })
 				}, undefined),
 				rename: siteHandler(async ({ input, ctx }) => {
+					if (hooks.rename === 'undeclared sql') {
+						await kept(hooks, () => call(ctx, 'sql', z.object({ n: z.number() })))
+					}
 					const saved = await call(ctx, 'db.target.update', { title: field(input, 'title') }, { expectVersion: field(input, 'expectVersion') })
 					if (hooks.rename === 'throw') {
 						throw new Error('the handler failed after its write')
@@ -131,7 +150,12 @@ export function ormApp(hooks: OrmHooks): ContractImplementation<typeof contract>
 					if (hooks.job === 'outside its transaction') {
 						await lose(at(ctx, 'db'))
 					} else {
-						await call(ctx, 'transaction', (tx: unknown) => lose(at(tx, 'db')))
+						await call(ctx, 'transaction', async (tx: unknown) => {
+							if (hooks.job === 'undeclared sql') {
+								await kept(hooks, () => call(tx, 'sql.scope', ref, 'deals'))
+							}
+							return lose(at(tx, 'db'))
+						})
 					}
 				}
 			}, undefined),

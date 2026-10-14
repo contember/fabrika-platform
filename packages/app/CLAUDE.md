@@ -594,9 +594,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   `Invocation` per request (`READ ONLY` for a query and an export), builds `ctx.db` by the access form
   (`endpointData`), ends the frame when the handler returns, validates the output, and only then commits; a throw, a
   refused output or an aborted request rolls back. Every handle checks `boundTo(frame)`: a handle kept past its
-  handler, or called from another request or another `boot`, is a `CapabilityRefusedError`. `ctx.sql` exists only on
+  handler, or called from another request or another `boot`, is a `CapabilityRefusedError`. `ctx.sql` runs only on
   a site that declares `sql`: `Invocation.sql(mode)` (a job's `tx.sql`: `jobSql`) asks `@fabrika/db`'s `DataAccess.sql`
-  for the tag over the same session as the site's handles, bound by `boundTo` too.
+  for the tag over the same session as the site's handles, bound by `boundTo` too. On a site without `sql`, `ctx.sql`
+  (`tx.sql`) is `undeclaredSql`, which only refuses with `undeclared_reach` and names the declaration, so an untyped
+  call is no `TypeError`.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
   before any application module loads.** The runtime adapter calls
   `captureEnvironment`, which keeps them in a frozen record and deletes them from
