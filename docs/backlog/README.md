@@ -57,4 +57,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [159](159-an-application-directory-page-and-an-expired-role-regrant.md) — A 100-person directory page exceeds D1's bind limit; an expired global role cannot be regranted.
 - [161](161-app-dev-review-findings.md) — The kit's share links never expire, and an app dev seed error can print a record key.
 - [160](160-a-link-client-lists-other-mounts-collections-and-an-xlsx-loses-carriage-returns.md) — A link client offers collections bound to other mounts, and an XLSX text cell loses its CR.
+- [162](162-the-generated-tests-have-no-column-write-case.md) — A column's own write action is enforced, but no generated policy test proves it.
+- [163](163-the-installation-hosts-send-no-hsts.md) — Only an `https` application host gets HSTS; IAM's and Control's hosts get none.
+- [164](164-a-job-without-handle-prints-the-builders-type.md) — A job, webhook, link or export procedure without `.handle` prints the builder's type, not a one-line fix.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
