@@ -35,6 +35,7 @@ bun run local:status       # …:smoke (disruptive end-to-end), :reset (wipes vo
 bun run test:browser       # opice suites in tests/browser/ (browser:up/reset/down manage the stack)
 
 bun run release:validate   # publishability + dependency direction; also :pack :smoke :publish
+bun run release:pack --local --artifacts=<dir>   # unreleased tarballs for an app outside the repo (app-setup.md)
 ```
 
 CPU-heavy runs (full typecheck, full test suite, docker builds) go through `cpu-lease run -n 4 -- …`.
@@ -44,7 +45,7 @@ Suites that need a real backend **skip cleanly** when it is absent and say what 
 `FABRIKA_TEST_S3_*` (the S3 blob store) each print the `docker run` that supplies one;
 `FABRIKA_LIVE_ZEROPS_TOKEN` + `FABRIKA_LIVE_ZEROPS_PROJECT_ID` run the platform-facts table against a
 real Zerops account, which no container can stand in for — it creates and deletes throwaway services in
-that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. `FABRIKA_TEST_CADDY_BIN` names a
+that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. `FABRIKA_TEST_RELEASE_PACK=1` packs locally, installs the set into a scratch application and checks it with `--packed` (`scripts/__tests__/release.test.ts`; needs npm). `FABRIKA_TEST_CADDY_BIN` names a
 caddy 2.10.2 binary (copy it out of the `caddy:2.10.2-alpine` image) and runs the generated proxy chain in a real
 Caddy (`packages/proxy/src/__tests__/caddy.live.test.ts`). `FABRIKA_TEST_CLAMSCAN_BIN` names a `clamscan` (or a wrapper
 that runs the `clamav/clamav:1.4` image with the batch directory mounted at its own path) and runs the file scan against

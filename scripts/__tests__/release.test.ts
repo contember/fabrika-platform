@@ -1,18 +1,25 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod'
 import {
 	assertPackedImports,
 	assertStandaloneCheckout,
 	awaitRegistryTag,
 	entryImportSmoke,
+	LOCAL_INSTALL_FILE,
+	LOCAL_TARBALL_DIRECTORY,
+	localInstallBlock,
+	localVersion,
 	packageInfo,
 	parseOptions,
+	parseReleaseManifest,
 	REGISTRY_BACKOFF_MS,
 	REGISTRY_DEADLINE_MS,
 	type RegistryWaitDeps,
 	rewriteExamplePins,
+	stagedAppSkill,
 	unifiedDiff,
 } from '../release'
 
@@ -174,6 +181,96 @@ describe('command line', () => {
 		await expect(parseOptions(['registry-smoke', 'oops', '--tag=v1.2.3'])).rejects.toThrow('Unknown option: oops')
 		await expect(parseOptions(['example-pin', '--nope', '--tag=v1.2.3'])).rejects.toThrow('Unknown option: --nope')
 	})
+
+	test('takes --local for pack only, and with no tag, since a local pack derives its version', async () => {
+		await expect(parseOptions(['publish', '--local', '--tag=v1.2.3'])).rejects.toThrow('Unknown option: --local')
+		await expect(parseOptions(['smoke', '--local', '--tag=v1.2.3'])).rejects.toThrow('Unknown option: --local')
+		await expect(parseOptions(['pack', '--local', '--tag=v1.2.3'])).rejects.toThrow('pack --local derives its version and takes no --tag')
+	})
+})
+
+describe('a local pack', () => {
+	test('is a prerelease of the last published version, named after the commit', () => {
+		expect(localVersion('0.3.3', 'abc1234')).toBe('0.3.3-local.abc1234')
+		expect(() => localVersion('0.3.3-next.1', 'abc1234')).toThrow('is not a release')
+		expect(() => localVersion('0.3.3', 'HEAD')).toThrow('is not a git object name')
+	})
+
+	test('installs from vendor/: every package a direct dependency and an override', () => {
+		const packages = [
+			{ name: '@fabrika/app', filename: 'fabrika-app-0.3.3-local.abc1234.tgz', dependencies: [], integrity: 'sha512-AAAA' },
+			{ name: '@fabrika/db', filename: 'fabrika-db-0.3.3-local.abc1234.tgz', dependencies: ['@fabrika/app'], integrity: 'sha512-BBBB' },
+		]
+		const tarballs = {
+			'@fabrika/app': 'file:vendor/fabrika-app-0.3.3-local.abc1234.tgz',
+			'@fabrika/db': 'file:vendor/fabrika-db-0.3.3-local.abc1234.tgz',
+		}
+		expect(localInstallBlock(packages)).toEqual({ dependencies: tarballs, overrides: tarballs })
+	})
+
+	test("leaves the skill's example pins at the published version npm has, and names the pack in SKILL.md", () => {
+		const files = [
+			{ path: 'SKILL.md', text: '---\nname: fabrika-app\nversion: 0.0.4\ndescription: rules\n---\n' },
+			{ path: 'references/app-setup.md', text: '\t\t"@fabrika/app": "^0.0.4",\n' },
+		]
+		expect(stagedAppSkill(files, '0.3.3-local.abc1234', '0.3.3')).toEqual([
+			{ path: 'SKILL.md', text: '---\nname: fabrika-app\nversion: 0.3.3-local.abc1234\ndescription: rules\n---\n' },
+			{ path: 'references/app-setup.md', text: '\t\t"@fabrika/app": "^0.3.3",\n' },
+		])
+	})
+})
+
+const ROOT = join(import.meta.dir, '..', '..')
+const runPackWitness = process.env['FABRIKA_TEST_RELEASE_PACK'] === '1'
+if (!runPackWitness) {
+	console.warn('release.test.ts: the local pack witness skipped: set FABRIKA_TEST_RELEASE_PACK=1 to pack, install and check (needs npm and minutes)')
+}
+
+const exec = async (
+	command: readonly string[],
+	cwd: string,
+): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> => {
+	const child = Bun.spawn([...command], { cwd, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, NO_COLOR: '1' } })
+	const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+	return { code, stdout, stderr }
+}
+
+describe.skipIf(!runPackWitness)('an application outside the repository on a local pack', () => {
+	test('installs the set from the written block and passes fabrika-check --packed, and fails it without', async () => {
+		const scratch = await mkdtemp(join(tmpdir(), 'fabrika-local-pack-'))
+		try {
+			const artifacts = join(scratch, 'artifacts')
+			const packed = await exec(['bun', 'scripts/release.ts', 'pack', '--local', `--artifacts=${artifacts}`], ROOT)
+			expect(packed.stderr).toBe('')
+			expect(packed.code).toBe(0)
+			const manifestPath = join(artifacts, 'release-manifest.json')
+			const manifest = parseReleaseManifest(await readFile(manifestPath, 'utf8'), manifestPath)
+			expect(manifest.version).toMatch(/^\d+\.\d+\.\d+-local\.[0-9a-f]+$/)
+			const block = z.object({ dependencies: z.record(z.string()), overrides: z.record(z.string()) })
+				.parse(JSON.parse(await readFile(join(artifacts, LOCAL_INSTALL_FILE), 'utf8')))
+			expect(block).toEqual(localInstallBlock(manifest.packages))
+
+			const application = join(scratch, 'notes')
+			await mkdir(join(application, LOCAL_TARBALL_DIRECTORY), { recursive: true })
+			for (const name of (await readdir(artifacts)).filter((name) => name.endsWith('.tgz'))) {
+				await cp(join(artifacts, name), join(application, LOCAL_TARBALL_DIRECTORY, name))
+			}
+			await writeFile(join(application, 'package.json'), `${JSON.stringify({ name: 'notes', private: true, type: 'module', ...block }, null, '\t')}\n`)
+			const installed = await exec(['bun', 'install', '--ignore-scripts'], application)
+			expect(installed.code).toBe(0)
+
+			const checker = join(application, 'node_modules', '.bin', 'fabrika-check')
+			const accepted = await exec([checker, '--packed', manifestPath, application], application)
+			expect({ code: accepted.code, stdout: accepted.stdout }).toEqual({ code: 0, stdout: '' })
+			const refused = await exec([checker, application], application)
+			expect(refused.code).toBe(1)
+			const rules = refused.stdout.split('\n').filter((line) => line !== '').map((line) => line.split(' ')[1])
+			// One refusal per package in each of dependencies and bun.lock, and one for overrides.
+			expect(rules).toEqual(Array.from({ length: manifest.packages.length * 2 + 1 }, () => 'package-replacement'))
+		} finally {
+			await rm(scratch, { recursive: true, force: true })
+		}
+	}, 900_000)
 })
 
 const EXAMPLE_MANIFEST = `{

@@ -191,7 +191,11 @@ describe('packed entry point traversal', () => {
 })
 
 describe('artifact metadata', () => {
-	const metadata = { tag: 'v0.0.4', version: '0.0.4', packages: [{ name: '@fabrika/app', filename: 'app.tgz', dependencies: ['@fabrika/auth'] }] }
+	const metadata = {
+		tag: 'v0.0.4',
+		version: '0.0.4',
+		packages: [{ name: '@fabrika/app', filename: 'app.tgz', dependencies: ['@fabrika/auth'], integrity: 'sha512-AAAA' }],
+	}
 	test('retains metadata order and strips extensions as before', () => {
 		expect(parseReleaseManifest(
 			JSON.stringify({
@@ -219,6 +223,8 @@ describe('artifact metadata', () => {
 				packages: [{ name: 'x', filename: '', dependencies: [] }],
 			},
 			{ ...metadata, packages: [{ name: 'x', filename: 'x', dependencies: [1] }] },
+			{ ...metadata, packages: [{ name: 'x', filename: 'x', dependencies: [] }] },
+			{ ...metadata, packages: [{ name: 'x', filename: 'x', dependencies: [], integrity: 'md5-AAAA' }] },
 		]
 	) {
 		test(`rejects malformed metadata ${JSON.stringify(value)}`, () => {

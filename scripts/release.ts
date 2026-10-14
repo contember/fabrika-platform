@@ -50,6 +50,8 @@ interface ReleasePackage {
 	readonly name: string
 	readonly filename: string
 	readonly dependencies: readonly string[]
+	/** The sha512 of the tarball's bytes, as npm and bun record it: what `fabrika-check --packed` compares. */
+	readonly integrity: string
 }
 
 interface ReleaseManifest {
@@ -62,6 +64,10 @@ interface Options {
 	readonly command: string
 	readonly tag: string
 	readonly version: string
+	/** `pack --local`: the version is derived, not tagged, and the pack also writes the block that installs it. */
+	readonly local: boolean
+	/** The version the skill's example pins name: the release itself, or for a local pack the last published one. */
+	readonly pinnedVersion: string
 	readonly artifactsDirectory: string
 	readonly dryRun: boolean
 	readonly positional: readonly string[]
@@ -108,6 +114,7 @@ const releaseManifestSchema = z.object({
 		name: nonEmptyString,
 		filename: nonEmptyString,
 		dependencies: z.array(z.string()),
+		integrity: z.string().startsWith('sha512-'),
 	})),
 })
 
@@ -251,6 +258,27 @@ const resolveTag = async (explicit: string | undefined): Promise<{ readonly tag:
 
 const COMMANDS: readonly string[] = ['validate', 'pack', 'smoke', 'publish', 'registry-smoke', 'example-pin']
 
+/** The package whose published version a local pack builds on. */
+const LOCAL_BASE_PACKAGE = '@fabrika/app'
+
+/**
+ * The version of a local pack: a prerelease of the last published version, named after the commit. npm never has it,
+ * so nothing resolves it from the registry by accident.
+ */
+export const localVersion = (published: string, commit: string): string => {
+	if (!/^\d+\.\d+\.\d+$/.test(published)) throw new Error(`${LOCAL_BASE_PACKAGE}: the published version ${JSON.stringify(published)} is not a release`)
+	if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`the commit ${JSON.stringify(commit)} is not a git object name`)
+	return `${published}-local.${commit}`
+}
+
+/** `pack --local`'s version and the published version it builds on, which the skill's example pins keep naming. */
+const resolveLocalVersion = async (): Promise<{ readonly version: string; readonly published: string }> => {
+	const published = await distTagVersion(LOCAL_BASE_PACKAGE, 'latest')
+	if (published === undefined) throw new Error(`${LOCAL_BASE_PACKAGE} has no latest version on npm to build a local pack on`)
+	const commit = (await run(['git', 'rev-parse', '--short', 'HEAD'])).stdout.trim()
+	return { version: localVersion(published, commit), published }
+}
+
 /** The one command that takes a path. Everywhere else a bare word is a typo, and `publish oops` must not publish. */
 const POSITIONAL_COMMAND = 'example-pin'
 
@@ -259,17 +287,24 @@ export const parseOptions = async (argv: readonly string[]): Promise<Options> =>
 	let tagArgument: string | undefined
 	let artifactsDirectory = join(ROOT, '.release')
 	let dryRun = false
+	let local = false
 	const positional: string[] = []
 	for (const argument of argv.slice(1)) {
 		if (argument.startsWith('--tag=')) tagArgument = argument.slice('--tag='.length)
 		else if (argument.startsWith('--artifacts=')) artifactsDirectory = resolve(ROOT, argument.slice('--artifacts='.length))
 		else if (argument === '--dry-run') dryRun = true
+		else if (argument === '--local' && command === 'pack') local = true
 		else if (command === POSITIONAL_COMMAND && !argument.startsWith('-')) positional.push(argument)
 		else throw new Error(`Unknown option: ${argument}`)
 	}
 	if (!COMMANDS.includes(command)) throw new Error(`Unknown release command: ${command}`)
+	if (local) {
+		if (tagArgument !== undefined) throw new Error('pack --local derives its version and takes no --tag')
+		const { version, published } = await resolveLocalVersion()
+		return { command, tag: `v${version}`, version, local, pinnedVersion: published, artifactsDirectory, dryRun, positional }
+	}
 	const { tag, version } = await resolveTag(tagArgument)
-	return { command, tag, version, artifactsDirectory, dryRun, positional }
+	return { command, tag, version, local, pinnedVersion: version, artifactsDirectory, dryRun, positional }
 }
 
 const internalDependencies = (item: PackageInfo, publicNames: ReadonlySet<string>): readonly string[] => {
@@ -307,14 +342,20 @@ const APP_SKILL_PACKAGE = '@fabrika/app'
 
 /**
  * The application skill of `@fabrika/app` as a release ships it: `SKILL.md` names the released version, and every
- * `@fabrika/*` range of a reference file's examples is `^<version>`, so an application copied from it installs the
- * release whose rules it read.
+ * `@fabrika/*` range of a reference file's examples is `^<pinnedVersion>`, so an application copied from it installs
+ * the release whose rules it read. A local pack pins the last published version, the newest npm has.
  */
-export const stagedAppSkill = (files: readonly { readonly path: string; readonly text: string }[], version: string) =>
-	files.map(({ path, text }) => ({ path, text: path === 'SKILL.md' ? stagedSkill(text, version) : rewriteExamplePins(text, version).text }))
+export const stagedAppSkill = (files: readonly { readonly path: string; readonly text: string }[], version: string, pinnedVersion = version) =>
+	files.map(({ path, text }) => ({ path, text: path === 'SKILL.md' ? stagedSkill(text, version) : rewriteExamplePins(text, pinnedVersion).text }))
 
 /** Copies `item` into `stagingDirectory` as `pack` packs it: its files, its staged manifest and, for the app, its skill. */
-export const stagePackage = async (item: PackageInfo, version: string, publicNames: ReadonlySet<string>, stagingDirectory: string): Promise<void> => {
+export const stagePackage = async (
+	item: PackageInfo,
+	version: string,
+	publicNames: ReadonlySet<string>,
+	stagingDirectory: string,
+	pinnedVersion = version,
+): Promise<void> => {
 	const includeDist = includesDist(item.manifest)
 	await cp(item.directory, stagingDirectory, { recursive: true, filter: (source) => stagesPath(source, includeDist) })
 	await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, version, publicNames), null, '\t')}\n`)
@@ -324,10 +365,27 @@ export const stagePackage = async (item: PackageInfo, version: string, publicNam
 	const files = await Promise.all(
 		['SKILL.md', ...references].map(async (path) => ({ path, text: await readFile(join(skillDirectory, path), 'utf8') })),
 	)
-	for (const file of stagedAppSkill(files, version)) await writeFile(join(skillDirectory, file.path), file.text)
+	for (const file of stagedAppSkill(files, version, pinnedVersion)) await writeFile(join(skillDirectory, file.path), file.text)
 }
 
 const tarballFilename = (name: string, version: string): string => `${name.replace(/^@/, '').replaceAll('/', '-')}-${version}.tgz`
+
+/** Where an application keeps the tarballs of a local pack, relative to its root. */
+export const LOCAL_TARBALL_DIRECTORY = 'vendor'
+
+/** The file beside a local pack's tarballs that holds the `dependencies` and `overrides` block installing them. */
+export const LOCAL_INSTALL_FILE = 'install.json'
+
+/**
+ * The `package.json` block that installs a local pack from `vendor/`: every package as a direct dependency, and as an
+ * override, because each packed manifest names its `@fabrika/*` dependencies by a range only the pack satisfies.
+ */
+export const localInstallBlock = (packages: readonly ReleasePackage[]) => {
+	const tarballs = Object.fromEntries(packages.map((item) => [item.name, `file:${LOCAL_TARBALL_DIRECTORY}/${item.filename}`]))
+	return { dependencies: tarballs, overrides: tarballs }
+}
+
+const tarballIntegrity = async (path: string): Promise<string> => `sha512-${createHash('sha512').update(await readFile(path)).digest('base64')}`
 
 const preparesRelease = (manifest: Record<string, unknown>): boolean => {
 	const scripts = manifest['scripts']
@@ -491,14 +549,14 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 		for (const item of order) {
 			if (preparesRelease(item.manifest)) await run(['bun', 'run', 'release:prepare'], { cwd: item.directory })
 			const stagingDirectory = join(stagingRoot, basename(item.directory))
-			await stagePackage(item, options.version, publicNames, stagingDirectory)
+			await stagePackage(item, options.version, publicNames, stagingDirectory, options.pinnedVersion)
 			const filename = tarballFilename(item.name, options.version)
 			const path = join(options.artifactsDirectory, filename)
 			await rm(path, { force: true })
 			await run(['npm', 'pack', stagingDirectory, '--json', '--ignore-scripts', '--pack-destination', options.artifactsDirectory])
 			if (!(await Bun.file(path).exists())) throw new Error(`${item.name}: npm pack did not create ${filename}`)
 			await assertSafeTarball(path, item.name, options.version)
-			entries.push({ name: item.name, filename, dependencies: internalDependencies(item, publicNames) })
+			entries.push({ name: item.name, filename, dependencies: internalDependencies(item, publicNames), integrity: await tarballIntegrity(path) })
 			console.info(`packed ${item.name}@${options.version}`)
 		}
 	} finally {
@@ -506,6 +564,9 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 	}
 	const manifest: ReleaseManifest = { tag: options.tag, version: options.version, packages: entries }
 	await writeFile(join(options.artifactsDirectory, 'release-manifest.json'), `${JSON.stringify(manifest, null, '\t')}\n`)
+	if (options.local) {
+		await writeFile(join(options.artifactsDirectory, LOCAL_INSTALL_FILE), `${JSON.stringify(localInstallBlock(entries), null, '\t')}\n`)
+	}
 	return manifest
 }
 
@@ -599,8 +660,7 @@ const published = async (name: string, version: string, path: string): Promise<b
 	const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
 	if (exitCode === 0) {
 		const registryIntegrity = parseRegistryIntegrity(stdout, `${name}@${version}`)
-		const localIntegrity = `sha512-${createHash('sha512').update(await readFile(path)).digest('base64')}`
-		if (registryIntegrity !== localIntegrity) {
+		if (registryIntegrity !== (await tarballIntegrity(path))) {
 			throw new Error(`${name}@${version} already exists with different content; refusing to treat this release as complete`)
 		}
 		return true

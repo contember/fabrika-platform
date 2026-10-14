@@ -25,6 +25,10 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 - Bin: `fabrika-check [<root>]` prints one line per refusal, `file:line:col rule-id message (allowed form: …)`, then
   the hints in the same form under the heading `Hints — …`, then `N refusals, M hints` on stderr. Exit 0 with no
   refusal (hints only included), 1 with a refusal, 2 on a usage or read error.
+- `--packed <release-manifest.json>` (`packed.ts`, `CheckInput.packed`): `package-replacement` accepts the tarballs of a
+  local pack, their `file:` specifiers, an `overrides` block of them alone and their lockfile entries, when each file
+  under the root hashes to the sha512 the manifest records ([ADR-0043](../../docs/decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).
+  The platform build never passes it; never make a configuration file or an environment variable turn it on.
 - **The shell slice** (`slice.ts`): every module the reader, the literal rule, `contractReaderInputs` and the SPA
   bundle read is read as its slice: each `<x>.query|mutation|cron|webhook(…).handle(<inline function>)` loses its
   `.handle(…)`, and so does every import specifier, function, const of an inline function and type that only those

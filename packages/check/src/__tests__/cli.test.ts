@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -103,5 +104,99 @@ describe('fabrika-check', () => {
 
 		expect(result.code).toBe(2)
 		expect(result.stderr).toStartWith("fabrika-check: unexpected argument '--fix'")
+	})
+})
+
+describe('fabrika-check --packed', () => {
+	const VERSION = '0.3.3-local.abc1234'
+	const tarballOf = (name: string): string => `fabrika-${name}-${VERSION}.tgz`
+	const integrity = (bytes: string): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`
+	const NAMES = ['app', 'db']
+	const bytesOf = (name: string): string => `the packed bytes of @fabrika/${name}`
+
+	/** The release manifest of a local pack of @fabrika/app and @fabrika/db, written outside the application. */
+	const manifest = async (): Promise<string> => {
+		const directory = await application({
+			'release-manifest.json': JSON.stringify({
+				tag: `v${VERSION}`,
+				version: VERSION,
+				packages: NAMES.map((name) => ({ name: `@fabrika/${name}`, filename: tarballOf(name), dependencies: [], integrity: integrity(bytesOf(name)) })),
+			}),
+		})
+		return join(directory, 'release-manifest.json')
+	}
+
+	/** An application installed from the pack's block, as `bun install` leaves it; `bytes` stands in for a tarball. */
+	const packedApplication = (bytes: (name: string) => string = bytesOf, overrides: Readonly<Record<string, string>> = {}) => {
+		const block = Object.fromEntries(NAMES.map((name) => [`@fabrika/${name}`, `file:vendor/${tarballOf(name)}`]))
+		return application({
+			'package.json': `${JSON.stringify({ name: 'notes', private: true, dependencies: block, overrides: { ...block, ...overrides } }, null, '\t')}\n`,
+			'bun.lock': `${
+				JSON.stringify(
+					{
+						lockfileVersion: 1,
+						packages: Object.fromEntries(
+							NAMES.map((name) => [`@fabrika/${name}`, [`@fabrika/${name}@vendor/${tarballOf(name)}`, {}, integrity(bytesOf(name))]]),
+						),
+					},
+					null,
+					'\t',
+				)
+			}\n`,
+			...Object.fromEntries(NAMES.map((name) => [`vendor/${tarballOf(name)}`, bytes(name)])),
+		})
+	}
+
+	const refusals = (stdout: string): string[] => stdout.split('\n').filter((line) => line !== '').map((line) => line.split(' ').slice(0, 2).join(' '))
+
+	test('without --packed, the tarballs, the overrides and their lockfile entries are refused', async () => {
+		const result = await run(await packedApplication())
+
+		expect(result.code).toBe(1)
+		expect(refusals(result.stdout)).toEqual([
+			'bun.lock:4:3 package-replacement',
+			'bun.lock:9:3 package-replacement',
+			'package.json:5:3 package-replacement',
+			'package.json:6:3 package-replacement',
+			'package.json:8:2 package-replacement',
+		])
+	})
+
+	test('with the manifest of the pack, the same application passes and the run says it took a local pack', async () => {
+		const result = await run('--packed', await manifest(), await packedApplication())
+
+		expect(result).toEqual({
+			code: 0,
+			stdout: '',
+			stderr: `fabrika-check: accepting the tarballs of the local pack ${VERSION}, which no deploy build does\nfabrika-check: 0 refusals, 0 hints\n`,
+		})
+	})
+
+	test('a tarball whose bytes differ from the manifest is refused at each place that names it', async () => {
+		const root = await packedApplication((name) => (name === 'db' ? 'other bytes under the same name' : bytesOf(name)))
+
+		const result = await run(`--packed=${await manifest()}`, root)
+
+		expect(result.code).toBe(1)
+		expect(refusals(result.stdout)).toEqual([
+			'bun.lock:9:3 package-replacement',
+			'package.json:6:3 package-replacement',
+			'package.json:8:2 package-replacement',
+		])
+	})
+
+	test('an override of a package outside the set is still refused', async () => {
+		const result = await run('--packed', await manifest(), await packedApplication(bytesOf, { zod: 'npm:other-zod@1.0.0' }))
+
+		expect(refusals(result.stdout)).toEqual(['package.json:8:2 package-replacement'])
+	})
+
+	test('a manifest that is not a release manifest is a read error', async () => {
+		const directory = await application({ 'release-manifest.json': '{ "version": "0.3.3" }' })
+
+		const result = await run('--packed', join(directory, 'release-manifest.json'), await packedApplication())
+
+		expect(result.code).toBe(2)
+		expect(result.stderr).toContain('does not name each package with its tarball and sha512 integrity')
 	})
 })

@@ -2,10 +2,13 @@
 // specifier that does not name a registry version, a lockfile entry without the registry's integrity hash, another
 // registry, and an ambient module declaration that retypes it. The platform build installs from the lockfile with
 // `--frozen-lockfile`, so a trusted entry that resolves from the registry with its hash is the package itself.
+// Only a packed set the caller names (`--packed`, never the platform build) admits its own tarballs and overrides.
 
+import { posix } from 'node:path'
 import { type AstNode, child, staticString } from '../ast'
 import type { Finding, Report } from '../finding'
 import { parseJsonc } from '../jsonc'
+import type { PackedSet } from '../packed'
 import { isKey, parseToml } from '../toml'
 import { BUNFIG_FILE, isTrustedSpecifier } from '../trust'
 
@@ -40,14 +43,29 @@ const lockfilePackage = (key: string): string => {
 	return scope?.startsWith('@') === true ? `${scope}/${last}` : last
 }
 
-export const checkPackageReplacement = (files: ReadonlyMap<string, string>): Finding[] => {
+/**
+ * Whether `target`, a path relative to the root, is the tarball of `name` in the packed set: named as the pack named
+ * it, with the bytes the pack hashed.
+ */
+const isPackedTarball = (packed: PackedSet | undefined, name: string, target: string): boolean => {
+	const tarball = packed?.packages.get(name)
+	const path = posix.normalize(target)
+	return tarball !== undefined && posix.basename(path) === tarball.filename && packed?.tarballs.get(path) === tarball.integrity
+}
+
+/** Whether a manifest's `file:` specifier for `name` names its packed tarball; relative to the manifest's directory. */
+const isPackedSpecifier = (packed: PackedSet | undefined, name: string, specifier: unknown, manifest: string): boolean =>
+	typeof specifier === 'string' && specifier.startsWith('file:')
+	&& isPackedTarball(packed, name, posix.join(posix.dirname(manifest), specifier.slice('file:'.length)))
+
+export const checkPackageReplacement = (files: ReadonlyMap<string, string>, packed?: PackedSet): Finding[] => {
 	const findings: Finding[] = []
 	const finding = (file: string, needle: string, message: string, allowed: string): void => {
 		findings.push({ file, ...positionIn(files.get(file) ?? '', needle), severity: 'refusal', rule: 'package-replacement', message, allowed })
 	}
 	for (const [path, text] of files) {
-		if (baseName(path) === 'package.json') checkManifest(path, text, finding)
-		else if (path === LOCKFILE) checkLockfile(text, finding)
+		if (baseName(path) === 'package.json') checkManifest(path, text, finding, packed)
+		else if (path === LOCKFILE) checkLockfile(text, finding, packed)
 		else if (path === BUNFIG_FILE) checkRegistryConfiguration(path, text, finding)
 		else if (path === NPMRC_FILE) checkNpmrc(text, finding)
 	}
@@ -56,7 +74,7 @@ export const checkPackageReplacement = (files: ReadonlyMap<string, string>): Fin
 
 type Finder = (file: string, needle: string, message: string, allowed: string) => void
 
-function checkManifest(path: string, text: string, finding: Finder): void {
+function checkManifest(path: string, text: string, finding: Finder, packed: PackedSet | undefined): void {
 	const manifest = parseJsonc(text)
 	if (!isRecord(manifest)) return
 	// Bun resolves a package's own name to itself: an application named `@fabrika/app` imports its own files as it.
@@ -73,7 +91,11 @@ function checkManifest(path: string, text: string, finding: Finder): void {
 		finding(path, '"exports"', 'an exports map lets the application stand in for a package by self-reference', 'no exports in the root package.json')
 	}
 	for (const field of REPLACEMENT_FIELDS) {
-		if (manifest[field] !== undefined) {
+		const replacements = manifest[field]
+		if (replacements === undefined) continue
+		const packedOverrides = field === 'overrides' && isRecord(replacements)
+			&& Object.entries(replacements).every(([name, specifier]) => isPackedSpecifier(packed, name, specifier, path))
+		if (!packedOverrides) {
 			finding(path, `"${field}"`, `${field} can replace any package, the ones the platform trusts by name included`, `no ${field} in package.json`)
 		}
 	}
@@ -81,7 +103,7 @@ function checkManifest(path: string, text: string, finding: Finder): void {
 		const dependencies = manifest[field]
 		if (!isRecord(dependencies)) continue
 		for (const [name, specifier] of Object.entries(dependencies)) {
-			if (!isTrustedSpecifier(name)) continue
+			if (!isTrustedSpecifier(name) || isPackedSpecifier(packed, name, specifier, path)) continue
 			if (typeof specifier !== 'string' || !REGISTRY_RANGE.test(specifier)) {
 				finding(path, `"${name}":`, `${field} names ${name} as '${String(specifier)}', which is not a registry version`, REGISTRY_ALLOWED)
 			}
@@ -89,7 +111,7 @@ function checkManifest(path: string, text: string, finding: Finder): void {
 	}
 }
 
-function checkLockfile(text: string, finding: Finder): void {
+function checkLockfile(text: string, finding: Finder, packed: PackedSet | undefined): void {
 	const lockfile = parseJsonc(text)
 	const packages = isRecord(lockfile) ? lockfile['packages'] : undefined
 	if (!isRecord(packages)) {
@@ -103,6 +125,8 @@ function checkLockfile(text: string, finding: Finder): void {
 		const registry = Array.isArray(entry) ? entry[1] : undefined
 		const integrity = Array.isArray(entry) ? entry.at(-1) : undefined
 		const version = typeof resolution === 'string' && resolution.startsWith(`${name}@`) ? resolution.slice(name.length + 1) : ''
+		// Bun records a tarball as `<name>@<path>`, its dependencies and the sha512 of its bytes, with no registry.
+		if (isPackedTarball(packed, name, version) && integrity === packed?.packages.get(name)?.integrity) continue
 		if (!EXACT_VERSION.test(version) || registry !== '' || typeof integrity !== 'string' || !integrity.startsWith('sha512-')) {
 			finding(
 				LOCKFILE,

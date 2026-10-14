@@ -16,6 +16,7 @@ import {
 	TABLES_FILE,
 	ZEROPS_FILES,
 } from './layout'
+import type { PackedSet } from './packed'
 import { type ModuleReference, moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
 import { checkContractRead } from './rules/contract'
@@ -40,6 +41,8 @@ export interface CheckInput {
 	readonly root: string
 	/** The application's files keyed by path relative to `root` with `/` separators; read from disk under `root` when omitted. */
 	readonly files?: ReadonlyMap<string, string>
+	/** A local pack whose tarballs `package-replacement` accepts (`fabrika-check --packed`); a deploy build gives none. */
+	readonly packed?: PackedSet
 }
 
 export interface ApplicationTree {
@@ -113,7 +116,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const mappings = readImportMappings(tree.files)
 	const trust = checkTrustedResolution(tree.files)
 	findings.push(...trust)
-	findings.push(...checkPackageReplacement(tree.files))
+	findings.push(...checkPackageReplacement(tree.files, input.packed))
 
 	for (const link of tree.links) {
 		findings.push({

@@ -49,6 +49,12 @@ the SPA is added with it.
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
   `@fabrika/*` import fails and tsc reports a cascade of implicit `any`s that are not your bugs.
+- To try unreleased packages outside the fabrika-platform repository, run `bun scripts/release.ts pack --local
+  --artifacts=<dir>` there. It writes the tarballs, `release-manifest.json` and `install.json`. Copy the tarballs into
+  the application's `vendor/`, replace every `@fabrika/*` entry of `dependencies` and `devDependencies` with the
+  `dependencies` of `install.json`, add its `overrides`, and run `bun install`. Then run the checker as
+  `fabrika-check --packed <dir>/release-manifest.json`: without the flag it refuses the tarballs. A deployed
+  application never takes this form; the platform build installs from the registry.
 
 ```json tsconfig.json
 {
