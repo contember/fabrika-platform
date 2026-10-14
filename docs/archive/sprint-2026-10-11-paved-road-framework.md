@@ -1029,3 +1029,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   code (the label, a hand-written status helper, a widened scope literal), each fixed in the kit or the skill (`aedd6992`,
   WU25, WU26). Round 6 on `4be1549a`: gpt-b 2 runs, 0 failing, 156 tests pass, no raw SQL, no edited migration or
   generated file. Every group has now met the cap of 3.
+- **After close — rounds 7 and 8 of group B.** Round 7 on `35cde08a`: gpt-b 2 runs (0 failing), opus-b 4 (0 failing; it
+  re-ran both after a test fix, as WU26's wording asked). Backlog batch A (`d156bb44`) reworded the loop: the tests until
+  they pass, then tsc and the checker once. Round 8 on `7d66518c`: gpt-b 2 runs (0 failing, 145 tests), opus-b 3 (1
+  failing, its own test's type; 143 tests). Neither wrote raw SQL or edited a migration or generated file.
