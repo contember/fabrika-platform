@@ -1,7 +1,7 @@
 // The generated tests' kits over a public intake application: its forms' inbox tables, a form with a challenge and a
 // `scan: true` collection. The policy probe compiles against the policies without the inboxes, whatever their forms are
-// named; the endpoint access kit boots without the challenge's secret, which no case uses, and its scanner passes the
-// files it seeds. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
+// named; the endpoint access kit boots without the challenge's secret and site key or an SPA mount's public variable,
+// which no case uses, and its scanner passes the files it seeds. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
 import { compileContract, defineContract } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
@@ -55,6 +55,18 @@ const guarded = app.contract((c) => ({
 	},
 }))
 
+/** The same with the widget's site key, and a public page that serves a config variable: boot requires both. */
+const configured = app.contract((c) => ({
+	site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['SIGNUP_URL'] }),
+	register: c.form('/register', {
+		input: Register,
+		appendTo: 'registrations',
+		challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' },
+	}),
+	resend: c.form('/resend', { input: Resend, appendTo: 'resend_requests' }),
+	files: guarded.surface.files,
+}))
+
 /** The intake's tables with a registration form named `probe`, as the policy kit's own probe mount is. */
 const probeNamedTables = defineTables(vocabulary, columns)({
 	candidates: { scope: { dimension: 'candidate' }, actions: { read: 'candidates.read', insert: 'candidates.process' }, insert: ['email', 'name'] },
@@ -84,6 +96,12 @@ if (postgres !== null) {
 
 		test("the endpoint access kit boots without a challenge's secret, and a scanning collection's seeded file is served", async () => {
 			const kit = endpointAccessKit(serve(guarded, { database: scoped(tables) }), tables, postgres)
+			expect(await kit.file('attachments', 'download', 'own')).toEqual({ status: 200 })
+			expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })
+		})
+
+		test("the endpoint access kit boots without a challenge's site key or an SPA mount's public variable", async () => {
+			const kit = endpointAccessKit(serve(configured, { database: scoped(tables) }), tables, postgres)
 			expect(await kit.file('attachments', 'download', 'own')).toEqual({ status: 200 })
 			expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })
 		})

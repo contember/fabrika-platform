@@ -227,16 +227,19 @@ const cleanScanner: FileScanner = {
 }
 
 /**
- * The variables `boot` requires of `app` that a generated case never uses: each form challenge's secret, since no case
- * submits a form. The kit's challenge stand-in refuses every token, so no verification leaves the process.
+ * The variables `boot` requires of `app` that a generated case never uses: each form challenge's secret and site key,
+ * since no case submits a form, and each SPA mount's `public` variables, since no case reads a page's config. The
+ * kit's challenge stand-in refuses every token, so no verification leaves the process.
  */
 function unusedVariables(app: ContractImplementation<AnyContract>): ApplicationEnvironment {
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
-	return Object.fromEntries(
-		Object.values(artifact.mounts).flatMap((
-			mount,
-		) => (mount.kind === 'form' && mount.challenge !== undefined ? [[mount.challenge.secret, 'unused']] : [])),
-	)
+	const names = Object.values(artifact.mounts).flatMap((mount): readonly string[] => {
+		if (mount.kind === 'form' && mount.challenge !== undefined) {
+			return mount.challenge.siteKey === undefined ? [mount.challenge.secret] : [mount.challenge.secret, mount.challenge.siteKey]
+		}
+		return mount.kind === 'spa' ? (mount.public ?? []) : []
+	})
+	return Object.fromEntries(names.map((name) => [name, 'unused']))
 }
 
 /**
