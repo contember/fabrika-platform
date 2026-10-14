@@ -2,7 +2,7 @@
 // zod and the contract's limits only. `FILE_LIST_INPUT` and `FILE_LIST_OUTPUT` of the contract describe the same.
 
 import { z } from 'zod/v4'
-import { FILE_LIMITS } from '../contract/defaults'
+import { FILE_LIMITS } from './defaults'
 
 /** `files.<name>.list`'s input. */
 export const FileListInput = z.strictObject({

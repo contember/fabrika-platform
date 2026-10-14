@@ -5,7 +5,7 @@
 import { z } from 'zod/v4'
 import { fileCollectionPaths, FILES_PREFIX, joinPath, LINK_API_SEGMENT } from '../contract/defaults'
 import type { FileCollection } from '../contract/define'
-import { FileListOutput } from '../files/schemas'
+import { FileListOutput } from '../contract/file-schemas'
 import { type BounceConfig, exchange, exchangeFile, RpcError, type RpcFetch } from './transport'
 
 /** A page of an owner's files, oldest first, as `files.<name>.list` answers it. */

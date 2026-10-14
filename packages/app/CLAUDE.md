@@ -105,6 +105,7 @@ src/
     context.ts        what a kit handler receives: ctx by access form and declaration (types only)
     define.ts         defineContract, the c.* kit and every type an agent meets
     attachment.ts     attachment(): an output that answers a file of rows (the rows' array schema, marked)
+    file-schemas.ts   the zod schemas of a collection's list endpoint, shared by files/ and the client
     declaration.ts    the contract as plain data, generic over its schema type
     schema-shape.ts   a zod 4 schema of the subset → SchemaShape
     compile.ts        compileContract / describeContract
@@ -140,7 +141,6 @@ src/
   files/              c.files: served by boot, never imported by an application
     collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep, ctx.files
     handle.ts         the types of ctx.files (types only, browser-safe)
-    schemas.ts        the list endpoint's zod schemas, shared with the client (browser-safe)
     scan.ts           the scan pass of scan: true collections and the FileScanner contract (FILE_SCAN_JOB)
     archive.ts        checkArchive: what a ZIP must be for the scanner's OK to cover it
     clamscan.ts       clamscanScanner: ClamAV's clamscan over a batch (Bun; @fabrika/app/bun only)
@@ -780,7 +780,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   paths. Never compute a procedure path anywhere else.
 - **A file collection's client takes its paths from `fileCollectionPaths`** (`client/files.ts`), as `buildArtifact`
   does: a session client of a mount that admits people gets every collection, a link mount's client the `link: true`
-  ones, with no owner parameter. Its list answer is parsed with `files/schemas.ts`, the endpoint's own schema.
+  ones, with no owner parameter. Its list answer is parsed with `contract/file-schemas.ts`, the endpoint's own
+  schema; the client never imports `files/`, which the examples' SPA bundle test refuses.
 - **An answer is parsed with the procedure's output schema** before the caller sees
   it. The tree's type is tied to the value by one structural check (`coversTree`),
   not a cast.

@@ -18,6 +18,7 @@ import {
 import { type FileObjectStore, type StoredObject, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
 import { FILE_LIMITS } from '../contract/defaults'
+import { FileLinkListInput, FileListInput, FileListOutput } from '../contract/file-schemas'
 import { HttpError, jsonResponse, NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type RequestFrame } from '../implement/capability'
 import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
@@ -26,7 +27,6 @@ import type { ContractDatabase, ImplementationDatabase } from '../implement/impl
 import type { OperationsReporter } from '../jobs/report'
 import type { FileCollectionHandle, FileCollections as FilesOfSite, FileListing, FileListPage, OpenedFile, OpenOptions } from './handle'
 import { type FileScanner, runScanPass } from './scan'
-import { FileLinkListInput, FileListInput, FileListOutput } from './schemas'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
 

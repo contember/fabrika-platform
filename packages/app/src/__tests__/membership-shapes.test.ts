@@ -10,9 +10,9 @@ import {
 	WEBHOOK_UNBIND_INPUT,
 	WEBHOOK_UNBIND_OUTPUT,
 } from '../contract/build'
+import { FileListInput, FileListOutput } from '../contract/file-schemas'
 import { Problems } from '../contract/problems'
 import { describeSchema } from '../contract/schema-shape'
-import { FileListInput, FileListOutput } from '../files/schemas'
 import { webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from '../implement/webhook'
 
 describe('the webhook binding endpoints', () => {
