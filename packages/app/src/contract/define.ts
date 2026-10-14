@@ -251,10 +251,15 @@ export interface WebhookMount<B extends string, Acts extends string, I extends S
 	readonly input: I
 }
 
-export interface FileCollection<A extends string> extends FilesDeclaration {
+/** `L` is which link mounts' holders reach the collection: the typed client gives a link mount's holders only those. */
+/** `link` of `c.files`: every link mount bound to the owner's dimension, none, or the named ones. */
+export type LinkServing = boolean | readonly string[]
+
+export interface FileCollection<A extends string, L extends LinkServing = LinkServing> extends FilesDeclaration {
 	readonly read: A
 	readonly write: A
 	readonly delete: A
+	readonly link?: L
 }
 
 export interface CronJob<Acts extends string, Sc extends string> extends CronDeclaration {
@@ -376,7 +381,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly maxBytes?: number
 		} & Owned<'kind' | 'path'>,
 	): WebhookMount<B, Acts[number], I>
-	files(
+	files<const L extends boolean | readonly [string, ...string[]] = false>(
 		collection: {
 			readonly owner: string
 			readonly read: A
@@ -386,11 +391,11 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly types: readonly [string, ...string[]]
 			readonly maxPerOwner?: number
 			/** `true`: every link mount bound to the owner's dimension serves the files; a list: the named link mounts only. */
-			readonly link?: boolean | readonly [string, ...string[]]
+			readonly link?: L
 			/** Each upload is scanned for malware and served only after a clean verdict; until then it answers 409. */
 			readonly scan?: boolean
 		} & Owned<'kind'>,
-	): FileCollection<A>
+	): FileCollection<A, L>
 	cron<const Acts extends readonly [A, ...A[]], const Sc extends D | 'app'>(
 		schedule: string,
 		options: { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number } & Owned<'kind' | 'schedule'>,

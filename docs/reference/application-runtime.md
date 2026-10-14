@@ -1096,6 +1096,16 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
 - An error envelope, or a proxy denial, is an `RpcError` with `type`, `httpStatus`,
   `issues` and `loginUrl`. `bounceOnAuth` sends the browser to sign in on a 401 that
   carries a login URL, as `createRpcClient` does.
+- **File collections** (`client/files.ts`). The client of an RPC mount whose callers include `human` has
+  `files.<name>` for every collection: `upload(owner, blob, { name? })` (the blob's `type` is the `Content-Type`,
+  a `File`'s name the `?name=`), `list({ owner, after?, limit? })`, `download(id)` and `remove({ id })`. A link
+  mount's client has `files.<name>` for every `link: true` collection and every one whose `link` names the mount,
+  without the owner: `upload(blob)`, `list()` and `download(id)`. The paths are `fileCollectionPaths` of `contract/defaults.ts`, the ones the artifact's rows
+  carry; a collection bound to another link mount's dimension answers 404 there. `download` answers a `File` named
+  by the answer's `filename*` and saves nothing; the list answer is parsed with the list endpoint's schema. A mount
+  whose procedures hold a group named `files` refuses the client where collections apply.
+- `ResultOf<F>` and `InputOf<F>` name a client procedure's answer (a `File` for an attachment procedure) and its
+  input as the caller writes it.
 
 ## Testing a contract application
 

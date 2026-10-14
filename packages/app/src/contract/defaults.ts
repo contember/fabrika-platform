@@ -141,3 +141,15 @@ export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'
 export function joinPath(prefix: string, rest: string): string {
 	return prefix === '/' ? `/${rest}` : `${prefix}/${rest}`
 }
+
+/**
+ * The paths of the endpoints of collection `name` under `base` (`FILES_PREFIX`, or a link mount's API prefix): the
+ * upload takes `/:owner` after its path for a signed-in caller, and the download `/:fileId`.
+ */
+export function fileCollectionPaths(
+	base: string,
+	name: string,
+): { readonly upload: string; readonly download: string; readonly list: string; readonly remove: string } {
+	const at = joinPath(base, `files.${name}`)
+	return { upload: `${at}.upload`, download: at, list: `${at}.list`, remove: `${at}.remove` }
+}

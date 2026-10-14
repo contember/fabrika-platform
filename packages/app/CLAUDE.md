@@ -76,7 +76,9 @@ src/
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
-    contract.ts       createClient: the typed client of a contract mount; download, the call of an attachment procedure
+    contract.ts       createClient: the typed client of a contract mount; download, the call of an attachment procedure;
+                      ResultOf, InputOf
+    files.ts          files.<name> of a client: a session's collections, a link holder's link: true ones
     share.ts          shareKey: the key the share SPA's bootstrap kept
     caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
@@ -774,6 +776,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   declared procedures exist, and each path comes from `joinPath` and
   `LINK_API_SEGMENT` in `contract/defaults.ts`, the code that gives the artifact its
   paths. Never compute a procedure path anywhere else.
+- **A file collection's client takes its paths from `fileCollectionPaths`** (`client/files.ts`), as `buildArtifact`
+  does: a session client of a mount that admits people gets every collection, a link mount's client the `link: true`
+  ones, with no owner parameter. Its list answer is parsed with `files/schemas.ts`, the endpoint's own schema.
 - **An answer is parsed with the procedure's output schema** before the caller sees
   it. The tree's type is tied to the value by one structural check (`coversTree`),
   not a cast.

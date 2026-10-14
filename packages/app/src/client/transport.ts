@@ -120,13 +120,21 @@ export async function exchange(doFetch: RpcFetch, url: string, init: () => Reque
 	return data.result
 }
 
-/** Sends one request whose success is a file and answers its bytes; a failure is read from its `{ error }` envelope. */
-export async function exchangeFile(doFetch: RpcFetch, url: string, init: () => RequestInit, bounce: BounceConfig | null): Promise<Blob> {
+/**
+ * Sends one request whose success is a file and answers its bytes and its `Content-Disposition`; a failure is read from
+ * its `{ error }` envelope.
+ */
+export async function exchangeFile(
+	doFetch: RpcFetch,
+	url: string,
+	init: () => RequestInit,
+	bounce: BounceConfig | null,
+): Promise<{ readonly body: Blob; readonly disposition: string | null }> {
 	const response = await send(doFetch, url, init)
 	if (!response.ok) {
 		const data = await envelope(response)
 		return await refused(data.error ?? `HTTP ${response.status}`, response, bounce)
 	}
 	clearBounce(bounce)
-	return await response.blob()
+	return { body: await response.blob(), disposition: response.headers.get('Content-Disposition') }
 }

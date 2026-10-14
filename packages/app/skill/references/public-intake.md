@@ -834,11 +834,11 @@ export const portal = app.link('/p', {
   answers the same time. IAM counts no uses: the proxy honors a token it holds without asking IAM.
 - A link procedure acts on the link's own object: no `from`, no id in the input. A key of another candidate reaches
   only that candidate's record, and a key whose candidate is gone answers 404.
-- `link: true` on the collection serves the holder `POST /p/api/files.attachments.upload?name=<name>` (the body is the
-  file), `POST /p/api/files.attachments.list` (`{ limit?, after? }`) and `GET /p/api/files.attachments/:fileId`, for
-  the link's candidate only: another candidate's file id answers 404. The mount must grant the collection's `write`
-  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`. A second link mount
-  on candidates that must not reach the files (a one-click answer) needs `link: ['portal']` instead.
+- `link: true` on the collection gives the holder's client `portal.files.attachments`: `upload(file)`, `list()` and
+  `download(id)`, for the link's candidate only: another candidate's file id answers 404. The mount must grant the
+  collection's `write` and `read`. HR reaches the same files through `api.files.attachments`, which names the owner,
+  with `candidates.read`. A second link mount on candidates that must not reach the files (a one-click answer) needs
+  `link: ['portal']` instead.
 
 ```ts web/portal/main.ts
 import { createClient, RpcError, shareKey } from '@fabrika/app/client'
@@ -864,16 +864,13 @@ export const confirm = async (status: HTMLElement): Promise<void> => {
 }
 
 export const attach = async (file: File): Promise<string> => {
-	if (key === null) return 'This link holds no key.'
-	const response = await fetch(
-		`/p/api/files.attachments.upload?name=${encodeURIComponent(file.name)}`,
-		{
-			method: 'POST',
-			headers: { Authorization: `Bearer ${key}`, 'Content-Type': file.type },
-			body: file,
-		},
-	)
-	return response.ok ? 'Received: it is being checked.' : 'Refused.'
+	if (portal === null) return 'This link holds no key.'
+	try {
+		await portal.files.attachments.upload(file)
+		return 'Received: it is being checked.'
+	} catch (error) {
+		return error instanceof RpcError ? `Refused: ${error.type}` : 'Failed'
+	}
 }
 ```
 

@@ -8,6 +8,7 @@ import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
 import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import { joinPath, LINK_API_SEGMENT } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, Surface } from '../contract/define'
+import { type FileClient, type FileTransport, type LinkCollections, type LinkFileClient, linkFiles, sessionFiles } from './files'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
@@ -27,7 +28,32 @@ export type ClientTree<T> = {
 		: ClientTree<T[K]>
 }
 
-export type ContractClient<C, M> = SurfaceOf<C>[M & keyof SurfaceOf<C>] extends { readonly procedures: infer T } ? ClientTree<T> : never
+type FilesOf<C> = SurfaceOf<C> extends { readonly files: infer F } ? F : Record<never, never>
+
+/** `files.<name>` of every collection, for the signed-in callers of an RPC mount that admits people. */
+type SessionFiles<C, Callers> = Callers extends readonly (infer Caller)[] ? 'human' extends Caller ? [keyof FilesOf<C>] extends [never] ? unknown
+		: { readonly files: { readonly [N in keyof FilesOf<C>]: FileClient } }
+	: unknown
+	: unknown
+
+/** `files.<name>` of every `link: true` collection, for a link mount's holders. */
+type HolderFiles<C, M> = [LinkCollections<FilesOf<C>, M>] extends [never] ? unknown
+	: { readonly files: { readonly [N in LinkCollections<FilesOf<C>, M>]: LinkFileClient } }
+
+type MountOf<C, M> = SurfaceOf<C>[M & keyof SurfaceOf<C>]
+
+/** One function per procedure, an `AttachmentProcedure` per attachment, and `files` where the mount's callers reach collections. */
+export type ContractClient<C, M> = MountOf<C, M> extends { readonly kind: 'link'; readonly procedures: infer T } ? ClientTree<T> & HolderFiles<C, M>
+	: MountOf<C, M> extends { readonly callers: infer Callers; readonly procedures: infer T } ? ClientTree<T> & SessionFiles<C, Callers>
+	: never
+
+/** The answer of a client procedure: `ResultOf<typeof api.tasks.get>`; an attachment procedure answers a `File`. */
+export type ResultOf<F> = F extends (...args: never[]) => Promise<infer R> ? R : F extends AttachmentProcedure<unknown> ? File : never
+
+/** The input of a client procedure as the caller writes it: `InputOf<typeof api.tasks.create>`. */
+export type InputOf<F> = F extends (...args: infer A) => Promise<unknown> ? A[0]
+	: F extends AttachmentProcedure<infer I> ? DownloadInput<I>[0]
+	: never
 
 export interface ClientOptions {
 	/** The application's origin; procedure paths are joined to it. Defaults to the page's own origin. */
@@ -139,7 +165,7 @@ export async function download<I>(procedure: AttachmentProcedure<I>, ...input: D
 	if (request === undefined) {
 		throw new Error(`'${procedure.id}' is not an attachment procedure of a client`)
 	}
-	const body = await exchangeFile(request.options.fetch ?? fetch, request.url, requestOf(request.options, input[0]), request.bounce)
+	const { body } = await exchangeFile(request.options.fetch ?? fetch, request.url, requestOf(request.options, input[0]), request.bounce)
 	const file = new File([body], procedure.filename, { type: body.type })
 	saveFile(file)
 	return file
@@ -170,6 +196,18 @@ function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unkno
 		}
 		return attachmentOf(node.output) === null ? typeof member === 'function' : typeof member === 'object' && member !== null && downloads.has(member)
 	})
+}
+
+/** A client of every collection in `names` under `files`, or no `files` at all. */
+function coversFiles(value: unknown, names: readonly string[]): boolean {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const files: unknown = Reflect.get(value, 'files')
+	if (names.length === 0) {
+		return true
+	}
+	return typeof files === 'object' && files !== null && names.every((name) => typeof Reflect.get(files, name) === 'object')
 }
 
 /** The page's origin when the client runs in a browser, else `null`. */
@@ -205,12 +243,25 @@ export function createClient<const C extends AnyContract, const M extends Client
 	if (options.key !== undefined && page !== null && origin !== '' && new URL(origin, page).origin !== page) {
 		throw new Error(`a client with a key in a browser calls only ${page}; baseUrl '${origin}' is another origin`)
 	}
-	const client = clientTree(node.procedures, { mount, origin, base, path: '' }, (target) => {
+	const procedures = clientTree(node.procedures, { mount, origin, base, path: '' }, (target) => {
 		const mark = attachmentOf(target.output)
 		return mark === null ? caller(target, options, bounce) : attachmentProcedure(target, mark.declaration.filename, options, bounce)
 	})
+	const transport: FileTransport = { origin, fetch: options.fetch ?? fetch, key: options.key, bounce }
+	const collections = Object.entries(surface.files ?? {}).flatMap(([name, collection]): (readonly [string, FileClient | LinkFileClient])[] => {
+		if (node.kind === 'link') {
+			const serves = collection.link === true || (Array.isArray(collection.link) && collection.link.includes(mount))
+			return serves ? [[name, linkFiles(transport, node.prefix, mount, name)]] : []
+		}
+		return node.callers.includes('human') ? [[name, sessionFiles(transport, name)]] : []
+	})
+	if (collections.length > 0 && Object.hasOwn(node.procedures, 'files')) {
+		throw new Error(`'${mount}' has a procedure group named files, which the client of its file collections takes`)
+	}
+	const client = collections.length === 0 ? procedures : Object.freeze({ ...procedures, files: Object.freeze(Object.fromEntries(collections)) })
 	// The tree was built from this mount's declaration; the check ties the value to the type the contract derives.
-	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures)
+	const names = collections.map(([name]) => name)
+	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures) && coversFiles(value, names)
 	if (!covers(client)) {
 		throw new Error(`the client of '${mount}' does not cover its procedures`)
 	}

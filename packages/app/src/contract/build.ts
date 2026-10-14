@@ -75,6 +75,7 @@ import {
 	CONTRACT_DEFAULTS,
 	exportBase,
 	FILE_LIMITS,
+	fileCollectionPaths,
 	FILES_PREFIX,
 	FORM_CHALLENGE_FIELD,
 	FORM_LIMITS,
@@ -977,7 +978,7 @@ class ArtifactBuilder {
 			dimensions[dimension] = { in: owner.scope.dimension, creator: null, members: null }
 			files[name] = artifact
 			const source: EndpointSource = { kind: 'files', name }
-			const base = joinPath(FILES_PREFIX, `files.${name}`)
+			const paths = fileCollectionPaths(FILES_PREFIX, name)
 			const [firstType, ...otherTypes] = collection.types
 			if (firstType !== undefined) {
 				this.#row({
@@ -985,7 +986,7 @@ class ArtifactBuilder {
 					source,
 					kind: 'upload',
 					method: 'POST',
-					path: `${base}.upload/:owner`,
+					path: `${paths.upload}/:owner`,
 					callers: ['human'],
 					requirement: { kind: 'action', action: collection.write, access: { form: 'on', dimension: owner.scope.dimension, from: 'owner' } },
 					admission: { contentTypes: [firstType, ...otherTypes], maxBytes: collection.maxBytes },
@@ -998,7 +999,7 @@ class ArtifactBuilder {
 				source,
 				kind: 'download',
 				method: 'GET',
-				path: `${base}/:fileId`,
+				path: `${paths.download}/:fileId`,
 				callers: ['human'],
 				requirement: { kind: 'action', action: collection.read, access: { form: 'on', dimension, from: 'fileId' } },
 				admission: null,
@@ -1010,7 +1011,7 @@ class ArtifactBuilder {
 				source,
 				kind: 'query',
 				method: 'POST',
-				path: `${base}.list`,
+				path: paths.list,
 				callers: ['human'],
 				requirement: { kind: 'action', action: collection.read, access: { form: 'on', dimension: owner.scope.dimension, from: 'owner' } },
 				admission: JSON_ADMISSION,
@@ -1022,7 +1023,7 @@ class ArtifactBuilder {
 				source,
 				kind: 'mutation',
 				method: 'POST',
-				path: `${base}.remove`,
+				path: paths.remove,
 				callers: ['human'],
 				requirement: { kind: 'action', action: collection.delete, access: { form: 'on', dimension, from: 'id' } },
 				admission: JSON_ADMISSION,
@@ -1072,7 +1073,7 @@ class ArtifactBuilder {
 				continue
 			}
 			const source: EndpointSource = { kind: 'mount', name: mountName }
-			const base = joinPath(joinPath(mount.prefix, LINK_API_SEGMENT), `files.${name}`)
+			const paths = fileCollectionPaths(joinPath(mount.prefix, LINK_API_SEGMENT), name)
 			const ofTheLink = (action: string): EndpointRequirement => ({
 				kind: 'action',
 				action,
@@ -1084,7 +1085,7 @@ class ArtifactBuilder {
 					source,
 					kind: 'upload',
 					method: 'POST',
-					path: `${base}.upload`,
+					path: paths.upload,
 					callers: ['link'],
 					requirement: ofTheLink(collection.write),
 					admission: { contentTypes: [firstType, ...otherTypes], maxBytes: collection.maxBytes },
@@ -1097,7 +1098,7 @@ class ArtifactBuilder {
 				source,
 				kind: 'query',
 				method: 'POST',
-				path: `${base}.list`,
+				path: paths.list,
 				callers: ['link'],
 				requirement: ofTheLink(collection.read),
 				admission: JSON_ADMISSION,
@@ -1109,7 +1110,7 @@ class ArtifactBuilder {
 				source,
 				kind: 'download',
 				method: 'GET',
-				path: `${base}/:fileId`,
+				path: `${paths.download}/:fileId`,
 				callers: ['link'],
 				requirement: ofTheLink(collection.read),
 				admission: null,

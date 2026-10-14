@@ -1464,6 +1464,43 @@ The collection serves, for signed-in people only:
 A file reaches what its task reaches, now: a moved task moves its files. The list answers the task's files oldest
 first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–100, default 50) after the id `after`.
 
+The SPA calls them through the typed client, never a hand-written `fetch`: `api.files.attachments` of
+`createClient(contract, 'api')`, and on a link mount's client the `link: true` collections, without the owner.
+
+```ts web/attachments.ts
+import { createClient, RpcError } from '@fabrika/app/client'
+import { contract } from '../fabrika.contract'
+
+const api = createClient(contract, 'api')
+
+/** Uploads `file` to the task, then lists its files; a file's `type` is the declared media type. */
+export const attach = async (
+	taskId: string,
+	file: File,
+	list: HTMLElement,
+): Promise<void> => {
+	try {
+		await api.files.attachments.upload(taskId, file)
+		const page = await api.files.attachments.list({ owner: taskId })
+		list.replaceChildren(
+			...page.items.map((item) =>
+				Object.assign(document.createElement('li'), {
+					textContent: `${item.name ?? 'file'} (${item.status})`,
+				})
+			),
+		)
+	} catch (error) {
+		list.textContent = error instanceof RpcError
+			? `Refused: ${error.type}`
+			: 'Failed'
+	}
+}
+```
+
+`download(id)` answers a `File` named as it was uploaded (409 `quarantined` while a scan runs), and `remove({ id })`
+removes one. `ResultOf<typeof api.tasks.get>` and `InputOf<typeof api.tasks.create>` of `@fabrika/app/client` name a
+procedure's answer and input for a view that maps them.
+
 ## From a handler or a job: `ctx.files`
 
 `ctx.files('<collection>')` reaches one collection of the contract from a handler, a job's `ctx` and its `tx`. Each
@@ -2701,11 +2738,11 @@ export const portal = app.link('/p', {
   answers the same time. IAM counts no uses: the proxy honors a token it holds without asking IAM.
 - A link procedure acts on the link's own object: no `from`, no id in the input. A key of another candidate reaches
   only that candidate's record, and a key whose candidate is gone answers 404.
-- `link: true` on the collection serves the holder `POST /p/api/files.attachments.upload?name=<name>` (the body is the
-  file), `POST /p/api/files.attachments.list` (`{ limit?, after? }`) and `GET /p/api/files.attachments/:fileId`, for
-  the link's candidate only: another candidate's file id answers 404. The mount must grant the collection's `write`
-  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`. A second link mount
-  on candidates that must not reach the files (a one-click answer) needs `link: ['portal']` instead.
+- `link: true` on the collection gives the holder's client `portal.files.attachments`: `upload(file)`, `list()` and
+  `download(id)`, for the link's candidate only: another candidate's file id answers 404. The mount must grant the
+  collection's `write` and `read`. HR reaches the same files through `api.files.attachments`, which names the owner,
+  with `candidates.read`. A second link mount on candidates that must not reach the files (a one-click answer) needs
+  `link: ['portal']` instead.
 
 ```ts web/portal/main.ts
 import { createClient, RpcError, shareKey } from '@fabrika/app/client'
@@ -2731,16 +2768,13 @@ export const confirm = async (status: HTMLElement): Promise<void> => {
 }
 
 export const attach = async (file: File): Promise<string> => {
-	if (key === null) return 'This link holds no key.'
-	const response = await fetch(
-		`/p/api/files.attachments.upload?name=${encodeURIComponent(file.name)}`,
-		{
-			method: 'POST',
-			headers: { Authorization: `Bearer ${key}`, 'Content-Type': file.type },
-			body: file,
-		},
-	)
-	return response.ok ? 'Received: it is being checked.' : 'Refused.'
+	if (portal === null) return 'This link holds no key.'
+	try {
+		await portal.files.attachments.upload(file)
+		return 'Received: it is being checked.'
+	} catch (error) {
+		return error instanceof RpcError ? `Refused: ${error.type}` : 'Failed'
+	}
 }
 ```
 

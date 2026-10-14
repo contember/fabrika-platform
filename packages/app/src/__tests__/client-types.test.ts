@@ -16,6 +16,10 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'08-download-input-of-another-shape.ts': "'org' does not exist in type '{ orgId: string; }'",
 	'09-link-caller-label.ts': "Type 'null' is not assignable to type 'string'.",
 	'10-test-scope-dimension-typo.ts': `Argument of type '"workspaces"' is not assignable to parameter of type '"workspace" | "note"'.`,
+	'11-link-upload-names-an-owner.ts': "Argument of type 'string' is not assignable to parameter of type 'Blob'.",
+	'12-link-files-of-a-collection-without-link.ts': "Property 'attachments' does not exist",
+	'13-result-of-is-the-output.ts': "Type 'string' is not assignable to type 'number'.",
+	'14-input-of-is-the-input.ts': "Property 'expectVersion' is missing",
 }
 
 describe('client and test kit mistakes are type errors', () => {
