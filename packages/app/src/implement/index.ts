@@ -1,6 +1,7 @@
 // @fabrika/app/implement — serving a contract: `serve` binds the handlers its endpoints carry, `boot` (called only by
 // the generated entrypoint, through a runtime adapter) serves it. Imports `node:async_hooks`, so it is not browser-safe.
 // `implement` (a mirrored handler tree) is the framework's own test entry, `./implement`, and no application's.
+export { FILE_SWEEP_JOB } from '../files/collections'
 export type { FileCollectionHandle, FileCollectionReader, FileListing, ListedFile, OpenedFile } from '../files/handle'
 export {
 	FILE_SCAN_JOB,

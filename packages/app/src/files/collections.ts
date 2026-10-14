@@ -40,6 +40,14 @@ const MAX_NAME_CODE_POINTS = 255
 export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
 /** A pending row older than this is an upload that will never complete; the sweep deletes its object and the row. */
 export const PENDING_GRACE_MS = 60 * 60 * 1000
+/**
+ * The framework's sweep job: hourly, it deletes the objects of every collection's removed and orphaned files and of
+ * abandoned uploads, so none waits for the next request. A reserved name with `-`, which no `c.cron` name can take;
+ * `@fabrika/provider-zerops` writes it into the crontab on this schedule (`ZEROPS_FILE_SWEEP_JOB`).
+ */
+export const FILE_SWEEP_JOB = 'fabrika-file-sweep'
+export const FILE_SWEEP_SCHEDULE = '41 * * * *'
+export const FILE_SWEEP_TIMEOUT_MS = 10 * 60_000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const ById = z.strictObject({ id: z.uuid() })
@@ -530,28 +538,45 @@ export class FileCollections {
 	}
 
 	/**
-	 * Deletes the objects of removed, orphaned and abandoned files, then their rows. Retry-safe: a row stays until its
-	 * object is gone, so a failed delete is retried by the next sweep. It never fails the request that triggered it.
+	 * Deletes the objects of one batch of removed, orphaned and abandoned files, then their rows. Retry-safe: a row stays
+	 * until its object is gone, so a failed delete is retried by the next sweep. It never fails the request that
+	 * triggered it; it answers whether a full batch went (`more`), a smaller one (`done`), or a step failed.
 	 */
-	async #sweep(collection: Collection): Promise<void> {
+	async #sweep(collection: Collection): Promise<'more' | 'done' | 'failed'> {
 		const pendingBefore = new Date(Date.now() - PENDING_GRACE_MS)
 		let step: FileCleanupStep = 'rows_read_failed'
 		try {
-			for (const file of await collection.table.removable(SWEEP_BATCH, pendingBefore)) {
+			const batch = await collection.table.removable(SWEEP_BATCH, pendingBefore)
+			for (const file of batch) {
 				step = 'object_delete_failed'
 				await this.#store.delete(file.objectKey)
 				step = 'row_delete_failed'
 				await collection.table.purge(file.id, pendingBefore)
 			}
+			return batch.length === SWEEP_BATCH ? 'more' : 'done'
 		} catch {
 			console.error(`fabrika: files '${collection.name}' sweep: ${step}`)
+			return 'failed'
 		}
 	}
 
-	/** One sweep of every collection, for a framework job to run on a schedule. */
-	async sweep(): Promise<void> {
+	/**
+	 * Sweeps every collection, batch by batch, until none holds a removable file or `signal` aborts: the body of the sweep
+	 * job. A collection whose sweep failed waits for the next run, and the run fails once every other one was swept.
+	 */
+	async sweep(signal: AbortSignal): Promise<void> {
+		const failed: string[] = []
 		for (const collection of this.#collections) {
-			await this.#sweep(collection)
+			let state: 'more' | 'done' | 'failed' = 'more'
+			while (state === 'more' && !signal.aborted) {
+				state = await this.#sweep(collection)
+			}
+			if (state === 'failed') {
+				failed.push(collection.name)
+			}
+		}
+		if (failed.length > 0) {
+			throw new ServerFault('file_sweep_failed', `the sweep of files ${failed.map((name) => `'${name}'`).join(', ')} failed; the next run retries it`)
 		}
 	}
 

@@ -7,7 +7,8 @@ export const JOB_USAGE = `fabrika job — an application's c.cron jobs
 
 Usage:
   fabrika job run <name>    Run the job <name> of ${CONTRACT_FILE} once: the command every crontab entry runs.
-                            The framework's own fabrika-file-scan scans the uploads of scan: true file collections.
+                            The framework's own fabrika-file-scan scans the uploads of scan: true file collections,
+                            and fabrika-file-sweep deletes the objects of removed and orphaned files.
 
 Run from the application root. The job boots like the server: the framework variables (FABRIKA_APP_ID,
 FABRIKA_APP_DATABASE_URL, FABRIKA_IAM_*, FABRIKA_CONTRACT_DIGEST, FABRIKA_PROXY_SECRET, FABRIKA_OPERATIONS_DSN)

@@ -1153,6 +1153,12 @@ provisioning credential of the application's role family
 throwaway `CREATEROLE` provisioner instead of `db`, which it grants `CREATE` on the database and drops afterwards.
 The provider writes the same reference as before; nothing else changes on the Zerops side.
 
+#### A contract with files sweeps hourly
+
+A contract that declares a file collection gets `fabrika job run fabrika-file-sweep` at minute 41 of every hour, on one
+container (`allContainers: false`): the framework's sweep deletes the objects of removed and orphaned files. The job's
+lease keeps two runs from overlapping.
+
 #### UNVERIFIED: ClamAV in a scanning application's runtime container
 
 A contract with a `scan: true` file collection gets `sudo apk add --no-cache clamav` and a first `sudo freshclam` in

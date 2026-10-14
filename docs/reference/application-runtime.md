@@ -528,7 +528,12 @@ the same pipeline:
   completion — deletes the object and the pending row, and when that fails too, the row stays
   for the sweep. The sweep deletes the objects and rows of removed and orphaned files, and of
   pending rows older than one hour (an upload fails after ten minutes), so it never touches
-  an upload in progress; a failed delete is retried on its next pass.
+  an upload in progress; a failed delete is retried on its next pass. A remove and an upload sweep their collection
+  (20 files at most), and the framework's sweep job (`fabrika-file-sweep`, `FILE_SWEEP_JOB`, a reserved name like the
+  scan job's) sweeps every collection hourly, batch by batch until nothing removable is left: an orphaned or removed
+  object leaves storage within the hour without any request, in a collection that does not scan too. A collection
+  whose sweep failed fails the run (`file_sweep_failed`), after the others were swept. On Zerops the crontab runs it
+  when the contract declares a collection (`ZeropsContractRun.files`).
 - **The upload is checked while it streams.** A `Content-Length` over `maxBytes` is 413
   before the body is read; otherwise the object store stops reading past `maxBytes`, keeps
   nothing and the answer is 413. The first 512 bytes must be the declared type (415):

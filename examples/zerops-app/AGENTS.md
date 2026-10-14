@@ -1424,6 +1424,7 @@ import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { digest } from './src/tasks/digest'
 import { tasks } from './src/tasks/endpoints'
+import { erase } from './src/tasks/erase'
 import { report } from './src/tasks/report'
 
 export const contract = app.contract((c) => ({
@@ -1447,7 +1448,7 @@ export const contract = app.contract((c) => ({
 			maxPerOwner: 20,
 		}),
 	},
-	jobs: { digest },
+	jobs: { digest, erase },
 	health: c.health('/healthz'),
 }))
 ```
@@ -1510,6 +1511,7 @@ call takes a `Ref` of the owner (a task here), for one of the collection's actio
 | --------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
 | `list(owner, { after?, limit? })` | `read` or `write`           | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
 | `open(owner, id, { maxBytes })`   | `read`                      | `{ id, name, type, size, bytes }` of one live file, read whole             |
+| `removeAll(owner)`                | `delete`                    | how many files it marked removed                                           |
 
 A Ref for another action, or of another dimension, is refused. `open` answers 404 for a file of another owner, a
 removed or a rejected one, 409 `quarantined` while the scan has not called it clean, and 413 for a file over
@@ -1635,6 +1637,43 @@ import { tables } from './db/tables'
 import { mailer } from './mail'
 
 export default serve(contract, { database: scoped(tables), deps: mailer })
+```
+
+`removeAll` runs in a mutation and in a job's `tx.files`, in the same transaction as the handler's writes: an erasure
+that blanks a record and removes its files keeps both or neither. A query and a job's `ctx.files` only read. The
+framework's sweep deletes the removed files' objects within the hour, and so the objects of a deleted owner's files.
+
+```ts src/tasks/erase.ts
+import { app } from '../app-kit'
+
+/** Blanks the title of every task closed more than a year ago, and removes its attachments with it. */
+export const erase = app.cron('30 2 * * *', {
+	actions: ['tasks.read', 'tasks.write'],
+	scope: 'app',
+})
+	.handle(async ({ ctx }) => {
+		const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(
+			0,
+			10,
+		)
+		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
+		const stale = await tasks.list({
+			where: [['status', '=', 'done'], ['due_on', '<', yearAgo], [
+				'title',
+				'<>',
+				'',
+			]],
+			limit: 100,
+		})
+		for (const task of stale.items) {
+			const ref = await ctx.ref('tasks.write', 'task', task.id)
+			await ctx.transaction(async (tx) => {
+				const locked = await tx.db.on(ref).getForUpdate()
+				await tx.db.on(ref).update({ title: '' }, { expectVersion: locked.version })
+				await tx.files('attachments').removeAll(ref)
+			})
+		}
+	})
 ```
 
 - The owner is a table with a dimension scope; an application table owns no collection.
@@ -1870,6 +1909,9 @@ export const contract = app.contract((c) => ({
   `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
   a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
   inbox, the record, the link and its e-mail, each step recorded before the next.
+- A job reads a file collection through `ctx.files('<collection>')` with a `Ref` it minted (`list`, `open` to attach a
+  file to an e-mail), and removes an owner's files only inside its transaction, `tx.files('<collection>').removeAll(ref)`
+  (`references/files.md`). The framework's own `fabrika-file-sweep` then deletes their objects; never write a sweep.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, or a framework refusal

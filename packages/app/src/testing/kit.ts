@@ -36,6 +36,7 @@ import { compileContract } from '../contract/compile'
 import type { AnyContract, DimensionOf } from '../contract/define'
 import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
+import type { FILE_SWEEP_JOB } from '../files/collections'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
 import type { ChallengeFetch } from '../implement/challenge'
@@ -136,10 +137,10 @@ export interface TestKit<C extends AnyContract> {
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
 	 * its key, its writes fenced. It first waits for the runs a form's `then` kicked, so it never races them.
-	 * `FILE_SCAN_JOB` runs the scan of `scan: true` collections with the kit's `scanner`. Needs the application's data
-	 * layer on Postgres.
+	 * `FILE_SCAN_JOB` runs the scan of `scan: true` collections with the kit's `scanner`, `FILE_SWEEP_JOB` the sweep of
+	 * removed and orphaned files. Needs the application's data layer on Postgres.
 	 */
-	runJob(name: JobName<C> | typeof FILE_SCAN_JOB, options?: JobRunOptions): Promise<JobRunResult>
+	runJob(name: JobName<C> | typeof FILE_SCAN_JOB | typeof FILE_SWEEP_JOB, options?: JobRunOptions): Promise<JobRunResult>
 }
 
 /** The names of the contract's cron jobs. */

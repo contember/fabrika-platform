@@ -135,6 +135,9 @@ export const contract = app.contract((c) => ({
   `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
   a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
   inbox, the record, the link and its e-mail, each step recorded before the next.
+- A job reads a file collection through `ctx.files('<collection>')` with a `Ref` it minted (`list`, `open` to attach a
+  file to an e-mail), and removes an owner's files only inside its transaction, `tx.files('<collection>').removeAll(ref)`
+  (`references/files.md`). The framework's own `fabrika-file-sweep` then deletes their objects; never write a sweep.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
 - A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, or a framework refusal

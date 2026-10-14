@@ -51,7 +51,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — Role creation by `db`, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
 - [122](122-a-generated-case-cannot-seed-a-child-rows-state-or-a-row-under-an-in-target.md) — `rows` seeds no child row state and no row under an `in` target; the own case expects exactly 200.
-- [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.

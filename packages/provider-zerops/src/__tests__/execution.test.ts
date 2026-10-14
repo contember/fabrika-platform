@@ -64,7 +64,12 @@ const DIGEST = `sha256:${new Bun.CryptoHasher('sha256').update(canonicalArtifact
 describe('the generated execution descriptor of a contract application', () => {
 	test('carries the run facts of the contract in the artifact', async () => {
 		const manifest = await compile(contractApp({ runtimePackages: ['vips'] }))
-		expect(manifest.target.contract).toEqual({ digest: DIGEST, readinessPath: '/healthz', jobs: [{ name: 'purgeDeleted', schedule: '0 3 * * *' }] })
+		expect(manifest.target.contract).toEqual({
+			digest: DIGEST,
+			readinessPath: '/healthz',
+			jobs: [{ name: 'purgeDeleted', schedule: '0 3 * * *' }],
+			files: true,
+		})
 		expect(zeropsArtifactCodec.decode(zeropsArtifactCodec.encode(manifest))).toEqual(manifest)
 	})
 
@@ -103,7 +108,10 @@ describe('the generated execution descriptor of a contract application', () => {
 					recoveryTimeout: '10s',
 					failureTimeout: '120s',
 				},
-				crontab: [{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purgeDeleted', allContainers: false }],
+				crontab: [
+					{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purgeDeleted', allContainers: false },
+					{ timing: '41 * * * *', command: './node_modules/.bin/fabrika job run fabrika-file-sweep', allContainers: false },
+				],
 				envVariables: {
 					PORT: '3000',
 					FABRIKA_CONTRACT_DIGEST: DIGEST,

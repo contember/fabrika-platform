@@ -36,6 +36,9 @@ export interface ZeropsContractJob {
 
 /** The framework's file scan job (`@fabrika/app`'s `FILE_SCAN_JOB`), run every minute when a collection scans. */
 export const ZEROPS_FILE_SCAN_JOB = 'fabrika-file-scan'
+/** The framework's file sweep job (`@fabrika/app`'s `FILE_SWEEP_JOB` and its schedule), run when the contract has files. */
+export const ZEROPS_FILE_SWEEP_JOB = 'fabrika-file-sweep'
+const FILE_SWEEP_SCHEDULE = '41 * * * *'
 
 /**
  * The RAM in GB a container of a scanning application starts with: one `clamscan` over a batch peaks at about 1 GB
@@ -55,6 +58,8 @@ export interface ZeropsContractRun {
 	/** The path of the contract's health endpoint, which the readiness and health checks request. */
 	readonly readinessPath: string
 	readonly jobs: readonly ZeropsContractJob[]
+	/** Present when the contract declares a file collection: the crontab runs the sweep of removed files. */
+	readonly files?: true
 	/** Present when a file collection scans its uploads: the build installs ClamAV and the crontab runs the scan. */
 	readonly scan?: true
 }
@@ -89,6 +94,7 @@ export function zeropsContractRun(artifact: ContractArtifact): ZeropsContractRun
 		digest: contractDigest(artifact),
 		readinessPath: health.path,
 		jobs: Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule })).sort(byName),
+		...(Object.keys(artifact.files).length > 0 ? { files: true } : {}),
 		...(Object.values(artifact.files).some((collection) => collection.scan === true) ? { scan: true } : {}),
 	}
 }
@@ -300,6 +306,9 @@ export function renderLockedSetup(
 	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
 	const crontab = [
 		...contract.jobs.map((job) => ({ timing: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}`, allContainers: false })),
+		...(contract.files === true
+			? [{ timing: FILE_SWEEP_SCHEDULE, command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SWEEP_JOB}`, allContainers: false }]
+			: []),
 		// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
 		...(scan
 			? [

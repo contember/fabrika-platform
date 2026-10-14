@@ -22,6 +22,7 @@ export const SERVER_FAULTS = {
 	file_object_mismatch: "a file's object has another size than its row records",
 	file_key_taken: "a new file's object key already held an object this upload did not write",
 	file_collection_unknown: 'ctx.files named a collection the contract does not declare',
+	file_sweep_failed: "the sweep could not delete a removed or orphaned file's object or row; the next run retries it",
 	challenge_unavailable: "a form's challenge provider could not be reached in time or did not answer as it documents",
 	challenge_misconfigured: "a form's challenge provider refused the application's secret",
 	attachment_rows: 'the handler returned more rows than its attachment declares (maxRows)',

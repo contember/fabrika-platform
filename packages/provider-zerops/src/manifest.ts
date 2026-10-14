@@ -301,6 +301,7 @@ const contractRunSchema = z.object({
 	digest: z.string().regex(CONTRACT_DIGEST_PATTERN),
 	readinessPath: z.string().regex(READINESS_PATH),
 	jobs: z.array(z.object({ name: z.string().regex(JOB_NAME), schedule: z.string().regex(CRON_SCHEDULE) }).strict()),
+	files: z.literal(true).optional(),
 	scan: z.literal(true).optional(),
 }).strict()
 

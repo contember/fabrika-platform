@@ -42,7 +42,7 @@ import { exportBase, FORM_CHALLENGE_FIELD, FORM_LIMITS } from '../contract/defau
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
-import { fileCollections } from '../files/collections'
+import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
@@ -714,14 +714,17 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		mint: issuer.mint,
 		data: bound?.data ?? null,
 		files,
-		frameworkJobs: files?.scans === true
-			? [{
-				name: FILE_SCAN_JOB,
-				schedule: FILE_SCAN_SCHEDULE,
-				timeoutMs: SCAN_LIMITS.jobTimeoutMs,
-				run: (reporter, signal) => files.scanPass(options.scanner ?? null, reporter, signal),
-			}]
-			: [],
+		frameworkJobs: files === null ? [] : [
+			...(files.scans
+				? [{
+					name: FILE_SCAN_JOB,
+					schedule: FILE_SCAN_SCHEDULE,
+					timeoutMs: SCAN_LIMITS.jobTimeoutMs,
+					run: (reporter: OperationsReporter, signal: AbortSignal) => files.scanPass(options.scanner ?? null, reporter, signal),
+				}]
+				: []),
+			{ name: FILE_SWEEP_JOB, schedule: FILE_SWEEP_SCHEDULE, timeoutMs: FILE_SWEEP_TIMEOUT_MS, run: (_reporter, signal) => files.sweep(signal) },
+		],
 		membership,
 		capabilities: issuer.authority,
 		containers,

@@ -12,6 +12,7 @@ import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
 import { digest } from './src/tasks/digest'
 import { tasks } from './src/tasks/endpoints'
+import { erase } from './src/tasks/erase'
 import { report } from './src/tasks/report'
 
 export const contract = app.contract((c) => ({
@@ -35,7 +36,7 @@ export const contract = app.contract((c) => ({
 			maxPerOwner: 20,
 		}),
 	},
-	jobs: { digest },
+	jobs: { digest, erase },
 	health: c.health('/healthz'),
 }))
 ```
@@ -98,6 +99,7 @@ call takes a `Ref` of the owner (a task here), for one of the collection's actio
 | --------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
 | `list(owner, { after?, limit? })` | `read` or `write`           | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
 | `open(owner, id, { maxBytes })`   | `read`                      | `{ id, name, type, size, bytes }` of one live file, read whole             |
+| `removeAll(owner)`                | `delete`                    | how many files it marked removed                                           |
 
 A Ref for another action, or of another dimension, is refused. `open` answers 404 for a file of another owner, a
 removed or a rejected one, 409 `quarantined` while the scan has not called it clean, and 413 for a file over
@@ -223,6 +225,43 @@ import { tables } from './db/tables'
 import { mailer } from './mail'
 
 export default serve(contract, { database: scoped(tables), deps: mailer })
+```
+
+`removeAll` runs in a mutation and in a job's `tx.files`, in the same transaction as the handler's writes: an erasure
+that blanks a record and removes its files keeps both or neither. A query and a job's `ctx.files` only read. The
+framework's sweep deletes the removed files' objects within the hour, and so the objects of a deleted owner's files.
+
+```ts src/tasks/erase.ts
+import { app } from '../app-kit'
+
+/** Blanks the title of every task closed more than a year ago, and removes its attachments with it. */
+export const erase = app.cron('30 2 * * *', {
+	actions: ['tasks.read', 'tasks.write'],
+	scope: 'app',
+})
+	.handle(async ({ ctx }) => {
+		const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(
+			0,
+			10,
+		)
+		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
+		const stale = await tasks.list({
+			where: [['status', '=', 'done'], ['due_on', '<', yearAgo], [
+				'title',
+				'<>',
+				'',
+			]],
+			limit: 100,
+		})
+		for (const task of stale.items) {
+			const ref = await ctx.ref('tasks.write', 'task', task.id)
+			await ctx.transaction(async (tx) => {
+				const locked = await tx.db.on(ref).getForUpdate()
+				await tx.db.on(ref).update({ title: '' }, { expectVersion: locked.version })
+				await tx.files('attachments').removeAll(ref)
+			})
+		}
+	})
 ```
 
 - The owner is a table with a dimension scope; an application table owns no collection.

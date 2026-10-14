@@ -8,7 +8,7 @@ import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseZeropsDescriptor } from '../descriptor'
-import { renderLockedExecutionDescriptor, ZEROPS_FILE_SCAN_JOB, ZEROPS_SCAN_MIN_RAM_GB, zeropsContractRun } from '../execution'
+import { renderLockedExecutionDescriptor, ZEROPS_FILE_SCAN_JOB, ZEROPS_FILE_SWEEP_JOB, ZEROPS_SCAN_MIN_RAM_GB, zeropsContractRun } from '../execution'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
@@ -67,6 +67,7 @@ describe('a scanning contract on Zerops', () => {
 		])
 		expect(generated['crontab']).toEqual([
 			{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purgeDeleted', allContainers: false },
+			{ timing: '41 * * * *', command: `./node_modules/.bin/fabrika job run ${ZEROPS_FILE_SWEEP_JOB}`, allContainers: false },
 			{ timing: '* * * * *', command: `./node_modules/.bin/fabrika job run ${ZEROPS_FILE_SCAN_JOB}`, allContainers: false },
 			{ timing: '17 4 * * *', command: 'sudo freshclam --stdout --quiet', allContainers: true },
 		])
@@ -79,6 +80,13 @@ describe('a scanning contract on Zerops', () => {
 		expect(generated['prepareCommands']).toBeUndefined()
 		expect(generated['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh'])
 		expect(JSON.stringify(generated['crontab'])).not.toContain(ZEROPS_FILE_SCAN_JOB)
+		expect(JSON.stringify(generated['crontab'])).toContain(ZEROPS_FILE_SWEEP_JOB)
+	})
+
+	test('a contract without a file collection runs no sweep', async () => {
+		const manifest = await compile(app({ ...notesArtifact, files: {} }, null))
+		expect(Object.keys(manifest.target.contract ?? {})).not.toContain('files')
+		expect(JSON.stringify(run(manifest)['crontab'])).not.toContain(ZEROPS_FILE_SWEEP_JOB)
 	})
 
 	test('the deploy service must start with the RAM a scan needs, at build and at a deploy of an approved scanning contract', async () => {

@@ -734,8 +734,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   never read a file by its id alone. Its statements run in the site's session (`FileSite.session`), so `removeAll`
   commits or rolls back with the invocation; it runs only where `FileSite.readOnly` is `null`. An export gets no
   `ctx.files`. The name is checked at the call (`file_collection_unknown`), because groups type before the contract.
-- `FileCollections.sweep()` is the seam a framework job calls on a schedule; until then a
-  remove sweeps its collection, and the scan job sweeps the scanning ones. `serveContract` opens the object storage from
+- **The sweep job is a framework job** (`FILE_SWEEP_JOB`, hourly, `FileCollections.sweep(signal)`): it sweeps every
+  collection batch by batch until nothing removable is left, and fails the run (`file_sweep_failed`) after the others
+  when one failed. A remove and an upload sweep their own collection once, and the scan job sweeps the scanning ones.
+  `@fabrika/provider-zerops` mirrors its name and schedule (`ZEROPS_FILE_SWEEP_JOB`); change both together. `serveContract` opens the object storage from
   `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or presign one.
 - **Only a completed clean verdict promotes a file** (`scan.ts`). An upload to a `scan: true` collection ends
   `quarantined`; the download answers 409 until the scan job writes `live`, and 404 once `rejected`. The pass reads each
