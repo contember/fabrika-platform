@@ -549,6 +549,7 @@ describe("the contract's endpoint table is enforced by the proxy, and survives t
 			'files.attachments.remove',
 			'files.attachments.upload',
 			'health',
+			'people.guests.invite',
 			'site',
 		])
 	})
