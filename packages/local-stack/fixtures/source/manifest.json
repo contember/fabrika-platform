@@ -29,8 +29,8 @@
 		"archiveSha256": "2040d69c8da442a88817c841359ece578e36fd25e1421cb4fdc7f781a95c9858"
 	},
 	"application": {
-		"commitSha": "028f0d75f22b81c24c7344c69d2e31d6d3dc5a83",
-		"treeSha": "bfda5a7525b2d02ec6c9c30aaaab08608be5dd03",
+		"commitSha": "2cfcacab14c388bf373e6cc883924b1b3c74cf77",
+		"treeSha": "f3403654710f382b36a982192b37672b853d9c5c",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -40,7 +40,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "2ab0e35356b8ba744b808d4ae3b7b2bdf1014de7",
+				"sha": "547d1094cdbdb5ecae695fd804799714a2396576",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -275,12 +275,12 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 74609,
-		"archiveSha256": "eb6d40aada05eb8cd52272aba2aeb2cf7664c5daca536621c402a30ba3e5e33e"
+		"archiveBytes": 75837,
+		"archiveSha256": "e8556d12e2173c342b58f479d693a401ce50070f851902e9b1f5a84dd27fe925"
 	},
 	"agentChange": {
-		"commitSha": "3ba78e1ef3f88a84f19cdb176e0d9adbe093c377",
-		"treeSha": "9922359aae160f5589a571bb2b64d0bea45e5fe4",
+		"commitSha": "a335ad43b4fcaaba9a44c24b81becfba424129f9",
+		"treeSha": "45fb4c28ec4a7e881986b6c6a1ac1c20ea804436",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -290,7 +290,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "2ab0e35356b8ba744b808d4ae3b7b2bdf1014de7",
+				"sha": "547d1094cdbdb5ecae695fd804799714a2396576",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -543,7 +543,7 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 75415,
-		"archiveSha256": "db8f96fdf732991b43d2ae419074e9d5884dbb2acead720229ed6fc568c5b7fc"
+		"archiveBytes": 76639,
+		"archiveSha256": "9a1a5b30c4d35619f9088e497372c92e302dd103f961f93c43f78e305dfbd038"
 	}
 }

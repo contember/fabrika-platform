@@ -1427,8 +1427,8 @@ CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_a
   `POST <prefix>/api/files.<name>.list` (no `owner`) and `GET <prefix>/api/files.<name>/:fileId` under every link mount bound to the owner's dimension, which must grant the
   collection's `write` and `read`. The owner is the link's object, never a parameter.
 - `link: ['completion']` serves the named link mounts only. Name them when the owner's dimension has a link meant
-  for something else (a one-click answer): a mount the list does not name serves no file route (404) and need not
-  grant the collection's actions.
+  for something else (a one-click answer): a mount the list does not name has no file route and need not grant
+  the collection's actions. Its holder gets 403 from the proxy, which finds no endpoint for the path.
 
 ## Storage
 

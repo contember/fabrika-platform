@@ -12,6 +12,7 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
+import { testKit } from '../testing'
 import { bootApp, endpointHeaderFor, grant, linkToken, ORIGIN, resultOf, send, token } from './fixtures/implement/harness'
 import { migration } from './fixtures/scoped-files/migration'
 import { tables } from './fixtures/scoped-files/src/db/tables'
@@ -303,7 +304,28 @@ describe.skipIf(!hasPostgres)('a link holder and its object’s files', () => {
 		expect(idOf(await upload(app, other, '/o'))).toBeString()
 	})
 
-	test("a key of a mount the collection's link does not name gets 404 on every file row", async () => {
+	test("through the proxy, a key of a mount the collection's link does not name is refused before the application: 403", async () => {
+		const kit = testKit(namedApp(), { database, files: new MemoryFileObjects() })
+		const note = await seedNote()
+		const object: { readonly type: 'note'; readonly value: string } = { type: 'note', value: note }
+		const link = (mount: string) =>
+			kit.testCaller([{ action: 'notes.read', scope: object }, { action: 'notes.write', scope: object }], {
+				kind: 'link',
+				link: { mount, chain: [object, { type: 'workspace', value: 'w1' }] },
+			})
+		const list = (holder: { readonly key: string | null }, prefix: string) =>
+			kit.fetch(`${prefix}/api/files.attachments.list`, {
+				method: 'POST',
+				headers: { Authorization: `Bearer ${holder.key ?? ''}`, 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+				body: '{}',
+			})
+		// No endpoint serves the path, so the proxy denies it (ADR-0022): the request never reaches the dispatcher.
+		const refused = await list(link('other'), '/o')
+		expect([refused.status, await refused.text()]).toEqual([403, 'forbidden'])
+		expect((await list(link('shared'), '/s')).status).toBe(200)
+	})
+
+	test("past the proxy, the dispatcher answers 404 to a key of a mount the collection's link does not name", async () => {
 		const files = bootApp(namedApp(), { database, files: new MemoryFileObjects() })
 		const note = await seedNote()
 		const shared = await holderOf(note)

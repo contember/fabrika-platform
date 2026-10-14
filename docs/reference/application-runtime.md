@@ -585,8 +585,9 @@ the same pipeline:
   `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
   `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
 - **Link holders' files** (`link: true`, or `link: ['<mount>', …]`). Every link mount bound to
-  the owner's dimension, or each one the list names (a mount it does not name serves no file
-  row and need not grant the collection's actions), gets `POST <prefix>/api/files.<name>.upload`, `POST <prefix>/api/files.<name>.list`
+  the owner's dimension, or each one the list names (a mount it does not name has no file
+  row and need not grant the collection's actions: the proxy denies its path as no endpoint, 403, and
+  the dispatcher, reached without the proxy, answers 404), gets `POST <prefix>/api/files.<name>.upload`, `POST <prefix>/api/files.<name>.list`
   (`{ after?, limit? }`, no owner) and `GET <prefix>/api/files.<name>/:fileId`,
   caller `link`, `on` the owner's dimension with no parameter: the owner is the link's
   object. Each checks the key's mount and the object's current chain as a link procedure
