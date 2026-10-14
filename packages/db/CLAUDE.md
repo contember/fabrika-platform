@@ -78,9 +78,11 @@ application runner (`migrate`, as the migration role: the framework's tables, th
 `fabrika db migrate` applies them), connects and seeds as its runtime role, so every test of
 application code runs least-privileged, or answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
 chains that share no value, every container row a table owns first, with the author's seed values in the table's own
-row (never a column that places it, nor a text column, whose marker the leak cases look for), and answers each row's `chain` of dimension values (a share link's chain); `tableProbe` reaches one table of a layer by
+row (never a column that places it, nor a text column that holds a marker the leak cases look for), and answers each row's `chain` of dimension values (a share link's chain); `seedUnder` seeds a row in a seeded row's object (a child row a fixture names); `tableProbe` reaches one table of a layer by
 name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
-column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer.
+column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer, except a
+foreign key outside the chain (`null`, or the key of a reference or application row) and a column a CHECK names (an
+`IN` list's first value, or `null`). What the seeding cannot satisfy is a `SeedLimitError` naming the constraint.
 There is no generated `move` case yet: an access form hands a handler one capability, and `t.move` needs the source
 and the target `Ref`, so no handler can call it.
 

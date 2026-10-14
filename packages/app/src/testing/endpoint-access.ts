@@ -18,12 +18,12 @@ import {
 } from '@fabrika/auth-core'
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
-import type { IsolationWorlds, SampleValue, TestDatabase } from '@fabrika/db/testing'
+import type { IsolationWorlds, SampleValue, TestDatabase, WorldRow } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
-import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER } from '../contract/defaults'
+import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
 import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -109,10 +109,28 @@ interface ActionEndpoint {
 /** Every dimension value a target lies in, its own first: where a member directory of its scope is found. */
 type Chain = readonly { readonly type: string; readonly value: string }[]
 
-/** The two scopes a case asks from: a target of each, the values the other's rows hold, and the grants of each. */
+/**
+ * One scope a case asks from: its target, the grants a caller of it holds, the target's chain, and the key of each row
+ * the case names in its target (`rows`), by input field.
+ */
+interface Side {
+	readonly target: string
+	readonly grants: readonly Grant[]
+	readonly chain: Chain
+	readonly rows: Readonly<Record<string, string>>
+}
+
+/** The two scopes a case asks from, and the values the other's rows hold. */
 interface Scopes {
-	readonly own: { readonly target: string; readonly grants: readonly Grant[]; readonly chain: Chain }
-	readonly other: { readonly target: string; readonly grants: readonly Grant[]; readonly values: readonly string[]; readonly chain: Chain }
+	readonly own: Side
+	readonly other: Side & { readonly values: readonly string[] }
+}
+
+/** The input fields that name a row the kit seeds in the case's object (`rows`), with the row's table. */
+function rowFields(input: Readonly<Record<string, unknown>>): readonly { readonly field: string; readonly table: string }[] {
+	return Object.entries(input).flatMap(([field, value]) =>
+		typeof value === 'string' && value.startsWith(GENERATED_ROW_PREFIX) ? [{ field, table: value.slice(GENERATED_ROW_PREFIX.length) }] : []
+	)
 }
 
 /** A case's input, and the values it named that only its own scope may see in an answer: a generated member's id and label. */
@@ -161,6 +179,17 @@ function sampleFile(name: string, types: readonly string[]): { readonly type: st
 }
 
 const uploadedSchema = z.strictObject({ result: z.strictObject({ id: z.string() }) })
+const errorSchema = z.object({ error: z.object({ type: z.string() }) })
+
+/** The `type` of an error envelope, or `undefined` for any other body. */
+function errorType(text: string): string | undefined {
+	try {
+		const parsed = errorSchema.safeParse(JSON.parse(text))
+		return parsed.success ? parsed.data.error.type : undefined
+	} catch {
+		return undefined
+	}
+}
 
 /** A scope value no table holds, in the format of the input field it is sent in. */
 function freshValue(dimension: string, world: 'own' | 'other', field: SchemaShape | undefined): string {
@@ -358,10 +387,16 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		}
 		const response = await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 		const text = await response.text()
-		// Input is parsed before the access form runs: a refused input would hide what the case is about.
+		// A 400 hides what the case is about: input is parsed before the access form runs, and a handler's refusal of
+		// the input it was given is no answer to another scope. Either is what the generator could not build.
 		if (response.status === 400) {
+			const type = errorType(text)
 			throw new Error(
-				`${row.id}: the case's input does not match the endpoint's input schema, or names no member its handler accepts; correct its fixture, or name the member field in members (${text})`,
+				type === 'validation'
+					? `${row.id}: the case's input does not match the endpoint's input schema; correct its fixture (${text})`
+					: `${row.id}: the handler refused the case's input (400 ${
+						type ?? 'without a type'
+					}); the case cannot reach what it tests until its fixtures give what the handler needs: a picked person in members, a row of its object in rows, the state in seeds or the whole input in fixtures (${text})`,
 			)
 		}
 		return { status: response.status, text }
@@ -400,46 +435,81 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return seeded
 	}
 
-	/** Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two fresh scope values. */
-	const scopesOf = async (action: string, dimension: string, field: SchemaShape | undefined, seed: Seed): Promise<Scopes> => {
+	/**
+	 * Two scopes of `dimension`: rows of the table that owns it when one does, with `seed`, otherwise two fresh scope
+	 * values. Each row `input` names in the object (`rows`) is seeded in each scope's row.
+	 */
+	const scopesOf = async (
+		action: string,
+		dimension: string,
+		field: SchemaShape | undefined,
+		seed: Seed,
+		input: Readonly<Record<string, unknown>>,
+	): Promise<Scopes> => {
+		const named = rowFields(input)
 		const collection = Object.keys(kit.artifact.files).find((name) => dimension === `file:${name}`)
+		const owner = ownerOf(dimension)
+		if (named.length > 0 && (collection !== undefined || owner === undefined)) {
+			throw new Error(`no table owns ${dimension}, so the kit seeds no ${named.map((row) => row.table).join(', ')} row in one`)
+		}
 		if (collection !== undefined) {
 			const seeded = await seedFiles(collection)
 			const grant = (world: 'own' | 'other'): Grant[] => [{ action, scope: { type: seeded.worlds.dimension, value: seeded.worlds[world].scope } }]
 			return {
-				own: { target: seeded.own, grants: grant('own'), chain: seeded.worlds.own.chain },
+				own: { target: seeded.own, grants: grant('own'), chain: seeded.worlds.own.chain, rows: {} },
 				other: {
 					target: seeded.other,
 					grants: grant('other'),
 					values: [...worldValues(seeded.worlds, 'other'), seeded.other],
 					chain: seeded.worlds.other.chain,
+					rows: {},
 				},
 			}
 		}
-		const owner = ownerOf(dimension)
 		if (owner === undefined) {
 			const own = freshValue(dimension, 'own', field)
 			const other = freshValue(dimension, 'other', field)
 			return {
-				own: { target: own, grants: [{ action, scope: { type: dimension, value: own } }], chain: [{ type: dimension, value: own }] },
+				own: { target: own, grants: [{ action, scope: { type: dimension, value: own } }], chain: [{ type: dimension, value: own }], rows: {} },
 				other: {
 					target: other,
 					grants: [{ action, scope: { type: dimension, value: other } }],
 					values: [other],
 					chain: [{ type: dimension, value: other }],
+					rows: {},
 				},
 			}
 		}
 		const worlds = await postgres.seedWorlds(tables, owner, seed)
+		const own = await rowsIn(worlds.own, named)
+		const other = await rowsIn(worlds.other, named)
 		return {
-			own: { target: worlds.own.key, grants: [{ action, scope: { type: worlds.dimension, value: worlds.own.scope } }], chain: worlds.own.chain },
+			own: {
+				target: worlds.own.key,
+				grants: [{ action, scope: { type: worlds.dimension, value: worlds.own.scope } }],
+				chain: worlds.own.chain,
+				rows: own.rows,
+			},
 			other: {
 				target: worlds.other.key,
 				grants: [{ action, scope: { type: worlds.dimension, value: worlds.other.scope } }],
-				values: worldValues(worlds, 'other'),
+				values: [...worldValues(worlds, 'other'), ...other.values],
 				chain: worlds.other.chain,
+				rows: other.rows,
 			},
 		}
+	}
+
+	/** One row of each named table seeded in `object`: its key by input field, and every key and marker it holds. */
+	const rowsIn = async (object: WorldRow, named: ReturnType<typeof rowFields>) => {
+		const rows: Record<string, string> = {}
+		const values: string[] = []
+		for (const { field, table } of named) {
+			const seeded = await postgres.seedUnder(tables, table, object)
+			rows[field] = seeded.key
+			values.push(seeded.key, ...seeded.markers)
+		}
+		return { rows, values }
 	}
 
 	/** For a list of `dimension`: one row in each scope of every table listed by it; each caller holds every scope of its side. */
@@ -456,9 +526,9 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			}
 		}
 		if (own.length === 0) {
-			return scopesOf(action, dimension, undefined, {})
+			return scopesOf(action, dimension, undefined, {}, {})
 		}
-		return { own: { target: '', grants: own, chain: [] }, other: { target: '', grants: other, values, chain: [] } }
+		return { own: { target: '', grants: own, chain: [], rows: {} }, other: { target: '', grants: other, values, chain: [], rows: {} } }
 	}
 
 	/**
@@ -484,14 +554,18 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			}
 		}
 		if (own.length === 0) {
-			const scopes = await scopesOf(action, dimension, field, seed)
+			const scopes = await scopesOf(action, dimension, field, seed, {})
 			return { own: [scopes.own], other: [scopes.other], values: scopes.other.values }
 		}
 		return { own, other, values }
 	}
 
-	const withTarget = (input: Readonly<Record<string, unknown>>, from: string | null, target: string): Readonly<Record<string, unknown>> =>
-		from === null ? input : { ...input, [from]: target }
+	/** `input` addressing `side`: its target in the `from` field, and its own key in each field that names a row (`rows`). */
+	const addressing = (
+		input: Readonly<Record<string, unknown>>,
+		from: string | null,
+		side: { readonly target: string; readonly rows?: Readonly<Record<string, string>> },
+	): Readonly<Record<string, unknown>> => ({ ...input, ...side.rows, ...(from === null ? {} : { [from]: side.target }) })
 
 	/**
 	 * `input` with every field that holds `GENERATED_MEMBER` set to a new member of the directory's value in `chain`: a
@@ -597,8 +671,13 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		return refused === undefined ? { answered: true, leaked } : { answered: false, status: refused.status, leaked }
 	}
 
-	/** A link holder of `row`'s mount, its key bound to the own world's object. */
-	const linkHolder = async (row: ActionEndpoint, mount: string, seed: Seed): Promise<RpcFetch> => {
+	/** A link holder of `row`'s mount, its key bound to the own world's object, and the rows `input` names in that object. */
+	const linkHolder = async (
+		row: ActionEndpoint,
+		mount: string,
+		seed: Seed,
+		input: Readonly<Record<string, unknown>>,
+	): Promise<{ readonly fetch: RpcFetch; readonly rows: Readonly<Record<string, string>> }> => {
 		const access = row.access
 		if (access.form !== 'on') {
 			throw new Error(`${row.id} is a link procedure, so its access form is on the link's object, not ${access.form}`)
@@ -612,11 +691,12 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			kind: 'link',
 			link: { mount, chain: own.chain },
 		})
-		return (input, init) => {
+		const fetch: RpcFetch = (request, init) => {
 			const headers = new Headers(init?.headers)
 			headers.set('Authorization', `Bearer ${holder.key ?? ''}`)
-			return kit.fetch(input, { ...init, headers })
+			return kit.fetch(request, { ...init, headers })
 		}
+		return { fetch, rows: (await rowsIn(own, rowFields(input))).rows }
 	}
 
 	const accessKit: EndpointAccessKit = {
@@ -626,8 +706,8 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			if (access.form !== 'on' && access.form !== 'in') {
 				throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
 			}
-			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
-			const asked = withTarget(input, access.from, scopes.other.target)
+			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
+			const asked = addressing(input, access.from, scopes.other)
 			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked, scopes.own.chain)
 			return { status }
 		},
@@ -640,12 +720,12 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 					targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
 				const marks: string[] = []
 				for (const side of scopes.other) {
-					const answer = await ask(row, grants(scopes.other), withTarget(input, access.from, side.target), side.chain)
+					const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain)
 					marks.push(...answer.marks)
 				}
 				const answers = []
 				for (const side of scopes.own) {
-					answers.push(await ask(row, grants(scopes.own), withTarget(input, access.from, side.target), side.chain))
+					answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
 				}
 				return leakOutcome(answers, [...scopes.values, ...marks])
 			}
@@ -653,19 +733,19 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
 			}
 			const scopes = access.form === 'on'
-				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
+				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
 				: await listScopesOf(action, access.dimension)
 			const from = access.form === 'on' ? access.from : null
 			const other = await ask(
 				row,
 				holding(row, input, scopes.other.grants, scopes.other.chain),
-				withTarget(input, from, scopes.other.target),
+				addressing(input, from, scopes.other),
 				scopes.other.chain,
 			)
 			const answer = await ask(
 				row,
 				holding(row, input, scopes.own.grants, scopes.own.chain),
-				withTarget(input, from, scopes.own.target),
+				addressing(input, from, scopes.own),
 				scopes.own.chain,
 			)
 			return leakOutcome([answer], [...scopes.other.values, ...other.marks])
@@ -677,14 +757,15 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				throw new Error(`${endpoint} has the access form ${access.form}; only on addresses an object of its own`)
 			}
 			if (row.link !== null) {
-				const { status } = await askAs(row, await linkHolder(row, row.link, seed), input)
+				const holder = await linkHolder(row, row.link, seed, input)
+				const { status } = await askAs(row, holder.fetch, { ...input, ...holder.rows })
 				return { status }
 			}
-			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
+			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, input)
 			const { status } = await ask(
 				row,
 				holding(row, input, scopes.own.grants, scopes.own.chain),
-				withTarget(input, access.from, scopes.own.target),
+				addressing(input, access.from, scopes.own),
 				scopes.own.chain,
 			)
 			return { status }

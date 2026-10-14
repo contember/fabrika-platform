@@ -3094,7 +3094,10 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
 
 Run them after every change of the contract or the tables. The platform runs them at every start, and the
 application is not ready until each passes. A failing generated test is a bug in the handler, the policy or the
-fixtures, never in the test: do not loosen access to make it pass.
+fixtures, never in the test: do not loosen access to make it pass. A case that throws instead of failing an
+assertion names what the generator could not build: an input the schema refuses, an input the handler refused (400),
+which the fixtures below supply, or a `SeedLimitError` of the seed (below). Do not reshape the contract or the schema
+around one; ask the human.
 
 ## Fixtures and seeds
 
@@ -3120,13 +3123,21 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   issued. Without it they send a sample, IAM answers 404, and the case fails.
 - `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
   endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
-  sets neither a column that places the row nor a text column.
+  sets neither a column that places the row nor a text column that holds a marker; a text column a CHECK lists the
+  values of, and a foreign key, it may set.
+- `rows['<endpoint id>']` names the input fields that address a row lying in the endpoint's object, with that row's
+  table: `export const rows = { 'api.tasks.editComment': { commentId: 'task_comments' } }`. The generated cases seed
+  one row of the table in each scope's object and send its key there. Without it they send a sample, the handler
+  finds no row (404), and the case fails.
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
-  type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A
-  `CHECK` on a text column fails those rows: use an `ENUM` type. A required foreign key outside the containment chain
-  cannot be filled: give it a default, or make it nullable and not text. The seed writes its marker into every text
-  column, a nullable one too, and no row it references holds that marker.
+  type: an enum's first label, `1`, `false`, today. A column with a `DEFAULT` keeps it (`status` is `open`). A column
+  a `CHECK` names gets the first value of an `IN (…)` list, or `null` where it is nullable. A foreign key outside
+  the containment chain is `null` where it is nullable, and otherwise references an existing or a seeded row of a
+  reference or application table. What the seed cannot satisfy (another `CHECK` on a required text column, a required
+  key to a dimension or child table outside the chain) fails the test with a `SeedLimitError` that names the
+  constraint: a limit of the generator, not a bug of the handler. Keep the column as the domain needs it, and ask the
+  human when the limit blocks the tests.
 - A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
   value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
   (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the

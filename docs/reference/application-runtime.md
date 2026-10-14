@@ -1071,10 +1071,16 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   function allowlist) is refused. A check before each commit rolls back a file that leaves an
   escape or an object no migration declares in the schema.
 - **Seeding.** Every seeded row lies in one of two containment chains that share no value,
-  with each container row a table owns. Every text column the fixture fills, nullable or
-  not, holds a distinct marker; a required column of another type gets a sample of its type.
-  A required foreign key outside the containment chain cannot be filled, so such a column
-  needs a default or must be nullable.
+  with each container row a table owns. A foreign key outside the chain holds `null` where
+  its columns admit it; a required one holds the key of an existing row of the referenced
+  table, or of one the fixture inserts, when that table is a reference, application or
+  unpoliced table, and is refused when it is a dimension or child table, whose row would lie
+  in another chain. A column a CHECK names holds the first value of a one-column `IN` list,
+  or `null` where it admits it. Every other text column the fixture fills, nullable or not,
+  holds a distinct marker; a required column of another type gets a sample of its type. A
+  CHECK or a foreign key the seeded values still fail, and a required key to a scoped table,
+  are generator limits (`SeedLimitError`, `@fabrika/db/testing`) that name the constraint or
+  the column, never a failure of the policy or the handler.
 - **Policy isolation tests**, `src/db/__tests__/<table>.policy-isolation.test.ts` for
   every dimension, child and application table, from the policies alone. They prove that the data
   layer enforces the declared policy, not that the application uses it:
@@ -1137,8 +1143,16 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   endpoint's dimension, written into both scopes' rows. It adds a second, seeded leak case beside the unseeded one,
   which always runs, so a seed meets a precondition without setting aside the state that leaks, and it reaches the
   own-target case; the denial runs unseeded. A seed may not set a column that places the row in its scope, nor a text
-  column, which holds the marker the leak cases look for. A seed of no `on` or `in` endpoint is an `endpoint-fixture`
-  finding.
+  column that holds a marker the leak cases look for (a text column a CHECK lists the values of, or a foreign key, it
+  may). A seed of no `on` or `in` endpoint is an `endpoint-fixture` finding.
+- **Rows.** A handler that addresses a row lying in its object by id (a note's comment) finds no row for a sampled id,
+  so the author names the field and the row's table: `export const rows = { '<endpoint id>': { <field>: '<table>' } }`.
+  The scaffold writes `GENERATED_ROW_PREFIX` and the table there (`'fabrika:row:note_comments'`), and the kit seeds one
+  row of the table in each scope's object (`seedUnder`) and sends, per case, the key of the row in the object the case
+  names: the other scope's in the denial, each scope's own in the leak case, which also looks for the other row's key
+  and markers, and the own in the own-target case, a link holder's included. A field of an endpoint that is not `on` an
+  object a table owns, one that is no string field, and a table that is no dimension or child table lying in that
+  object are `endpoint-fixture` findings.
 - **Members.** A handler that validates a picked person with `ctx.members.get` refuses a sampled id, so the author
   names the field in the same file: `export const members = { '<endpoint id>': ['<field>'] }`. The scaffold writes
   `GENERATED_MEMBER` (`'fabrika:member'`, `@fabrika/app/contract`) there, and the kit replaces it, per case, with a new

@@ -128,6 +128,13 @@ export const GENERATED_INVITATION = 'fabrika:invitation'
  */
 export const GENERATED_LINK = 'fabrika:link'
 
+/**
+ * The prefix of the value a generated endpoint access case sends in an input field that names a row lying in its object
+ * (`rows` of `endpoint-access.fixtures.ts`), followed by the row's table: `fabrika:row:note_comments`. The endpoint
+ * access kit seeds one such row in each scope's object and sends that scope's key.
+ */
+export const GENERATED_ROW_PREFIX = 'fabrika:row:'
+
 export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */

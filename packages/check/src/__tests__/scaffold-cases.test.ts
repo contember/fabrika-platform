@@ -89,7 +89,12 @@ describe('the endpoint access cases of a kit application', () => {
 			members: {},
 			invitations: {},
 			links: {},
+			rows: {},
 		})
+		expect(read("export const rows = { 'api.notes.get': { commentId: 'note_comments' } }\n").rows).toEqual({
+			'api.notes.get': { commentId: 'note_comments' },
+		})
+		expect(() => read("export const rows = { 'api.notes.get': { commentId: 1 } }\n")).toThrow()
 		expect(() => read('export const seeds = {}\nexport const seeds = {}\n')).toThrow()
 		expect(() => read('export const setup = {}\n')).toThrow()
 	})
@@ -174,5 +179,30 @@ describe('the invitations and links of the fixtures: input fields that name what
 		expect(read("export const links = { 'api.notes.unshare': ['linkId'] }\n").links).toEqual({ 'api.notes.unshare': ['linkId'] })
 		expect(() => read("export const invitations = { 'api.workspaces.cancel': 'invitationId' }\n")).toThrow()
 		expect(() => read('export const links = {}\nexport const links = {}\n')).toThrow()
+	})
+})
+
+describe('the rows of the fixtures: input fields that name a row lying in the endpoint object', () => {
+	const ISOLATION_ROOT = join(import.meta.dir, '..', '..', '..', 'cli', 'src', '__tests__', 'fixtures', 'isolation-app')
+	const withFixtures = (text: string) => new Map([...tree(ISOLATION_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+
+	test("each case sends the kit's row of the named table in the field", async () => {
+		const text = await endpointTest(tree(ISOLATION_ROOT))
+		expect(text).toContain(
+			"expect(await kit.own('api.notes.editComment', { body: 'x', commentId: 'fabrika:row:note_comments', id: 'x' })).toEqual({ status: 200 })",
+		)
+	})
+
+	test('a row of a table outside the object, a field that is no string, and an endpoint not on an owned object are findings', () => {
+		expect(findings("export const rows = { 'api.notes.editComment': { commentId: 'workspaces', body: 'note_comments' } }\n")).toEqual([
+			"api.notes.editComment: workspaces is no dimension or child table that lies in a note, so the kit seeds none in the endpoint's object",
+		])
+		expect(findings("export const rows = { 'api.notes.editComment': { missing: 'note_comments' } }\n")).toEqual([
+			'api.notes.editComment: missing is no string field of its input, so it cannot name a row',
+		])
+		expect(findings("export const rows = { 'api.notes.create': { title: 'notes' } }\n")).toEqual([
+			'api.notes.create is no tested endpoint on an object a table owns, in which the kit could seed a row',
+		])
 	})
 })

@@ -3,7 +3,7 @@
 // one file per application, from the contract: they run the application's own `serve(…)` and handlers. The checker
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
-import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER } from '@fabrika/app/contract'
+import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER, GENERATED_ROW_PREFIX } from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	endpointDirectory,
@@ -193,7 +193,8 @@ const isLinkProcedure = (row: EndpointRow): boolean =>
 /**
  * The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither
  * exists. Each field its `members`, `invitations` or `links` name holds `GENERATED_MEMBER`, `GENERATED_INVITATION` or
- * `GENERATED_LINK`, which the kit replaces with a real member, an open invitation or a link it issued.
+ * `GENERATED_LINK`, which the kit replaces with a real member, an open invitation or a link it issued; each field its
+ * `rows` name holds `GENERATED_ROW_PREFIX` and the table, which the kit replaces with the key of a row it seeded.
  */
 const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<string, Sample>> | undefined => {
 	const fixture = fixtures.inputs[row.id]
@@ -206,6 +207,7 @@ const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<
 			...generated(fixtures.members[row.id], GENERATED_MEMBER),
 			...generated(fixtures.invitations[row.id], GENERATED_INVITATION),
 			...generated(fixtures.links[row.id], GENERATED_LINK),
+			...Object.entries(fixtures.rows[row.id] ?? {}).map(([field, table]) => [field, `${GENERATED_ROW_PREFIX}${table}`]),
 		]),
 	}
 }
@@ -221,6 +223,25 @@ const issuesLinks = (artifact: ContractArtifact, row: EndpointRow): boolean => {
 /** Whether `shape` admits a principal id: a string, optional or nullable. */
 const admitsString = (shape: SchemaShape | undefined): boolean =>
 	shape?.type === 'string' || ((shape?.type === 'optional' || shape?.type === 'nullable') && admitsString(shape.inner))
+
+/**
+ * Whether a row of `table` lies in an object of `dimension`: a dimension table contained in it, or a child table whose
+ * parent's dimension is it or lies in it.
+ */
+const liesIn = (artifact: ContractArtifact, policies: Policies, table: string, dimension: string): boolean => {
+	const scope = policies[table]?.scope
+	const parent = scope?.mode === 'child' ? policies[scope.parent]?.scope : undefined
+	let current = scope?.mode === 'dimension'
+		? (scope.container?.dimension ?? null)
+		: parent?.mode === 'dimension'
+		? parent.dimension
+		: null
+	for (let depth = 0; current !== null && depth <= Object.keys(artifact.dimensions).length; depth++) {
+		if (current === dimension) return true
+		current = artifact.dimensions[current]?.in ?? null
+	}
+	return false
+}
 
 /** The read action of the table that owns `dimension`, or `undefined` when no table owns it. */
 const ownerRead = (policies: Policies, dimension: string): string | undefined =>
@@ -508,6 +529,32 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 				if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
 					findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name ${holder.names}`, 'a top-level string field of the input'))
 				}
+			}
+		}
+	}
+	for (const [id, fields] of Object.entries(fixtures.rows).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+		const row = tested.find((candidate) => candidate.id === id)
+		const access = row?.requirement?.kind === 'action' ? row.requirement.access : undefined
+		const owned = access?.form === 'on' && ownerRead(policies, access.dimension) !== undefined
+		if (row === undefined || access?.form !== 'on' || !owned) {
+			findings.push(
+				at(
+					`${id} is no tested endpoint on an object a table owns, in which the kit could seed a row`,
+					"export const rows = { '<endpoint id>': { <input field>: '<table>' } }, for an endpoint on a dimension a table owns",
+				),
+			)
+			continue
+		}
+		for (const [field, table] of Object.entries(fields).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
+			if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
+				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a row`, 'a top-level string field of the input'))
+			} else if (!liesIn(artifact, policies, table, access.dimension)) {
+				findings.push(
+					at(
+						`${id}: ${table} is no dimension or child table that lies in a ${access.dimension}, so the kit seeds none in the endpoint's object`,
+						`a child table of the table that owns ${access.dimension}, or a table contained in ${access.dimension}`,
+					),
+				)
 			}
 		}
 	}

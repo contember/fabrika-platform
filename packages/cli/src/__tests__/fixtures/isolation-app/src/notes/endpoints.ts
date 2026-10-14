@@ -8,6 +8,7 @@ import {
 	Comments,
 	Count,
 	Done,
+	EditComment,
 	Invite,
 	Invited,
 	Members,
@@ -75,6 +76,8 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.db.target.note_comments.list({ orderBy: [['id', 'asc']] })).items.map((comment) => ({ id: comment.id, body: comment.body })),
 		})),
+	editComment: r.mutation({ input: EditComment, output: Done, access: { action: 'notes.write', on: 'note', from: 'id' } })
+		.handle(async ({ input, ctx }) => ({ id: (await ctx.db.target.note_comments.update(input.commentId, { body: input.body })).id })),
 	share: r.mutation({ input: Share, output: Shared, access: { action: 'notes.share', on: 'note', from: 'id' }, issues: 'shared' })
 		.handle(async ({ input, ctx }) => {
 			const link = await ctx.links.issue(ctx.target, { mount: 'shared', days: input.days })

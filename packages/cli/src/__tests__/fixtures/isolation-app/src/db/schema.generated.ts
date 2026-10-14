@@ -23,6 +23,8 @@ export interface NotesTable {
 	body: string | null
 	internal: string | null
 	pinned: boolean
+	country_code: string | null
+	tone: string | null
 	created_by: string
 	version: number
 }
@@ -30,6 +32,7 @@ export interface NotesTable {
 export interface OrganizationsTable {
 	id: string
 	name: string
+	country_code: string
 }
 
 export interface WorkspaceEventsTable {
@@ -37,6 +40,7 @@ export interface WorkspaceEventsTable {
 	workspace_id: string
 	organization_id: string
 	summary: string
+	kind: string
 }
 
 export interface WorkspacesTable {
@@ -87,10 +91,17 @@ export const columns: TypedColumnList<DB> = {
 			'body',
 			'internal',
 			'pinned',
+			'country_code',
+			'tone',
 			'created_by',
 			'version',
 		],
 		foreignKeys: [
+			{
+				columns: ['country_code'],
+				table: 'countries',
+				references: ['code'],
+			},
 			{
 				columns: ['workspace_id', 'organization_id'],
 				table: 'workspaces',
@@ -102,8 +113,15 @@ export const columns: TypedColumnList<DB> = {
 		columns: [
 			'id',
 			'name',
+			'country_code',
 		],
-		foreignKeys: [],
+		foreignKeys: [
+			{
+				columns: ['country_code'],
+				table: 'countries',
+				references: ['code'],
+			},
+		],
 	},
 	'workspace_events': {
 		columns: [
@@ -111,6 +129,7 @@ export const columns: TypedColumnList<DB> = {
 			'workspace_id',
 			'organization_id',
 			'summary',
+			'kind',
 		],
 		foreignKeys: [
 			{
