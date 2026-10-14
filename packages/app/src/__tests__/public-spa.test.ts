@@ -152,7 +152,9 @@ describe("an SPA mount's bare prefix", () => {
 		const artifact = compileContract(contract, {})
 		const web = artifact.endpoints.find((row) => row.id === 'web')
 		expect(web?.path).toBe('/app/*')
-		expect(artifact.endpoints.find((row) => row.id === 'web.prefix')).toEqual(web === undefined ? undefined : { ...web, id: 'web.prefix', path: '/app' })
+		expect(artifact.endpoints.find((row) => row.id === 'web.prefix')).toEqual(
+			web === undefined ? undefined : { ...web, id: 'web.prefix', path: '/app' },
+		)
 		expect(artifact.endpoints.filter((row) => row.source.kind === 'mount' && row.source.name === 'site').map((row) => row.path)).toEqual(['/*'])
 		expect(parseContractArtifact(JSON.parse(JSON.stringify(artifact)))).toEqual(artifact)
 	})
@@ -169,4 +171,3 @@ describe("an SPA mount's bare prefix", () => {
 		expect(await (await kit.browser(member)('/app/')).text()).toBe('dist/app')
 	})
 })
-
