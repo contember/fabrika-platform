@@ -54,7 +54,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
 - [120](120-a-job-attempt-reports-a-refused-statement-as-handler-failed.md) — A job attempt reports a data-layer refusal as `handler_failed`, without its reason.
 - [122](122-a-generated-case-cannot-seed-a-child-rows-state-or-a-row-under-an-in-target.md) — `rows` seeds no child row state and no row under an `in` target; the own case expects exactly 200.
-- [126](126-a-global-grant-application-has-no-people-of-its-own.md) — Global roles give no member directory and no in-app role management.
 - [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
 - [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
@@ -66,6 +65,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [149](149-a-job-drains-its-inbox-and-outbox-without-per-record-attempts.md) — The intake recipe drains unbounded, stops on one bad record, and sends no idempotency key.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
-- [156](156-a-member-directory-has-no-sign-in-time-and-no-list-across-values.md) — No last sign-in, and one directory call per value.
 - [157](157-an-endpoint-holds-one-capability.md) — An operation across two dimensions needs raw SQL and `unscoped` reads.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

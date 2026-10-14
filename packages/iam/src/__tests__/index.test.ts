@@ -652,6 +652,7 @@ describe('the entrypoint an application binds', () => {
 		'findMember',
 		'getJwks',
 		'issueLink',
+		'listAppMembers',
 		'listMembers',
 		'listPrincipals',
 		'mintFromKey',

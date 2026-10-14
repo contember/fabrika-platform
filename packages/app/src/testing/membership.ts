@@ -8,6 +8,7 @@
 
 import {
 	API_KEY_PREFIX,
+	type AppMemberItem,
 	type AssignMemberInput,
 	type AssignMemberResult,
 	type ContractArtifact,
@@ -24,9 +25,12 @@ import {
 	invitedAddress,
 	type IssueLinkInput,
 	type IssueLinkResult,
+	type ListAppMembersInput,
+	type ListAppMembersResult,
 	type ListMembersInput,
 	type ListMembersResult,
 	matchAction,
+	MAX_APP_MEMBERS_PAGE,
 	MAX_LINK_CHAIN_LENGTH,
 	MAX_MEMBERSHIP_SCOPE_PART_LENGTH,
 	type MemberItem,
@@ -235,6 +239,43 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, perm
 		})
 	}
 	return { ok: true, members, invitations: [] }
+}
+
+/**
+ * The application's own people, as IAM answers them: every caller holding a role of the contract, a membership role
+ * only in a value of its dimension, paged by id; labels under `directory: 'labels'` or to the application's
+ * `members.manage` held globally, which alone sees addresses and last sign-ins.
+ */
+function listAppMembers(artifact: ContractArtifact, callers: DirectoryCallers, permsOf: PermsOf, input: ListAppMembersInput): ListAppMembersResult {
+	const caller = memberCaller(callers, input, false)
+	if (isFailure(caller)) return caller
+	const perms = [...permsOf(caller)]
+	const people = artifact.members
+	if (people === undefined) return invalid('the application declares no members')
+	if (!permits(perms, people.list)) return NOT_ALLOWED
+	const limit = input.limit ?? MAX_APP_MEMBERS_PAGE
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_APP_MEMBERS_PAGE) return invalid(`a page holds 1 to ${MAX_APP_MEMBERS_PAGE} members`)
+	const manager = permits(perms, people.manage)
+	const members: AppMemberItem[] = []
+	for (const { caller: member, memberships } of callers.all()) {
+		const roles = memberships.filter(({ role, scope }) => {
+			const declared = Object.hasOwn(artifact.roles, role) ? artifact.roles[role] : undefined
+			return declared !== undefined && (declared.member === null || declared.member.scope === scope?.type)
+		})
+		if (roles.length === 0 || member.kind === 'link' || (input.after !== undefined && member.id <= input.after)) continue
+		members.push({
+			principalId: member.id,
+			label: manager || artifact.directory === 'labels' ? member.label : null,
+			email: manager ? member.email : null,
+			lastSignInAt: manager ? member.lastSignInAt : null,
+			roles: roles.map(({ role, scope }) => ({ role, scope: scope === null ? null : { type: scope.type, value: scope.value } })),
+			disabled: member.disabled,
+			affiliation: member.affiliation,
+		})
+	}
+	members.sort((a, b) => (a.principalId < b.principalId ? -1 : a.principalId > b.principalId ? 1 : 0))
+	const page = members.slice(0, limit)
+	return { ok: true, members: page, next: members.length > limit ? (page.at(-1)?.principalId ?? null) : null }
 }
 
 function findMember(artifact: ContractArtifact, callers: DirectoryCallers, permsOf: PermsOf, input: FindMemberInput): FindMemberResult {
@@ -608,6 +649,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 
 	const rpc: IamMembershipRpc = {
 		listMembers: (input) => Promise.resolve(listMembers(artifact, live, permsOf, input)),
+		listAppMembers: (input) => Promise.resolve(listAppMembers(artifact, live, permsOf, input)),
 		findMember: (input) => Promise.resolve(findMember(artifact, live, permsOf, input)),
 		requestDelegation: (input) => Promise.resolve(requestDelegation(input)),
 		createScope: (input) => Promise.resolve(createScope(input)),

@@ -169,6 +169,14 @@ export interface AppSchema {
 	displayName?: string
 	/** The app's wording of IAM's e-mails, by message and language; absent, IAM's own. */
 	mail?: MailTemplates
+	/**
+	 * The application's own people, every holder of one of its roles. A holder of `manage`, globally at the app, grants and
+	 * revokes the app's global roles in IAM's console within its own actions; a holder of `list`, globally, reads the
+	 * directory (`listAppMembers`). Absent, only an IAM administrator grants them and nobody lists them.
+	 */
+	members?: { manage: string; list: string }
+	/** `labels`: a holder of the app's `members.list` also sees each member's label. Absent, labels stay with `members.manage`. */
+	directory?: 'labels'
 }
 
 /**

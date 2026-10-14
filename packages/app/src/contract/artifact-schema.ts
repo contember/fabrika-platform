@@ -300,6 +300,8 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	displayName: z.string().refine((value) => displayNameProblem(value) === null, 'not a display name').optional(),
 	mail: z.strictObject({ invitation: mailLocales('invitation'), enrollment: mailLocales('enrollment'), reset: mailLocales('reset') }).partial()
 		.optional(),
+	members: z.strictObject({ manage: action, list: action }).optional(),
+	directory: z.literal('labels').optional(),
 })
 
 function mailLocales(kind: MessageKind) {

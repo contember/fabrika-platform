@@ -10,6 +10,7 @@
 
 import {
 	API_KEY_PREFIX,
+	type AppMemberItem,
 	type AssignMemberInput,
 	type AssignMemberResult,
 	type CreateScopeInput,
@@ -22,9 +23,12 @@ import {
 	invitedAddress,
 	type IssueLinkInput,
 	type IssueLinkResult,
+	type ListAppMembersInput,
+	type ListAppMembersResult,
 	type ListMembersInput,
 	type ListMembersResult,
 	matchAction,
+	MAX_APP_MEMBERS_PAGE,
 	MAX_LINK_CHAIN_LENGTH,
 	MAX_MEMBERSHIP_SCOPE_PART_LENGTH,
 	type MemberItem,
@@ -48,6 +52,7 @@ import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
 import { contractGrantProblem, externalGrantProblem } from './contract-rules'
 import {
+	type AppMembersRow,
 	type AppScopeRow,
 	type AuditEventInput,
 	auditLabelOf,
@@ -665,6 +670,89 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
  * not count. The caller learns only whether the principal it named is a member, and its label where the directory
  * shows labels; an unknown id answers the same `null` as a non-member.
  */
+/**
+ * One page of the application's own people: every principal holding a role of it (`listAppMemberIds`). Needs the
+ * application's `members.list` held globally; labels where it declares `directory: 'labels'` or to its `members.manage`
+ * held globally, which alone sees addresses and last sign-ins.
+ */
+export async function listAppMembers(
+	services: Services,
+	env: CallerEnv,
+	_ctx: RequestContext,
+	input: ListAppMembersInput,
+): Promise<ListAppMembersResult> {
+	const resolved = await resolveMemberCaller(services, env, input, false)
+	if (!resolved.ok) return resolved
+	const { caller } = resolved
+	const people = await services.repositories.appSchema.getAppMembers(caller.app)
+	if (people === null) {
+		return invalid('the application declares no members')
+	}
+	if (!permits(caller.permissions, people.list)) {
+		return NOT_ALLOWED
+	}
+	const limit = input.limit ?? MAX_APP_MEMBERS_PAGE
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_APP_MEMBERS_PAGE) {
+		return invalid(`a page holds 1 to ${MAX_APP_MEMBERS_PAGE} members`)
+	}
+	if (input.after !== undefined && (input.after === '' || input.after.length > MAX_MEMBERSHIP_SCOPE_PART_LENGTH)) {
+		return invalid('after is the next of a previous page')
+	}
+	const page = await appMemberPage(services, caller.app, people, permits(caller.permissions, people.manage), input.after ?? null, limit)
+	return { ok: true, ...page }
+}
+
+/**
+ * One page of the people of `app`, as a holder of its `members.list` sees them; `manager` adds labels, addresses and last
+ * sign-ins. `next` is the page's last id while another principal follows it, null on the last page.
+ */
+export async function appMemberPage(
+	services: Services,
+	app: string,
+	people: AppMembersRow,
+	manager: boolean,
+	after: string | null,
+	limit: number,
+): Promise<{ members: AppMemberItem[]; next: string | null }> {
+	const read = await services.repositories.membership.listAppMemberIds(app, after, limit + 1)
+	const ids = read.slice(0, limit)
+	const members = new Map<string, AppMemberItem>()
+	for (const row of await services.repositories.membership.listAppMemberGrants(app, ids)) {
+		const scope = row.scope_type === null || row.scope_value === null ? null : { type: row.scope_type, value: row.scope_value }
+		const member = members.get(row.principal_id)
+		if (member === undefined) {
+			members.set(row.principal_id, {
+				principalId: row.principal_id,
+				label: manager || people.directory === 'labels' ? row.label : null,
+				email: manager ? row.email : null,
+				lastSignInAt: manager ? row.signed_in_at : null,
+				roles: [{ role: row.role_key, scope }],
+				disabled: row.disabled_at !== null,
+				affiliation: row.affiliation,
+			})
+		} else {
+			member.roles.push({ role: row.role_key, scope })
+		}
+	}
+	for (const member of members.values()) {
+		member.roles.sort((a, b) => byCodeUnit(a.role, b.role) || byCodeUnit(scopeKey(a.scope), scopeKey(b.scope)))
+	}
+	const listed = ids.flatMap((id) => {
+		const member = members.get(id)
+		return member === undefined ? [] : [member]
+	})
+	return { members: listed, next: read.length > limit ? (ids.at(-1) ?? null) : null }
+}
+
+/** A global grant first, then values by type and value. */
+function scopeKey(scope: Scope | null): string {
+	return scope === null ? '' : `${scope.type}\u0000${scope.value}`
+}
+
+function byCodeUnit(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0
+}
+
 export async function findMember(services: Services, env: CallerEnv, ctx: RequestContext, input: FindMemberInput): Promise<FindMemberResult> {
 	const resolved = await resolveMemberCaller(services, env, input, false)
 	if (!resolved.ok) return resolved

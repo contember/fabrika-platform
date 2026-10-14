@@ -43,6 +43,8 @@ export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 		...(artifact.locale === undefined ? {} : { locale: artifact.locale }),
 		...(artifact.displayName === undefined ? {} : { displayName: artifact.displayName }),
 		...(artifact.mail === undefined ? {} : { mail: artifact.mail }),
+		...(artifact.members === undefined ? {} : { members: { manage: artifact.members.manage, list: artifact.members.list } }),
+		...(artifact.directory === 'labels' ? { directory: 'labels' } : {}),
 	}
 }
 

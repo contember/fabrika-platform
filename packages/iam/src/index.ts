@@ -21,6 +21,8 @@ import type {
 	IssueLinkInput,
 	IssueLinkResult,
 	Jwks,
+	ListAppMembersInput,
+	ListAppMembersResult,
 	ListMembersInput,
 	ListMembersResult,
 	ListOwnDeviceAuthorizationsInput,
@@ -154,6 +156,10 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 
 	listMembers(input: ListMembersInput): Promise<ListMembersResult> {
 		return iamRpc(this.env, this.ctx).listMembers(input)
+	}
+
+	listAppMembers(input: ListAppMembersInput): Promise<ListAppMembersResult> {
+		return iamRpc(this.env, this.ctx).listAppMembers(input)
 	}
 
 	findMember(input: FindMemberInput): Promise<FindMemberResult> {

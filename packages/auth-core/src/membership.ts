@@ -87,6 +87,16 @@ export function directoryLookups(artifact: Pick<ContractArtifact, 'directories' 
 	return [...actions].sort()
 }
 
+/**
+ * Whether an endpoint reads the application's own directory (`ctx.members.list()` of `listAppMembers`): a procedure of
+ * an RPC mount whose access is `app` and whose action is the application's `members.list`, which IAM checks live.
+ */
+export function endpointAppDirectory(artifact: Pick<ContractArtifact, 'members'>, row: EndpointRow): boolean {
+	const procedure = (row.kind === 'query' || row.kind === 'mutation') && row.source.kind === 'mount'
+	return procedure && row.requirement?.kind === 'action' && row.requirement.access.form === 'app' && artifact.members !== undefined
+		&& row.requirement.action === artifact.members.list
+}
+
 /** Every request carries the caller's own credential; `app` is superseded by the credential's verified app. */
 export interface MembershipCaller {
 	app: string
@@ -301,6 +311,44 @@ export interface FoundMember {
 /** `member` is null for a principal that holds no membership role in `scope`, unknown ones included. */
 export type FindMemberResult = { ok: true; member: FoundMember | null } | MembershipFailure
 
+/** The most members one page of an application's directory answers. */
+export const MAX_APP_MEMBERS_PAGE = 100
+
+/**
+ * One page of the application's own people (`AppSchema.members`): every principal holding a role of the application,
+ * globally or in a value. Needs the application's `members.list` held globally; labels by the same rule as a value's
+ * directory, emails and last sign-ins only to its `members.manage` held globally. Pages run by principal id: `after`
+ * is the previous page's `next`.
+ */
+export interface ListAppMembersInput extends MembershipCaller {
+	after?: string
+	/** 1 to `MAX_APP_MEMBERS_PAGE`; absent, the most. */
+	limit?: number
+}
+
+/** One role a principal holds at the application: globally (`scope: null`), or in one value. */
+export interface AppMemberRole {
+	role: string
+	scope: Scope | null
+}
+
+export interface AppMemberItem {
+	principalId: string
+	/** The principal's display label; null unless the application declares `directory: 'labels'` or the caller manages its people. */
+	label: string | null
+	/** Null unless the caller holds the application's `members.manage` globally. */
+	email: string | null
+	/** As `MemberItem.lastSignInAt`, to a holder of the application's `members.manage` only. */
+	lastSignInAt: number | null
+	/** Sorted by role, then scope; a global grant first. */
+	roles: AppMemberRole[]
+	disabled: boolean
+	affiliation: PrincipalAffiliation
+}
+
+/** `next` is the `after` of the following page, null on the last one. */
+export type ListAppMembersResult = { ok: true; members: AppMemberItem[]; next: string | null } | MembershipFailure
+
 /**
  * Issue a share link of `mount` for the object `chain[0]`. `chain` names the object and every value
  * containing it, outward, as the app resolved it from its database; the framework re-checks it on every
@@ -329,6 +377,7 @@ export interface IamMembershipRpc {
 	assignMember(input: AssignMemberInput): Promise<AssignMemberResult>
 	revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult>
 	listMembers(input: ListMembersInput): Promise<ListMembersResult>
+	listAppMembers(input: ListAppMembersInput): Promise<ListAppMembersResult>
 	findMember(input: FindMemberInput): Promise<FindMemberResult>
 	issueLink(input: IssueLinkInput): Promise<IssueLinkResult>
 	revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult>

@@ -57,10 +57,10 @@ describe("the kit's member directory", () => {
 			{ caller: owner, memberships: [] },
 			{ caller: reader, memberships: [] },
 		]
-		const directory = kitDirectory(notesArtifact, {
+		const directory = kitMembership(notesArtifact, {
 			byCredential: (_app, credential) => members.find((member) => member.caller.key === credential)?.caller,
 			all: () => members,
-		})
+		}).rpc
 		const signIns = async (credential: string) => {
 			const listed = await directory.listMembers({ app: 'notes', credential, requestId: 'r1', scope: W1 })
 			if (!listed.ok) throw new Error(`no list: ${listed.reason}`)

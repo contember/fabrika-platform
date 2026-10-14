@@ -101,6 +101,13 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 			exactAction(['scopes', index, 'lookups', lookup], action)
 		}
 	}
+	if (schema.members !== undefined) {
+		exactAction(['members', 'manage'], schema.members.manage)
+		exactAction(['members', 'list'], schema.members.list)
+	}
+	if (schema.directory !== undefined && schema.members === undefined) {
+		issues.push({ path: ['directory'], message: 'the application declares a directory without members' })
+	}
 	for (const scope of schema.scopes) {
 		const seen = new Set<string>([scope.type])
 		for (let next = scope.in; next !== undefined; next = dimensions.get(next)?.in) {
@@ -199,6 +206,8 @@ const appSchemaShape = z.object({
 	}).optional(),
 	mail: z.object({ invitation: mailLocales('invitation'), enrollment: mailLocales('enrollment'), reset: mailLocales('reset') }).strict().partial()
 		.optional(),
+	members: z.object({ manage: z.string().min(1), list: z.string().min(1) }).optional(),
+	directory: z.literal('labels').optional(),
 })
 
 /** One message's templates by language, each refused with the same rule the contract build applies. */

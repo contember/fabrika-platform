@@ -257,6 +257,7 @@ class ArtifactBuilder {
 		const locale = this.#locale()
 		const displayName = this.#displayName()
 		const mail = this.#mail()
+		const people = this.#people()
 		const artifact: ContractArtifact = {
 			app: contract.app,
 			dimensions,
@@ -276,6 +277,7 @@ class ArtifactBuilder {
 			...(locale === null ? {} : { locale }),
 			...(displayName === null ? {} : { displayName }),
 			...(mail === null ? {} : { mail }),
+			...people,
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -298,6 +300,25 @@ class ArtifactBuilder {
 	}
 
 	// ── Vocabulary ──────────────────────────────────────────────────────────────────────────────
+
+	/** The application's own people: its `members` actions, and its directory's labels. Each field only when declared. */
+	#people(): Pick<ContractArtifact, 'members' | 'directory'> {
+		const { members, directory } = this.#contract
+		if (members !== undefined) {
+			this.#knownAction('members.manage', members.manage)
+			this.#knownAction('members.list', members.list)
+		}
+		if (directory !== undefined && directory !== 'labels') {
+			this.#problem('directory', `is '${String(directory)}' (allowed: 'labels')`)
+		}
+		if (directory !== undefined && members === undefined) {
+			this.#problem('directory', 'declares a directory and no members: { manage, list } whose list it labels')
+		}
+		return {
+			...(members === undefined ? {} : { members: { manage: members.manage, list: members.list } }),
+			...(directory === 'labels' ? { directory: 'labels' } : {}),
+		}
+	}
 
 	#locale(): Locale | null {
 		const locale = this.#contract.locale

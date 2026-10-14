@@ -24,6 +24,10 @@ export { type CapturedEnvironment, captureEnvironment } from './environment'
 export type { ApplicationEnvironment, ContractDatabase, ContractImplementation, DepsRuntime, ImplementationDatabase } from './implement'
 export { isContractImplementation } from './implement'
 export type {
+	ApplicationDirectory,
+	ApplicationMember,
+	ApplicationMemberPage,
+	ApplicationMemberRole,
 	AssignedMember,
 	DirectoryMember,
 	IssuedLink,

@@ -520,6 +520,12 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   `revoke(ref, …)`, one change per request. `list(ref)` adds each member's `email` and `lastSignInAt` (unix seconds of
   its last sign-in to this application, `null` for one that never signed in) and the open `invitations`: show a person
   as invited, active or disabled from these, never from a column of your own.
+- An application whose roles are global grants (staff, no dimension with members) declares its own people in the
+  vocabulary: `members: { manage: 'people.manage', list: 'people.list' }`, plus `directory: 'labels'` to name them.
+  An `app: true` endpoint of `people.list` reads `ctx.members.list({ after })`: everyone holding a role of the
+  application, `{ principalId, label, email, lastSignInAt, roles: [{ role, scope }], disabled, affiliation }`, 100 a page
+  with `next`. Name the author of a stored change from it, never from a copied label. A holder of `people.manage`
+  grants the roles in IAM's console; build no role management of your own (`references/public-intake.md`).
 - A partner company's people: a role with `external: true` whose `assignableBy` names an app-wide staff role.
   `assign(ref, { email }, 'partner', { label: company.name, message })` mails the invitation with the company's name
   (≤ 200 characters, one line) and a note (≤ 1000 characters); a new address chooses its password from the mail and

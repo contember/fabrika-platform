@@ -38,9 +38,11 @@ export const vocabulary = defineVocabulary({
 		'positions.manage': 'Edit the open positions',
 		'reasons.manage': 'Edit the reasons a decision records',
 		'exports.read': 'Read the log of candidate exports',
+		'people.list': "List the application's people",
+		'people.manage': "Grant and revoke the application's roles",
 	},
 	roles: {
-		hr: { grants: ['candidates.read', 'candidates.review', 'positions.read'] },
+		hr: { grants: ['candidates.read', 'candidates.review', 'positions.read', 'people.list'] },
 		hr_lead: {
 			grants: [
 				'candidates.review',
@@ -49,15 +51,33 @@ export const vocabulary = defineVocabulary({
 				'positions.manage',
 				'reasons.manage',
 				'exports.read',
+				'people.list',
+			],
+		},
+		hr_admin: {
+			grants: [
+				'candidates.read',
+				'candidates.review',
+				'positions.read',
+				'people.list',
+				'people.manage',
 			],
 		},
 	},
+	members: { manage: 'people.manage', list: 'people.list' },
+	directory: 'labels',
 })
 ```
 
 - `candidate` is a top-level dimension with no members: a candidate is a record, not a scope people are invited to.
 - `hr` and `hr_lead` have no `member`, so an administrator grants them in IAM, usually without a scope (a global
   grant). The code list and the export of every candidate need that grant: they are data of the whole application.
+- `members` names the application's own people: everyone holding one of its roles. A holder of `people.manage`
+  (`hr_admin`) grants and revokes `hr` in IAM's console without being an IAM administrator, and IAM audits each
+  change; it gives only a role whose every action it holds itself, so `hr_admin` cannot give `hr_lead`. The
+  application builds no role management of its own.
+- `directory: 'labels'` lets every `people.list` holder read each person's label, for naming the author of a change.
+  A label spells a user's address, so the approver reviews it closely.
 - The link's holder and the job get their actions from the link mount and the job's `actions`, not from a role.
 
 ```sql db/migrations/20261013090000_intake.sql
@@ -800,6 +820,15 @@ const ExportLog = z.strictObject({
 	next: z.nullable(z.string()),
 })
 const LogPage = z.strictObject({ after: Cursor.optional() })
+const Person = z.strictObject({
+	principalId: z.string(),
+	name: z.nullable(z.string()),
+	active: z.boolean(),
+})
+const People = z.strictObject({
+	items: z.array(Person),
+	next: z.nullable(z.string()),
+})
 
 /** The file's row limit: a larger export is refused, never cut short. */
 const MAX_EXPORT_ROWS = 10000
@@ -911,6 +940,22 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 				}),
 			)
 		),
+	people: r.query({
+		input: LogPage,
+		output: People,
+		access: { action: 'people.list', app: true },
+	})
+		.handle(async ({ input, ctx }) => {
+			const page = await ctx.members.list({ after: input.after })
+			return {
+				items: page.members.map((person) => ({
+					principalId: person.principalId,
+					name: person.label,
+					active: !person.disabled,
+				})),
+				next: page.next,
+			}
+		}),
 }))
 ```
 
@@ -921,6 +966,11 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 - **Application history is a table on the paved road.** `decide` writes its `candidate_events` row through the
   handle, in the invocation's one transaction: the status and its history row commit together or not at all, and
   `created_by` is the caller. There is no framework audit API; never write history from a job or after the answer.
+- **The author of a change is named from the application's directory.** A history row keeps `created_by`, the
+  principal id; `people` answers every person holding a role of the application with their current label, a page of
+  at most 100 at a time, and the HR SPA names each `createdBy` from it. Never copy a label into the row: a person's
+  label changes, and the directory is the one current answer. `ctx.members.list()` exists only on an `app: true`
+  endpoint whose action is the vocabulary's `members.list`, and IAM checks that action live, held globally.
 - **An audited export of every candidate** is one `app` mutation under an action of its own, `candidates.export`.
   `ctx.db.app.candidates` lists every candidate, read-only, because the candidates' policy names that action in its
   `appRead`, and the log row goes into `candidate_exports`, whose insert action is the export's, in the invocation's
@@ -1190,6 +1240,7 @@ const membership: IamMembershipRpc = {
 	assignMember: refused,
 	revokeMember: refused,
 	listMembers: refused,
+	listAppMembers: refused,
 	findMember: refused,
 	issueLink: refused,
 	revokeLink: refused,

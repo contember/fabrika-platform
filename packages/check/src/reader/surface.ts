@@ -192,15 +192,28 @@ class SurfaceReader {
 	// ── Vocabulary ──────────────────────────────────────────────────────────────────────────────
 
 	#vocabulary(value: LiteralValue): Vocabulary<string, string, string> {
-		const fields = strictFields(value, 'the vocabulary', ['app', 'dimensions', 'actions', 'roles'], ['locale', 'displayName', 'mail'])
+		const fields = strictFields(value, 'the vocabulary', ['app', 'dimensions', 'actions', 'roles'], [
+			'locale',
+			'displayName',
+			'mail',
+			'members',
+			'directory',
+		])
 		const locale = fields.get('locale')
 		const displayName = fields.get('displayName')
 		const mail = fields.get('mail')
+		const members = fields.get('members')
+		const memberFields = members === undefined ? undefined : strictFields(members, 'the vocabulary members', ['manage', 'list'], [])
+		const directory = fields.get('directory')
 		return {
 			app: text(fields.get('app'), value, 'app'),
 			...(locale === undefined ? {} : { locale: localeOf(locale, value) }),
 			...(displayName === undefined ? {} : { displayName: text(displayName, value, 'displayName') }),
 			...(mail === undefined ? {} : { mail: this.#mail(mail) }),
+			...(memberFields === undefined
+				? {}
+				: { members: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') } }),
+			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
 			dimensions: this.#each(entries(fields.get('dimensions'), value, 'dimensions'), (name, dimension) => this.#dimension(name, dimension)),
 			actions: this.#each(entries(fields.get('actions'), value, 'actions'), (_, description) => text(description, description, 'an action description')),
 			roles: this.#each(entries(fields.get('roles'), value, 'roles'), (name, role) => this.#role(name, role)),

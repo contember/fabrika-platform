@@ -78,6 +78,14 @@ export interface AppMailTemplateRow {
 	body: string
 }
 
+/** The application's own people (the `app_members` table): the actions that manage and list them. */
+export interface AppMembersRow {
+	app: string
+	manage: string
+	list: string
+	directory: 'labels' | null
+}
+
 /** An action-catalog row (the `app_actions` table). */
 export interface AppActionRow {
 	app: string
@@ -117,6 +125,16 @@ export class AppSchemaRepository {
 			.prepare('SELECT * FROM app_mail_templates WHERE app = ? AND kind = ? AND locale = ?')
 			.bind(app, kind, locale)
 			.first<AppMailTemplateRow>()
+	}
+
+	/** The actions that manage and list the app's own people, or null when it declares none. */
+	async getAppMembers(app: string): Promise<AppMembersRow | null> {
+		return this.db.prepare('SELECT * FROM app_members WHERE app = ?').bind(app).first<AppMembersRow>()
+	}
+
+	/** Every app that declares its own people, for the apps an administrator of one may administer. */
+	async listAppMembers(): Promise<AppMembersRow[]> {
+		return (await this.db.prepare('SELECT * FROM app_members ORDER BY app').all<AppMembersRow>()).results
 	}
 
 	/** True when the app's schema was compiled from a contract (ADR-0022 rule 6). */
@@ -315,6 +333,8 @@ export class AppSchemaRepository {
 		presentation?: { locale: string | null; displayName: string | null }
 		/** The app's e-mail templates; every row of the app is replaced, and none left out removes them all. */
 		mail?: { kind: string; locale: string; subject: string; text: string }[]
+		/** The actions that manage and list the app's own people; absent or null removes the row. */
+		members?: { manage: string; list: string; directory: 'labels' | null } | null
 	}, audit?: AuditEventInput): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -328,7 +348,15 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM app_workloads WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_presentation WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_mail_templates WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_members WHERE app = ?').bind(app),
 		]
+		if (input.members != null) {
+			statements.push(
+				this.db
+					.prepare('INSERT INTO app_members (app, manage, list, directory) VALUES (?, ?, ?, ?)')
+					.bind(app, input.members.manage, input.members.list, input.members.directory),
+			)
+		}
 		for (const template of input.mail ?? []) {
 			statements.push(
 				this.db
@@ -476,15 +504,16 @@ export class AppSchemaRepository {
 						WHERE m.app = credentials.app AND m.mount = credentials.link_mount AND m.dimension = credentials.link_dimension)`)
 				.bind(unixNow(), app),
 		)
-		// An app left with no delegated endpoint, no link mount and no dimension that lists its members calls no membership
-		// operation, so it keeps no transport key.
+		// An app left with no delegated endpoint, no link mount, no dimension that lists its members and no people of its own
+		// calls no membership operation, so it keeps no transport key.
 		statements.push(
 			this.db
 				.prepare(`DELETE FROM membership_transport_keys
 					WHERE app = ? AND NOT EXISTS (SELECT 1 FROM app_delegated_endpoints d WHERE d.app = ?)
 						AND NOT EXISTS (SELECT 1 FROM app_link_mounts m WHERE m.app = ?)
-						AND NOT EXISTS (SELECT 1 FROM app_scopes s WHERE s.app = ? AND s.members_list IS NOT NULL)`)
-				.bind(app, app, app, app),
+						AND NOT EXISTS (SELECT 1 FROM app_scopes s WHERE s.app = ? AND s.members_list IS NOT NULL)
+						AND NOT EXISTS (SELECT 1 FROM app_members p WHERE p.app = ?)`)
+				.bind(app, app, app, app, app),
 		)
 		if (audit !== undefined) {
 			statements.push(auditEventStatement(this.db, audit))

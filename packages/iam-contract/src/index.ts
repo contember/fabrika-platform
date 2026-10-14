@@ -13,6 +13,7 @@ import type {
 	AppActionDef,
 	AppDelegationDef,
 	AppLinkMountDef,
+	AppMemberItem,
 	AppSchema,
 	AppScopeDef,
 	Locale,
@@ -182,6 +183,10 @@ export interface AppSchemaDto {
 	locale?: Locale
 	/** The name IAM shows for the app; absent when the app declares none. */
 	displayName?: string
+	/** The actions that manage and list the app's own people; absent when the app declares none. */
+	members?: { manage: string; list: string }
+	/** `labels` when the app's directory shows labels to `members.list` holders. */
+	directory?: 'labels'
 }
 
 // ── Policies (origin='custom' roles, admin-composed) ──────────────────────────
@@ -529,6 +534,61 @@ export interface IssueMembershipKeyResponse {
 	expiresAt: number
 }
 
+// ── An application's own people, administered by its own administrator ───────
+
+/**
+ * An application whose people the caller administers: it holds the application's `members.manage` globally there.
+ * `roles` are the application's global roles the caller may grant, those whose every action it holds itself.
+ */
+export interface AdministeredAppDto {
+	app: string
+	displayName: string | null
+	roles: { key: string; name: string; permissions: string[] }[]
+}
+
+export interface AppPeopleInput {
+	app: string
+	/** The previous page's `next`. */
+	after?: string
+}
+
+/** One page of the application's people, as its administrator sees them: labels, addresses and last sign-ins. */
+export interface AppPeopleDto {
+	app: string
+	members: AppMemberItem[]
+	next: string | null
+}
+
+/**
+ * Give a person who already has an IAM principal one of the application's global roles, by its address (the people
+ * list answers each person's). An address IAM knows no person for is a 404: an IAM administrator invites people, an
+ * application's administrator does not. Holding the role already answers the same.
+ */
+export interface GrantAppRoleRequest {
+	app: string
+	role: string
+	email: string
+}
+
+export interface GrantAppRoleResponse {
+	principalId: string
+	role: string
+	/** False when the person held the role already. */
+	granted: boolean
+}
+
+/** Remove the global grant of `role` from a person. Repeating it answers the same. */
+export interface RevokeAppRoleRequest {
+	app: string
+	role: string
+	principalId: string
+}
+
+export interface RevokeAppRoleResponse {
+	/** False when the person held no such grant. */
+	revoked: boolean
+}
+
 export interface IamAdminRpcContract {
 	me: RpcProcedure<void, MeDto>
 	principals: {
@@ -597,7 +657,17 @@ export interface IamAdminRpcContract {
 		list: RpcProcedure<ListAuditInput, CursorList<AuditEventDto>>
 		listAuthLog: RpcProcedure<ListAuthLogInput, CursorList<AuthLogDto>>
 	}
+	/**
+	 * An application's own people, administered by whoever holds the application's `members.manage` globally there: no
+	 * installation admin needed. Each change writes its audit row under the application.
+	 */
+	appPeople: {
+		apps: RpcProcedure<void, ListResponse<AdministeredAppDto>>
+		list: RpcProcedure<AppPeopleInput, AppPeopleDto>
+		grant: RpcProcedure<GrantAppRoleRequest, GrantAppRoleResponse>
+		revoke: RpcProcedure<RevokeAppRoleRequest, RevokeAppRoleResponse>
+	}
 }
 
-export type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }
+export type { AppActionDef, AppMemberItem, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }
 export * from './oauth'

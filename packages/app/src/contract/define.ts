@@ -87,11 +87,36 @@ export interface RoleDef<A extends string, D extends string, R extends string> {
 	readonly external?: true
 }
 
-export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation {
+export interface Vocabulary<A extends string, D extends string, R extends string> extends Presentation, AppPeople<A> {
 	readonly app: string
 	readonly dimensions: { readonly [K in D]: DimensionDef<A, D, R> }
 	readonly actions: { readonly [K in A]: string }
 	readonly roles: { readonly [K in R]: RoleDef<A, D, R> }
+}
+
+/** The actions that manage and list the application's own people. */
+export interface AppMembers<A extends string> {
+	readonly manage: A
+	readonly list: A
+}
+
+/**
+ * The application's own people: every holder of one of its roles, globally or in a value. A holder of `members.manage`,
+ * globally, grants and revokes the application's global roles in IAM's console within its own actions; an `app: true`
+ * endpoint whose action is `members.list` reads them (`ctx.members.list()`).
+ */
+export interface AppPeople<A extends string> {
+	readonly members?: AppMembers<A>
+	/** `'labels'`: the directory also answers each person's label to a `members.list` holder. A reviewed declaration. */
+	readonly directory?: 'labels'
+}
+
+/** A vocabulary's people fields, copied one by one: each exists only when declared. */
+export function peopleOf<A extends string>(vocabulary: AppPeople<A>): AppPeople<A> {
+	return {
+		...(vocabulary.members === undefined ? {} : { members: { manage: vocabulary.members.manage, list: vocabulary.members.list } }),
+		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
+	}
 }
 
 /** How IAM names the application to a person: on its sign-in, password and invitation pages, and in its e-mails. */
@@ -514,7 +539,7 @@ export function defineContract<
 	const Dims extends { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> },
 	const S extends Surface & FormJobs<S>,
 >(
-	vocabulary: Presentation & {
+	vocabulary: Presentation & AppPeople<NoInfer<A>> & {
 		readonly app: string
 		readonly dimensions: Dims & { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> }
 		readonly actions: { readonly [K in A]: K extends `${string}*${string}` ? WildcardMessage : string }
@@ -529,6 +554,7 @@ export function defineContract<
 			actions: vocabulary.actions,
 			roles: vocabulary.roles,
 			...presentationOf(vocabulary),
+			...peopleOf(vocabulary),
 		},
 		dimensions: vocabulary.dimensions,
 		surface: surface(surfaceKit()),

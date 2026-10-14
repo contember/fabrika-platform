@@ -19,7 +19,7 @@ import type {
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { AppCapability, Ref, Within } from '../implement/capability'
-import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
+import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
 import type { ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
@@ -48,6 +48,8 @@ export interface KitTypes {
 	readonly role: string
 	/** The dimension definitions as written, for `ctx.members`. */
 	readonly dimensions: unknown
+	/** The actions of the application's own people, as written; `never` when the vocabulary declares none. */
+	readonly members: { readonly manage: string; readonly list: string }
 	readonly index: AnyDbIndex
 	/** The table names of `src/db/tables.ts`. */
 	readonly tables: string
@@ -287,11 +289,19 @@ type DirectoryContext<K extends KitTypes, N extends string, A extends string> = 
  * otherwise the directory of the nearest dimension, its own or one containing it, that declares members. IAM checks the
  * endpoint's own action for a lookup and `members.list` for a list, so the type promises what IAM answers.
  */
-type MembersContext<K extends KitTypes, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
-	? A extends MembersOf<K, D>['manage'] ? { readonly members: MemberManagement<D, A, K['role']> }
-	: [DirectoryOf<K, D>] extends [never] ? { readonly members: Unavailable<`neither ${D} nor a dimension containing it declares members`> }
-	: DirectoryContext<K, DirectoryOf<K, D>, A>
+type MembersContext<K extends KitTypes, Acc> = Acc extends { readonly action: infer A extends string; readonly app: true }
+	? ApplicationMembersContext<K, A>
+	: TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
+		? A extends MembersOf<K, D>['manage'] ? { readonly members: MemberManagement<D, A, K['role']> }
+		: [DirectoryOf<K, D>] extends [never] ? { readonly members: Unavailable<`neither ${D} nor a dimension containing it declares members`> }
+		: DirectoryContext<K, DirectoryOf<K, D>, A>
 	: { readonly members: Unavailable<'ctx.members needs access on or in a dimension, with the action that lists or manages its members'> }
+
+/** `ctx.members` of an `app: true` endpoint: the application's own people, where its action is their `members.list`. */
+type ApplicationMembersContext<K extends KitTypes, A extends string> = [K['members']] extends [never]
+	? { readonly members: Unavailable<'the application declares no people: members: { manage, list } in the vocabulary'> }
+	: A extends K['members']['list'] ? { readonly members: ApplicationDirectory }
+	: { readonly members: Unavailable<`listing the application's people needs the action '${K['members']['list']}'`> }
 
 /** `ctx.links`, only where the endpoint declares the link mount it issues (`issues: '<mount>'`). */
 type LinksContext<Acc, Is extends string> = [Is] extends [never]

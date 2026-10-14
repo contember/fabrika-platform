@@ -87,6 +87,9 @@ function appSchemaError(issues: readonly z.ZodIssue[]): string {
 			? "each workload needs a kind of 'job' or 'webhook', a name and an array of exact actions"
 			: 'workloads must be an array'
 	}
+	if (field === 'members' || field === 'directory') {
+		return issue?.code === 'custom' ? issue.message : "members must be { manage, list } of exact actions, and directory 'labels'"
+	}
 	if (field === 'locale') return `locale must be one of ${LOCALES.map((locale) => `'${locale}'`).join(', ')}`
 	if (field === 'displayName') return issue?.code === 'custom' ? issue.message : 'displayName must be a string'
 	if (key === undefined) return 'scopes and actions must be arrays'
@@ -190,6 +193,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			mail: Object.entries(schema.mail ?? {}).flatMap(([kind, byLocale]) =>
 				Object.entries(byLocale ?? {}).flatMap(([locale, template]) => (template === undefined ? [] : [{ kind, locale, ...template }]))
 			),
+			members: schema.members === undefined ? null : { ...schema.members, directory: schema.directory ?? null },
 		},
 		adminEvent(c, {
 			action: 'iam.app.schema.reconcile',
@@ -206,6 +210,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				locale: schema.locale ?? null,
 				displayName: schema.displayName ?? null,
 				mail: Object.entries(schema.mail ?? {}).flatMap(([kind, byLocale]) => Object.keys(byLocale ?? {}).map((locale) => `${kind}.${locale}`)),
+				members: schema.members ?? null,
 			},
 		}),
 	)
@@ -230,6 +235,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 		delegations[row.endpoint] = { action: row.action, dimension: row.dimension, purpose: row.purpose }
 	}
 	const presentation = parsePresentation(await c.services.repositories.appSchema.getPresentation(app))
+	const members = await c.services.repositories.appSchema.getAppMembers(app)
 	return {
 		app,
 		scopes: scopeRows.map((r) => ({
@@ -247,6 +253,8 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 		...(Object.keys(delegations).length > 0 ? { delegations } : {}),
 		...(presentation.locale === null ? {} : { locale: presentation.locale }),
 		...(presentation.displayName === null ? {} : { displayName: presentation.displayName }),
+		...(members === null ? {} : { members: { manage: members.manage, list: members.list } }),
+		...(members?.directory === 'labels' ? { directory: 'labels' } : {}),
 	}
 }
 

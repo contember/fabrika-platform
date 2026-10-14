@@ -107,6 +107,7 @@ class LinkLedger implements IamMembershipRpc {
 	assignMember = refused
 	revokeMember = refused
 	listMembers = refused
+	listAppMembers = refused
 	findMember = refused
 }
 

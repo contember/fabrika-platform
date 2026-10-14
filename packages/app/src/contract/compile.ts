@@ -68,6 +68,8 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 		...(vocabulary.locale === undefined ? {} : { locale: vocabulary.locale }),
 		...(vocabulary.displayName === undefined ? {} : { displayName: vocabulary.displayName }),
 		...(vocabulary.mail === undefined ? {} : { mail: vocabulary.mail }),
+		...(vocabulary.members === undefined ? {} : { members: vocabulary.members }),
+		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
 	}
 }
 

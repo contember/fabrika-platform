@@ -1,4 +1,4 @@
-import type { IamMembershipRpc, MemberItem } from '@fabrika/auth-core'
+import type { AppMemberItem, IamMembershipRpc, MemberItem } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { buildAuthContext } from '../client'
 import { createIamMembership, IamMembership } from '../membership'
@@ -60,6 +60,7 @@ describe('IamMembership', () => {
 			assignMember: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 			revokeMember: () => Promise.resolve({ ok: false, reason: 'last_creator' }),
 			listMembers: () => Promise.resolve({ ok: true, members: [], invitations: [] }),
+			listAppMembers: (input) => Promise.resolve({ ok: true, members: [], next: input.after ?? null }),
 			findMember: (input) =>
 				Promise.resolve({ ok: true, member: { principalId: input.principalId, label: null, disabled: false, affiliation: 'internal' } }),
 			issueLink: () => Promise.resolve({ ok: true, key: 'px_k', id: 'c1', expiresAt: 2 }),
@@ -70,6 +71,7 @@ describe('IamMembership', () => {
 		expect(await membership.createScope(caller, 'g', 'workspace')).toEqual({ ok: true, scope, role: 'owner' })
 		expect(await membership.revokeMember(caller, 'g', scope, { principalId: 'p1' })).toEqual({ ok: false, reason: 'last_creator' })
 		expect(await membership.issueLink(caller, 'shared', [scope], 3)).toEqual({ ok: true, key: 'px_k', id: 'c1', expiresAt: 2 })
+		expect(await membership.listAppMembers(caller, 'p9')).toEqual({ ok: true, members: [], next: 'p9' })
 		expect(await membership.findMember(caller, scope, 'p2', 'notes.read')).toEqual({
 			ok: true,
 			member: { principalId: 'p2', label: null, disabled: false, affiliation: 'internal' },
@@ -158,6 +160,17 @@ describe('HttpIamRpc — the membership methods', () => {
 		await expect(http({ ok: true, members: [{ ...member, lastSignInAt: 'yesterday' }], invitations: [] }).rpc.listMembers({ ...base, scope })).rejects
 			.toBeInstanceOf(IamTransportError)
 		await expect(http({ ok: true, members: 'everyone' }).rpc.listMembers({ ...base, scope })).rejects.toBeInstanceOf(IamTransportError)
+		const person: AppMemberItem = {
+			principalId: 'p',
+			label: 'Ann',
+			email: null,
+			lastSignInAt: null,
+			roles: [{ role: 'staff', scope: null }, { role: 'partner', scope }],
+			disabled: false,
+			affiliation: 'internal',
+		}
+		expect(await http({ ok: true, members: [person], next: 'p' }).rpc.listAppMembers(base)).toEqual({ ok: true, members: [person], next: 'p' })
+		await expect(http({ ok: true, members: [person] }).rpc.listAppMembers(base)).rejects.toBeInstanceOf(IamTransportError)
 		await expect(http({ ok: true, scope: 'w1' }).rpc.createScope({ ...base, delegation: 'g', dimension: 'w' })).rejects.toBeInstanceOf(
 			IamTransportError,
 		)

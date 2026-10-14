@@ -20,6 +20,10 @@ export interface ContractDeclaration<S> {
 	readonly displayName?: string
 	/** Message kind → locale → template; `buildArtifact` refuses an unknown kind or locale and a bad template. */
 	readonly mail?: Readonly<Record<string, Readonly<Record<string, MailTemplate>>>>
+	/** The actions that manage and list the application's own people. */
+	readonly members?: { readonly manage: string; readonly list: string }
+	/** `'labels'` only; `buildArtifact` refuses another value, and refuses it without `members`. */
+	readonly directory?: string
 }
 
 /**

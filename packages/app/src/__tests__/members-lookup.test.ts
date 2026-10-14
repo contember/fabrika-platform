@@ -158,6 +158,7 @@ describe.skipIf(postgres === null)("a deal endpoint's ctx.members in the test ki
 			return {
 				findMember: () => Promise.resolve({ ok: true, member: ann }),
 				listMembers: () => Promise.resolve({ ok: true, members: [{ ...ann, email: null, lastSignInAt: null, roles: ['viewer'] }], invitations: [] }),
+				listAppMembers: refused,
 				requestDelegation: refused,
 				createScope: refused,
 				assignMember: refused,

@@ -5,6 +5,7 @@ import { z } from 'zod'
 import type { IamAppContext } from '../app'
 import { logError } from '../log'
 import { recordAdminAccess, rpcProcedureOf } from './access'
+import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
@@ -200,6 +201,17 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			}))
 			.require(ADMIN_ACTION)
 			.query(({ ctx, input }) => adminUseCases.listAuthLog(context(ctx), input)),
+	}),
+	// No `iam.admin` here: each use case authorizes the application's own `members.manage`, held globally there.
+	appPeople: t.router({
+		apps: t.procedure.query(({ ctx }) => listAdministeredApps(ctx)),
+		list: t.procedure.input(z.object({ app: nonEmpty, after: nonEmpty.optional() })).query(({ ctx, input }) => listAppPeople(ctx, input)),
+		grant: t.procedure
+			.input(z.object({ app: nonEmpty, role: nonEmpty, email: nonEmpty }))
+			.mutation(({ ctx, input }) => grantAppRole(ctx, input)),
+		revoke: t.procedure
+			.input(z.object({ app: nonEmpty, role: nonEmpty, principalId: nonEmpty }))
+			.mutation(({ ctx, input }) => revokeAppRole(ctx, input)),
 	}),
 })
 

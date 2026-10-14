@@ -8,6 +8,7 @@ import {
 	type ContractArtifact,
 	contractDigest,
 	type CredentialedEndpoint,
+	endpointAppDirectory,
 	endpointDigest,
 	endpointDirectory,
 	endpointMembers,
@@ -438,6 +439,9 @@ function facilitiesOf(artifact: ContractArtifact, row: EndpointRow): Facilities 
 		return NO_FACILITIES
 	}
 	const { action, access } = row.requirement
+	if (endpointAppDirectory(artifact, row)) {
+		return Object.freeze({ members: 'application', links: Object.freeze([]) })
+	}
 	if ((access.form !== 'in' && access.form !== 'on') || access.from === null) {
 		return NO_FACILITIES
 	}

@@ -185,6 +185,25 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(EMPTY_SNAPSHOT, labelled).changes).toContainEqual({ widens: true, line, review: 'closer' })
 	})
 
+	test("the application's own people widen for closer review, and so do their labels; removing them narrows", () => {
+		const people = snapshot(edited("app: 'notes',", "app: 'notes',\n\tmembers: { manage: 'notes.delete', list: 'notes.read' },"))
+		const labelled = snapshot(
+			edited("app: 'notes',", "app: 'notes',\n\tmembers: { manage: 'notes.delete', list: 'notes.read' },\n\tdirectory: 'labels',"),
+		)
+		const declared =
+			"Holders of `notes.delete` grant and revoke the application's global roles in IAM's console, and holders of `notes.read` list everyone holding one of its roles"
+		expect(classifyAccess(snapshot(), people)).toEqual({ outcome: 'widening', changes: [{ widens: true, line: declared, review: 'closer' }] })
+		expect(classifyAccess(people, labelled)).toEqual({
+			outcome: 'widening',
+			changes: [{
+				widens: true,
+				line: "Holders of the application's members.list action see each person's label, which spells a user's email address",
+				review: 'closer',
+			}],
+		})
+		expect(classifyAccess(people, snapshot()).outcome).toBe('removal')
+	})
+
 	test('the member directory an endpoint reads is recorded: an approval before it was recorded widens, labels for closer review', () => {
 		const members = "workspace: { creator: 'owner', members: { manage: 'notes.delete', list: 'notes.read' } }"
 		const listed = snapshot(edited("workspace: { creator: 'owner' }", members))

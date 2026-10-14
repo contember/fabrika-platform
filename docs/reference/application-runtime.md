@@ -656,6 +656,16 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   the vocabulary (a user's label spells its address); that declaration is in the contract,
   and adding it widens for closer review. Under it the type is `string`, and the framework
   refuses an IAM answer without a label (`iam_answer_unlabelled`, 500).
+- **The application's own people.** A vocabulary that declares `members: { manage, list }` (and optionally
+  `directory: 'labels'`) has people of its own: every principal holding one of its roles, globally or in a value. An
+  `app: true` endpoint whose action is that `members.list` gets `ctx.members.list({ after? })`, a page of at most 100
+  `{ principalId, label, email, lastSignInAt, roles: [{ role, scope }], disabled, affiliation }`, and `next`; IAM's
+  `listAppMembers` checks the action live, held globally. Labels by the vocabulary's `directory` or to its
+  `members.manage`; `email` and `lastSignInAt` only to `members.manage`. A holder of `members.manage`, globally,
+  grants and revokes the application's global roles in IAM's console (`appPeople.*` of IAM's administration API),
+  within its own actions and audited by IAM; the application builds no role management. Any other endpoint's
+  `ctx.members` is unavailable for the application's people, and the approval reads a new `members` or
+  `directory` as a widening for closer review.
 - `ctx.links.issue(ref, { mount, days })` and `ctx.links.revoke(id)` exist on an endpoint
   that declares `issues: '<mount>'` and whose `Ref` carries the mount's `issuedBy` for its
   dimension. IAM binds the key to the object's whole chain; the answer is
@@ -1077,7 +1087,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   manages members or issues share links tests them without a transport of its own, and so does the policy isolation
   kit's probe. It answers a member directory (`ctx.members.list()` and `get`) from the kit's callers: each caller's
   membership roles in the scope, labels only to a `members.manage` holder or where the dimension declares
-  `directory: 'labels'`, `lastSignInAt` (`testCaller`'s option) only to a `members.manage` holder, and `not_allowed` to a caller without the dimension's `members.list` there (a list) or the
+  `directory: 'labels'`, `lastSignInAt` (`testCaller`'s option) only to a `members.manage` holder, the application's own directory from every caller holding a role of the contract, and `not_allowed` to a caller without the dimension's `members.list` there (a list) or the
   endpoint's action on the chain (a lookup). It answers the writes under IAM's rules for the caller's grants: a
   single-use delegation grant per request, `members.manage` on the value itself, an assigning role (`assignableBy`)
   there or, an application-wide one, globally, every action of the role assigned, a link mount's `issuedBy` and grants

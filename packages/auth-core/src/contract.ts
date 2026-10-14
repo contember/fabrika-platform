@@ -41,6 +41,14 @@ export interface ContractArtifact extends EndpointTable {
 	readonly displayName?: string
 	/** The application's wording of IAM's e-mails. Absent unless declared, so the digest stays. */
 	readonly mail?: MailTemplates
+	/**
+	 * The application's own people, every holder of one of its roles: `manage` held globally administers its global roles in
+	 * IAM's console, `list` held globally reads its member directory (`ctx.members` of an `app` endpoint of that action).
+	 * Absent unless declared, so the digest stays.
+	 */
+	readonly members?: { readonly manage: string; readonly list: string }
+	/** `labels`: the application's directory shows labels to `members.list` holders. Absent unless declared, so digests stay. */
+	readonly directory?: 'labels'
 }
 
 // ── The endpoint table ──────────────────────────────────────────────────────────────────────────

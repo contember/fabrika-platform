@@ -88,6 +88,80 @@ export interface MemberDirectory<L extends string | null = string | null> extend
 	list(): Promise<readonly DirectoryMember<L>[]>
 }
 
+/** One role a person holds at the application: globally (`scope: null`), or in one value. */
+export interface ApplicationMemberRole {
+	readonly role: string
+	readonly scope: Scope | null
+}
+
+/** One of the application's own people, as its directory lists them. */
+export interface ApplicationMember {
+	readonly principalId: string
+	/** The principal's display label; null unless the vocabulary declares `directory: 'labels'` or the caller manages the people. */
+	readonly label: string | null
+	/** The person's address; null unless the caller holds the application's `members.manage` globally. */
+	readonly email: string | null
+	/** Unix seconds of the person's last sign-in to the application; null for one who never did, and as `email`. */
+	readonly lastSignInAt: number | null
+	/** Every role the person holds at the application, a global one first. */
+	readonly roles: readonly ApplicationMemberRole[]
+	readonly disabled: boolean
+	readonly affiliation: PrincipalAffiliation
+}
+
+export interface ApplicationMemberPage {
+	readonly members: readonly ApplicationMember[]
+	/** The `after` of the following page; null on the last one. */
+	readonly next: string | null
+}
+
+/**
+ * `ctx.members` of an `app: true` endpoint whose action is the application's `members.list`: every principal holding a
+ * role of the application, globally or in a value, a page of at most 100 at a time. IAM checks the action live.
+ */
+export interface ApplicationDirectory {
+	list(options?: { readonly after?: string | undefined }): Promise<ApplicationMemberPage>
+}
+
+/**
+ * The application's own directory, read from IAM with the caller's token. A runtime without an IAM membership transport
+ * still boots, and only a call fails.
+ */
+export function applicationDirectory(iam: IamMembership | null, caller: MembershipRequestCaller, endpoint: string): ApplicationDirectory {
+	return Object.freeze({
+		async list(options?: { readonly after?: string | undefined }): Promise<ApplicationMemberPage> {
+			if (iam === null) {
+				throw new ServerFault(
+					'facility_unbound',
+					`'${endpoint}' reads the application's people, and the runtime adapter supplies no IAM membership transport`,
+					503,
+				)
+			}
+			const after = options?.after
+			if (after !== undefined && (typeof after !== 'string' || after === '')) {
+				throw new HttpError(400, 'invalid_request', "after is the next of a previous page of the application's people")
+			}
+			const listed = await ask(() => iam.listAppMembers(caller, after), "list the application's people")
+			return Object.freeze({
+				members: Object.freeze(
+					listed.members.map((member) =>
+						Object.freeze({
+							principalId: member.principalId,
+							label: member.label,
+							email: member.email,
+							lastSignInAt: member.lastSignInAt,
+							roles: Object.freeze(member.roles.map((held) => Object.freeze({ role: held.role, scope: held.scope }))),
+							disabled: member.disabled,
+							affiliation: member.affiliation,
+						})
+					),
+				),
+				next: listed.next,
+			})
+		},
+	})
+}
+
 export interface IssuedLink {
 	readonly id: string
 	/** `<prefix>/#<key>`: the key travels in the fragment, which never reaches a server or a `Referer`. */

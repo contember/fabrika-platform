@@ -57,6 +57,8 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		...(artifact.locale === undefined ? {} : { locale: artifact.locale }),
 		...(artifact.displayName === undefined ? {} : { displayName: artifact.displayName }),
 		...(artifact.mail === undefined ? {} : { mail: artifact.mail }),
+		...(artifact.members === undefined ? {} : { members: artifact.members }),
+		...(artifact.directory === undefined ? {} : { directory: artifact.directory }),
 	}
 }
 

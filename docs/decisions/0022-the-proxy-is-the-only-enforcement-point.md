@@ -515,8 +515,26 @@ still refuses any `Authorization` header, as authorization.
   names. `assignableBy` names membership roles of the same dimension, held in that value, or application-wide roles
   (roles with no `member`), held in that value or globally. So a staff member with a global role invites into any
   value. IAM checks the inviter again when an invitation is accepted, and the write that consumes it requires what
-  that check relied on: the inviter still enabled, still holding the assigning role, and the application's schema at
-  the revision the check read, so a reconcile or a disable between the check and the write makes it write nothing.
+  that check relied on: the inviter still enabled, still holding the assigning role, the application's schema at
+  the revision the check read, and the inviter's grants at the revision the check read (every removal of a grant
+  moves the principal's revision on, in its own transaction), so a reconcile, a disable or the removal of any grant of
+  the inviter between the check and the write makes it write nothing.
+- **The application's own people.** An application whose roles are global grants declares `members: { manage, list }`
+  in its vocabulary, reconciled into `app_members`. Its people are every principal holding one of its roles, globally
+  or in a value. A user holding `manage` globally at the application grants and revokes the application's global roles
+  through IAM's administration API (`appPeople.*` of `/admin/rpc`, reached through the console's gateway) without being
+  an installation administrator: only roles the application declares with no `member`, never a built-in or a custom
+  policy, only a role whose every action that user holds globally there, and only to a person IAM already has (by
+  address; inviting a person stays an IAM administrator's). Each change writes its `audit_events` row under the
+  application, in the change's own transaction. A `px_` key does not administer this way, because its own grants
+  narrow what it carries. A user holding `list` globally reads the directory (`listAppMembers`, `ctx.members.list()`
+  of an `app: true` endpoint of that action), paged by principal id, at most 100 a page: labels where the vocabulary
+  declares `directory: 'labels'` or to `manage`, addresses and last sign-ins only to `manage`. This is authorization of
+  IAM's own operations, never a second enforcement decision; the alternative, one organisation value per
+  single-tenant application, made every endpoint carry a scope with one value.
+- **A member's last sign-in is personal data.** IAM records a person's last sign-in to each application when the
+  application's proxy redeems the handoff code (`app_sign_ins`), and answers it as `lastSignInAt` beside the address,
+  to a holder of `members.manage` only: the dimension's for a value's directory, the application's for its own.
 - **A membership write may lead to an external principal.** An invitation by e-mail to a role declared `external`
   ([ADR-0051](0051-external-principals.md)) for a mailbox no principal holds creates the external principal when its
   owner accepts, with the password chosen there ([ADR-0020](0020-compose-human-authentication-methods.md)), in the
@@ -553,7 +571,8 @@ principal kind `link`: its token carries no `ptype` and names its link mount and
 On Zerops an application has no IAM binding. It reaches IAM's membership operations at `POST /membership/<method>` on
 IAM's public origin, with a **membership transport key** of its application environment as the bearer. Control
 issues that key from the approved snapshot while the contract has an endpoint with a delegation, an endpoint on, in or
-below a dimension with members (its read-only member directory, `ctx.members.get` and `list`) or a share-link mount,
+below a dimension with members (its read-only member directory, `ctx.members.get` and `list`), an `app` endpoint of
+the application's own `members.list`, or a share-link mount,
 rotates it like a workload key, and writes it with IAM's origin as `FABRIKA_IAM_RPC_KEY` and `FABRIKA_IAM_RPC_URL`;
 a reconcile that leaves the application neither deletes it. The key pins the application id: a call for another
 application or environment is refused. It adds no authority, because every operation still acts as the caller's token,

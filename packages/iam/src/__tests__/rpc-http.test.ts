@@ -172,6 +172,10 @@ function recorder(canned: Canned = {}): Recorder {
 			note('listMembers', input)
 			return Promise.resolve({ ok: true, members: [], invitations: [] })
 		},
+		listAppMembers(input) {
+			note('listAppMembers', input)
+			return Promise.resolve({ ok: true, members: [], next: null })
+		},
 		findMember(input) {
 			note('findMember', input)
 			return Promise.resolve({ ok: true, member: { principalId: input.principalId, label: null, disabled: false, affiliation: 'internal' } })

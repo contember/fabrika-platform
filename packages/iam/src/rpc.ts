@@ -45,7 +45,17 @@ import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
 import { issueKey, revokeKey } from './issue'
 import { logError } from './log'
-import { assignMember, createScope, findMember, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from './membership'
+import {
+	assignMember,
+	createScope,
+	findMember,
+	issueLink,
+	listAppMembers,
+	listMembers,
+	requestDelegation,
+	revokeLink,
+	revokeMember,
+} from './membership'
 import { acceptRequestId } from './request-id'
 import { buildServices, type Services } from './services'
 import { getSigner } from './signing'
@@ -78,6 +88,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		assignMember: membership('assignMember', assignMember),
 		revokeMember: membership('revokeMember', revokeMember),
 		listMembers: membership('listMembers', listMembers),
+		listAppMembers: membership('listAppMembers', listAppMembers),
 		findMember: membership('findMember', findMember),
 		issueLink: membership('issueLink', issueLink),
 		revokeLink: membership('revokeLink', revokeLink),

@@ -42,6 +42,7 @@ import {
 	type LinkMount,
 	type NotLoose,
 	type Path,
+	peopleOf,
 	presentationOf,
 	type ProcedureTree,
 	type RpcMount,
@@ -59,12 +60,13 @@ import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 type Owned<K extends string> = { readonly [P in K]?: never }
 
 /** The kit's types, computed once from the vocabulary, the tables' index and the imports. */
-export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer A, infer D, infer R, infer Dims> ? {
+export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer A, infer D, infer R, infer Dims, infer M> ? {
 		readonly action: A
 		readonly dimension: D
 		readonly creatable: CreatableDimension<Dims>
 		readonly role: R
 		readonly dimensions: Dims
+		readonly members: M
 		readonly index: Ix
 		readonly tables: Ix extends { readonly tables: infer T } ? keyof T & string : never
 		readonly imports: Imp
@@ -477,6 +479,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 					actions: vocabulary.actions,
 					roles: vocabulary.roles,
 					...presentationOf(vocabulary),
+					...peopleOf(vocabulary),
 				},
 				dimensions: vocabulary.dimensions,
 				surface: declared,

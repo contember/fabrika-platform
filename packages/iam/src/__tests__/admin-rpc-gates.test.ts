@@ -12,6 +12,9 @@
  *      assert 403. This catches a procedure that is gated on the wrong action, and it fails when a
  *      method is added to the contract and forgotten here, which is the point: the list of methods is
  *      derived from the contract's own shape, not typed out.
+ *
+ * The one exception is named here: `appPeople.*`, which an application's own administrator calls, authorizes the
+ * application's `members.manage` held globally there in its use case, and answers a stranger nothing.
  */
 
 import { unusedDatabase } from '@fabrika/platform/testing'
@@ -45,6 +48,9 @@ function env(h: Harness): Env {
 }
 
 const ROUTER_METHODS = routerLeaves(adminRpcRouter)
+
+/** The procedures an application's administrator calls without `iam.admin` (`admin/app-people.ts`). */
+const DELEGATED = ['appPeople.apps', 'appPeople.grant', 'appPeople.list', 'appPeople.revoke']
 
 /**
  * A minimally-shaped input for each method — enough to pass validation IF the gate were missing, so a
@@ -84,12 +90,16 @@ const INPUTS: Record<string, unknown> = {
 	'membershipKeys.issue': { app: 'nowhere@prod', expiresAt: 4_102_444_800, keep: null },
 	'shareLinks.issue': { app: 'nowhere', grants: [{ action: 'a' }], expiresAt: 1 },
 	'shareLinks.revoke': { id: 'nobody' },
+	'appPeople.apps': null,
+	'appPeople.list': { app: 'nowhere@prod' },
+	'appPeople.grant': { app: 'nowhere@prod', role: 'staff', email: 'nobody@example.com' },
+	'appPeople.revoke': { app: 'nowhere@prod', role: 'staff', principalId: 'nobody' },
 }
 
 describe('every admin RPC procedure is gated', () => {
 	test('the shipped router declares at least one authz requirement on every leaf', () => {
 		expect(ROUTER_METHODS.length).toBeGreaterThan(20)
-		expect(ROUTER_METHODS.filter((leaf) => leaf.requirements === 0)).toEqual([])
+		expect(ROUTER_METHODS.filter((leaf) => leaf.requirements === 0).map((leaf) => leaf.method).sort()).toEqual(DELEGATED)
 	})
 
 	test('an authenticated NON-admin is refused by every method the contract declares', async () => {
@@ -101,9 +111,8 @@ describe('every admin RPC procedure is gated', () => {
 		const bearer = await h.adminToken(viewer, { issuer: ORIGIN })
 		const app = createIamApp()
 
-		const admitted: string[] = []
-		for (const { method } of ROUTER_METHODS) {
-			const response = await app.fetch(
+		const call = (method: string) =>
+			app.fetch(
 				new Request(`${ORIGIN}/admin/rpc`, {
 					method: 'POST',
 					headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
@@ -112,12 +121,23 @@ describe('every admin RPC procedure is gated', () => {
 				env(h),
 				exec,
 			)
+		const admitted: string[] = []
+		for (const { method } of ROUTER_METHODS) {
+			if (DELEGATED.includes(method)) continue
+			const response = await call(method)
 			const type = prop(prop(await response.json(), 'error'), 'type')
 			if (response.status !== 403 || type !== 'forbidden') {
 				admitted.push(`${method} → ${response.status} ${String(type)}`)
 			}
 		}
-
 		expect(admitted).toEqual([])
+
+		// A stranger to every application administers none: no application listed, and each other call is the 404 of an
+		// application whose people it does not administer, the same as for one that does not exist.
+		expect(await (await call('appPeople.apps')).json()).toEqual({ result: { items: [] } })
+		for (const method of DELEGATED.filter((name) => name !== 'appPeople.apps')) {
+			const response = await call(method)
+			expect([method, response.status, prop(prop(await response.json(), 'error'), 'type')]).toEqual([method, 404, 'not_found'])
+		}
 	})
 })

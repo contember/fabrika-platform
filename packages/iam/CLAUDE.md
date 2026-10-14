@@ -181,11 +181,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   rule 6, `src/membership-http.ts`, mounted by the Bun composition only). The bearer is the environment's membership
   transport key (`membership_transport_keys`, hash only, no `credentials` row, so no `px_` path finds it and it mints
   nothing); a call whose `app` is not the key's is `not_allowed` before the operation runs. It serves `createScope`,
-  `assignMember`, `revokeMember`, `listMembers`, `findMember`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
+  `assignMember`, `revokeMember`, `listMembers`, `listAppMembers`, `findMember`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
   proxy obtains a grant. The caller is still the token in the body. `membershipKeys.issue` (admin RPC) issues a key
   for an `<app>@<env>` id only, ≤30 days, and deletes every other key of it except `keep`; a reconcile that leaves the
-  app no delegated endpoint, no link mount and no dimension that lists its members deletes its keys in the same
-  batch (the schema holds no per-endpoint list fact, so a members-declaring dimension keeps the key).
+  app no delegated endpoint, no link mount, no dimension that lists its members and no people of its own
+  (`app_members`) deletes its keys in the same batch (the schema holds no per-endpoint list fact, so a
+  members-declaring dimension keeps the key).
 - **`workloads.issueKey` NEVER REVOKES THE KEY THE CALLER NAMES AS ACTIVE.** It creates the principal on first use,
   issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance
@@ -271,6 +272,19 @@ fails if that stops being true — it is the guard, not documentation of one.
   from the approved contract's `directories`, `app_scopes.members_lookup`) and the caller must hold it on the scope
   itself; IAM knows no containment below a value, so a grant on a contained object never counts. The answer is the
   member (label by the same rule) or `null`, the same for an unknown id.
+- **AN APPLICATION'S OWN PEOPLE ARE ADMINISTERED BY ITS OWN ADMINISTRATOR, AS AUTHORIZATION, NOT ENFORCEMENT**
+  (`src/admin/app-people.ts`, ADR-0022 rule 6). `app_members` (reconciled from the vocabulary's `members` and
+  `directory`) names the action that manages and the one that lists the principals holding any role of the app
+  (`APP_MEMBER_GRANT`: a membership role only in a value of its dimension, an external's only of an external role).
+  `listAppMembers` needs `list` held globally and pages by principal id (`MAX_APP_MEMBERS_PAGE`); labels by
+  `directory` or to `manage`, emails and last sign-ins only to `manage`. The `appPeople.*` procedures of `/admin/rpc`
+  are the ONE exception to "every procedure requires `iam.admin`" (`admin-rpc-gates.test.ts` names them): a USER behind
+  the console's token (never a `px_` key, whose own grants narrow it) holding `manage` globally at the app, resolved
+  live there, grants and revokes the app's declared global roles (no `member`, no built-in, no custom policy) whose
+  every action it holds globally, to a person IAM already has — never an invitation, which would let an application's
+  administrator create a principal the OIDC allowlist's known-principal bypass admits. An app it does not administer
+  and an unknown app are one 404. Each change writes `iam.grant.create`/`iam.grant.revoke` under the APP, in its own
+  transaction, with `delegated: true` and no address.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE
@@ -388,7 +402,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   the app the admin's credential was verified for (the console gateway, or `propustka` for a `px_` key). A request whose
   access cannot be recorded answers 503 and does not run. A refused REST route is recorded too: a 405 under its
   template, a path that names no operation under the fixed `/admin/*`, never the raw path. An RPC caller without
-  `iam.admin` reaches no procedure and is not recorded. A mutation therefore writes two rows: the access and the
+  `iam.admin` reaches no procedure but `appPeople.*`, and is not recorded; each change it makes there is. A mutation therefore writes two rows: the access and the
   change.
 - **RETENTION IS AN IAM SETTING, IN DAYS** (`src/retention.ts`, `Config.retention`): `AUTH_LOG_RETENTION_DAYS` (deploy
   var `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`, default 30) and `AUDIT_RETENTION_DAYS` (`FABRIKA_IAM_AUDIT_RETENTION_DAYS`,

@@ -69,6 +69,7 @@ import {
 	findMemberSchema,
 	issueKeySchema,
 	issueLinkSchema,
+	listAppMembersSchema,
 	listMembersSchema,
 	listPrincipalsSchema,
 	mintFromKeySchema,
@@ -156,6 +157,8 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershi
 				return json(await rpc.revokeMember(revokeMemberSchema.parse(body)))
 			case 'listMembers':
 				return json(await rpc.listMembers(listMembersSchema.parse(body)))
+			case 'listAppMembers':
+				return json(await rpc.listAppMembers(listAppMembersSchema.parse(body)))
 			case 'findMember':
 				return json(await rpc.findMember(findMemberSchema.parse(body)))
 			case 'issueLink':

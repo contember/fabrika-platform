@@ -85,6 +85,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	if (before === null) changes.add(widening(`The application becomes the contract application \`${candidate.app}\``))
 	else if (baseline.app !== candidate.app) changes.add(widening(`The contract's application changes from \`${baseline.app}\` to \`${candidate.app}\``))
 	changes.add(...presentationChanges(baseline, candidate))
+	changes.add(...peopleChanges(baseline, candidate))
 	compareEndpoints(changes, baseline, candidate)
 	compareSet(changes, baseline.reservedPrefixes, candidate.reservedPrefixes, {
 		// A reserved prefix restricts which endpoints compete under it, so losing one widens.
@@ -851,6 +852,33 @@ function presentationChanges(baseline: ContractArtifact, candidate: ContractArti
 			.map((locale) => `\`${kind}\` in \`${locale}\``)
 	)
 	if (changed.length > 0) changes.push(widening(`The application's wording of IAM's e-mails changes: ${changed.join(', ')}`))
+	return changes
+}
+
+/**
+ * The application's own people: who administers its global roles in IAM's console, who lists everyone holding one of
+ * its roles, and whether that list shows labels, which spell users' addresses.
+ */
+function peopleChanges(baseline: ContractArtifact, candidate: ContractArtifact): AccessChange[] {
+	const changes: AccessChange[] = []
+	const before = baseline.members
+	const after = candidate.members
+	if (canonicalJson(before ?? null) !== canonicalJson(after ?? null)) {
+		changes.push(
+			after === undefined
+				? removal('The application no longer declares its own people: only an IAM administrator grants its roles, and nobody lists them')
+				: closerWidening(
+					`Holders of \`${after.manage}\` grant and revoke the application's global roles in IAM's console, and holders of \`${after.list}\` list everyone holding one of its roles`,
+				),
+		)
+	}
+	if (baseline.directory !== candidate.directory) {
+		changes.push(
+			candidate.directory === 'labels'
+				? closerWidening("Holders of the application's members.list action see each person's label, which spells a user's email address")
+				: removal("Holders of the application's members.list action no longer see labels"),
+		)
+	}
 	return changes
 }
 

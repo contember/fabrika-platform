@@ -360,6 +360,17 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(buildArtifact({ ...base, mail: { reset: { cs: reset } } }, notesArtifact.tables).mail).toEqual({ reset: { cs: reset } })
 	})
 
+	test('members of the application name actions of the catalog, and its directory needs them', () => {
+		expect(build({ ...base, members: { manage: 'people.manage', list: 'notes.read' } })).toEqual([
+			"members.manage: 'people.manage' is not an action of the contract",
+		])
+		expect(build({ ...base, directory: 'labels' })).toEqual(['directory: declares a directory and no members: { manage, list } whose list it labels'])
+		expect(buildArtifact({ ...base, members: { manage: 'notes.write', list: 'notes.read' } }, notesArtifact.tables).members).toEqual({
+			manage: 'notes.write',
+			list: 'notes.read',
+		})
+	})
+
 	test("a directory other than 'labels', or one on a dimension that declares no members", () => {
 		const problems = build({
 			...base,

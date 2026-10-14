@@ -11,6 +11,8 @@ import type {
 	IamMembershipRpc,
 	IssueLinkInput,
 	IssueLinkResult,
+	ListAppMembersInput,
+	ListAppMembersResult,
 	ListMembersInput,
 	ListMembersResult,
 	MembershipFailure,
@@ -27,6 +29,7 @@ export type MembershipCall =
 	| { readonly method: 'assignMember'; readonly input: AssignMemberInput }
 	| { readonly method: 'revokeMember'; readonly input: RevokeMemberInput }
 	| { readonly method: 'listMembers'; readonly input: ListMembersInput }
+	| { readonly method: 'listAppMembers'; readonly input: ListAppMembersInput }
 	| { readonly method: 'findMember'; readonly input: FindMemberInput }
 	| { readonly method: 'issueLink'; readonly input: IssueLinkInput }
 	| { readonly method: 'revokeLink'; readonly input: RevokeLinkInput }
@@ -76,6 +79,11 @@ export class RecordingMembership implements IamMembershipRpc {
 			members: [{ principalId: 'user-1', label: null, email: null, lastSignInAt: null, roles: ['owner'], disabled: false, affiliation: 'internal' }],
 			invitations: [],
 		})
+	}
+
+	async listAppMembers(input: ListAppMembersInput): Promise<ListAppMembersResult> {
+		this.calls.push({ method: 'listAppMembers', input })
+		return this.#answer({ ok: true, members: [], next: null })
 	}
 
 	async findMember(input: FindMemberInput): Promise<FindMemberResult> {

@@ -5,6 +5,7 @@ import type {
 	IamMembershipRpc,
 	InvitationOptions,
 	IssueLinkResult,
+	ListAppMembersResult,
 	ListMembersResult,
 	MemberTarget,
 	RequestDelegationResult,
@@ -70,6 +71,11 @@ export class IamMembership {
 
 	listMembers(caller: MembershipRequestCaller, scope: Scope): Promise<ListMembersResult> {
 		return this.binding.listMembers({ ...this.caller(caller), scope })
+	}
+
+	/** One page of the application's own people; `after` is the previous page's `next`. */
+	listAppMembers(caller: MembershipRequestCaller, after?: string): Promise<ListAppMembersResult> {
+		return this.binding.listAppMembers({ ...this.caller(caller), ...(after === undefined ? {} : { after }) })
 	}
 
 	/** One principal among the members of `scope`, for an endpoint of `action` on, in or below its dimension. */

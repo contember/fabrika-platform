@@ -15,6 +15,7 @@ import { WorkloadRepository } from './repositories/workloads'
 
 export {
 	type AppActionRow,
+	type AppMembersRow,
 	AppSchemaRepository,
 	type AppScopeRow,
 	type DelegatedEndpointRow,

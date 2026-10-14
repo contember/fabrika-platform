@@ -61,6 +61,8 @@ import type {
 	IssueLinkInput,
 	IssueLinkResult,
 	Jwks,
+	ListAppMembersInput,
+	ListAppMembersResult,
 	ListMembersInput,
 	ListMembersResult,
 	ListOwnDeviceAuthorizationsInput,
@@ -130,6 +132,19 @@ const listMembersSuccessSchema = z.object({
 		affiliation: affiliationSchema,
 	})),
 	invitations: z.array(z.object({ id: z.string(), email: z.string(), role: z.string(), expiresAt: z.number().finite() })),
+})
+const listAppMembersSuccessSchema = z.object({
+	...okEnvelope,
+	members: z.array(z.object({
+		principalId: z.string(),
+		label: z.string().nullable(),
+		email: z.string().nullable(),
+		lastSignInAt: z.number().finite().nullable(),
+		roles: z.array(z.object({ role: z.string(), scope: scopeSchema.nullable() })),
+		disabled: z.boolean(),
+		affiliation: affiliationSchema,
+	})),
+	next: z.string().nullable(),
 })
 const findMemberSuccessSchema = z.object({
 	...okEnvelope,
@@ -285,6 +300,10 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 		return this.#membership.listMembers(input)
 	}
 
+	listAppMembers(input: ListAppMembersInput): Promise<ListAppMembersResult> {
+		return this.#membership.listAppMembers(input)
+	}
+
 	findMember(input: FindMemberInput): Promise<FindMemberResult> {
 		return this.#membership.findMember(input)
 	}
@@ -415,6 +434,11 @@ export class DecodedIamMembership implements IamMembershipRpc {
 	async listMembers(input: ListMembersInput): Promise<ListMembersResult> {
 		const body = await this.#call('listMembers', input)
 		return readMembershipFailure(body) ?? decode(listMembersSuccessSchema, body, 'listMembers')
+	}
+
+	async listAppMembers(input: ListAppMembersInput): Promise<ListAppMembersResult> {
+		const body = await this.#call('listAppMembers', input)
+		return readMembershipFailure(body) ?? decode(listAppMembersSuccessSchema, body, 'listAppMembers')
 	}
 
 	async findMember(input: FindMemberInput): Promise<FindMemberResult> {

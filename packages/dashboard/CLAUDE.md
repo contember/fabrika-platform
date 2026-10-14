@@ -54,6 +54,9 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   - **Permissions is one page for roles, actions and scope dimensions**, with a policy edited inline in
     the roles table it belongs to. `roles.list({ app })` already returns custom roles; the page drops them and
     renders the policy rows instead, which carry what it takes to edit them.
+- **People (`/people`) is outside the Access rail on purpose.** It serves an application's own administrator, who holds
+  the application's `members.manage` and is no IAM administrator, so the Access layout's `iam.admin` gate would refuse
+  them. It only asks IAM's `appPeople.*`; IAM decides which applications and roles it lists and audits each change.
 
 ## Patterns
 

@@ -52,6 +52,21 @@ export interface MemberGrantRow {
 	signed_in_at: number | null
 }
 
+/** One role grant at an application, in a value or global, with its principal and its last sign-in there. */
+export interface AppMemberGrantRow extends MemberGrantRow {
+	scope_type: string | null
+	scope_value: string | null
+}
+
+/**
+ * The grants that count as holding a role of the application: an active grant of a role row of the app, a membership
+ * role only in a value of its own dimension, and an external principal's only of a role declared external, as
+ * `computePermissions` counts them.
+ */
+const APP_MEMBER_GRANT = `g.app = ? AND (g.expires_at IS NULL OR g.expires_at > ?)
+	AND (r.member_scope IS NULL OR r.member_scope = g.scope_type)
+	AND (p.affiliation = 'internal' OR r.external = 1)`
+
 /**
  * The rows behind the membership operations. Membership itself is ordinary role grants scoped to a value,
  * so a group assignment (backlog 91) can sit next to them later; this repository adds the values IAM
@@ -224,6 +239,38 @@ export class MembershipRepository {
 				ORDER BY g.principal_id, g.role_key`)
 			.bind(app, scope.type, scope.value, scope.type, unixNow())
 			.all<MemberGrantRow>()
+		return results
+	}
+
+	/** A page of the principals holding a role of `app` (`APP_MEMBER_GRANT`), by id after `after`, at most `limit`. */
+	async listAppMemberIds(app: string, after: string | null, limit: number): Promise<string[]> {
+		const page = after === null ? '' : 'AND g.principal_id > ?'
+		const { results } = await this.db
+			.prepare(`SELECT DISTINCT g.principal_id
+				FROM grants g
+				JOIN principals p ON p.id = g.principal_id
+				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+				WHERE ${APP_MEMBER_GRANT} ${page}
+				ORDER BY g.principal_id
+				LIMIT ?`)
+			.bind(app, unixNow(), ...(after === null ? [] : [after]), limit)
+			.all<{ principal_id: string }>()
+		return results.map((row) => row.principal_id)
+	}
+
+	/** The grants of `principalIds` that make them people of `app` (`APP_MEMBER_GRANT`), with each principal. */
+	async listAppMemberGrants(app: string, principalIds: readonly string[]): Promise<AppMemberGrantRow[]> {
+		if (principalIds.length === 0) return []
+		const { results } = await this.db
+			.prepare(`SELECT g.principal_id, g.role_key, g.scope_type, g.scope_value, p.label, p.email, p.disabled_at, p.affiliation, si.signed_in_at
+				FROM grants g
+				JOIN principals p ON p.id = g.principal_id
+				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+				LEFT JOIN app_sign_ins si ON si.app = g.app AND si.principal_id = g.principal_id
+				WHERE ${APP_MEMBER_GRANT} AND g.principal_id IN (${principalIds.map(() => '?').join(', ')})
+				ORDER BY g.principal_id, g.role_key`)
+			.bind(app, unixNow(), ...principalIds)
+			.all<AppMemberGrantRow>()
 		return results
 	}
 

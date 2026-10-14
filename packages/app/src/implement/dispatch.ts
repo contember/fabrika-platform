@@ -4,7 +4,7 @@
 // checks are admission. Neither is the proxy's decision: the proxy has already decided that the request may reach us.
 // The anonymous kinds (health, form, webhook, the share SPA) read no token and take their own fixed steps.
 
-import type { IamMembership } from '@fabrika/auth'
+import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import {
 	type CompiledEndpointTable,
 	type CredentialedEndpoint,
@@ -59,6 +59,7 @@ import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { endpointData, Invocation, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
 import {
+	applicationDirectory,
 	createScope,
 	type IssuableLink,
 	linkIssuing,
@@ -86,9 +87,10 @@ export interface SpaAssets {
 export interface Facilities {
 	/**
 	 * `ctx.members`: management where the action is the dimension's `members.manage`; otherwise the member directory of the
-	 * nearest dimension, the endpoint's own or one containing it, that declares members (`endpointDirectory`).
+	 * nearest dimension, the endpoint's own or one containing it, that declares members (`endpointDirectory`); for an
+	 * `app` endpoint of the application's `members.list`, its own people (`endpointAppDirectory`).
 	 */
-	readonly members: 'manage' | ReadDirectory | null
+	readonly members: 'manage' | ReadDirectory | 'application' | null
 	/** The link mounts whose dimension and issuing action are the endpoint's. */
 	readonly links: readonly IssuableLink[]
 }
@@ -436,7 +438,10 @@ export class ContractRuntime {
 						principal: caller.principal,
 						requestId: frame.id,
 						...access.context,
-						...this.#facilities(served.facilities, served.row, membership, access.context['target']),
+						...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
+							credential: caller.token,
+							requestId: request.headers.get(REQUEST_ID_HEADER) ?? frame.id,
+						}),
 						...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
 						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context)),
 					})
@@ -566,7 +571,11 @@ export class ContractRuntime {
 		row: CredentialedEndpoint,
 		membership: MembershipRequest | null,
 		target: unknown,
+		caller: MembershipRequestCaller,
 	): Readonly<Record<string, unknown>> {
+		if (facilities.members === 'application') {
+			return { members: applicationDirectory(this.#parts.membership, caller, row.id) }
+		}
 		const reads = facilities.members === null || facilities.members === 'manage' || row.requirement.kind !== 'action' ? null : facilities.members
 		const directory = reads === null ? {} : { members: memberDirectory(membership, target, { endpoint: row.id, ...reads }) }
 		if (facilities.members !== 'manage' && facilities.links.length === 0) {

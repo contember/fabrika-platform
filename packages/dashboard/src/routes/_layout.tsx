@@ -21,6 +21,7 @@ type Page =
 	| 'operations/sources'
 	| 'operations/releases'
 	| 'operations/health'
+	| 'people'
 
 interface NavItem {
 	to: Page
@@ -98,6 +99,12 @@ const NAV: NavSection[] = [
 			{ to: 'operations/health', label: 'Health', description: 'Runtime and pipeline signals', icon: 'runs', match: '/operations/health' },
 		],
 	},
+	{
+		label: 'Your applications',
+		items: [
+			{ to: 'people', label: 'People', description: 'Roles of the applications you administer', icon: 'users', match: '/people' },
+		],
+	},
 ]
 
 function isActive(item: NavItem, pathname: string): boolean {
@@ -114,6 +121,8 @@ export default function RootLayout() {
 		? 'Access'
 		: pathname.startsWith('/operations')
 		? 'Operations'
+		: pathname.startsWith('/people')
+		? 'Your applications'
 		: 'Delivery'
 	const here = [LEAD, ...NAV.flatMap((section) => section.items)].find((item) => isActive(item, pathname)) ?? null
 
