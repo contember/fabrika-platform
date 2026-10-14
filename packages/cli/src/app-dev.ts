@@ -6,9 +6,10 @@
 import { CONTRACT_FILE, IMPLEMENTATION_FILE } from '@fabrika/app/build'
 import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
-import type { ContractImplementation } from '@fabrika/app/implement'
+import { BootError, type ContractImplementation } from '@fabrika/app/implement'
 import { type LabelledTestCaller, testKit } from '@fabrika/app/testing'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
+import { PostgresMigrationError } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,6 +33,23 @@ const PICKER_PATH = '/__fabrika/dev'
 const CHOOSE_PATH = '/__fabrika/dev/as'
 const CHOICE_COOKIE = 'fabrika-dev-as'
 const MAX_SCOPE_VALUE = 200
+
+/** A refusal of `app dev` itself, whose message names nothing of the environment. */
+export class AppDevError extends Error {
+	override readonly name = 'AppDevError'
+}
+
+/**
+ * What of a startup failure reaches the terminal: the message of `app dev`'s own refusal, of the framework's boot and of
+ * the migration runner, which name no value of the environment; anything else (an application module, a driver, a
+ * dependency `deps` built) may carry a credential, so it is a fixed code.
+ */
+export function startupFailure(error: unknown): Error {
+	if (error instanceof AppDevError || error instanceof BootError || error instanceof PostgresMigrationError) {
+		return new Error(error.message)
+	}
+	return new Error('app dev could not start: start_failed (the error is withheld: it may contain a credential)')
+}
 
 export interface AppDevOptions {
 	/** The application root. */
@@ -134,15 +152,26 @@ function pickerPage(contract: AnyContract, current: Choice | null, next: string)
 
 /** Serves `app` through its test kit on a loopback port until `stop`. */
 export async function startAppDev(app: ContractImplementation<AnyContract>, options: AppDevOptions): Promise<AppDevServer> {
-	if (!LOOPBACK.has(options.host)) throw new Error(`app dev serves this machine only, not ${options.host}`)
-	const contract = app.contract
+	if (!LOOPBACK.has(options.host)) throw new AppDevError(`app dev serves this machine only, not ${options.host}`)
 	let postgres: TestDatabase | null = null
 	if (app.database !== null) {
 		if ((options.env[TEST_POSTGRES_URL] ?? '') === '') {
-			throw new Error(`app dev needs ${TEST_POSTGRES_URL}, the database the tests use: it migrates a throwaway schema there`)
+			throw new AppDevError(`app dev needs ${TEST_POSTGRES_URL}, the database the tests use: it migrates a throwaway schema there`)
 		}
 		postgres = await testDatabase({ migrations: join(options.root, 'db', 'migrations'), label: 'fabrika app dev' })
 	}
+	try {
+		return serveThroughKit(app, options, postgres)
+	} catch (error) {
+		// The schema and its roles exist from here on: a failed start drops them as a stop does.
+		await postgres?.close()
+		throw error
+	}
+}
+
+/** The server over the kit of `app`, on `postgres` when it has a data layer; its `stop` also drops the schema. */
+function serveThroughKit(app: ContractImplementation<AnyContract>, options: AppDevOptions, postgres: TestDatabase | null): AppDevServer {
+	const contract = app.contract
 	const hasFiles = Object.keys(contract.surface.files ?? {}).length > 0
 	const kit = testKit(app, {
 		root: options.root,
@@ -229,7 +258,7 @@ export async function startAppDev(app: ContractImplementation<AnyContract>, opti
 		return response
 	}
 
-	const server = Bun.serve({
+	const server = listen({
 		hostname: options.host,
 		port: options.port,
 		async fetch(request) {
@@ -250,9 +279,26 @@ export async function startAppDev(app: ContractImplementation<AnyContract>, opti
 	return {
 		url: `http://${host}:${server.port}/`,
 		async stop() {
-			await server.stop(true)
-			await postgres?.close()
+			try {
+				await server.stop(true)
+			} finally {
+				await postgres?.close()
+			}
 		},
+	}
+}
+
+/** `Bun.serve`, with a port another process holds named as such. */
+function listen(serving: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
+	try {
+		return Bun.serve(serving)
+	} catch (error) {
+		if (error instanceof Error && 'code' in error && error.code === 'EADDRINUSE') {
+			throw new AppDevError(
+				`app dev: port ${String(serving.port)} on ${String(serving.hostname)} is in use; pass --port=<n>, or --port=0 for a free one`,
+			)
+		}
+		throw error
 	}
 }
 
@@ -263,15 +309,12 @@ export const runAppDevCli = async (argv: readonly string[]): Promise<void> => {
 	if (!existsSync(join(root, CONTRACT_FILE))) {
 		throw new Error(`app dev: no ${CONTRACT_FILE} in ${root}; run it from the application root`)
 	}
-	const secret = process.env[TEST_POSTGRES_URL] ?? ''
 	let server: AppDevServer
 	try {
 		const { default: app } = await implementationAt(join(root, IMPLEMENTATION_FILE))()
 		server = await startAppDev(app, { root, port, host, env: process.env })
 	} catch (error) {
-		// A driver or an application error may quote the database URL, which is a credential.
-		const message = error instanceof Error ? error.message : String(error)
-		throw new Error(secret === '' ? message : message.replaceAll(secret, TEST_POSTGRES_URL))
+		throw startupFailure(error)
 	}
 	console.info(server.url)
 	console.error(`fabrika app dev: pick a caller at ${server.url}${PICKER_PATH.slice(1)}; stop with Ctrl-C`)

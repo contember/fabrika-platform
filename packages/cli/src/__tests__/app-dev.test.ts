@@ -3,8 +3,11 @@
 // FABRIKA_TEST_POSTGRES_URL, the tests' database, and skip cleanly without it. The URL is a credential: no assertion
 // prints it, and the command's output is checked for it.
 
-import type { Subprocess } from 'bun'
+import { SQL, type Subprocess } from 'bun'
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseAppDevArgs } from '../app-dev'
 
@@ -16,6 +19,19 @@ const TEMPLATE = join(import.meta.dir, '..', '..', '..', '..', 'examples', 'zero
 
 if (url === '') {
 	console.warn('app-dev.test.ts skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests')
+}
+
+/** Runs `fabrika app dev` in `cwd` until it exits; answers its exit code and its whole output. */
+async function exited(cwd: string, env: Readonly<Record<string, string>>, args: readonly string[] = ['--port=0']) {
+	const child = Bun.spawn(['bun', CLI, 'app', 'dev', ...args], {
+		cwd,
+		stdin: 'ignore',
+		stdout: 'pipe',
+		stderr: 'pipe',
+		env: { PATH: process.env['PATH'] ?? '', ...env },
+	})
+	const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+	return { code, output: `${stdout}${stderr}` }
 }
 
 describe('fabrika app dev refuses before it serves', () => {
@@ -37,6 +53,63 @@ describe('fabrika app dev refuses before it serves', () => {
 		const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
 		expect(code).toBe(1)
 		expect(stderr).toContain('app dev: no fabrika.contract.ts')
+	})
+
+	test("an application's startup error is a fixed code: its message may carry a credential", async () => {
+		const root = mkdtempSync(join(tmpdir(), 'fabrika-app-dev-'))
+		try {
+			writeFileSync(join(root, 'fabrika.contract.ts'), '')
+			mkdirSync(join(root, 'src'))
+			writeFileSync(join(root, 'src', 'app.ts'), "throw new Error(`cannot reach the mail API with ${process.env['MAIL_API_KEY']}`)\n")
+			const failed = await exited(root, { MAIL_API_KEY: 'mail-key-9f3c', FABRIKA_TEST_POSTGRES_URL: 'postgres://u:pw-77ab@localhost/db' })
+			expect(failed.code).toBe(1)
+			expect(failed.output).toContain('app dev could not start: start_failed')
+			expect(failed.output).not.toContain('mail-key-9f3c')
+			expect(failed.output).not.toContain('pw-77ab')
+		} finally {
+			rmSync(root, { recursive: true, force: true })
+		}
+	})
+
+	test("its own refusal keeps its message: the template without the tests' database", async () => {
+		const failed = await exited(TEMPLATE, {})
+		expect(failed.code).toBe(1)
+		expect(failed.output).toContain('app dev needs FABRIKA_TEST_POSTGRES_URL')
+	})
+})
+
+/** The session-level advisory lock that holds a test schema, as `@fabrika/db/testing` derives it. */
+const schemaLockKey = (schema: string): string =>
+	String(createHash('sha256').update(`fabrika-test-schema:${schema}`, 'utf8').digest().readUIntBE(0, 6) + 1)
+
+describe.skipIf(url === '')('fabrika app dev that cannot listen', () => {
+	test('a port in use is named, and the throwaway schema it migrated is dropped before it exits', async () => {
+		const held = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('held') })
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const schemas = async (): Promise<string[]> => {
+			const rows: unknown = await sql.unsafe("SELECT nspname AS name FROM pg_namespace WHERE nspname LIKE 'app\\_test\\_%'")
+			return Array.isArray(rows) ? rows.map((row: unknown) => String(typeof row === 'object' && row !== null ? Reflect.get(row, 'name') : '')) : []
+		}
+		try {
+			const before = new Set(await schemas())
+			const failed = await exited(TEMPLATE, { FABRIKA_TEST_POSTGRES_URL: url }, [`--port=${held.port}`])
+			expect(failed.code).toBe(1)
+			expect(failed.output).toContain(`app dev: port ${held.port} on 127.0.0.1 is in use`)
+			expect(failed.output).not.toContain(url)
+			// A schema another live run holds stays locked; one this run left behind would be free.
+			const left: string[] = []
+			for (const schema of (await schemas()).filter((name) => !before.has(name))) {
+				const taken: unknown = await sql.unsafe('SELECT pg_try_advisory_lock($1::bigint) AS taken', [schemaLockKey(schema)])
+				if (Array.isArray(taken) && Reflect.get(taken[0], 'taken') === true) {
+					left.push(schema)
+					await sql.unsafe('SELECT pg_advisory_unlock($1::bigint)', [schemaLockKey(schema)])
+				}
+			}
+			expect(left).toEqual([])
+		} finally {
+			await sql.close()
+			held.stop(true)
+		}
 	})
 })
 

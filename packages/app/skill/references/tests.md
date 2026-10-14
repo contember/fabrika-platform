@@ -52,7 +52,9 @@ export const members = { 'api.tasks.assign': ['assignee'] }
   values of, and a foreign key, it may set.
 - `rows['<endpoint id>']` names the input fields that address a row lying in the endpoint's object, with that row's
   table: `export const rows = { 'api.tasks.editComment': { commentId: 'task_comments' } }`. The generated cases seed
-  one row of the table in each scope's object and send its key there. Without it they send a sample, the handler
+  one row of the table in each scope's object and send its key there. The table lies directly in the object: a child
+  table of the table that owns it, or a table it contains; the checker refuses a row further down
+  (`endpoint-fixture`). Without it they send a sample, the handler
   finds no row (404), and the case fails.
 - The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
 - The seed of the tests fills every text column with a marker and every other required column with a sample of its
@@ -224,7 +226,9 @@ if (postgres !== null) {
 - `kit.acceptInvitation(invitationId)` is the invited person accepting an invitation your handler opened
   (`ctx.members.assign(ctx.target, { email }, role)`): it answers a new caller labelled by the address, holding the
   role in that scope (an `external` person for an external role). Pass a caller to make an existing person the
-  member: `kit.acceptInvitation(invitationId, member)`. An invitation that is not open throws.
+  member: `kit.acceptInvitation(invitationId, member)`. It throws as IAM refuses: an invitation that is not open, an
+  external person and a role not declared external (`not_eligible`), an inviter that has since lost the authority to
+  give the role (`not_allowed`).
 
 ```ts src/members/__tests__/members.test.ts
 import { createClient } from '@fabrika/app/client'

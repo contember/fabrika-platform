@@ -1009,7 +1009,9 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   as in IAM: the directory, its own checks and the next token the kit signs for that principal read it.
   `kit.acceptInvitation(invitationId, person?)` is IAM's onboarding as a test step: the invitation closes, and
   `person`, or a new person labelled by the invited address (`external` for an external role), holds the invited
-  role from then on. `options.membership` replaces the stand-in with the test's own `IamMembershipRpc`; that kit
+  role from then on. As IAM, it first refuses an external `person` for a role not declared external (`not_eligible`)
+  and an invitation whose inviter can no longer give the role, by its live roles and permissions (`not_allowed`),
+  and leaves the invitation open. `options.membership` replaces the stand-in with the test's own `IamMembershipRpc`; that kit
   accepts no invitation.
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
@@ -1082,7 +1084,9 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   function allowlist) is refused. A check before each commit rolls back a file that leaves an
   escape or an object no migration declares in the schema.
 - **Seeding.** Every seeded row lies in one of two containment chains that share no value,
-  with each container row a table owns. A foreign key outside the chain holds `null` where
+  with each container row a table owns. A column with a database default keeps it unless a
+  seed sets it, and a value a seed sets, `null` included, is written as given. Otherwise a
+  foreign key outside the chain holds `null` where
   its columns admit it; a required one holds the key of an existing row of the referenced
   table, or of one the fixture inserts, when that table is a reference, application or
   unpoliced table, and is refused when it is a dimension or child table, whose row would lie
@@ -1162,8 +1166,9 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   row of the table in each scope's object (`seedUnder`) and sends, per case, the key of the row in the object the case
   names: the other scope's in the denial, each scope's own in the leak case, which also looks for the other row's key
   and markers, and the own in the own-target case, a link holder's included. A field of an endpoint that is not `on` an
-  object a table owns, one that is no string field, and a table that is no dimension or child table lying in that
-  object are `endpoint-fixture` findings.
+  object a table owns, one that is no string field, and a table whose rows do not lie directly in that object (a
+  child table of the table that owns it, or a dimension table it contains) are `endpoint-fixture` findings: the kit
+  seeds no container between, so a task row of an org endpoint, whose project it would need, is refused.
 - **Members.** A handler that validates a picked person with `ctx.members.get` refuses a sampled id, so the author
   names the field in the same file: `export const members = { '<endpoint id>': ['<field>'] }`. The scaffold writes
   `GENERATED_MEMBER` (`'fabrika:member'`, `@fabrika/app/contract`) there, and the kit replaces it, per case, with a new
