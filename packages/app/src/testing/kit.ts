@@ -434,6 +434,7 @@ export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C
 			app: null,
 			label: null,
 			email: null,
+			lastSignInAt: null,
 			link: Object.freeze({ mount: link.mount, chain }),
 		})
 	}
