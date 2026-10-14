@@ -762,8 +762,9 @@ async function openInvitationOf(services: Services, token: string): Promise<Invi
 
 /**
  * The authority that lets the inviter give the invitation's role there against its permissions now: the roles that make
- * it an assigner, and the schema revision read before anything else, so the acceptance's write requires the
- * declarations this check read (`InviterCheck`). Null when it could not give the role.
+ * it an assigner, the schema revision read before anything else and the inviter's grant revision read before its
+ * permissions, so the acceptance's write requires the declarations and the grants this check read (`InviterCheck`).
+ * Null when it could not give the role.
  */
 async function inviterAssigners(services: Services, invitation: InvitationRow): Promise<InviterCheck | null> {
 	const revision = await services.repositories.appSchema.getSchemaRevision(invitation.app)
@@ -778,7 +779,11 @@ async function inviterAssigners(services: Services, invitation: InvitationRow): 
 	if (!manage.ok || (await roleAuthorityProblem(services, actor, scope, role)) !== null) {
 		return null
 	}
-	return { assigners: role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by), revision }
+	return {
+		assigners: role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by),
+		revision,
+		grantRevision: inviter.grant_revision,
+	}
 }
 
 /** The record of an acceptance, by the principal that accepted. A user's audit label is its id. */

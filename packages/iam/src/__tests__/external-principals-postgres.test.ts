@@ -176,7 +176,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 		const accepting = repositories.membership.acceptInvitation(
 			invitation,
 			external.id,
-			await inviterCheck(repositories, ['partner'], APP),
+			await inviterCheck(repositories, invitation, ['partner']),
 			event('race.accept', external.id),
 		)
 		await pause.reached()
@@ -207,7 +207,7 @@ describe.skipIf(!hasPostgres)('the external-role rule under concurrent writers o
 		open.push(() => pause.release())
 		const narrowing = concurrent.appSchema.reconcileAppSchema(schema(false), event('race.reconcile', external.id))
 		await pause.reached()
-		const accepting = repositories.membership.acceptInvitation(invitation, external.id, await inviterCheck(repositories, ['partner'], APP))
+		const accepting = repositories.membership.acceptInvitation(invitation, external.id, await inviterCheck(repositories, invitation, ['partner']))
 		await pause.blocked()
 		await pause.release()
 
@@ -360,7 +360,7 @@ describe('an acceptance whose grant writes nothing', () => {
 			repositories.membership.acceptInvitation(
 				invitation,
 				external.id,
-				await inviterCheck(repositories, ['partner'], APP),
+				await inviterCheck(repositories, invitation, ['partner']),
 				event('race.accept', external.id),
 			),
 		).rejects.toThrow()

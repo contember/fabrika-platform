@@ -11,6 +11,7 @@ import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import { acceptInvitation, assignMember, createScope, findMember, issueLink, listMembers, requestDelegation, revokeMember } from '../membership'
 import { hashToken } from '../secret'
 import {
+	BetweenCheckAndWrite,
 	CALLER_ENV,
 	CapturingEmail,
 	CREATE_ENDPOINT,
@@ -178,11 +179,11 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const invitee = await f.person(`accept-invitee-${fixtureSeq}`)
 		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		if (invitation === null) throw new Error('fixture')
-		const ownerCheck = await inviterCheck(concurrent, ['owner'])
+		const ownerCheck = await inviterCheck(concurrent, invitation, ['owner'])
 		const outcomes = await Promise.all([1, 2, 3].map(() => concurrent.membership.acceptInvitation(invitation, invitee.id, ownerCheck)))
 		expect(outcomes.filter((outcome) => outcome === 'accepted')).toHaveLength(1)
 		await repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
-		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, ['owner']))).toBe('not_open')
+		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, invitation, ['owner']))).toBe('not_open')
 		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
 	})
 
@@ -238,9 +239,11 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 				scope.value,
 			])
 			let settled = false
-			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, ['owner'])).finally(() => {
-				settled = true
-			})
+			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, invitation, ['owner'])).finally(
+				() => {
+					settled = true
+				},
+			)
 			await Bun.sleep(300)
 			expect(settled).toBe(false)
 			await reserved.unsafe('COMMIT')
@@ -282,7 +285,11 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 				'staff',
 			])
 			let settled = false
-			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(concurrent, ['owner', 'manager', 'staff']))
+			const acceptance = concurrent.membership.acceptInvitation(
+				invitation,
+				invitee.id,
+				await inviterCheck(concurrent, invitation, ['owner', 'manager', 'staff']),
+			)
 				.finally(() => {
 					settled = true
 				})
@@ -295,6 +302,32 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 			await removal.close()
 		}
 		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
+	})
+
+	test("an inviter's supplementing grant removed on another connection between the check and the write: the acceptance grants nothing", async () => {
+		if (fixture === null) throw new Error('fixture')
+		const email = new CapturingEmail()
+		const membership = new BetweenCheckAndWrite(fixture.db, { dialect: 'postgres' })
+		const f = await membershipFixture({ ...repositories, membership }, { email })
+		fixtureSeq += 1
+		const owner = await f.person(`supplemented-owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		// `owner` assigns a publisher but lacks `notes.publish`: this second grant of the owner supplies it.
+		const supplement = await repositories.grants.createGrant({ principalId: owner.id, app: APP, permissions: ['notes.publish'] })
+		const invited = await assignMember(f.services, CALLER_ENV, f.ctx, {
+			...(await delegated(f, owner)),
+			scope,
+			role: 'publisher',
+			member: { email: `supplemented-invitee-${fixtureSeq}@example.test` },
+		})
+		expect(invited).toMatchObject({ ok: true, invited: {} })
+		const invitee = await repositories.principals.getPrincipalById((await f.person(`supplemented-invitee-${fixtureSeq}`)).id)
+		if (invitee === null) throw new Error('fixture')
+		membership.between = () => concurrent.grants.deleteGrant(supplement.id)
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
+		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])
 	})
 
 	test('a link issued while a reconcile removes its mount is never left usable', async () => {

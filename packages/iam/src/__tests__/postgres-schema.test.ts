@@ -111,6 +111,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0013_app_mail_templates.sql' },
 			{ bundle: 'iam', name: '0014_invitation_wording.sql' },
 			{ bundle: 'iam', name: '0015_app_schema_revisions.sql' },
+			{ bundle: 'iam', name: '0016_principal_grant_revision.sql' },
 		])
 	})
 

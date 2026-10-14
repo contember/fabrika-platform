@@ -17,6 +17,8 @@ export interface PrincipalRow {
 	created_at: number
 	/** `external`: a person from outside the organization, who holds only roles declared external (ADR-0051). */
 	affiliation: PrincipalAffiliation
+	/** Moved on by every removal of one of its grants (`grantRemovalStatement`); an acceptance writes only under the one it checked. */
+	grant_revision: number
 }
 
 /** Derived principal status — invited (not activated) → active → disabled. */

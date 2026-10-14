@@ -52,6 +52,7 @@ class FakeStore implements UserPrincipalStore {
 			activated_at: 0,
 			created_at: 0,
 			affiliation: 'internal',
+			grant_revision: 0,
 		}
 		this.rows.push(row)
 		return Promise.resolve(row)
@@ -68,6 +69,7 @@ const invited = (email: string): PrincipalRow => ({
 	activated_at: null,
 	created_at: 0,
 	affiliation: 'internal',
+	grant_revision: 0,
 })
 
 describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
@@ -83,6 +85,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 			affiliation: 'internal',
+			grant_revision: 0,
 		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
@@ -103,6 +106,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 			affiliation: 'internal',
+			grant_revision: 0,
 		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'new@x.com', 'req-resolve')
 		expect(res.ok).toBe(true)
@@ -126,6 +130,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 			affiliation: 'internal',
+			grant_revision: 0,
 		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com', 'req-resolve')
 		expect(res).toEqual({ ok: false, reason: 'disabled' })
@@ -165,6 +170,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 			activated_at: 0,
 			created_at: 0,
 			affiliation: 'internal',
+			grant_revision: 0,
 		})
 		const res = await resolveUserPrincipal(db, 'sub-other', 'shared@x.com', 'req-resolve')
 		expect(res).toEqual({ ok: false, reason: 'unknown_principal' })

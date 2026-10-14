@@ -34,6 +34,19 @@ export function eligibleGrantSql(dialect: SqlDialect): string {
 	OR EXISTS (SELECT 1 FROM roles er WHERE er.app = ? AND er.role_key = ? AND er.external = 1${lock}))`
 }
 
+/**
+ * The first statement of every transaction that removes a grant of a principal: it moves the principal's grant revision
+ * on and, on Postgres, takes the principal row first, as every writer of a principal's rows starts. An acceptance
+ * writes only while its inviter's revision is the one read before its check of the inviter's live permissions
+ * (`InviterCheck`), so a removal of any of its grants between the check and the write is seen.
+ */
+export function grantRemovalStatement(db: SqlDatabase, target: { principalId: string } | { grantId: string }): SqlStatement {
+	return 'principalId' in target
+		? db.prepare('UPDATE principals SET grant_revision = grant_revision + 1 WHERE id = ?').bind(target.principalId)
+		: db.prepare('UPDATE principals SET grant_revision = grant_revision + 1 WHERE id = (SELECT principal_id FROM grants WHERE id = ?)')
+			.bind(target.grantId)
+}
+
 export function eligibleGrantBinds(input: { principalId: string; app?: string | null; roleKey?: string | null }): (string | null)[] {
 	return [input.principalId, input.app ?? null, input.roleKey ?? null]
 }
@@ -237,17 +250,23 @@ export class GrantRepository {
 		}
 	}
 
-	/** Delete a grant. `audit` is written exactly when this call deleted it. */
+	/** Delete a grant, after its principal's revision (`grantRemovalStatement`). `audit` is written exactly when this call deleted it. */
 	async deleteGrant(id: string, audit?: AuditEventInput): Promise<boolean> {
-		return (await this.writer.run([{ sql: 'DELETE FROM grants WHERE id = ? RETURNING id', binds: [id] }], audit)).length > 0
+		const removal = this.writer.changed([{ sql: 'DELETE FROM grants WHERE id = ? RETURNING id', binds: [id] }], audit)
+		const results = await this.db.batch([grantRemovalStatement(this.db, { grantId: id }), ...removal.statements])
+		return removal.rows(results, 1).length > 0
 	}
 
-	/** Delete all grants for a principal (revocation). */
+	/** Delete all grants for a principal (revocation), after its revision (`grantRemovalStatement`). */
 	async deleteGrantsForPrincipal(principalId: string): Promise<void> {
-		await this.writer.run([this.deleteGrantsForPrincipalChange(principalId)], undefined)
+		const removal = this.db.prepare('DELETE FROM grants WHERE principal_id = ?').bind(principalId)
+		await this.db.batch([grantRemovalStatement(this.db, { principalId }), removal])
 	}
 
-	/** Every grant of a principal, as a change an audited revocation groups with others. */
+	/**
+	 * Every grant of a principal, as a change an audited revocation groups with others. It moves no grant revision, so
+	 * the group must disable the principal in the same transaction, which an acceptance sees as surely (`InviterCheck`).
+	 */
 	deleteGrantsForPrincipalChange(principalId: string): SqlChange {
 		return { sql: 'DELETE FROM grants WHERE principal_id = ? RETURNING id', binds: [principalId] }
 	}

@@ -31,6 +31,7 @@ import { mintFromKey } from '../tokens'
 import { createHarness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
 import {
 	APP,
+	BetweenCheckAndWrite,
 	CALLER_ENV,
 	CapturingEmail,
 	CREATE_ENDPOINT,
@@ -502,9 +503,11 @@ describe('an application-wide role in assignableBy assigns in every value, held 
 		const second = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		if (first === null || second === null) throw new Error('fixture')
 		const accepting = await f.person('first')
-		expect(await f.repositories.membership.acceptInvitation(first, accepting.id, await inviterCheck(f.repositories, ['staff']))).toBe('accepted')
+		expect(await f.repositories.membership.acceptInvitation(first, accepting.id, await inviterCheck(f.repositories, first, ['staff']))).toBe('accepted')
 		await f.repositories.grants.deleteGrant(grantId)
-		expect(await f.repositories.membership.acceptInvitation(second, (await f.person('second')).id, await inviterCheck(f.repositories, ['staff']))).toBe(
+		expect(
+			await f.repositories.membership.acceptInvitation(second, (await f.person('second')).id, await inviterCheck(f.repositories, second, ['staff'])),
+		).toBe(
 			'not_allowed',
 		)
 	})
@@ -998,10 +1001,14 @@ describe('review round 1', () => {
 		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		const invitee = await f.person('invitee')
 		if (invitation === null) throw new Error('fixture')
-		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(f.repositories, ['owner']))).toBe('accepted')
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(f.repositories, invitation, ['owner']))).toBe(
+			'accepted',
+		)
 		await f.repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
 		// The second attempt passed its checks with the same open row before the first committed.
-		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(f.repositories, ['owner']))).toBe('not_open')
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, await inviterCheck(f.repositories, invitation, ['owner']))).toBe(
+			'not_open',
+		)
 		expect(await rolesOf(f, invitee, scope)).toEqual([])
 	})
 
@@ -1019,6 +1026,26 @@ describe('review round 1', () => {
 		const invitee = await f.repositories.principals.getPrincipalById(person.id)
 		if (invitee === null) throw new Error('fixture')
 		removing.removeBeforeAcceptance = { app: APP, principalId: owner.id, roleKey: 'owner', scope }
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await rolesOf(f, person, scope)).toEqual([])
+		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])
+	})
+
+	test('an inviter whose supplementing grant goes between the check and the write grants nothing, and the invitation stays open', async () => {
+		const email = new CapturingEmail()
+		const harness = createHarness()
+		const membership = new BetweenCheckAndWrite(new TestSqlDatabase(harness.sqlite))
+		const f = await membershipFixture({ ...harness.repositories, membership }, { email })
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		// `owner` assigns a publisher but lacks `notes.publish`: this second grant of the owner supplies it.
+		const supplement = await f.repositories.grants.createGrant({ principalId: owner.id, app: APP, permissions: ['notes.publish'] })
+		expect(await assign(f, owner, scope, 'publisher', { email: 'invitee@example.test' })).toMatchObject({ ok: true, invited: {} })
+		const person = await f.person('invitee')
+		const invitee = await f.repositories.principals.getPrincipalById(person.id)
+		if (invitee === null) throw new Error('fixture')
+		membership.between = () => f.repositories.grants.deleteGrant(supplement.id)
 		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toEqual({ ok: false, reason: 'not_allowed' })
 		expect(await rolesOf(f, person, scope)).toEqual([])
 		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))

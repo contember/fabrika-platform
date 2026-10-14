@@ -2,7 +2,7 @@ import type { PrincipalAffiliation, Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlQueryResult, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import type { StoredPasswordHash } from '../password-crypto'
 import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange, type SqlDialect } from './audit'
-import { eligibleGrantBinds, eligibleGrantSql, type GrantRow } from './grants'
+import { eligibleGrantBinds, eligibleGrantSql, grantRemovalStatement, type GrantRow } from './grants'
 import type { PrincipalRow } from './principals'
 import { unixNow } from './sql'
 
@@ -91,13 +91,14 @@ export type NewPrincipalAcceptance =
 
 /**
  * What authorized an acceptance, as the use case checked it: the roles that make the inviter an assigner of the
- * invitation's role, and the revision of the app's schema and policies read BEFORE that check
- * (`AppSchemaRepository.getSchemaRevision`). The acceptance writes only while the revision is unchanged, so the
- * declarations the check read are the ones in force at the write.
+ * invitation's role, the revision of the app's schema and policies (`AppSchemaRepository.getSchemaRevision`) and the
+ * inviter's grant revision (`principals.grant_revision`), both read BEFORE that check. The acceptance writes only while
+ * both are unchanged, so the declarations and the grants the check read are the ones in force at the write.
  */
 export interface InviterCheck {
 	readonly assigners: readonly string[]
 	readonly revision: number
+	readonly grantRevision: number
 }
 
 /** The records of an acceptance that creates its principal, each written exactly when its change was. */
@@ -268,13 +269,15 @@ export class MembershipRepository {
 		return granted ?? null
 	}
 
-	/** Remove one role grant of a principal in `scope`. Returns whether a row went. */
+	/** Remove one role grant of a principal in `scope`, after its grant revision (`grantRemovalStatement`). Returns whether a row went. */
 	async deleteRoleGrant(app: string, principalId: string, roleKey: string, scope: Scope): Promise<boolean> {
-		const result = await this.db
-			.prepare('DELETE FROM grants WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ?')
-			.bind(app, principalId, roleKey, scope.type, scope.value)
-			.run()
-		return result.meta.changes > 0
+		const [, deleted] = await this.db.batch<{ id: string }>([
+			grantRemovalStatement(this.db, { principalId }),
+			this.db
+				.prepare('DELETE FROM grants WHERE app = ? AND principal_id = ? AND role_key = ? AND scope_type = ? AND scope_value = ? RETURNING id')
+				.bind(app, principalId, roleKey, scope.type, scope.value),
+		])
+		return (deleted?.results.length ?? 0) > 0
 	}
 
 	/**
@@ -282,11 +285,13 @@ export class MembershipRepository {
 	 * there. The value's `membership_scopes` row is the lock: created on demand, because an administrator
 	 * may have granted the role without `createScope`, then taken with a row-locking UPDATE — the one lock
 	 * statement SQLite and Postgres share; D1 runs a batch serially anyway. Two revokes of the last two
-	 * holders therefore run one after the other, and the second sees the first's delete.
+	 * holders therefore run one after the other, and the second sees the first's delete. The principal's
+	 * grant revision moves first (`grantRemovalStatement`), so its row is locked before the value's.
 	 */
 	async deleteCreatorGrantUnlessLast(app: string, principalId: string, roleKey: string, scope: Scope): Promise<boolean> {
 		const remove = this.deleteCreatorChange(app, principalId, roleKey, scope, unixNow())
-		const [, , deleted] = await this.db.batch<{ role_key: string }>([
+		const [, , , deleted] = await this.db.batch<{ role_key: string }>([
+			grantRemovalStatement(this.db, { principalId }),
 			...this.scopeLockStatements(app, scope),
 			this.db.prepare(remove.sql).bind(...remove.binds),
 		])
@@ -328,7 +333,7 @@ export class MembershipRepository {
 				return this.writer.changed([remove], audit(roleKey))
 			}),
 		]
-		const lock = this.scopeLockStatements(app, scope)
+		const lock = [grantRemovalStatement(this.db, { principalId }), ...this.scopeLockStatements(app, scope)]
 		const results = await this.db.batch<{ role_key: string }>([...lock, ...groups.flatMap((group) => group.statements)])
 		let offset = lock.length
 		const removed: string[] = []
@@ -706,12 +711,13 @@ export class MembershipRepository {
 	}
 
 	/**
-	 * What an acceptance's writes require of the authority `inviter` checked: the inviter is still enabled, the app's
+	 * What an acceptance's writes require of the authority `inviter` checked: the inviter is still enabled and its grant
+	 * revision unchanged (no grant of it was removed, the one that supplied an action of the role included), the app's
 	 * schema revision is still the one read before the check, and the inviter still holds one of the assigners in the
 	 * value, or an application-wide one globally (`ASSIGNING_GRANT`).
 	 *
 	 * On Postgres `locks` come first in the batch, in the principal-first order: the inviter's principal row `FOR SHARE`
-	 * (a disable waits for the acceptance, or the acceptance reads the committed disable), then the revision row
+	 * (a disable or a grant removal waits for the acceptance, or the acceptance reads the committed change), then the revision row
 	 * `FOR SHARE` (a reconcile's increment, its first statement, waits, or the acceptance reads the new revision), and
 	 * only then do the writes' conditions lock the assigning grant and the role row. SQLite and D1 run one writer at a
 	 * time and need none.
@@ -727,7 +733,7 @@ export class MembershipRepository {
 				this.db.prepare(`SELECT id FROM principals WHERE id = ? ${this.#shareLock}`).bind(invitation.invited_by),
 				this.db.prepare(`SELECT revision FROM app_schema_revisions WHERE app = ? ${this.#shareLock}`).bind(invitation.app),
 			]
-		const sql = `EXISTS (SELECT 1 FROM principals WHERE id = ? AND disabled_at IS NULL)
+		const sql = `EXISTS (SELECT 1 FROM principals WHERE id = ? AND disabled_at IS NULL AND grant_revision = ?)
 			AND COALESCE((SELECT revision FROM app_schema_revisions WHERE app = ?), 0) = ?
 			AND EXISTS (
 				SELECT 1 FROM grants
@@ -736,6 +742,7 @@ export class MembershipRepository {
 				${this.#shareLock})`
 		const binds = [
 			invitation.invited_by,
+			inviter.grantRevision,
 			invitation.app,
 			inviter.revision,
 			invitation.app,

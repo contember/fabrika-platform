@@ -240,7 +240,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   `password_credentials`, `password_action_tokens` and `sessions` locks the principal row first
   (`principalLockStatements`): `promoteToInternal`, `upsertCredential` (enrollment and login rehash), `disableCredential`,
   `completeAction` and action-token issuance. They wait at one row and never hold each other's; a new such writer must
-  start there too.
+  start there too. So does every write that removes a grant: its first statement moves `principals.grant_revision`
+  on (`grantRemovalStatement`, `repositories/grants.ts`) — the admin `grants.revoke`, a membership revoke and every
+  repository delete. The one exception, an API key's revoke, disables the principal in the same statement.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and
@@ -288,7 +290,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   acceptance against the declarations of one schema revision (`app_schema_revisions`, read BEFORE the check; every
   reconcile and custom-policy write increments it as its first statement), and the UPDATE that consumes the invitation
   writes only while that authority still holds (`checkedAuthority`, `InviterCheck`): the inviter not disabled, the
-  revision unchanged, and its assigning grant in the value or global. On Postgres the batch first locks the inviter's
+  revision unchanged, the inviter's `grant_revision` the one read before its live permissions (so the removal of ANY of
+  its grants, one that only supplied an action of the role included, is seen), and its assigning grant in the value or
+  global. On Postgres the batch first locks the inviter's
   principal row, then the revision row, both `FOR SHARE`, and the conditions then hold the assigning grant and the
   role row `FOR SHARE` (principal first, as every writer of a principal's rows starts); a D1 batch runs alone. A
   removal, a disable or a reconcile either commits first and the acceptance is `not_allowed` with the invitation still

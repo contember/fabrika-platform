@@ -286,9 +286,15 @@ export class InviterRemovedBeforeAcceptance extends MembershipRepository {
 	}
 }
 
-/** The authority a test hands an acceptance directly: `assigners`, under the app's schema revision as it is now. */
-export async function inviterCheck(repositories: IamRepositories, assigners: readonly string[], app: string = APP): Promise<InviterCheck> {
-	return { assigners, revision: await repositories.appSchema.getSchemaRevision(app) }
+/** The authority a test hands an acceptance directly: `assigners`, under the app's and the inviter's revisions as they are now. */
+export async function inviterCheck(
+	repositories: IamRepositories,
+	invitation: Pick<InvitationRow, 'app' | 'invited_by'>,
+	assigners: readonly string[],
+): Promise<InviterCheck> {
+	const inviter = await repositories.principals.getPrincipalById(invitation.invited_by)
+	if (inviter === null) throw new Error('the invitation names no inviter')
+	return { assigners, revision: await repositories.appSchema.getSchemaRevision(invitation.app), grantRevision: inviter.grant_revision }
 }
 
 /**

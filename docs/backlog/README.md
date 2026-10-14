@@ -59,7 +59,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [139](139-an-application-cannot-author-the-html-of-iams-e-mails.md) — application e-mail templates are plain text; IAM builds the HTML.
-- [141](141-an-acceptance-is-not-serialized-with-every-grant-of-its-inviter.md) — removing a supplementing grant of the inviter is not serialized with an acceptance.
 - [142](142-a-data-layer-capability-refusal-fails-as-handler-failed.md) — `@fabrika/db`'s `CapabilityError` fails a request as `handler_failed`, with no reason.
 - [143](143-no-server-code-reads-a-file-collection.md) — A handler or a job cannot list, check or open a collection's files, and only a dimension table owns one.
 - [144](144-the-typed-client-has-no-file-collections-and-no-answer-type.md) — `createClient` has no file rows and exports no type of a procedure's input or answer.

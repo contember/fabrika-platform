@@ -170,7 +170,9 @@ describe.skipIf(!hasPostgres)('an invitation that creates its principal, on Post
 			const principal = await repositories.principals.getUserByEmail(mailbox)
 			if (principal === null) throw new Error('no principal')
 			const loser = outcomes[0]?.ok === true ? other : first
-			expect(await repositories.membership.acceptInvitation(loser, principal.id, await inviterCheck(repositories, ['owner', 'staff']))).toBe('accepted')
+			expect(await repositories.membership.acceptInvitation(loser, principal.id, await inviterCheck(repositories, loser, ['owner', 'staff']))).toBe(
+				'accepted',
+			)
 		}
 	})
 
@@ -187,7 +189,7 @@ describe.skipIf(!hasPostgres)('an invitation that creates its principal, on Post
 		expect(
 			await repositories.membership.acceptAsNewPrincipal({
 				invitation: before,
-				inviter: await inviterCheck(repositories, ['owner']),
+				inviter: await inviterCheck(repositories, before, ['owner']),
 				password: PASSWORD,
 			}, eventsFor),
 		).toEqual({
@@ -214,7 +216,7 @@ describe.skipIf(!hasPostgres)('an invitation that creates its principal, on Post
 			let settled = false
 			const acceptance = concurrent.membership.acceptAsNewPrincipal({
 				invitation,
-				inviter: await inviterCheck(concurrent, ['owner', 'staff']),
+				inviter: await inviterCheck(concurrent, invitation, ['owner', 'staff']),
 				password: PASSWORD,
 			}, eventsFor)
 				.finally(() => {
@@ -295,6 +297,26 @@ describe.skipIf(!hasPostgres)('a change between the check of an acceptance and i
 	}
 })
 
+describe.skipIf(!hasPostgres)("an inviter's supplementing grant removed on another connection between the check and the write", () => {
+	test('the acceptance that creates its principal writes nothing, and the invitation stays open', async () => {
+		const o = await onboarding()
+		const widened = reconcilesBetween(ONBOARDING_SCHEMA)['role actions widened']
+		if (widened === undefined) throw new Error('fixture')
+		expect((await o.f.putSchema(widened)).status).toBe(200)
+		const staff = await o.f.person(`supplemented-staff-${seq}`)
+		await repositories.grants.createRoleGrantUnlessHeld({ principalId: staff.id, app: APP, roleKey: 'staff' })
+		// `staff` assigns the widened partner but lacks `notes.publish`: this second grant of the staff member supplies it.
+		const supplement = await repositories.grants.createGrant({ principalId: staff.id, app: APP, permissions: ['notes.publish'] })
+		const mailbox = `supplemented-${seq}@partner.test`
+		const invitation = await o.invite(mailbox, { by: staff })
+		o.membership.between = () => concurrent.grants.deleteGrant(supplement.id)
+		expect(await acceptCreatingPrincipal(o.f.services, invitation, PASSWORD, 'pg-supplement')).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await principalsOf(mailbox)).toBe(0)
+		const open = await repositories.membership.getInvitationById(invitation.id)
+		expect([open?.accepted_at, open?.revoked_at]).toEqual([null, null])
+	})
+})
+
 describe.skipIf(!hasPostgres)("the inviter's disable and an acceptance, on two connections", () => {
 	async function staffInvitation(o: Onboarding): Promise<{ staff: Person; invitation: InvitationRow; mailbox: string }> {
 		const staff = await o.f.person(`racing-staff-${seq}`)
@@ -342,7 +364,7 @@ describe.skipIf(!hasPostgres)("the inviter's disable and an acceptance, on two c
 		await o.invite(`racing-invitee-${seq}@example.test`, { by: staff })
 		const invitation = await repositories.membership.getInvitationByHash(await hashToken(o.email.lastToken()))
 		if (invitation === null) throw new Error('fixture')
-		const check = await inviterCheck(concurrent, ['owner', 'staff'])
+		const check = await inviterCheck(concurrent, invitation, ['owner', 'staff'])
 		let settled = false
 		const { acceptance } = await holding('UPDATE principals SET disabled_at = 1 WHERE id = $1', [staff.id], async () => {
 			const pending = concurrent.membership.acceptInvitation(invitation, invitee.id, check).finally(() => {
