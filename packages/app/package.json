@@ -85,7 +85,7 @@
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "bun test"
+		"test": "bun test --path-ignore-patterns='src/react/**' && bun test --isolate src/react"
 	},
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",

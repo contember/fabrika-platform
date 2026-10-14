@@ -17,7 +17,7 @@ target: an application declares `fabrika.contract.ts` with the staged kit and se
 
 ```bash
 bun run typecheck
-bun test
+bun run test                                    # every suite; the DOM tests of src/react in a run --isolate of their own
 bun test src/__tests__/rpc.test.ts
 bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compiled by tsc
 bun test src/__tests__/implement-types.test.ts  # the handler mistakes, compiled by tsc
