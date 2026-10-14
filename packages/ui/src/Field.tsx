@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useId } from 'react'
+import { createContext, isValidElement, type ReactNode, useContext, useId } from 'react'
 import { classNames } from './class-names'
 import { useFormFieldError } from './Form'
 
@@ -27,8 +27,16 @@ export interface FieldProps {
 	readonly className?: string
 }
 
+/** The id the one control inside was given explicitly, so the label and the descriptions point at it. */
+function explicitId(children: ReactNode): string | undefined {
+	if (!isValidElement(children) || typeof children.props !== 'object' || children.props === null) return undefined
+	const id: unknown = Reflect.get(children.props, 'id')
+	return typeof id === 'string' && id !== '' ? id : undefined
+}
+
 export function Field({ label, name, hint, error, required = false, children, className }: FieldProps) {
-	const id = useId()
+	const generated = useId()
+	const id = explicitId(children) ?? generated
 	const formError = useFormFieldError(name)
 	const message = error ?? formError
 	const hintId = hint === undefined ? undefined : `${id}-hint`

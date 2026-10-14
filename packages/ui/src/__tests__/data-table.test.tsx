@@ -122,9 +122,9 @@ describe('DataTable status', () => {
 		expect(mounted.container.textContent).not.toContain('Alpha')
 	})
 
-	test('error shows the message and Retry calls onRetry', async () => {
+	test('a failed first load shows the message and Retry calls onRetry', async () => {
 		let retries = 0
-		mounted = await mount(table({ status: 'error', error: 'Could not load deals', onRetry: () => retries++ }))
+		mounted = await mount(table({ rows: [], status: 'error', error: 'Could not load deals', onRetry: () => retries++ }))
 		expect(query(mounted.container, '[role="alert"]', HTMLElement).textContent).toBe('Could not load deals')
 		expect(mounted.container.textContent).not.toContain('Alpha')
 		await click(byText(mounted.container, 'button', 'Retry', HTMLButtonElement))
@@ -172,5 +172,19 @@ describe('DataTable load more', () => {
 		const busy = byText(mounted.container, 'button', 'More deals', HTMLButtonElement)
 		expect(busy.disabled).toBe(true)
 		expect(busy.getAttribute('aria-busy')).toBe('true')
+	})
+})
+
+describe('a failed later page', () => {
+	test('keeps the loaded rows and shows the error with a retry after them', async () => {
+		let retried = 0
+		mounted = await mount(
+			<DataTable columns={columns} rows={deals} rowKey={(deal) => deal.id} status="error" error="The next page failed" onRetry={() => retried++} />,
+		)
+		const rows = queryAll(mounted.container, 'tbody tr', HTMLTableRowElement).map((row) => row.textContent)
+		expect(rows.slice(0, 3)).toEqual(['Alpha100', 'Beta250', 'Gamma75'])
+		expect(rows[3]).toContain('The next page failed')
+		await click(byText(mounted.container, 'button', 'Retry', HTMLButtonElement))
+		expect(retried).toBe(1)
 	})
 })

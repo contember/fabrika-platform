@@ -72,7 +72,8 @@ export function DataTable<Row>({
 	className,
 }: DataTableProps<Row>) {
 	const columnCount = columns.length + (selection ? 1 : 0)
-	const showRows = status === 'ready'
+	// A failed later page keeps the rows already loaded; the error row and its retry follow them.
+	const showRows = status === 'ready' || (status === 'error' && rows.length > 0)
 	const visibleKeys = showRows ? rows.map(rowKey) : []
 	const selectedKeys = selection ? [...selection.selected] : []
 	const selectedVisible = selection ? visibleKeys.filter((key) => selection.selected.has(key)).length : 0
@@ -151,19 +152,7 @@ export function DataTable<Row>({
 									))}
 								</tr>
 							))}
-						{status === 'error' && (
-							<tr className="fui-table__row">
-								<td className="fui-table__cell fui-table__message fui-table__message--error" colSpan={columnCount}>
-									<span role="alert">{error}</span>
-									{onRetry && (
-										<Button size="sm" onClick={onRetry}>
-											{retryLabel}
-										</Button>
-									)}
-								</td>
-							</tr>
-						)}
-						{showRows && rows.length === 0 && (
+						{status === 'ready' && rows.length === 0 && (
 							<tr className="fui-table__row">
 								<td className="fui-table__cell fui-table__message" colSpan={columnCount}>
 									{empty}
@@ -188,6 +177,18 @@ export function DataTable<Row>({
 								</tr>
 							)
 						})}
+						{status === 'error' && (
+							<tr className="fui-table__row">
+								<td className="fui-table__cell fui-table__message fui-table__message--error" colSpan={columnCount}>
+									<span role="alert">{error}</span>
+									{onRetry && (
+										<Button size="sm" onClick={onRetry}>
+											{retryLabel}
+										</Button>
+									)}
+								</td>
+							</tr>
+						)}
 					</tbody>
 				</table>
 			</div>

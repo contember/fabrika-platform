@@ -54,6 +54,8 @@ describe('Field', () => {
 		const textarea = query(mounted.container, 'textarea', HTMLTextAreaElement)
 		expect(textarea.id).toBe('notes')
 		expect(describedBy(textarea)).toEqual(['Extra', 'Too long'])
+		// One id for both: the label names the control the author identified.
+		expect(query(mounted.container, 'label', HTMLLabelElement).htmlFor).toBe('notes')
 	})
 
 	test('Select reads the field too and renders the placeholder first', async () => {
