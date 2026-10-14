@@ -22,6 +22,7 @@
 	"include": [
 		"src/**/*",
 		"web/**/*",
+		"dev/**/*",
 		"build-web.ts",
 		"fabrika.contract.ts",
 		"fabrika.config.ts",

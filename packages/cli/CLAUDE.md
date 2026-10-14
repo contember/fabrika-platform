@@ -132,10 +132,21 @@ arguments and reports.
   the provider's build; the Worker entrypoint on Cloudflare, and nothing else. An
   application without a contract builds as before.
 - `app dev` (`src/app-dev.ts`) resolves no provider: it loads `src/app.ts` with `@fabrika/app/bun`'s
-  `implementationAt` and serves it through `@fabrika/app/testing`'s `testKit`, on a throwaway schema of
-  `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`), with a caller picker at `/__fabrika/dev`. It refuses any host
-  but loopback and prints nothing of the environment. It is the kit and nothing else: never add a proxy rule, an
-  IAM or a second enforcement decision here.
+  `implementationAt` and serves it through `@fabrika/app/testing`'s `devKit` (the test kit and its stand-in IAM), on
+  a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`). It is the kit and nothing else: never add
+  a proxy rule, an IAM or a second enforcement decision here.
+  - The seed (`src/app-dev-seed.ts`): `--seed=<module>`, or `dev/seed.ts` when it exists, default-exports a `DevSeed`
+    that gets the kit before the first request. Its answer is parsed at the boundary: a persona is a person that kit
+    made, a link is a local path. A seed that throws is `seed_failed` with no message; a wrong answer names the
+    entry's position, never what the seed wrote.
+  - The routes under `/__fabrika/dev`: the picker, `as` (a persona, a role in a scope value, an accepted invitee, or
+    anonymous; it sets the cookie the application never sees), `accept` (an invitation the stand-in IAM sent),
+    `state` (the toolbar's JSON) and `toolbar.js`. Every `text/html` 200 of an SPA or link mount gets the toolbar's
+    same-origin script tag; the kit's CSP already admits it, so `app dev` changes no header the kit answers.
+  - The UI (`src/app-dev-ui.ts`) is self-contained HTML, CSS and a shadow-DOM script, colored by `--fd-*` custom
+    properties, light and dark. The picker answers its own strict CSP and runs no script.
+  - It refuses any host but loopback, answers 421 to a request whose `Host` is not its loopback name and port, and
+    prints its address and the seed's counts only: no credential, link key or mailbox.
 
 ## Provider selection
 

@@ -1127,14 +1127,22 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 - An SPA mount whose built directory exists under `options.root` (the working directory when omitted) is served from
   it as the Bun deploy serves it (`diskAssets`): a file by its path, every other path of the mount by its
   `index.html`; a mount not built is an empty HTML document, and `options.assets` replaces both.
-- `fabrika app dev` (`packages/cli/src/app-dev.ts`) serves the application through this kit on a loopback port, to
-  click through its screens: a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and
-  dropped on exit, the stand-in IAM, the SPAs from their built directories, file objects in memory, and the
-  application's variables from the environment without the `FABRIKA_*` names. `/__fabrika/dev` picks the caller, a
-  role of the vocabulary held app-wide or, a membership role, in one scope value; a cookie keeps the choice, which
-  never reaches the application, and the kit's own session never leaves the process. A sign-in the proxy answers (a
-  redirect to the kit's IAM, a 401's `loginUrl`) points to the picker. It listens on `127.0.0.1`, `::1` or
-  `localhost` only, and prints its address and nothing of the environment. Cron jobs do not run there.
+- `fabrika app dev` (`packages/cli/src/app-dev.ts`) serves the application through this kit (`devKit`, the kit with
+  its stand-in IAM) on a loopback port, to click through its screens: a throwaway schema of
+  `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and dropped on exit, the SPAs from their built
+  directories, file objects in memory, and the application's variables from the environment without the `FABRIKA_*`
+  names. A seed module (`--seed`, or `dev/seed.ts`) default-exports a `DevSeed`: it gets the kit, writes through the
+  endpoints, and answers personas (a person the kit made), link pages (a URL `ctx.links` answered) and labelled scope
+  values. `/__fabrika/dev` picks the caller: a persona, a role of the vocabulary held app-wide or in one scope value,
+  or anonymous; a cookie keeps the choice, which never reaches the application, and the kit's own session never leaves
+  the process. A sign-in the proxy answers (a redirect to the kit's IAM, a 401's `loginUrl`) points to the picker.
+  Every SPA page it serves gets a same-origin toolbar script (the kit's `script-src 'self'` admits it; `app dev`
+  changes no policy): who the browser is, a persona switch, the link pages, and the invitations the stand-in IAM sent,
+  each with a link that accepts it as IAM's onboarding does. The stand-in IAM signs no password, so there is no reset
+  mail. It listens on `127.0.0.1`, `::1` or `localhost` only, answers no request addressed to another host name, and
+  prints its address and nothing of the environment. Cron jobs do not run there.
+- The kit's stand-in IAM mints for the key of a share link it issued through `ctx.links`, as IAM resolves a link key:
+  the mount's grants on the link's object, bound to its chain, until the link is revoked.
 - `kit.fetch` takes a request as it reaches the proxy; `kit.browser(caller?)` adds
   what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
   request's credentials are `omit`, the caller's session cookie. Both refuse a host
