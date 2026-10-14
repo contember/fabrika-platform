@@ -86,7 +86,7 @@ const checkSourceModule = async (
 		checkFrameworkWrite(node, ancestors, trusted, report)
 		checkTypeNode(node, report)
 		checkAmbientModule(node, report)
-		if (isTest) checkTestNode(node, report)
+		if (isTest) checkTestNode(node, ancestors, report)
 		checkMockModule(node, module.file, files, report)
 		checkStructureNode(place, node, report)
 	})

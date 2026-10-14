@@ -164,12 +164,46 @@ const cases: readonly RuleCase[] = [
 				'export { connect, serve }',
 				'',
 			].join('\n'),
+			// The global, also beside a function whose parameter of that name shadows it, and under an ambient declaration.
+			'src/widths.ts': [
+				'declare const self: { width: number }',
+				'export const half = (window: { width: number }) => window.width / 2',
+				'export const width = window.innerWidth',
+				'export const own = self.width',
+				'',
+			].join('\n'),
 		},
-		expected: ['src/server.ts:1:1', 'src/server.ts:2:1', 'src/server.ts:3:22', 'src/server.ts:4:21', 'src/server.ts:5:1'],
+		expected: [
+			'src/server.ts:1:1',
+			'src/server.ts:2:1',
+			'src/server.ts:3:22',
+			'src/server.ts:4:21',
+			'src/server.ts:5:1',
+			'src/widths.ts:3:22',
+			'src/widths.ts:4:20',
+		],
 		good: {
 			// Outside src/ a build script still reaches Bun's other members; a server module only tests for a global.
 			'scripts/files.ts': "import { file } from 'bun'\n\nexport const read = () => Bun.file('notes.txt').text()\nexport { file }\n",
 			'src/runtime.ts': "export const inBrowser = typeof window !== 'undefined'\n",
+			// A name the module binds itself is not the global: a const, a parameter, a catch binding, an import.
+			'src/viewport.ts': [
+				"import { global } from './regions'",
+				'',
+				'const window = { opensAt: 9, closesAt: 17 }',
+				'export const hours = window.closesAt - window.opensAt',
+				'export const scale = (self: { factor: number }) => self.factor * 2',
+				'export const region = global.code',
+				'export const failed = () => {',
+				'\ttry {',
+				'\t\treturn hours',
+				'\t} catch (globalThis) {',
+				'\t\treturn globalThis',
+				'\t}',
+				'}',
+				'',
+			].join('\n'),
+			'src/regions.ts': "export const global = { code: 'eu' }\n",
 		},
 	},
 	{
@@ -643,15 +677,33 @@ const cases: readonly RuleCase[] = [
 				'declare const xit: (name: string, run: () => void) => void',
 				'',
 			].join('\n'),
+			// An alias imported from bun:test is the alias.
+			'src/__tests__/imported.test.ts': "import { expect, xdescribe } from 'bun:test'\n\nxdescribe('notes', () => expect(1).toBe(1))\n",
 		},
 		expected: [
+			'src/__tests__/imported.test.ts:3:1',
 			'src/__tests__/notes.test.ts:2:1',
 			'src/__tests__/notes.test.ts:3:1',
 			'src/__tests__/notes.test.ts:4:1',
 			'src/__tests__/notes.test.ts:5:1',
 			'src/__tests__/notes.test.ts:6:1',
 		],
-		good: { 'src/notes.test.ts': "import { expect, test } from 'bun:test'\n\ntest('lists', () => {\n\texpect([1]).toHaveLength(1)\n})\n" },
+		good: {
+			'src/notes.test.ts': "import { expect, test } from 'bun:test'\n\ntest('lists', () => {\n\texpect([1]).toHaveLength(1)\n})\n",
+			// A helper the test file binds itself is not Bun's focused test, whatever its name.
+			'src/fit.test.ts': [
+				"import { expect, test } from 'bun:test'",
+				"import { xit } from './scale'",
+				'',
+				'const fit = (width: number) => Math.min(width, 80)',
+				"test('fits', () => {",
+				'\texpect(fit(120)).toBe(80)',
+				'\texpect(xit(2)).toBe(4)',
+				'})',
+				'',
+			].join('\n'),
+			'src/scale.ts': 'export const xit = (factor: number) => factor * 2\n',
+		},
 	},
 	{
 		rule: 'test-without-assertion',

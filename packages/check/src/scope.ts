@@ -31,9 +31,12 @@ const declaratorNames = (declaration: AstNode | undefined, lexical: boolean): re
 	return children(declaration, 'declarations').flatMap((declarator) => (declarator === null ? [] : patternNames(child(declarator, 'id'))))
 }
 
-/** What one statement declares in the block it stands in: `let`/`const` (every kind at the top level), functions, classes, imports. */
+/**
+ * What one statement declares in the block it stands in: `let`/`const` (every kind at the top level), functions,
+ * classes, value imports. An ambient `declare` binds nothing at runtime: the name it types stays the global.
+ */
 const statementNames = (statement: AstNode | null, topLevel: boolean): readonly string[] => {
-	if (statement === null) return []
+	if (statement === null || statement['declare'] === true) return []
 	switch (statement.type) {
 		case 'VariableDeclaration':
 			return topLevel ? [...declaratorNames(statement, true), ...declaratorNames(statement, false)] : declaratorNames(statement, true)
@@ -42,7 +45,10 @@ const statementNames = (statement: AstNode | null, topLevel: boolean): readonly 
 		case 'TSImportEqualsDeclaration':
 			return patternNames(child(statement, 'id'))
 		case 'ImportDeclaration':
-			return children(statement, 'specifiers').flatMap((specifier) => (specifier === null ? [] : patternNames(child(specifier, 'local'))))
+			if (stringField(statement, 'importKind') === 'type') return []
+			return children(statement, 'specifiers').flatMap((specifier) =>
+				specifier === null || stringField(specifier, 'importKind') === 'type' ? [] : patternNames(child(specifier, 'local'))
+			)
 		case 'ExportNamedDeclaration':
 		case 'ExportDefaultDeclaration':
 			return statementNames(child(statement, 'declaration') ?? null, topLevel)

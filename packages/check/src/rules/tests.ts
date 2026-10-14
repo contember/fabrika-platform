@@ -1,6 +1,7 @@
 import { type AstNode, child, children, type Comment, identifierName, memberPath, memberSuffix, staticString, walk } from '../ast'
 import type { Finding, Report } from '../finding'
 import { ENDPOINT_ACCESS_TEST, isRelativeSpecifier, joinRelative, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR, resolveRelative } from '../layout'
+import { declaringScope } from '../scope'
 import { isKey, parseToml } from '../toml'
 import { BUNFIG_FILE } from '../trust'
 
@@ -59,15 +60,36 @@ const registrationPath = (node: AstNode): readonly string[] | undefined => {
 	return path?.[path.length - 1] === 'each' ? path : undefined
 }
 
+/** The name of `bun:test`'s export a module's own `local` binding imports, if it imports one. */
+const bunTestImport = (program: AstNode, local: string): string | undefined => {
+	for (const statement of children(program, 'body')) {
+		if (statement?.type !== 'ImportDeclaration' || staticString(child(statement, 'source')) !== 'bun:test') continue
+		for (const specifier of children(statement, 'specifiers')) {
+			if (specifier?.type === 'ImportSpecifier' && identifierName(child(specifier, 'local')) === local) {
+				return identifierName(child(specifier, 'imported')) ?? staticString(child(specifier, 'imported'))
+			}
+		}
+	}
+	return undefined
+}
+
+/** What a call rooted at `root` reaches: the global, `bun:test`'s export it imports, or nothing for the module's own binding. */
+const runnerName = (root: string, ancestors: readonly AstNode[]): string | undefined => {
+	const scope = declaringScope(root, ancestors)
+	if (scope === undefined) return root
+	return scope.type === 'Program' ? bunTestImport(scope, root) : undefined
+}
+
 /** For test files: every test runs, and every test asserts. */
-export const checkTestNode = (node: AstNode, report: Report): void => {
+export const checkTestNode = (node: AstNode, ancestors: readonly AstNode[], report: Report): void => {
 	if (node.type !== 'CallExpression') return
 	const path = registrationPath(node)
 	if (path === undefined) return
 	const [root, ...modifiers] = path
 	if (root === undefined) return
 	const notRun = TEST_ROOTS.has(root) ? modifiers.find((modifier) => NOT_RUN.has(modifier)) : undefined
-	if (notRun !== undefined || (NOT_RUN_ALIASES.has(root) && modifiers.length === 0)) {
+	const isAlias = modifiers.length === 0 && NOT_RUN_ALIASES.has(root) && NOT_RUN_ALIASES.has(runnerName(root, ancestors) ?? '')
+	if (notRun !== undefined || isAlias) {
 		if (child(node, 'callee')?.type !== 'CallExpression') {
 			report(node, 'skipped-test', `${path.join('.')} leaves tests out of the run`, 'a test that runs, or no test at all')
 		}

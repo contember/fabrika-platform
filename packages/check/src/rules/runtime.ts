@@ -16,6 +16,7 @@ import {
 import type { Report } from '../finding'
 import { unwrapValue } from '../graph'
 import { isRequire } from '../references'
+import { declaringScope } from '../scope'
 import { FORBIDDEN_BUN_MEMBERS } from './modules'
 import { handledProcedure } from './structure'
 
@@ -304,7 +305,8 @@ const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: Source
 	}
 }
 
-const checkMember = (node: AstNode, parent: AstNode | undefined, context: SourceContext): void => {
+const checkMember = (node: AstNode, ancestors: readonly AstNode[], context: SourceContext): void => {
+	const parent = ancestors[ancestors.length - 1]
 	const path = globalPath(node)
 	const property = staticKey(node, 'property')
 	const name = path?.join('.') ?? ''
@@ -319,7 +321,8 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 	}
 	const bunMember = path?.length === 2 && path[0] === 'Bun' ? FORBIDDEN_BUN_MEMBERS.get(path[1] ?? '') : undefined
 	// In a server module the root itself is refused (`checkIdentifier`), once.
-	const rootRefused = context.isServerModule && SERVER_REFUSED_GLOBALS.has(memberPath(node)?.[0] ?? '')
+	const root = memberPath(node)?.[0] ?? ''
+	const rootRefused = context.isServerModule && SERVER_REFUSED_GLOBALS.has(root) && declaringScope(root, ancestors) === undefined
 	if (bunMember !== undefined && !rootRefused) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
 	if (pathIs(path, 'eval') && (memberPath(node)?.length ?? 0) > 1) context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
 	if (!context.isGeneratedEntry && (pathIs(path, 'process', 'env') || pathIs(path, 'Bun', 'env'))) {
@@ -387,13 +390,19 @@ const checkUndeclaredSql = (node: AstNode, ancestors: readonly AstNode[], contex
 	}
 }
 
-const checkIdentifier = (node: AstNode, parent: AstNode | undefined, context: SourceContext): void => {
+/** Inside an ambient `declare`, which types a name and runs nothing. */
+const isAmbient = (ancestors: readonly AstNode[]): boolean => ancestors.some((ancestor) => ancestor['declare'] === true)
+
+const checkIdentifier = (node: AstNode, ancestors: readonly AstNode[], context: SourceContext): void => {
+	const parent = ancestors[ancestors.length - 1]
 	if (!isValueReference(node, parent)) return
 	const name = stringField(node, 'name')
 	const isMemberObject = parent?.type === 'MemberExpression' && parent['object'] === node
 	if (name === 'eval') context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
 	const isTypeofCheck = parent?.type === 'UnaryExpression' && parent['operator'] === 'typeof'
-	if (context.isServerModule && name !== undefined && SERVER_REFUSED_GLOBALS.has(name) && !isTypeofCheck) {
+	const isRefusedName = context.isServerModule && name !== undefined && SERVER_REFUSED_GLOBALS.has(name) && !isTypeofCheck
+	// A name the module binds itself (a declaration, a parameter, an import) is its own value, not the global.
+	if (isRefusedName && declaringScope(name, ancestors) === undefined && !isAmbient(ancestors)) {
 		context.report(node, 'forbidden-global', `${name} is not used in a server module`, 'what the framework hands the handler through ctx or deps')
 		return
 	}
@@ -452,9 +461,9 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 			return checkComputedLoad(node, context)
 		case 'MemberExpression':
 			checkUndeclaredSql(node, ancestors, context)
-			return checkMember(node, parent, context)
+			return checkMember(node, ancestors, context)
 		case 'Identifier':
-			return checkIdentifier(node, parent, context)
+			return checkIdentifier(node, ancestors, context)
 		case 'VariableDeclarator':
 			return checkDestructuredEnv(node, context)
 		case 'AssignmentExpression':
