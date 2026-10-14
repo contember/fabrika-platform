@@ -1597,9 +1597,10 @@ export const contract = app.contract((c) => ({
   leaves the filter (`overdue` is now true) moves no other row to an earlier page.
 - A bulk write declares `sql: 'write'` on the job and runs `tx.sql` inside the transaction:
 
-  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
+  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) returning id`)``
 
-  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'project')`). The version bump is yours to write.
+  The version bump is yours to write. **A job writes no scope fragment**: it is app-wide (`scope: 'app'` is the only
+  scope), so `tx.sql.scope` of its `Within` would be every row.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
@@ -1609,6 +1610,29 @@ export const contract = app.contract((c) => ({
   inbox, the record, the link and its e-mail, each step recorded before the next.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
+- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, or a framework refusal
+  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`; `references/errors.md`).
+
+## An outbox: what a request asks a job to do
+
+A request handler calls no outside service (`references/endpoint.md`). It records what to do in a row, in its own
+transaction: a form's inbox row, or a state of its record (`link_state = 'due'`). A job does the work and calls the
+service. `references/public-intake.md` is the whole recipe; its rules:
+
+- **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
+  first; the next run takes the rest. The job's lease runs one attempt at a time, so no `for update skip locked`.
+- **Each record is its own work.** Run it in its own transactions, inside a `try`: a failure adds one to the record's
+  `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
+  run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
+  run meets the record as it is.
+- **A dead state.** A record that failed `MAX_ATTEMPTS` times is dead: the batch skips it, the job logs it once by its
+  id (never an address), and an operator fixes or deletes it. Give the record a way back when the cause can go away
+  (a resend revives a dead delivery).
+- **A key on every external call**, derived from the record: the e-mail's `Idempotency-Key`, a provider's request id.
+  The provider then acts once per key, however often the job hands the call over.
+- **Each step recorded before the next effect**, so the next run finishes a stopped one.
+- An inbox needs a row key for this: `id UUID NOT NULL DEFAULT gen_random_uuid()`, since a form writes only its input
+  fields.
 
 ---
 
@@ -1629,6 +1653,8 @@ visitor do. The visitor never reaches a handler without a credential:
    answer for a known address would tell a stranger who registered.
 3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
    Each form kicks it (`then: 'intake'`), so it runs within seconds of a submission; its schedule is the recovery.
+   It is the outbox recipe of `references/jobs.md`: bounded batches, each record its own work with an attempt count,
+   a dead state for a record that keeps failing, and an idempotency key on the e-mail.
 4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
 5. **A second form** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
 
@@ -1703,9 +1729,11 @@ export const vocabulary = defineVocabulary({
 
 ```sql db/migrations/20261013090000_intake.sql
 CREATE TYPE candidate_status AS ENUM ('new', 'screening', 'interview', 'hired', 'rejected');
-CREATE TYPE link_state AS ENUM ('due', 'issued', 'sent');
+CREATE TYPE link_state AS ENUM ('due', 'issued', 'sent', 'failed');
 
 -- The link delivery is the intake job's own state: each step is recorded here before the next effect starts.
+-- attempts counts the failed attempts of the current delivery and last_failure names the step that failed;
+-- a delivery that failed five times is 'failed', which an operator sees.
 CREATE TABLE candidates (
 	id UUID PRIMARY KEY,
 	email TEXT NOT NULL UNIQUE,
@@ -1717,6 +1745,8 @@ CREATE TABLE candidates (
 	revoke_link_id TEXT,
 	sends INTEGER NOT NULL DEFAULT 0,
 	window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	attempts INTEGER NOT NULL DEFAULT 0,
+	last_failure TEXT,
 	created_by TEXT NOT NULL,
 	version INTEGER NOT NULL
 );
@@ -1734,13 +1764,18 @@ CREATE TABLE candidate_events (
 CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
 
 -- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token. A form
--- writes its input fields only, so received_at keeps the time of the submission.
+-- writes its input fields only, so every other column has a default: id names the row for the job, received_at keeps
+-- the time of the submission, and a registration counts the job's failed attempts at it.
 CREATE TABLE registrations (
+	id UUID NOT NULL DEFAULT gen_random_uuid(),
 	email TEXT NOT NULL,
 	full_name TEXT NOT NULL,
-	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	attempts INTEGER NOT NULL DEFAULT 0,
+	last_failure TEXT
 );
 CREATE TABLE resend_requests (
+	id UUID NOT NULL DEFAULT gen_random_uuid(),
 	email TEXT NOT NULL,
 	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -1821,6 +1856,8 @@ export const tables = defineTables(vocabulary, columns)({
 			revoke_link_id: { read: 'candidates.process' },
 			sends: { read: 'candidates.process' },
 			window_started_at: { read: 'candidates.process' },
+			attempts: { read: 'candidates.process' },
+			last_failure: { read: 'candidates.process' },
 		},
 	},
 	candidate_events: {
@@ -1876,6 +1913,7 @@ export const tables = defineTables(vocabulary, columns)({
   name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
 - The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
   (`received_at`). The job's own `now()` is later: seconds after a kick, up to a minute when the schedule recovers it.
+  An inbox's `id` is a `DEFAULT gen_random_uuid()` for the same reason: the job takes and counts each row by it.
 - The delivery columns are read only with `candidates.process`, so neither HR nor the link's holder sees them.
 
 ## The contract
@@ -1996,9 +2034,16 @@ export const contract = app.contract((c) => ({
 ```ts src/mail.ts
 import { defineDeps } from '@fabrika/app/implement'
 
+export interface Mail {
+	readonly to: string
+	readonly url: string
+	/** The provider sends one message per key, however often the job hands it over. */
+	readonly idempotencyKey: string
+}
+
 export interface Mailer {
-	/** Sends the link to `to`; throws when the provider refuses, and gives up once `signal` aborts. */
-	sendLink(to: string, url: string, signal: AbortSignal): Promise<void>
+	/** Sends the link; throws when the provider refuses, and gives up once `signal` aborts. */
+	sendLink(mail: Mail, signal: AbortSignal): Promise<void>
 	/** Sends a fixed test message to `to`, the same way. */
 	sendTest(to: string, signal: AbortSignal): Promise<void>
 }
@@ -2019,12 +2064,17 @@ const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 }
 
 export const mailer = defineDeps((env): Mailer => {
-	const send = async (message: Message, signal: AbortSignal) => {
+	const send = async (
+		message: Message,
+		idempotencyKey: string | null,
+		signal: AbortSignal,
+	) => {
 		const response = await fetch(variable(env, 'MAIL_API_URL'), {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
 				'Content-Type': 'application/json',
+				...(idempotencyKey === null ? {} : { 'Idempotency-Key': idempotencyKey }),
 			},
 			body: JSON.stringify(message),
 			signal,
@@ -2034,20 +2084,29 @@ export const mailer = defineDeps((env): Mailer => {
 		}
 	}
 	return {
-		sendLink: (to, url, signal) =>
-			send({
-				to,
-				subject: 'Confirm your address',
-				text: `Open ${
-					variable(env, 'INTAKE_ORIGIN')
-				}${url} to confirm your address.`,
-			}, signal),
+		sendLink: (mail, signal) =>
+			send(
+				{
+					to: mail.to,
+					subject: 'Confirm your address',
+					text: `Open ${
+						variable(env, 'INTAKE_ORIGIN')
+					}${mail.url} to confirm your address.`,
+				},
+				mail.idempotencyKey,
+				signal,
+			),
+		// Each click is a new message: the test e-mail takes no key.
 		sendTest: (to, signal) =>
-			send({
-				to,
-				subject: 'A test e-mail from the intake',
-				text: 'The intake can send you e-mail.',
-			}, signal),
+			send(
+				{
+					to,
+					subject: 'A test e-mail from the intake',
+					text: 'The intake can send you e-mail.',
+				},
+				null,
+				signal,
+			),
 	}
 })
 ```
@@ -2067,13 +2126,19 @@ import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { mailer } from '../mail'
 
-const Registration = z.strictObject({ email: z.string(), fullName: z.string() })
+const Queued = z.strictObject({
+	id: z.string(),
+	email: z.string(),
+	fullName: z.string(),
+})
 const Ask = z.strictObject({ email: z.string() })
 const Id = z.strictObject({ id: z.string() })
+const Attempts = z.strictObject({ attempts: z.number() })
+const State = z.strictObject({ linkState: z.string() })
 const Due = z.strictObject({
 	id: z.string(),
 	email: z.string(),
-	linkState: z.enum(['due', 'issued', 'sent']),
+	linkState: z.enum(['due', 'issued']),
 	linkId: z.nullable(z.string()),
 	revokeLinkId: z.nullable(z.string()),
 })
@@ -2081,6 +2146,13 @@ const Due = z.strictObject({
 /** A link lives a week; an address gets at most three e-mails a day, failed deliveries included. */
 const LINK_DAYS = 7
 const SENDS_PER_DAY = 3
+/** The records a run takes of each kind; the next run takes the rest. */
+const BATCH = 50
+/** A record that failed this many attempts is dead: the job leaves it to an operator. */
+const MAX_ATTEMPTS = 5
+
+/** The step of a delivery that failed last: a fixed code, never the error's message. */
+type Step = 'reserve' | 'revoke' | 'issue' | 'send'
 
 export const intake = app.cron('* * * * *', {
 	actions: [
@@ -2097,27 +2169,67 @@ export const intake = app.cron('* * * * *', {
 })
 	.handle(async ({ ctx }) => {
 		const mail = mailer.get()
-		// A registration becomes a candidate once; the form told the visitor nothing either way.
-		await ctx.transaction(async (tx) => {
-			const rows = await tx.sql(Registration)`
-				delete from registrations returning email, full_name`
-			for (const row of rows) {
-				await tx.sql(Id)`
-					insert into candidates (id, email, name, created_by, version)
-					values (${crypto.randomUUID()}, ${row.email}, ${row.fullName}, ${ctx.principal.id}, 1)
-					on conflict (email) do nothing
-					returning id`
+		/**
+		 * One record's work. A failure is the record's (`failed` counts it) and the run goes on
+		 * with the next record, unless the attempt itself ended: the next run meets it as it is.
+		 */
+		const eachRecord = async (
+			work: () => Promise<void>,
+			failed: () => Promise<void>,
+		): Promise<void> => {
+			try {
+				await work()
+			} catch (error) {
+				if (ctx.signal.aborted) throw error
+				await failed()
 			}
-		})
-		// A resend supersedes the sent link of an unverified candidate while its budget has an e-mail left.
+		}
+		// A registration becomes a candidate once; the form told the visitor nothing either way.
+		const queued = await ctx.transaction((tx) =>
+			tx.sql(Queued)`
+				select id, email, full_name from registrations
+				where attempts < ${MAX_ATTEMPTS}
+				order by received_at, id limit ${BATCH}`
+		)
+		for (const row of queued) {
+			await eachRecord(() =>
+				ctx.transaction(async (tx) => {
+					const taken = await tx.sql(Id)`
+						delete from registrations where id = ${row.id} returning id`
+					if (taken.length === 0) return
+					await tx.sql(Id)`
+						insert into candidates (id, email, name, created_by, version)
+						values (${crypto.randomUUID()}, ${row.email}, ${row.fullName},
+							${ctx.principal.id}, 1)
+						on conflict (email) do nothing
+						returning id`
+				}), async () => {
+				const [counted] = await ctx.transaction((tx) =>
+					tx.sql(Attempts)`
+						update registrations
+						set attempts = attempts + 1, last_failure = 'register'
+						where id = ${row.id} returning attempts`
+				)
+				if (counted !== undefined && counted.attempts >= MAX_ATTEMPTS) {
+					console.error(
+						`intake: registration ${row.id} is dead; an operator decides`,
+					)
+				}
+			})
+		}
+		// A resend supersedes the link of an unverified candidate, sent or dead, within its budget.
 		await ctx.transaction(async (tx) => {
-			for (
-				const ask of await tx.sql(Ask)`delete from resend_requests returning email`
-			) {
+			const asks = await tx.sql(Ask)`
+				delete from resend_requests where id in (
+					select id from resend_requests order by received_at, id limit ${BATCH})
+				returning email`
+			for (const ask of asks) {
 				await tx.sql(Id)`
 					update candidates
-					set link_state = 'due', revoke_link_id = link_id, link_id = null
-					where email = ${ask.email} and verified_at is null and link_state = 'sent'
+					set link_state = 'due', link_id = null, attempts = 0,
+						revoke_link_id = coalesce(link_id, revoke_link_id)
+					where email = ${ask.email} and verified_at is null
+						and link_state in ('sent', 'failed')
 						and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
 					returning id`
 			}
@@ -2127,57 +2239,92 @@ export const intake = app.cron('* * * * *', {
 			tx.sql(Due)`
 				select id, email, link_state, link_id, revoke_link_id
 				from candidates
-				where link_state <> 'sent'
+				where link_state in ('due', 'issued')
 					and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
-				order by id limit 50`
+				order by id limit ${BATCH}`
 		)
 		for (const candidate of due) {
-			// The e-mail is charged before any effect; without one left, the row waits as it is.
-			const reserved = await ctx.transaction((tx) =>
-				tx.sql(Id)`
-					update candidates set
-						sends = case when window_started_at < now() - interval '1 day' then 1 else sends + 1 end,
-						window_started_at = case when window_started_at < now() - interval '1 day'
-							then now() else window_started_at end
-					where id = ${candidate.id}
-						and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
-					returning id`
-			)
-			if (reserved.length === 0) continue
-			// A link issued but not known to be e-mailed, or one a resend superseded, ends first.
-			const superseded = candidate.linkState === 'issued'
-				? candidate.linkId
-				: candidate.revokeLinkId
-			if (superseded !== null) {
+			let step: Step = 'reserve'
+			await eachRecord(async () => {
+				// The e-mail is charged before any effect; without one left, the row waits as it is.
+				const reserved = await ctx.transaction((tx) =>
+					tx.sql(Id)`
+						update candidates set
+							sends = case when window_started_at < now() - interval '1 day' then 1 else sends + 1 end,
+							window_started_at = case when window_started_at < now() - interval '1 day'
+								then now() else window_started_at end
+						where id = ${candidate.id}
+							and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
+						returning id`
+				)
+				if (reserved.length === 0) return
+				// A link issued but not known to be e-mailed, or one a resend superseded, ends first.
+				const superseded = candidate.linkState === 'issued'
+					? candidate.linkId
+					: candidate.revokeLinkId
+				if (superseded !== null) {
+					step = 'revoke'
+					ctx.signal.throwIfAborted()
+					await ctx.links.revoke(superseded)
+					await ctx.transaction((tx) =>
+						tx.sql(Id)`
+							update candidates set link_state = 'due', link_id = null, revoke_link_id = null
+							where id = ${candidate.id} returning id`
+					)
+				}
+				step = 'issue'
 				ctx.signal.throwIfAborted()
-				await ctx.links.revoke(superseded)
+				const ref = await ctx.ref('candidates.invite', 'candidate', candidate.id)
+				const link = await ctx.links.issue(ref, {
+					mount: 'portal',
+					days: LINK_DAYS,
+				})
 				await ctx.transaction((tx) =>
 					tx.sql(Id)`
-						update candidates set link_state = 'due', link_id = null, revoke_link_id = null
+						update candidates set link_state = 'issued', link_id = ${link.id}
 						where id = ${candidate.id} returning id`
 				)
-			}
-			ctx.signal.throwIfAborted()
-			const ref = await ctx.ref('candidates.invite', 'candidate', candidate.id)
-			const link = await ctx.links.issue(ref, { mount: 'portal', days: LINK_DAYS })
-			await ctx.transaction((tx) =>
-				tx.sql(Id)`
-					update candidates set link_state = 'issued', link_id = ${link.id}
-					where id = ${candidate.id} returning id`
-			)
-			ctx.signal.throwIfAborted()
-			await mail.sendLink(candidate.email, link.url, ctx.signal)
-			await ctx.transaction((tx) =>
-				tx.sql(Id)`
-					update candidates set link_state = 'sent'
-					where id = ${candidate.id} and link_id = ${link.id} returning id`
-			)
+				step = 'send'
+				ctx.signal.throwIfAborted()
+				await mail.sendLink({
+					to: candidate.email,
+					url: link.url,
+					idempotencyKey: `intake-link-${link.id}`,
+				}, ctx.signal)
+				await ctx.transaction((tx) =>
+					tx.sql(Id)`
+						update candidates set link_state = 'sent', attempts = 0, last_failure = null
+						where id = ${candidate.id} and link_id = ${link.id} returning id`
+				)
+			}, async () => {
+				const [counted] = await ctx.transaction((tx) =>
+					tx.sql(State)`
+						update candidates
+						set attempts = attempts + 1, last_failure = ${step},
+							link_state = case when attempts + 1 >= ${MAX_ATTEMPTS}
+								then 'failed' else link_state end
+						where id = ${candidate.id} returning link_state`
+				)
+				if (counted?.linkState === 'failed') {
+					console.error(
+						`intake: the delivery to ${candidate.id} is dead; an operator decides`,
+					)
+				}
+			})
 		}
 	})
 ```
 
-The job keeps three invariants. Keep them when you change it:
+The job keeps five invariants. Keep them when you change it:
 
+- **Each record is its own work, in bounded batches.** A run takes at most 50 registrations, oldest first, and 50 due
+  deliveries; the next run takes the rest. Each record's work runs in `eachRecord`: a failure (a row the insert refuses,
+  a refused recipient, IAM down) adds one to the record's `attempts`, keeps the step in `last_failure`, and the run
+  goes on with the next record, so one bad record stops nothing else. A record that failed `MAX_ATTEMPTS` times is
+  dead: a registration stays in its inbox and the batch skips it, a delivery is `failed`; the job logs each once, by
+  id, never by address. An operator decides: fix the row, or delete it. A resend revives a `failed` delivery, within
+  the budget. A failure of an ended attempt (`ctx.signal` aborted) is the attempt's, not the record's: it is thrown,
+  and the next run meets the record as it is.
 - **The budget is charged first.** Each delivery reserves one e-mail of the address's daily budget, in its own
   transaction, before any effect. A delivery that fails after the e-mail left is still counted, so a provider that
   times out cannot make the job mail one address without end. Only a row with an e-mail left is selected for the batch
@@ -2185,7 +2332,13 @@ The job keeps three invariants. Keep them when you change it:
 - **Each step is recorded before the next effect.** Revoke a superseded link, then record it; issue, then record the
   link's id (`issued`); send, then record `sent`. A run that stops anywhere (a crash, a refused e-mail, IAM down) is
   finished by the next run its budget allows: an `issued` row's link is revoked and replaced, so exactly one live link
-  was e-mailed. The e-mail is at least once. The link's key is never stored: only the job saw it.
+  was e-mailed. The link's key is never stored: only the job saw it.
+- **Every external call carries a key derived from the record.** The e-mail's `Idempotency-Key` is
+  `intake-link-<link id>`, so the provider sends one message per link however often the job hands it over (a retried
+  request, a lost answer). The next run never sends the same link again, since it cannot read the key: a delivery
+  whose answer was lost revokes that link and e-mails a new one, so the e-mail is at least once, and only the last
+  link works. IAM's `issue` takes no key: a run that stops between the issue and its record leaves a link no row
+  names. Nobody holds its key, which only the job saw, and it expires with its `days`.
 - **An effect starts only while the attempt is live.** `ctx.signal.throwIfAborted()` runs before each IAM call and the
   e-mail, and the e-mail takes `ctx.signal`. The runner aborts a timed-out attempt before the next one starts, so no
   effect of a stale attempt follows the next one's. `ctx.links` itself refuses to call IAM for an ended attempt.
@@ -2196,13 +2349,16 @@ More on the job:
   links it issued. Its `actions` must hold the mount's `issuedBy` and every grant of the mount, or the contract is
   refused: IAM lets an issuer delegate only what it holds. The link is bound to one candidate (the `Ref`), and the
   approver sees the job's `issues` marked "needs closer review".
-- **`sql: 'write'`** is the declared reach into the inboxes: `delete … returning` takes each row exactly once. A job is
-  app-wide, so its statements need no scope fragment (`tx.sql.scope` of its `Within` is every row).
+- **`sql: 'write'`** is the declared reach into the inboxes: `delete … where id = …` takes each row exactly once, and
+  a refused insert rolls its delete back with it. **A job writes no scope fragment**: it is app-wide (`scope: 'app'`
+  is the only scope), so `tx.sql.scope` of its `Within` is every row, and an inbox has no scope at all.
+- **One run at a time.** The job's lease runs one attempt at a time, so a batch needs no `for update skip locked`: no
+  other run takes the same rows meanwhile, and a replaced attempt commits nothing.
 - **The latency.** The forms' kick starts a run within seconds of a submission, so the e-mail leaves seconds later,
   while the address has an e-mail of its daily budget left; a spent one waits until a day after the window's first
   e-mail. Keep the schedule (`* * * * *`): it is the recovery path. A kicked run that dies (a crash, a deploy, a
-  refused e-mail) leaves its rows, and the next scheduled run finishes them, within a minute. `retries: 0`: that run
-  is the retry. A failed run leaves a pending kick to the schedule too.
+  timeout) leaves its rows, and the next scheduled run finishes them, within a minute. `retries: 0`: that run is the
+  retry. A failed run leaves a pending kick to the schedule too.
 - **A revoked link** still works until the token the proxy holds for it expires, at most 5 minutes. Revocation is the
   stop at IAM; it is not instant.
 - The e-mail goes through `deps` (`src/mail.ts`), built from application variables the human sets (`INTAKE_ORIGIN`,
@@ -2804,7 +2960,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
   answers `issueLink` and `revokeLink`. A test of a form passes `env: {
   TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
   `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
-  down, a crash after each step): the next run must leave exactly one live, e-mailed link.
+  down, a crash after each step): the next run must leave exactly one live, e-mailed link. Test a bad record beside
+  good ones too: a registration the insert refuses and a recipient the provider always refuses end dead after
+  `MAX_ATTEMPTS` runs, while every other record is delivered and every run succeeds.
 - A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
   submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
 - The e-mail provider is a stand-in too: `testKit(app, { env: { MAIL_API_URL, MAIL_API_KEY: 'test', INTAKE_ORIGIN:
@@ -2818,14 +2976,20 @@ import { spyOn } from 'bun:test'
 /** The mail provider of a test; `env.MAIL_API_URL` points the mailer here. */
 export const MAIL_API_URL = 'https://mail.test/send'
 
-/** Answers the mail provider's URL and keeps each mail; every other request goes on to the real `fetch`. */
+/**
+ * Answers the mail provider's URL and keeps each mail with its idempotency key, sending one per key as the provider
+ * does; every other request goes on to the real `fetch`.
+ */
 export const standInMail = () => {
-	const sent: string[] = []
+	const sent: { readonly key: string | null; readonly body: string }[] = []
 	const passOn = globalThis.fetch
 	const answer = async (...args: Parameters<typeof fetch>) => {
 		const request = new Request(...args)
 		if (request.url !== MAIL_API_URL) return passOn(...args)
-		sent.push(await request.text())
+		const key = request.headers.get('Idempotency-Key')
+		if (!sent.some((mail) => mail.key !== null && mail.key === key)) {
+			sent.push({ key, body: await request.text() })
+		}
 		return new Response(null, { status: 202 })
 	}
 	const spy = spyOn(globalThis, 'fetch').mockImplementation(
@@ -2898,9 +3062,10 @@ if (postgres !== null) {
 			})
 			const api = createClient(contract, 'api', { fetch: kit.browser(lead) })
 			expect(await api.settings.testMail()).toEqual({ sentTo: 'lead@intake.test' })
-			expect(mail.sent.map((body) => Mail.parse(JSON.parse(body)).to)).toEqual([
-				'lead@intake.test',
-			])
+			expect(mail.sent.map((sent) => Mail.parse(JSON.parse(sent.body)).to))
+				.toEqual([
+					'lead@intake.test',
+				])
 		})
 	})
 }

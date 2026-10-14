@@ -7,10 +7,17 @@ import { defineDeps } from '@fabrika/app/implement'
 /** The effects of one delivery, in order: each is recorded in the candidate's row before the next one starts. */
 export type DeliveryStep = 'revoked' | 'issued' | 'recorded' | 'mailed'
 
+/** One e-mail; the provider sends one message per `idempotencyKey`, however often it is handed over. */
+export interface IntakeMail {
+	readonly to: string
+	readonly url: string
+	readonly idempotencyKey: string
+}
+
 export interface IntakeWorld {
 	readonly origin: string
 	/** Sends one e-mail; it throws when the provider refuses, and abandons the request once `signal` aborts. */
-	send(message: { readonly to: string; readonly url: string }, signal: AbortSignal): Promise<void>
+	send(message: IntakeMail, signal: AbortSignal): Promise<void>
 	/** Runs after each effect of a delivery: a test throws here to stop the run between two effects. */
 	after(step: DeliveryStep, candidate: string): Promise<void>
 }

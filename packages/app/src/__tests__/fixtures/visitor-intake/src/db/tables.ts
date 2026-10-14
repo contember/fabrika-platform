@@ -17,6 +17,8 @@ export const tables = defineTables(vocabulary, columns)({
 			revoke_link_id: { read: 'candidates.process' },
 			sends: { read: 'candidates.process' },
 			window_started_at: { read: 'candidates.process' },
+			attempts: { read: 'candidates.process' },
+			last_failure: { read: 'candidates.process' },
 		},
 	},
 	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },

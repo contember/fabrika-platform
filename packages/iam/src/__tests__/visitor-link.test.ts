@@ -358,7 +358,8 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 
 		await s.reconcile(false)
 		await s.visit('/register', { body: { email: 'cy@example.test', name: 'Cy' } })
-		expect(await s.runJob()).toMatchObject({ status: 'failed', code: 'handler_failed' })
+		// IAM's refusal fails the candidate's delivery, which counts the attempt; the run goes on and succeeds.
+		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(s.world.mails).toEqual([])
 		expect(await rpc.issueLink({ ...caller, mount: 'portal', chain: [{ type: 'candidate', value: 'c1' }], days: 1 })).toEqual({
 			ok: false,

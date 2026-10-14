@@ -685,9 +685,16 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   the job is not. A webhook issues nothing. The `url` is a path: the job prepends the
   application's public origin from its own configuration before it e-mails the link.
 - **The public intake recipe** (a form, a cron job, a link mount). A form appends a row and
-  answers a constant; the job drains the inbox into records in one transaction, then
-  delivers each record's link. IAM and the e-mail do not roll back with a transaction, so a
-  delivery keeps three invariants:
+  answers a constant; the job drains the inbox into records, then delivers each record's
+  link. It is the skill's outbox recipe: a run takes bounded batches (50, oldest first) and
+  each record is its own work, in its own transactions. A record's failure adds one to its
+  `attempts`, keeps a fixed step code in `last_failure`, and the run goes on; a record that
+  failed five times is dead (a registration left in its inbox, a delivery `failed`), logged
+  once by id, and left to an operator; a resend revives a dead delivery. A failure after the
+  attempt ended is the attempt's, never the record's. The lease runs one attempt at a time,
+  so a batch takes no row lock, and a job's statements carry no scope fragment (a job is
+  app-wide). IAM and the e-mail do not roll back with a transaction, so a delivery keeps
+  four invariants:
   1. **It charges the budget first.** One transaction reserves an e-mail of the recipient's
      daily budget (a counter and a window in the row) before any effect, so a delivery that
      fails after its e-mail left still counts; without one left, the row waits for the next
@@ -696,13 +703,17 @@ request the schema cannot express); an IAM that cannot be asked is 503.
      issue → record the link id (`issued`); e-mail → record `sent`. The next run finishes a
      stopped delivery: a link in state `issued` may have been e-mailed, so it is revoked and
      replaced; a link issued but not recorded was never e-mailed (its key existed only in the
-     job) and expires with its `days`. Never store a link's key. The e-mail is
-     at-least-once.
+     job) and expires with its `days`; IAM's `issue` takes no idempotency key, so that window
+     stays. Never store a link's key. The e-mail is at-least-once.
   3. **An effect starts only while the attempt is live**: `ctx.signal.throwIfAborted()`
      before each revoke, issue and e-mail, and the e-mail transport takes `ctx.signal`. The
      runner aborts the signal before a replacement attempt starts, and `ctx.links` of an
      ended attempt asks IAM nothing, so no effect of a stale attempt follows its
      replacement's.
+  4. **Every external call carries a key derived from the record**: the e-mail's
+     `Idempotency-Key` is `intake-link-<link id>`, so the provider sends one message per
+     link however often the job hands it over. A delivery whose answer was lost e-mails a
+     new link, since the job cannot resend one it never stored.
 
   A resend (a second form, `{ email }`) marks an unverified record due while its budget has
   an e-mail left; the job revokes the sent link before it issues the next. Verification is

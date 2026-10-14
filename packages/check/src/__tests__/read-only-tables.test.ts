@@ -42,7 +42,7 @@ describe("a form's input fields are its inbox's columns", () => {
 		)
 		expect(findings).toEqual([
 			refusal(
-				"mount 'resend': the input field 'eMail' is not a column of its inbox resend_requests — did you mean 'email'? (allowed: a field named like a column: email)",
+				"mount 'resend': the input field 'eMail' is not a column of its inbox resend_requests — did you mean 'email'? (allowed: a field named like a column: id, email, received_at)",
 			),
 		])
 	})
@@ -59,8 +59,8 @@ describe("a form's input fields are its inbox's columns", () => {
 		const declared = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"
 		expect(await contractFindings(INTAKE_ROOT, 'fabrika.contract.ts', guarded(declared))).toEqual([])
 		expect((await contractFindings(INTAKE_ROOT, 'fabrika.contract.ts', guarded(''))).map((finding) => finding.message)).toEqual([
-			"mount 'register': the input field 'website' is not a column of its inbox registrations (allowed: a field named like a column: email, name)",
-			"mount 'register': the input field 'challengeToken' is not a column of its inbox registrations (allowed: a field named like a column: email, name)",
+			"mount 'register': the input field 'website' is not a column of its inbox registrations (allowed: a field named like a column: id, email, name, received_at, attempts, last_failure)",
+			"mount 'register': the input field 'challengeToken' is not a column of its inbox registrations (allowed: a field named like a column: id, email, name, received_at, attempts, last_failure)",
 		])
 	})
 })

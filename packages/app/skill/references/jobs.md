@@ -124,9 +124,10 @@ export const contract = app.contract((c) => ({
   leaves the filter (`overdue` is now true) moves no other row to an earlier page.
 - A bulk write declares `sql: 'write'` on the job and runs `tx.sql` inside the transaction:
 
-  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) and ${tx.sql.scope(within, 'tasks')} returning id`)``
+  ``ctx.transaction((tx) => tx.sql(Marked)`update tasks set overdue = true, version = version + 1 where (…) returning id`)``
 
-  `within` is the `Within` the job minted (`ctx.within('tasks.write', 'project')`). The version bump is yours to write.
+  The version bump is yours to write. **A job writes no scope fragment**: it is app-wide (`scope: 'app'` is the only
+  scope), so `tx.sql.scope` of its `Within` would be every row.
 - `bun test --isolate` runs a job with `kit.runJob('markOverdue')` (`references/tests.md`). The platform runs
   `fabrika job run <name>` from the crontab it generates; never write a crontab or read `FABRIKA_JOB_*`.
 - A job cannot create scopes or manage members, and has no `ctx.members`: a job holds no object chain. It issues share
@@ -136,3 +137,26 @@ export const contract = app.contract((c) => ({
   inbox, the record, the link and its e-mail, each step recorded before the next.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
+- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, or a framework refusal
+  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`; `references/errors.md`).
+
+## An outbox: what a request asks a job to do
+
+A request handler calls no outside service (`references/endpoint.md`). It records what to do in a row, in its own
+transaction: a form's inbox row, or a state of its record (`link_state = 'due'`). A job does the work and calls the
+service. `references/public-intake.md` is the whole recipe; its rules:
+
+- **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
+  first; the next run takes the rest. The job's lease runs one attempt at a time, so no `for update skip locked`.
+- **Each record is its own work.** Run it in its own transactions, inside a `try`: a failure adds one to the record's
+  `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
+  run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
+  run meets the record as it is.
+- **A dead state.** A record that failed `MAX_ATTEMPTS` times is dead: the batch skips it, the job logs it once by its
+  id (never an address), and an operator fixes or deletes it. Give the record a way back when the cause can go away
+  (a resend revives a dead delivery).
+- **A key on every external call**, derived from the record: the e-mail's `Idempotency-Key`, a provider's request id.
+  The provider then acts once per key, however often the job hands the call over.
+- **Each step recorded before the next effect**, so the next run finishes a stopped one.
+- An inbox needs a row key for this: `id UUID NOT NULL DEFAULT gen_random_uuid()`, since a form writes only its input
+  fields.

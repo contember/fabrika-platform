@@ -8,22 +8,30 @@ export interface CandidatesTable {
 	email: string
 	name: string
 	verified_at: ColumnType<Date | null, Date | string | null, Date | string | null>
-	link_state: Generated<'due' | 'issued' | 'sent'>
+	link_state: Generated<'due' | 'issued' | 'sent' | 'failed'>
 	link_id: string | null
 	revoke_link_id: string | null
 	sends: Generated<number>
 	window_started_at: Generated<Date>
+	attempts: Generated<number>
+	last_failure: string | null
 	created_by: string
 	version: number
 }
 
 export interface RegistrationsTable {
+	id: Generated<string>
 	email: string
 	name: string
+	received_at: Generated<Date>
+	attempts: Generated<number>
+	last_failure: string | null
 }
 
 export interface ResendRequestsTable {
+	id: Generated<string>
 	email: string
+	received_at: Generated<Date>
 }
 
 export interface DB {
@@ -44,6 +52,8 @@ export const columns: TypedColumnList<DB> = {
 			'revoke_link_id',
 			'sends',
 			'window_started_at',
+			'attempts',
+			'last_failure',
 			'created_by',
 			'version',
 		],
@@ -52,15 +62,23 @@ export const columns: TypedColumnList<DB> = {
 	},
 	'registrations': {
 		columns: [
+			'id',
 			'email',
 			'name',
+			'received_at',
+			'attempts',
+			'last_failure',
 		],
 		foreignKeys: [],
+		timestamps: ['received_at'],
 	},
 	'resend_requests': {
 		columns: [
+			'id',
 			'email',
+			'received_at',
 		],
 		foreignKeys: [],
+		timestamps: ['received_at'],
 	},
 }

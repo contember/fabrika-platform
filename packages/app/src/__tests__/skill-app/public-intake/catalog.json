@@ -183,7 +183,8 @@
 			"enum_labels": [
 				"due",
 				"issued",
-				"sent"
+				"sent",
+				"failed"
 			]
 		},
 		{
@@ -224,6 +225,26 @@
 			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidates",
+			"column_name": "attempts",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidates",
+			"column_name": "last_failure",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
 			"enum_labels": []
 		},
 		{
@@ -848,6 +869,16 @@
 		},
 		{
 			"table_name": "registrations",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "registrations",
 			"column_name": "email",
 			"type_name": "text",
 			"type_type": "b",
@@ -872,6 +903,36 @@
 			"type_name": "timestamptz",
 			"type_type": "b",
 			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "registrations",
+			"column_name": "attempts",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "registrations",
+			"column_name": "last_failure",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "resend_requests",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
 			"nullable": false,
 			"generated": "default",
 			"enum_labels": []

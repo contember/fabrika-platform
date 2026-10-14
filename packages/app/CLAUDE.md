@@ -44,6 +44,7 @@ bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honey
 bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
 bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/intake.test.ts           # the intake recipe's job: each stop, bad records, batches, keys (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handler: a cancelled request, the budget
 bun test src/__tests__/outbox-rule.test.ts      # the generated cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
