@@ -1,0 +1,118 @@
+/* The CRM over the kit: the page itself, and the few pieces the kit has no component for (the pipeline board and its
+   cards, an inline form row, the caller in the top bar). Only the kit's tokens. */
+
+html,
+body {
+	margin: 0;
+	background: var(--fui-bg);
+}
+
+.crm-brand {
+	font-weight: var(--fui-weight-semibold);
+	font-size: var(--fui-text-lg);
+	letter-spacing: 0.02em;
+}
+
+.crm-caller {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	line-height: var(--fui-line-height-tight);
+}
+
+.crm-caller__label {
+	font-weight: var(--fui-weight-medium);
+	font-size: var(--fui-text-sm);
+}
+
+.crm-caller__email {
+	color: var(--fui-text-muted);
+	font-size: var(--fui-text-xs);
+}
+
+.crm-muted {
+	margin: 0;
+	color: var(--fui-text-muted);
+	font-size: var(--fui-text-sm);
+}
+
+.crm-stack {
+	display: flex;
+	flex-direction: column;
+	gap: var(--fui-space-6);
+	min-width: 0;
+}
+
+.crm-board {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: var(--fui-space-3);
+	align-items: start;
+}
+
+@media (max-width: 1100px) {
+	.crm-board {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+.crm-board__total {
+	color: var(--fui-text-muted);
+	font-size: var(--fui-text-xs);
+	font-variant-numeric: tabular-nums;
+}
+
+.crm-deal-cards {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--fui-space-2);
+}
+
+.crm-deal-card {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--fui-space-1);
+	padding: var(--fui-space-2) var(--fui-space-3);
+	border: var(--fui-border-width) solid var(--fui-border);
+	border-radius: var(--fui-radius-md);
+	background: var(--fui-surface);
+}
+
+.crm-deal-card__title {
+	font-weight: var(--fui-weight-medium);
+}
+
+.crm-deal-card__meta {
+	color: var(--fui-text-muted);
+	font-size: var(--fui-text-xs);
+}
+
+.crm-inline-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--fui-space-3);
+}
+
+.crm-inline-form > .fui-field {
+	flex: 1 1 10rem;
+}
+
+.crm-files {
+	margin: var(--fui-space-2) 0;
+	padding-left: var(--fui-space-5);
+	font-size: var(--fui-text-sm);
+}
+
+.crm-visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}

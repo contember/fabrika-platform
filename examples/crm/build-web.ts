@@ -1,4 +1,5 @@
-// The SPA build: `web/index.html` through `@fabrika/check/bun-plugin`, which loads the contract without its handlers.
+// The SPA build: `web/index.html` (React, `@fabrika/ui` and its stylesheet) through `@fabrika/check/bun-plugin`, which
+// loads the contract without its handlers.
 // `zerops.yaml` runs it (`bun run build:web`); the contract's `site` mount serves its output.
 
 import { shellSlicePlugin } from '@fabrika/check/bun-plugin'
@@ -9,6 +10,10 @@ export const buildWeb = (outdir: string, options: { readonly metafile?: boolean;
 		entrypoints: [join(import.meta.dir, 'web', 'index.html')],
 		outdir,
 		target: 'browser',
+		// The mount answers `index.html` for every path under `/`, so the page loads its assets from the root.
+		publicPath: '/',
+		// React's production build: without it the bundle carries React's development checks.
+		define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 		minify: options.minify ?? true,
 		metafile: options.metafile ?? false,
 		plugins: [shellSlicePlugin({ root: import.meta.dir })],
