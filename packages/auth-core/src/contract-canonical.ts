@@ -26,7 +26,11 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		actions: artifact.actions,
 		roles: mapValues(artifact.roles, canonicalRole),
 		mounts: mapValues(artifact.mounts, canonicalMount),
-		files: mapValues(artifact.files, (collection) => ({ ...collection, types: sorted(collection.types) })),
+		files: mapValues(artifact.files, (collection) => ({
+			...collection,
+			types: sorted(collection.types),
+			link: typeof collection.link === 'boolean' ? collection.link : sorted(collection.link),
+		})),
 		jobs: mapValues(artifact.jobs, (job) => ({ ...job, actions: sorted(job.actions) })),
 		exports: mapValues(artifact.exports, (declaration) => ({ ...declaration, consumers: sorted(declaration.consumers) })),
 		imports: mapValues(artifact.imports, (declaration) => ({

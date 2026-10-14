@@ -248,7 +248,8 @@ export interface FilesDeclaration extends OptionsRecord {
 	readonly maxBytes: number
 	readonly types: readonly string[]
 	readonly maxPerOwner?: number
-	readonly link?: boolean
+	/** `true`: every link mount bound to the owner's dimension serves the files; a list: the named link mounts only. */
+	readonly link?: boolean | readonly string[]
 	/** Every upload waits `quarantined` until the scan pass gives it a clean verdict. */
 	readonly scan?: boolean
 }

@@ -548,7 +548,7 @@ class SurfaceReader {
 			maxBytes: numeric(options.get('maxBytes'), at, 'maxBytes'),
 			types: texts(options.get('types'), at, 'types'),
 			maxPerOwner: optionalNumber(options.get('maxPerOwner'), 'maxPerOwner'),
-			link: link === undefined ? undefined : boolean(link, 'link'),
+			link: link === undefined ? undefined : fileLink(link, at),
 			scan: scan === undefined ? undefined : boolean(scan, 'scan'),
 			unknownOptions: optionKeys(options, 'files'),
 		}
@@ -862,6 +862,13 @@ function boolean(value: LiteralValue, field: string): boolean {
 		throw new Refused(value.at, `${field} is a ${describeKind(value)}`, `${field}: true or false`)
 	}
 	return value.value
+}
+
+/** A collection's `link`: `true` or `false`, or the link mounts it names; the build refuses an empty list. */
+function fileLink(value: LiteralValue, owner: Owner): boolean | string[] {
+	if (value.kind === 'boolean') return value.value
+	if (value.kind !== 'array') throw new Refused(value.at, `link is a ${describeKind(value)}`, "link: true, or link: ['<link mount>']")
+	return texts(value, owner, 'link')
 }
 
 function schema(value: LiteralValue | undefined, owner: Owner, field: string): Schema {

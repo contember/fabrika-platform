@@ -961,35 +961,43 @@ class ArtifactBuilder {
 				input: ID_OBJECT,
 				output: ID_OBJECT,
 			})
-			if (artifact.link) {
-				this.#linkFiles(where, name, collection, owner.scope.dimension)
+			if (artifact.link !== false) {
+				this.#linkFiles(where, name, collection, owner.scope.dimension, artifact.link)
 			}
 		}
 		return files
 	}
 
 	/**
-	 * The rows a link holder reaches a collection by (upload, list, download): under the API prefix of every link mount bound to the owner's
-	 * dimension, caller `link`, the owner being the link's object (no parameter names it). The mount grants the
-	 * collection's write and read actions, so a key of it can do what the rows require.
+	 * The rows a link holder reaches a collection by (upload, list, download): under the API prefix of every link mount
+	 * bound to the owner's dimension (`link: true`) or of each one `link` names, caller `link`, the owner being the
+	 * link's object (no parameter names it). A serving mount grants the collection's write and read actions, so a key of
+	 * it can do what the rows require; a mount `link` does not name serves no row and need not grant them.
 	 */
-	#linkFiles(where: string, name: string, collection: FilesDeclaration, ownerDimension: string): void {
-		const mounts = Object.entries(this.#contract.mounts).flatMap(([mountName, mount]) =>
+	#linkFiles(where: string, name: string, collection: FilesDeclaration, ownerDimension: string, link: true | readonly string[]): void {
+		const bound = Object.entries(this.#contract.mounts).flatMap(([mountName, mount]) =>
 			mount.kind === 'link' && mount.dimension === ownerDimension ? [{ mountName, mount }] : []
 		)
-		if (mounts.length === 0) {
-			this.#problem(
-				where,
-				`sets link: true, and no link mount is bound to '${ownerDimension}' (allowed: c.link(prefix, { dimension: '${ownerDimension}', … }))`,
-			)
+		const boundForm = `c.link(prefix, { dimension: '${ownerDimension}', … })`
+		if (link === true && bound.length === 0) {
+			this.#problem(where, `sets link: true, and no link mount is bound to '${ownerDimension}' (allowed: ${boundForm})`)
 		}
+		const mounts = link === true ? bound : link.flatMap((mountName) => {
+			const found = bound.find((candidate) => candidate.mountName === mountName)
+			if (found === undefined) {
+				const allowed = bound.length === 0 ? boundForm : bound.map((candidate) => candidate.mountName).join(', ')
+				this.#problem(where, `link names '${mountName}', which is no link mount bound to '${ownerDimension}' (allowed: ${allowed})`)
+			}
+			return found === undefined ? [] : [found]
+		})
 		const [firstType, ...otherTypes] = collection.types
 		for (const { mountName, mount } of mounts) {
 			const missing = [collection.write, collection.read].filter((action, index, all) => all.indexOf(action) === index && !mount.grants.includes(action))
 			if (missing.length > 0) {
+				const subject = link === true ? `sets link: true, and link mount '${mountName}'` : `link names mount '${mountName}', which`
 				this.#problem(
 					where,
-					`sets link: true, and link mount '${mountName}' grants no ${missing.map((action) => `'${action}'`).join(' or ')} (allowed: grants: [${
+					`${subject} grants no ${missing.map((action) => `'${action}'`).join(' or ')} (allowed: grants: [${
 						[...mount.grants, ...missing].map((action) => `'${action}'`).join(', ')
 					}])`,
 				)
@@ -1053,6 +1061,7 @@ class ArtifactBuilder {
 			this.#positiveInteger(`${where} maxPerOwner`, collection.maxPerOwner)
 		}
 		this.#unique(where, 'types', collection.types)
+		const link = this.#fileLink(where, collection.link)
 		for (const type of collection.types) {
 			if (!MIME_TYPE.test(type)) {
 				this.#problem(where, `'${type}' is not an exact media type (allowed: 'image/png'; no wildcards or parameters)`)
@@ -1084,9 +1093,17 @@ class ArtifactBuilder {
 			maxBytes: collection.maxBytes,
 			types: [...collection.types],
 			maxPerOwner: collection.maxPerOwner ?? CONTRACT_DEFAULTS.fileMaxPerOwner,
-			link: collection.link ?? CONTRACT_DEFAULTS.fileLink,
+			link,
 			...(collection.scan === true ? { scan: true } : {}),
 		}
+	}
+
+	/** `link` as the artifact holds it: a boolean, or the link mounts it names, each once. */
+	#fileLink(where: string, link: FilesDeclaration['link']): boolean | readonly string[] {
+		if (link === undefined || typeof link === 'boolean') return link ?? CONTRACT_DEFAULTS.fileLink
+		if (link.length === 0) this.#problem(where, "link names no mount (allowed: link: true, or link: ['<link mount>'])")
+		this.#unique(where, 'link', link)
+		return [...link]
 	}
 
 	#jobs(): Record<string, JobArtifact> {

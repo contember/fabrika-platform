@@ -353,7 +353,8 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly maxBytes: number
 			readonly types: readonly [string, ...string[]]
 			readonly maxPerOwner?: number
-			readonly link?: boolean
+			/** `true`: every link mount bound to the owner's dimension serves the files; a list: the named link mounts only. */
+			readonly link?: boolean | readonly [string, ...string[]]
 			/** Each upload is scanned for malware and served only after a clean verdict; until then it answers 409. */
 			readonly scan?: boolean
 		} & Owned<'kind'>,

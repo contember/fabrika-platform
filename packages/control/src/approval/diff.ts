@@ -117,7 +117,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: mountChanges,
 	})
 	compareKeyed(changes, record(baseline.files), record(candidate.files), {
-		added: (name, files) => `New file collection \`${name}\`${files.link ? ', reachable through share links' : ''}`,
+		added: (name, files) => `New file collection \`${name}\`${files.link === false ? '' : `, reachable through ${linkReach(files.link)}`}`,
 		removed: (name) => `File collection \`${name}\` is removed`,
 		changed: fileChanges,
 	})
@@ -685,9 +685,7 @@ function externalChange(name: string, before: true | undefined, after: true | un
 
 function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollectionArtifact): AccessChange[] {
 	const files = `File collection \`${name}\``
-	const linkChange = from.link === to.link
-		? []
-		: [to.link ? widening(`${files} becomes reachable through share links`) : removal(`${files} is no longer reachable through share links`)]
+	const linkChange = fileLinkChanges(files, from.link, to.link)
 	// Without scanning, an upload is served the moment it is written.
 	const scanChange = (from.scan === true) === (to.scan === true)
 		? []
@@ -705,6 +703,20 @@ function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollect
 		...linkChange,
 		...scanChange,
 	]
+}
+
+/** The share links a collection's `link` reaches it through: every link mount of its owner, or the named ones. */
+function linkReach(link: true | readonly string[]): string {
+	return link === true ? 'share links' : `the share links of mount ${listOf(link, 'none')}`
+}
+
+function fileLinkChanges(files: string, from: boolean | readonly string[], to: boolean | readonly string[]): AccessChange[] {
+	if (from === to) return []
+	if (to === false) return [removal(`${files} is no longer reachable through share links`)]
+	if (from === false) return [widening(`${files} becomes reachable through ${linkReach(to)}`)]
+	if (to === true) return [widening(`${files} becomes reachable through the share links of every link mount bound to its owner`)]
+	if (from === true) return [removal(`${files} is reachable only through ${linkReach(to)}`)]
+	return setChanges(files, from, to, 'becomes reachable through the share links of mount', 'is no longer reachable through the share links of mount')
 }
 
 /**

@@ -607,7 +607,8 @@ export const portal = app.link('/p', {
 - `link: true` on the collection serves the holder `POST /p/api/files.attachments.upload?name=<name>` (the body is the
   file), `POST /p/api/files.attachments.list` (`{ limit?, after? }`) and `GET /p/api/files.attachments/:fileId`, for
   the link's candidate only: another candidate's file id answers 404. The mount must grant the collection's `write`
-  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`.
+  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`. A second link mount
+  on candidates that must not reach the files (a one-click answer) needs `link: ['portal']` instead.
 
 ```ts web/portal/main.ts
 import { createClient, RpcError, shareKey } from '@fabrika/app/client'

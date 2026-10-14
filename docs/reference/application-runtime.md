@@ -584,8 +584,9 @@ the same pipeline:
   applies the same treatment to the answer of the endpoint it selected. The file itself gets `Content-Type` from the recorded type,
   `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
   `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
-- **Link holders' files** (`link: true`). Every link mount bound to the owner's dimension
-  gets `POST <prefix>/api/files.<name>.upload`, `POST <prefix>/api/files.<name>.list`
+- **Link holders' files** (`link: true`, or `link: ['<mount>', …]`). Every link mount bound to
+  the owner's dimension, or each one the list names (a mount it does not name serves no file
+  row and need not grant the collection's actions), gets `POST <prefix>/api/files.<name>.upload`, `POST <prefix>/api/files.<name>.list`
   (`{ after?, limit? }`, no owner) and `GET <prefix>/api/files.<name>/:fileId`,
   caller `link`, `on` the owner's dimension with no parameter: the owner is the link's
   object. Each checks the key's mount and the object's current chain as a link procedure
@@ -600,8 +601,8 @@ the same pipeline:
 - `boot` refuses a collection whose name is not lowercase snake_case of at most 39
   characters, which admits a type the framework cannot sniff, or which has no object storage
   or no `scoped(tables)` data layer; the contract refuses `link: true` without a link mount
-  bound to the owner's dimension, or with one that does not grant the collection's write and
-  read actions. `serveContract` opens the
+  bound to the owner's dimension, a named mount that is no link mount bound to it, and a
+  serving mount that does not grant the collection's write and read actions. `serveContract` opens the
   storage (path-style S3, `@fabrika/platform-node`'s `S3BlobStore`) from
   `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a
   partial set stops the boot. On Zerops the platform writes all four into the generated run

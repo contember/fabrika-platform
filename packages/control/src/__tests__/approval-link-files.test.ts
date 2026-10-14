@@ -1,5 +1,6 @@
 // A link-holder file collection (WU15) in the conservative access diff: a collection that becomes reachable through
-// share links widens, with a line for each upload, list and download route the link mount's holders gain.
+// share links widens, with a line for each upload, list and download route the link mount's holders gain; naming the
+// mounts a collection serves narrows it from every link mount of its owner.
 
 import { compileContract, defineContract } from '@fabrika/app/contract'
 import { describe, expect, test } from 'bun:test'
@@ -11,7 +12,7 @@ import type { AccessSnapshot } from '../approval/snapshot'
 
 const Title = z.strictObject({ title: z.string() })
 
-function snapshot(link: boolean): AccessSnapshot {
+function snapshot(link: boolean | readonly ['shared', ...'shared'[]]): AccessSnapshot {
 	const contract = defineContract(vocabulary, (c) => ({
 		shared: c.link('/s', {
 			spa: 'dist/share',
@@ -46,5 +47,15 @@ describe('a link-holder file collection in the approval diff', () => {
 			'New endpoint `shared.files.attachments.upload` (POST /s/api/files.attachments.upload) for link callers with `notes.write` (on `note`)',
 			'File collection `attachments` becomes reachable through share links',
 		])
+	})
+
+	test('naming the mounts it serves is shown, and so is going back to every link mount', () => {
+		expect(classifyAccess(snapshot(true), snapshot(['shared'])).changes).toEqual([
+			{ widens: false, line: 'File collection `attachments` is reachable only through the share links of mount `shared`' },
+		])
+		expect(classifyAccess(snapshot(['shared']), snapshot(true)).changes).toEqual([
+			{ widens: true, line: 'File collection `attachments` becomes reachable through the share links of every link mount bound to its owner' },
+		])
+		expect(classifyAccess(snapshot(['shared']), snapshot(['shared'])).outcome).toBe('unchanged')
 	})
 })

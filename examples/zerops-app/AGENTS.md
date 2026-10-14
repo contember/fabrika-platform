@@ -1422,6 +1422,9 @@ CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_a
 - `link: true` serves a link mount's holders, for the mount's own object: `POST <prefix>/api/files.<name>.upload`,
   `POST <prefix>/api/files.<name>.list` (no `owner`) and `GET <prefix>/api/files.<name>/:fileId` under every link mount bound to the owner's dimension, which must grant the
   collection's `write` and `read`. The owner is the link's object, never a parameter.
+- `link: ['completion']` serves the named link mounts only. Name them when the owner's dimension has a link meant
+  for something else (a one-click answer): a mount the list does not name serves no file route (404) and need not
+  grant the collection's actions.
 
 ## Storage
 
@@ -2188,7 +2191,8 @@ export const portal = app.link('/p', {
 - `link: true` on the collection serves the holder `POST /p/api/files.attachments.upload?name=<name>` (the body is the
   file), `POST /p/api/files.attachments.list` (`{ limit?, after? }`) and `GET /p/api/files.attachments/:fileId`, for
   the link's candidate only: another candidate's file id answers 404. The mount must grant the collection's `write`
-  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`.
+  and `read`. HR reaches the same files under `/api/files.attachments…` with `candidates.read`. A second link mount
+  on candidates that must not reach the files (a one-click answer) needs `link: ['portal']` instead.
 
 ```ts web/portal/main.ts
 import { createClient, RpcError, shareKey } from '@fabrika/app/client'
@@ -3631,15 +3635,16 @@ export const shared = app.link('/s', {
 - The share SPA reads the key with `shareKey()` of `@fabrika/app/client` and calls
   `createClient(contract, 'shared', { key })`. Never read `location.hash`.
 - Issue the link after the data work: IAM does not roll back with the transaction.
-- `ctx.links.issue` answers `{ id, url, expiresAt }`. Keep the `id` (never the key) to end the link later with
-  `ctx.links.revoke(id)`, which the same `issues` declaration gives; its issuer or a holder of `members.manage` on its
+- `ctx.links.issue` answers `{ id, url, expiresAt }`. A holder of that link calls with `ctx.principal.kind === 'link'`
+  and `ctx.principal.credentialId` equal to that `id`, so a row that stores the `id` finds what the link was issued
+  for. Keep the `id` (never the key) to end the link later with `ctx.links.revoke(id)`, which the same `issues` declaration gives; its issuer or a holder of `members.manage` on its
   chain may. A revoked link still works until the proxy's token for it expires, at most 5 minutes.
 - A link procedure acts on the link's own object (`ctx.db.target`), with no `from` and no id in its input. A link
   that should work once records its use in the row: a `verify` sets `verified_at` once under `getForUpdate`, and a
   second call answers the same. IAM counts no uses.
 - A cron job may issue links too (`issues` on `app.cron`, `references/jobs.md`): a visitor without an account gets a
   link by e-mail from a job that drains a form's inbox. `references/public-intake.md` is that recipe end to end, with
-  the files a link holder uploads (`link: true`, `references/files.md`).
+  the files a link holder uploads (`link: true`, or `link: ['<mount>']` for some mounts only, `references/files.md`).
 
 ## Connectors: another application's data
 

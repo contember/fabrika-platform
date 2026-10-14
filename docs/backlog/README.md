@@ -64,7 +64,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [142](142-a-data-layer-capability-refusal-fails-as-handler-failed.md) — `@fabrika/db`'s `CapabilityError` fails a request as `handler_failed`, with no reason.
 - [143](143-no-server-code-reads-a-file-collection.md) — A handler or a job cannot list, check or open a collection's files, and only a dimension table owns one.
 - [144](144-the-typed-client-has-no-file-collections-and-no-answer-type.md) — `createClient` has no file rows and exports no type of a procedure's input or answer.
-- [145](145-a-link-collection-serves-every-link-mount-of-its-dimension.md) — `link: true` serves every link mount of the owner's dimension; it cannot name the mounts.
 - [146](146-a-request-handler-has-no-abort-signal.md) — A request handler has no `ctx.signal`, and an outbound call fails the generated cases.
 - [149](149-a-job-drains-its-inbox-and-outbox-without-per-record-attempts.md) — The intake recipe drains unbounded, stops on one bad record, and sends no idempotency key.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.

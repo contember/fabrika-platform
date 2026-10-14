@@ -542,8 +542,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   endpoint's own dimension and action. A webhook gets neither; a job gets `ctx.links` only as Jobs says. A directory
   does not need the transport to boot: without one only its `list()` and `get()` calls answer 503.
 - **A link holder's file route is a link procedure for its owner** (`#linkFile` in `dispatch.ts`): a `link: true`
-  collection's rows sit under each link mount bound to the owner's dimension (`buildArtifact`'s `#linkFiles`, which
-  refuses a mount that does not grant the collection's write and read), `on` the owner with no parameter. The route
+  collection's rows sit under each link mount bound to the owner's dimension, a `link: ['<mount>']` one's under the
+  named mounts only (`buildArtifact`'s `#linkFiles`, which refuses a serving mount that does not grant the
+  collection's write and read), `on` the owner with no parameter. The route
   checks the mount and the chain with `#linkTarget`, and a download then requires the file's located chain to put it
   beneath that object (else 404). Never take the owner, or a file of another owner, from the request.
 - **A link procedure re-reads the object's chain on every request** and answers 404 when

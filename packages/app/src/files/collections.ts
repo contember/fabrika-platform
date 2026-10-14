@@ -449,6 +449,9 @@ function tooMany(collection: Collection): HttpError {
  * The file collections of `artifact`, or `null` when it declares none. Every reason a collection cannot be served
  * goes into `problems`, so `boot` refuses to start rather than answer an upload it cannot check.
  */
+/** Whether a collection's `link` reaches its files through the link mount `mount`. */
+const servesLink = (link: boolean | readonly string[], mount: string): boolean => (typeof link === 'boolean' ? link : link.includes(mount))
+
 export function fileCollections(
 	artifact: ContractArtifact,
 	database: ImplementationDatabase | null,
@@ -487,11 +490,9 @@ export function fileCollections(
 				scan: collection.scan === true,
 			})
 			const ownerDimension = artifact.dimensions[dimension]?.in ?? null
-			const linkMounts = collection.link
-				? Object.entries(artifact.mounts).flatMap((
-					[mount, declared],
-				) => (declared.kind === 'link' && declared.dimension === ownerDimension ? [mount] : []))
-				: []
+			const linkMounts = Object.entries(artifact.mounts).flatMap(([mount, declared]) =>
+				declared.kind === 'link' && declared.dimension === ownerDimension && servesLink(collection.link, mount) ? [mount] : []
+			)
 			collections.push({ name, artifact: collection, dimension, table, linkMounts })
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : `files '${name}' cannot be served`)

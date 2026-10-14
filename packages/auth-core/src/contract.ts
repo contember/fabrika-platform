@@ -350,8 +350,11 @@ export interface FileCollectionArtifact {
 	readonly maxBytes: number
 	readonly types: readonly string[]
 	readonly maxPerOwner: number | null
-	/** Whether a share link to the owner reaches the files. */
-	readonly link: boolean
+	/**
+	 * Whether a share link to the owner reaches the files: `true` through every link mount bound to the owner's
+	 * dimension, a list through the named link mounts only.
+	 */
+	readonly link: boolean | readonly string[]
 	/**
 	 * Present when every upload waits `quarantined` for a clean malware verdict before it is served. Absent otherwise,
 	 * so the digest of a contract that does not scan is what it was before the field existed.

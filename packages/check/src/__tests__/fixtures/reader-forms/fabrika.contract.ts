@@ -68,7 +68,7 @@ export const contract = defineContract({
 			maxBytes: 10485760,
 			types: ['image/png', 'application/pdf'],
 			maxPerOwner: 20,
-			link: true,
+			link: ['shared'],
 		}),
 	},
 	jobs: {

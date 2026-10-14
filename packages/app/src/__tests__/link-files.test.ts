@@ -1,5 +1,5 @@
 // Link-holder file collections (WU15): a `link: true` collection gets upload, list and download routes under the API prefix
-// of every link mount bound to its owner's dimension, caller `link`. The owner is the link's object, never a parameter:
+// of every link mount bound to its owner's dimension, caller `link`; `link: ['<mount>']` gets them under the named mounts only. The owner is the link's object, never a parameter:
 // each route checks the key's mount and the object's current chain as a link procedure does, and a download resolves
 // its file beneath that object. On a REAL Postgres; skips cleanly without FABRIKA_TEST_POSTGRES_URL.
 
@@ -65,6 +65,66 @@ const linked = (shared: { readonly grants: readonly ['notes.read', ...('notes.re
 
 const contract = linked({ grants: ['notes.read', 'notes.write'] })
 
+/** `link: ['shared']`: the files serve one mount only, and the other mount, which grants only reading, serves none. */
+const namedLink = (link: readonly [string, ...string[]]) =>
+	defineContract(vocabulary, (c) => ({
+		api: c.rpc('/api', { callers: ['human'] }, {
+			notes: { get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Title, access: { action: 'notes.read', on: 'note', from: 'id' } }) },
+		}),
+		shared: c.link('/s', {
+			spa: 'dist/share',
+			dimension: 'note',
+			grants: ['notes.read', 'notes.write'],
+			issuedBy: 'notes.write',
+			maxDays: 7,
+			procedures: (l) => ({ note: l.query({ output: Title, access: { action: 'notes.read' } }) }),
+		}),
+		other: c.link('/o', {
+			spa: 'dist/other',
+			dimension: 'note',
+			grants: ['notes.read'],
+			issuedBy: 'notes.write',
+			maxDays: 7,
+			procedures: (l) => ({ note: l.query({ output: Title, access: { action: 'notes.read' } }) }),
+		}),
+		files: {
+			attachments: c.files({
+				owner: 'notes',
+				read: 'notes.read',
+				write: 'notes.write',
+				delete: 'notes.delete',
+				maxBytes: 4096,
+				types: ['application/pdf'],
+				maxPerOwner: 2,
+				link,
+			}),
+		},
+	}))
+
+const named = namedLink(['shared'])
+
+function namedApp() {
+	return implement(named, {
+		database: scoped(tables),
+		deps: () => ({}),
+		handlers: () => ({
+			api: { notes: { get: () => ({ title: 'a note' }) } },
+			shared: { note: () => ({ title: 'a note' }) },
+			other: { note: () => ({ title: 'a note' }) },
+		}),
+	})
+}
+
+function problemsOf(compile: () => unknown): readonly string[] {
+	try {
+		compile()
+	} catch (error) {
+		if (error instanceof ContractError) return error.problems
+		throw error
+	}
+	return []
+}
+
 function linkedApp() {
 	return implement(contract, {
 		database: scoped(tables),
@@ -101,6 +161,28 @@ describe('a link: true collection in the artifact', () => {
 		}
 		expect(problems).toEqual([
 			"files 'attachments': sets link: true, and link mount 'shared' grants no 'notes.write' (allowed: grants: ['notes.read', 'notes.write'])",
+		])
+	})
+})
+
+describe('a collection whose link names its mounts', () => {
+	test('has rows under the named mount only, and the mount it does not name need not grant its actions', () => {
+		const artifact = compileContract(named, tables)
+		expect(artifact.files['attachments']?.link).toEqual(['shared'])
+		expect(artifact.endpoints.filter((row) => row.id.includes('.files.')).map((row) => row.id)).toEqual([
+			'shared.files.attachments.download',
+			'shared.files.attachments.list',
+			'shared.files.attachments.upload',
+		])
+	})
+
+	test('is refused when a name is no link mount bound to its owner, or the mount does not grant its actions', () => {
+		expect(problemsOf(() => compileContract(namedLink(['other']), tables))).toEqual([
+			"files 'attachments': link names mount 'other', which grants no 'notes.write' (allowed: grants: ['notes.read', 'notes.write'])",
+		])
+		expect(problemsOf(() => compileContract(namedLink(['api', 'missing']), tables))).toEqual([
+			"files 'attachments': link names 'api', which is no link mount bound to 'note' (allowed: shared, other)",
+			"files 'attachments': link names 'missing', which is no link mount bound to 'note' (allowed: shared, other)",
 		])
 	})
 })
@@ -219,6 +301,18 @@ describe.skipIf(!hasPostgres)('a link holder and its object’s files', () => {
 		expect((await download(app, other, shared)).status).toBe(403)
 		expect((await download(app, other, shared, '/o')).status).toBe(200)
 		expect(idOf(await upload(app, other, '/o'))).toBeString()
+	})
+
+	test("a key of a mount the collection's link does not name gets 404 on every file row", async () => {
+		const files = bootApp(namedApp(), { database, files: new MemoryFileObjects() })
+		const note = await seedNote()
+		const shared = await holderOf(note)
+		const id = idOf(await upload(files, shared))
+		const other = await holderOf(note, 'other')
+		expect((await send(files, '/o/api/files.attachments.list', { token: other, body: {} })).status).toBe(404)
+		expect((await download(files, other, id, '/o')).status).toBe(404)
+		expect((await upload(files, other, '/o')).status).toBe(404)
+		expect((await download(files, shared, id)).status).toBe(200)
 	})
 
 	test('once the object moves, its link reaches none of its files and uploads nothing', async () => {
