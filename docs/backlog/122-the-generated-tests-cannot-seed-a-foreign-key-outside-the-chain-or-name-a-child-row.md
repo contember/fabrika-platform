@@ -23,6 +23,14 @@ endpoint that addresses a child row by id gets a sample id and a 404. Effort: Sâ
   child row that the kit seeded. An endpoint `on` a record whose input names one of the record's child rows
   (`{ id, childId }`) gets a sample `childId` in its `own` and `leak` cases. That id belongs to no seeded row, so the
   case answers 404 and fails. The agent reshaped the endpoint to address the child rows by another field.
+- **The seeds shape the domain model.** A second application built on the paved road met all of these, and a `CHECK`
+  on a text column, which fails the seeded marker rows (`references/tests.md:51`â€“`:52` advises an `ENUM` instead).
+  It changed its contract to fit the generator: a withdrawal addresses the consent by purpose, not by the child row's
+  id. A link mutation whose precondition is a child row (an open request, a delivery) cannot be seeded either, and its
+  own case expects exactly 200 (`packages/check/src/scaffold.ts:293`â€“`:298`), so the application answers 200 for
+  "nothing to do" where a 409 is the honest answer. `askAs` throws on every 400 as a broken fixture
+  (`packages/app/src/testing/endpoint-access.ts:362`â€“`:365`), so a handler's own 400 for a domain refusal reads as the
+  author's mistake.
 
 ## Approach / acceptance
 
@@ -32,6 +40,10 @@ endpoint that addresses a child row by id gets a sample id and a 404. Effort: Sâ
 - A fixture can name an input field as a child row of a table, like `members`:
   `export const rows = { '<endpoint id>': { childId: '<child table>' } }`. The kit then seeds one row of that table
   under each world's target and sends its key. The leak case sends the other world's key.
+- Consider the general form instead of one export per case: declarative relational fixtures with named rows (a
+  child row, a reference row, a row in a state), which the kit seeds in both worlds and a case refers to by name. A
+  schema or endpoint the generator cannot seed is reported as a generator limit, with the column or field named, not
+  as a failing case of the handler.
 - Witness: the isolation fixture (`packages/cli/src/__tests__/fixtures/isolation-app/`) gains a nullable text
   foreign key to a reference table and an `on` endpoint with a child id field, and its regenerated tests pass.
   `references/tests.md` ("Fixtures and seeds") then drops "and not text" from its advice on such a key.

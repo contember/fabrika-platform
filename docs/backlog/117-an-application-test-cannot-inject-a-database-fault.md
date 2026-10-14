@@ -23,6 +23,10 @@ its work. A raw-SQL trigger that fails the Nth write was refused by the checker,
 out through its `JobClock` instead (`examples/crm/src/tasks/__tests__/overdue.test.ts`). A deadlock, a refused
 constraint mid-batch or a lost connection cannot be staged at all.
 
+An application built on the paved road met the same wall in its outbox job: it must never send an e-mail twice when
+the commit after the provider's acceptance fails. The test provider can lose an answer, refuse, or stay unreachable,
+but a failed commit after an accepted message cannot be staged: the kit has no hook into a job's transactions.
+
 ## Approach / acceptance
 
 - Decide the form: a fault seam in `@fabrika/db/testing` (for example `testDatabase(…).failNext({ table, operation,

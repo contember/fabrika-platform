@@ -23,6 +23,16 @@ deviation. Effort: S–M; it needs a decision first.
   reviews as a deviation, or a second action checked in the handler, which the skill forbids
   (`packages/app/skill/SKILL.md:176`–`:177`). The private dogfood met
   this with its export of every record.
+- The export is one case of a wider gap: any action other than the table's read action that must reach many records.
+  A second application built on the paved road met two more:
+  - **A send under its own action.** A bulk e-mail to selected records runs under `<records>.send`. Under `app: true`,
+    `ctx.db.app.<records>` and `ctx.sql.scope(ctx.app, …)` refuse it; under `over`, the handles list only by the read
+    action and give no write handle for the outbox rows. It became `over` with `sql: 'write'` and
+    `ctx.sql.scope(ctx.within, …)`, which accepts a `Within` of `<records>.send` because a `Within`'s reach checks the
+    dimension only (see [134](134-a-sql-scope-fragment-does-not-tie-its-action-to-the-statement.md)).
+  - **An aggregate-only reach.** An operator role reads counts over the records (how many are verified, how many have
+    no answer) and must not read one record. No form grants counts without rows: the endpoint declares
+    `unscoped: { <records>: 'read' }`, the broadest read there is, for a statement that answers a few numbers.
 
 ## Approach / acceptance
 
@@ -37,6 +47,8 @@ Decide one of these:
 - **(c) Keep it.** The export's action is the read action; a separate permission is a declared `unscoped` read. The
   skill says so in the export recipe.
 
+- Whatever the choice, decide whether an aggregate-only reach (`count`/`aggregate` app-wide, no row) is a table action
+  of its own, so a counts endpoint needs no `unscoped` read.
 - Witness: the public intake recipe's export with an action of its own, no `unscoped` and no `sql`; a global holder of
   only `candidates.read` gets 403 on it; `classifyAccess` widens on the new action.
 

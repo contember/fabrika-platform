@@ -28,6 +28,13 @@ Effort: S–M; it needs a decision first.
 - `packages/db/CLAUDE.md` describes the fragment as "what the handles of `capability` match"; the handles check the
   action and the operation, the fragment does not. `sql: 'write'` is a declared deviation with a closer-review line,
   and the runtime role bounds it to the schema, so this is a gap in the road's promise, not an escape.
+- tsc and `fabrika-check` accept a fragment the runtime refuses. `scope(capability: unknown, table: string)` is untyped,
+  so `ctx.sql.scope(ctx.app, '<table>')` under an action the table does not read with passes both and throws
+  `CapabilityError` (`checkAppReach`) only at run time. An application built on the paved road first saw it as a 500
+  in a generated case, after a framework upgrade tightened the check
+  (see [142](142-a-data-layer-capability-refusal-fails-as-handler-failed.md)).
+- `sql: 'read' | 'write'` is one declaration per site, coarser than the statement's tables. The approver sees that a
+  site runs raw SQL, not which tables it reads or writes.
 
 ## Approach / acceptance
 
@@ -41,6 +48,9 @@ Decide one of these:
 - **(b) State it.** A fragment scopes rows, not actions. `packages/db/CLAUDE.md`, the runtime reference and the
   skill say that `sql: 'write'` is the declaration the approver reviews, and the fragment does not stand for it.
 
+- Either way, type `scope`'s capability and table, so a fragment the runtime refuses is a type error at its line, and
+  consider a per-table `sql` declaration (`sql: { records: 'read', deliveries: 'write' }`) that the approval diff
+  shows and the tag enforces.
 - Witness: `raw-sql.test.ts` cases for each grant kind: a write under a read action, a read under an action the table
   does not name, and a reference table as a write target.
 

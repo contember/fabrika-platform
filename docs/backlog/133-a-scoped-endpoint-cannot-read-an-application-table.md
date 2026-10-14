@@ -20,6 +20,11 @@ dogfood used a database constraint instead. Effort: S–M; it needs a decision f
   table (WU23a), which a mutation `on` a record cannot read.
 - The private dogfood validated a status-change value against its code list with a foreign key from the record's
   column to the code list, so a wrong value is a database error (a 500), not a 400 that names the value.
+- A second application built on the paved road refined that workaround: the event row carries `reason_id` and
+  `reason_active` (always true when written), with a composite foreign key `(reason_id, reason_active) REFERENCES
+  reasons (id, active) ON UPDATE CASCADE`. An unknown or retired reason fails the insert, the handler maps SQLSTATE
+  `23503` to 400, and retiring a reason cascades into old events. It works, but every scoped validation against an
+  editable list needs this schema trick, and the 400 cannot name which value failed.
 
 ## Approach / acceptance
 
