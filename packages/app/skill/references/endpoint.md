@@ -47,7 +47,8 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal`
   (`{ kind: 'user', id, label, email }` for a `human` caller) and `ctx.requestId`.
-- `ctx.principal.email` is the person's own address as IAM knows it, lower-cased, from the token. Mail "send it to me"
+- `ctx.principal.email` is the mailbox IAM recorded for the person, lower-cased, from the token: the address to mail,
+  not a proof that the person controls it. Mail "send it to me"
   there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory

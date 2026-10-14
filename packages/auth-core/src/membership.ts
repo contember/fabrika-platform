@@ -139,9 +139,13 @@ export function normalizeEmailIdentity(value: string): string {
 	return value.normalize('NFC').trim().toLocaleLowerCase('en-US')
 }
 
-/** A mailbox as IAM stores it: already normalized, and an address. */
+/**
+ * A mailbox as IAM stores it: a trimmed, lower-cased address. It never normalizes again: NFC before lower-casing is not
+ * idempotent (`J\u030C` stores as `j\u030C`, which NFC would compose to `\u01F0`), so a second pass would refuse a
+ * stored mailbox.
+ */
 export function isNormalizedMailbox(value: string): boolean {
-	return value === normalizeEmailIdentity(value) && /^[^\s@]+@[^\s@]+$/.test(value)
+	return value === value.trim().toLocaleLowerCase('en-US') && /^[^\s@]+@[^\s@]+$/.test(value)
 }
 
 /** The normalized address IAM invites for `address`, or `null` for one it refuses as no address. */

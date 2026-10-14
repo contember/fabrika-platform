@@ -259,6 +259,26 @@ describe("a user token carries the principal's mailbox", () => {
 		expect(claims?.label).toBe('Ann@B.cz')
 	})
 
+	test('a mailbox whose normalization is not idempotent mints from a session and from a key', async () => {
+		const h = createHarness()
+		const principal = await h.repositories.principals.createUser('g-caron', 'J\u030C@example.test')
+		const stored = principal.email
+		expect(stored).toBe('j\u030C@example.test')
+		const key = 'px_caron-key'
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			principalId: principal.id,
+			issuedBy: principal.id,
+			grants: [],
+		})
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const session = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principal.id), requestId: 'r' })
+		const personal = await mintFromKey(services, ENV, { app: 'example-app', key, requestId: 'r' })
+		if (!session.result.ok || !personal.result.ok) throw new Error('expected ok')
+		expect((await claimsOf(session.result.token, 'example-app'))?.email).toBe(stored ?? '')
+		expect((await claimsOf(personal.result.token, 'example-app'))?.email).toBe(stored ?? '')
+	})
+
 	test("a key bound to the person carries it too, and a service's key none", async () => {
 		const h = createHarness()
 		const person = seedUser(h.sqlite, { sub: 'g-key', email: 'key@b.cz' })

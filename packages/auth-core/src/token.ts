@@ -106,8 +106,9 @@ export interface AccessTokenClaims {
 	/** Audit actor label — the principal's label, or the credential label, or null (anonymous). */
 	label: string | null
 	/**
-	 * Only on a user token: the principal's mailbox as IAM stores it (`normalizeEmailIdentity`), the address its
-	 * sign-in or invitation verified. A user's `label` is that address as it was spelled, never a substitute for it.
+	 * Only on a user token: the mailbox IAM recorded for the principal (`principals.email`, `normalizeEmailIdentity`).
+	 * The signature authenticates that IAM recorded it, not that the person controls it. A user's `label` is that
+	 * address as it was spelled, never a substitute for it.
 	 */
 	email?: string
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */

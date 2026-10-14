@@ -443,8 +443,10 @@ At startup the application compares its contract digest with `FABRIKA_CONTRACT_D
 the execution descriptor ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). It
 refuses to start on a mismatch.
 
-The publish order stays proxy, application, IAM. Because of the digest check the order is safe in both
-directions. During a switch, changed endpoints answer 503 and new endpoints answer 404.
+Within one application's publish the order stays proxy, application, IAM. Because of the digest check that order is
+safe in both directions for a change of endpoint rules. During a switch, changed endpoints answer 503 and new endpoints
+answer 404. The digest does not cover the claims a token carries, so a framework version that requires a new claim is
+an exception with its own order: the `email` claim of a user token (rule 6) is one.
 
 **The caller document is information, not a decision.** Every member SPA answers `<prefix>/__fabrika-me.json` under
 the mount's own access, from the token the proxy injected and nothing else: the person's label and mailbox, the
@@ -491,8 +493,16 @@ still refuses any `Authorization` header, as authorization.
 - **A user token carries the person's mailbox.** Beside `label`, the address as the person or an administrator spelled
   it, a token of `ptype: 'user'` carries `email`: `principals.email`, normalized, on a session's token and a user key's
   alike. The framework hands it to a handler as `ctx.principal.email`, the one address a "send it to me" action
-  mails; a service, workload or link token carries none, and the parser refuses one there. A contract application
-  refuses (401) a `human` token without it, so an application on this version needs an IAM that mints it.
+  mails; a service, workload or link token carries none, and the parser refuses one there. It is the mailbox IAM
+  recorded for the principal, authenticated by the token's signature; it is no proof that the person controls the
+  mailbox, which IAM establishes only as far as its login method does (an IdP configured to accept an unverified
+  address, an administrator who hands over an enrollment link). A contract application refuses (401) a `human` token
+  without it. **Rollout:** upgrade IAM first. The parser still accepts a token without the claim, and the proxy reuses
+  a cached token until `TOKEN_REFRESH_SKEW_SECONDS` (30 s) before it expires, at most `DEFAULT_TOKEN_TTL_SECONDS`
+  (300 s) after it was minted, so upgrade an application to a framework version that requires the claim only once
+  300 s have passed since IAM's upgrade; earlier, its people get 401 until their cached token is replaced. **Rollback:**
+  never roll IAM back to a version without the claim while an application that requires it runs; roll those
+  applications back first, and IAM after them.
 - **Delegation grants.** For an endpoint whose action is a dimension's `members.manage`, or that
   creates a value of a dimension, the proxy obtains a single-use grant bound to the endpoint and the
   request. IAM requires it for scope creation, assignment and revocation, so a handler on another

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { normalizeEmailIdentity } from '../membership'
 import { accessClaimsToResolved, type AccessTokenClaims, buildAccessClaims, parseAccessClaims, principalKind } from '../token'
 import type { PermissionEntry } from '../types'
 
@@ -259,6 +260,13 @@ describe('the mailbox of a user token', () => {
 		expect(parseAccessClaims({ ...anonymous, email: 'ann@example.com' })).toBeNull()
 		const job = buildAccessClaims({ ...userParams, type: 'job', workload: 'digest' })
 		expect(parseAccessClaims({ ...job, email: 'ann@example.com' })).toBeNull()
+	})
+
+	test('a mailbox IAM stored round-trips, also one its normalization would change on a second pass', () => {
+		const stored = normalizeEmailIdentity('J\u030C@example.test')
+		expect(normalizeEmailIdentity(stored)).not.toBe(stored)
+		const built = buildAccessClaims({ ...userParams, email: stored })
+		expect(parseAccessClaims(JSON.parse(JSON.stringify(built)))?.email).toBe(stored)
 	})
 
 	test('a mailbox that is not normalized, not a string or no address rejects the whole token', () => {

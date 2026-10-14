@@ -9,7 +9,7 @@ export interface UserPrincipal {
 	readonly id: string
 	/** What IAM shows for the person: the address as it was spelled. Display it; never mail it. */
 	readonly label: string
-	/** The person's own address as IAM knows it, lower-cased: the one to mail. Only a person has one. */
+	/** The mailbox IAM recorded for the person, lower-cased: the one to mail, not proof of possession. Only a person has one. */
 	readonly email: string
 }
 

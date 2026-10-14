@@ -1225,11 +1225,14 @@ not declare is refused where it is set.
 ## Who calls
 
 A handler's `ctx.principal` comes from the verified token. A `human` caller is
-`{ kind: 'user', id, label, email }`: `email` is the token's `email` claim, the person's
-mailbox as IAM stores it (lower-cased), and `label` the spelling IAM displays. A `machine`
-caller is `{ kind: 'service', id, label }` and has no address, and neither has a link holder or
-a connector. `boot` refuses (401) a `human` token without the claim, so an application on this
-version needs an IAM that mints it.
+`{ kind: 'user', id, label, email }`: `email` is the token's `email` claim, the mailbox IAM
+recorded for the person (lower-cased), and `label` the spelling IAM displays. The signature
+authenticates that IAM recorded it; it does not prove the person controls the mailbox beyond
+what the login method checked. A `machine` caller is `{ kind: 'service', id, label }` and has
+no address, and neither has a link holder or a connector. `boot` refuses (401) a `human` token
+without the claim: upgrade IAM first, and an application to this version only once 300 s (the
+token lifetime) have passed, and roll an application back before IAM
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6).
 
 Every member SPA serves `<prefix>/__fabrika-me.json` to the person its access admitted, from
 the same token and without asking IAM:

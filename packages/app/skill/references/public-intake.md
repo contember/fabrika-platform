@@ -960,8 +960,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-- **The address is the caller's, from the token.** `ctx.principal.email` is the person's own address as IAM knows it
-  (lower-cased), so the input has no address field. An input that named one would let any member mail any address
+- **The address is the caller's, from the token.** `ctx.principal.email` is the mailbox IAM recorded for the person
+  (lower-cased), so the input has no address field. IAM recorded it; how far it checked that the person controls it is
+  its login method's (an operator may accept an IdP's unverified address). An input that named one would let any member mail any address
   past every consent the application asks for. Never take a recipient from the input for "send it to me".
 - `{ member: true }` admits any member of the application and reaches no data: the endpoint mails only the caller.
   The generated tests give a `member` endpoint no case, so the test below is yours.
