@@ -42,7 +42,14 @@ export const vocabulary = defineVocabulary({
 		'people.manage': "Grant and revoke the application's roles",
 	},
 	roles: {
-		hr: { grants: ['candidates.read', 'candidates.review', 'positions.read', 'people.list'] },
+		hr: {
+			grants: [
+				'candidates.read',
+				'candidates.review',
+				'positions.read',
+				'people.list',
+			],
+		},
 		hr_lead: {
 			grants: [
 				'candidates.review',
