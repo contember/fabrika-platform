@@ -54,6 +54,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.
 - [118](118-member-labels-are-nullable-under-a-labels-directory.md) — `ctx.members` labels are `string | null` even under `directory: 'labels'`.
 - [119](119-the-test-kit-cannot-make-a-disabled-member.md) — The kit's directory answers `disabled: false` for everyone.
+- [120](120-a-job-attempt-reports-a-refused-statement-as-handler-failed.md) — A job attempt reports a data-layer refusal as `handler_failed`, without its reason.
 - [122](122-the-generated-tests-cannot-seed-a-foreign-key-outside-the-chain-or-name-a-child-row.md) — The seed marks a nullable text foreign key, and no fixture names a seeded child row.
 - [126](126-a-global-grant-application-has-no-people-of-its-own.md) — Global roles give no member directory and no in-app role management.
 - [127](127-a-form-records-no-request-evidence.md) — A form cannot record a client address or user agent as consent evidence.
