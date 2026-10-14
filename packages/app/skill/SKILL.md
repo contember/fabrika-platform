@@ -247,21 +247,27 @@ they are declared. A query or an export declares only `'read'`.
 
 ## The loop
 
-Run from the application's root (setup: `references/app-setup.md`). A schema change (a new migration) runs every step. A
-handler-only change needs no migration or codegen: it runs `test-scaffold` when an endpoint, its access or a table
-policy changed, then `tsc` and `fabrika-check` once the slice is written, then the tests. The application you are handed
-is green: a tsc or checker run before you have written anything proves nothing. Run `tsc` first and `fabrika-check` once
-tsc is green, and after a fix run both again in that order: the checker reads the tests too (a cast, a skipped or
-assertion-free test, a generated test's hash), so a change to a test file alone still needs it.
+Run from the application's root (setup: `references/app-setup.md`). The application you are handed is green: a tsc or
+checker run before you have written anything proves nothing.
+
+1. Write the slice and its tests. A schema change first adds a migration and runs `migrate` and `codegen`; a
+   handler-only change needs neither.
+2. Run `test-scaffold` when an endpoint, its access or a table policy changed.
+3. Run `bun test --isolate` until it passes. Bun strips the types and runs the tests without checking them, so this is
+   the cheap loop.
+4. Then run `tsc` and `fabrika-check` once each, in that order, at the end. The checker reads the tests too (a cast, a
+   skipped or assertion-free test, a generated test's hash).
+5. After a finding, fix it and re-run only what that fix needs: the step that found it and any later one. A checker fix
+   re-runs `tsc` only when it changed a type (a removed cast does), and the tests only when it changed what code does.
 
 ```bash
 bunx fabrika db new <slug>                                  # a new migration file
 export FABRIKA_APP_ID=tasks FABRIKA_APP_DATABASE_URL="$FABRIKA_TEST_POSTGRES_URL"
 bunx fabrika db migrate && bunx fabrika db codegen          # writes src/db/schema.generated.ts
 bunx fabrika db test-scaffold                               # writes the generated tests; commit them
-bunx tsc --noEmit
-bunx fabrika-check .                                        # refusals fail; hints print below them
-bun test --isolate                                          # needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
+bun test --isolate                                          # until it passes; needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
+bunx tsc --noEmit                                           # once, at the end
+bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
 ```
 
 A generated file changes only through its command (`codegen`, `test-scaffold`); running it is the loop, not an edit.

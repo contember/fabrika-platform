@@ -148,7 +148,8 @@ describe('a new application', () => {
 })
 ```
 
-The loop of `SKILL.md` without its database lines: `bunx tsc --noEmit`, `bunx fabrika-check .`, `bun test --isolate`.
+The loop of `SKILL.md` without its database lines: `bun test --isolate` until it passes, then `bunx tsc --noEmit` and
+`bunx fabrika-check .` once each.
 
 ## The first table
 
