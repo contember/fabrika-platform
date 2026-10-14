@@ -423,12 +423,15 @@ type ReadOnlyMessage<T extends string, Mode> = Mode extends 'reference'
 export type ReadOnlyUnscoped<Ix extends AnyDbIndex, U> = [ReadOnlyWritten<Ix, U>] extends [never] ? unknown
 	: { readonly [T in ReadOnlyWritten<Ix, U>]: Unavailable<ReadOnlyMessage<T, Ix['tables'][T]['mode']>> }
 
+type KeylessMessage<T extends string, Mode> = Mode extends 'reference' ? `${T} is a reference table, which has no key: read it with list`
+	: `${T} is a form's inbox, which has no key: read it with list`
+
 /** A table a site declared `unscoped`: its scope predicate is `true`, and `'read'` writes nothing. */
 export interface UnscopedRows<T extends string, E extends IndexedTable, M extends UnscopedMode, K extends DataKind> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>
 	count(options?: CountOptions<TableRow<E>>): Promise<number>
 	aggregate<const S extends AggregateSpec<TableRow<E>>>(spec: S): Promise<AggregateRow<TableRow<E>, S>[]>
-	get(key: string): Promise<TableRow<E>>
+	readonly get: E['mode'] extends 'reference' | 'inbox' ? Unavailable<KeylessMessage<T, E['mode']>> : (key: string) => Promise<TableRow<E>>
 	readonly insert: UnscopedWrite<T, M, K, 'insert', (values: { [C in keyof UnscopedInsert<E>]: UnscopedInsert<E>[C] }) => Promise<Saved<E>>>
 	readonly update: UnscopedWrite<
 		T,

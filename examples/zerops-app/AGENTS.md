@@ -652,7 +652,7 @@ dimension value takes `access: { action, app: true }`.
 | `reference.<table>`                                    | `list(options)`, `count({ where })`: no `get`; look a row up by its key with `where` (`priorities.get` below)                                                                                   |
 | `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
 | `app.<table>` (`app: true`), a scoped table            | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
-| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)`; with `'write'` also `insert`, `update`, `remove`                                                                                                       |
+| `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table or an inbox, which have no key); with `'write'` also `insert`, `update`, `remove`                                             |
 
 `{ expectVersion }` is taken only on a table with `version`.
 

@@ -130,7 +130,8 @@ and the target `Ref`, so no handler can call it.
   "does not exist" error; reference and unscoped rows read through the table's read action. An `unscoped` declaration's
   mode that may be `'write'` (a union or an optional one too) of a reference or inbox table is an `Unavailable` at its
   key (`ReadOnlyUnscoped`): no site writes either, and
-  `insertUnscoped` still refuses it at run time. `RowOf<typeof tables, T, A>`
+  `insertUnscoped` still refuses it at run time. Neither has a key, so its unscoped `get` is an `Unavailable` that says
+  to read it with `list`; `unscopedRows` still refuses it at run time (`row_address`). `RowOf<typeof tables, T, A>`
   (`@fabrika/db/tables`) is that row for an application's mapper; `A` defaults to the table's read action. A job's handles outside
   its transaction read only: every write is an `Unavailable` that names `ctx.transaction((tx) => …)` and `tx.db`. The static reader reads
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.

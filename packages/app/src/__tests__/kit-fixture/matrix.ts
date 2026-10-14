@@ -180,6 +180,8 @@ type Unscoped = Context<
 	Declared<never, { readonly companies: 'write'; readonly deals: 'write' }, never, never>
 >
 
+type ReadsReference = Context<'query', { readonly member: true }, Declared<never, { readonly countries: 'read' }, never, never>>
+
 /** The declared off-road fields: each handle exists only where the site declares it, in the declared mode. */
 export type OffRoadFields = [
 	// An unscoped insert has no capability to stamp containment from, so it takes the containment columns.
@@ -217,6 +219,11 @@ export type OffRoadFields = [
 	Expect<Equal<keyof ReadOnlyUnscoped<K['index'], { readonly countries?: 'read' | 'write' }>, 'countries'>>,
 	Expect<Equal<ReadOnlyUnscoped<K['index'], { readonly countries: 'read' }>, unknown>>,
 	Expect<Equal<ReadOnlyUnscoped<K['index'], { readonly countries?: 'read' }>, unknown>>,
+	// A reference table has no key: unscoped, it is listed, never read by one.
+	Expect<
+		Equal<ReadsReference['db']['unscoped']['countries']['get'], Unavailable<'countries is a reference table, which has no key: read it with list'>>
+	>,
+	Expect<Equal<Returned<ReadsReference['db']['unscoped']['countries']['list']>['items'][number]['code'], string>>,
 	Expect<
 		Equal<
 			Returned<OffRoad['connect']['catalog']['get']>,
