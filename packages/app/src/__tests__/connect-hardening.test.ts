@@ -128,6 +128,8 @@ describe('a captured ctx.connect method sends nothing outside its own request', 
 		const kept: Get[] = []
 		const outcomes: string[] = []
 		let afterwards: Promise<ConnectResult<unknown>> | null = null
+		// The request's timer calls only once the test says the request has ended; a fixed delay can fire before that.
+		const ended = Promise.withResolvers<void>()
 		const use = async (): Promise<boolean> => {
 			const [get] = kept
 			if (get === undefined) {
@@ -147,7 +149,12 @@ describe('a captured ctx.connect method sends nothing outside its own request', 
 						show: async ({ ctx }) => {
 							const get = ctx.connect.catalog.get
 							kept.push(get)
-							afterwards = new Promise((resolve) => setTimeout(() => resolve(get({ sku: 'p1' })), 20))
+							afterwards = new Promise((resolve) =>
+								setTimeout(async () => {
+									await ended.promise
+									resolve(get({ sku: 'p1' }))
+								}, 0)
+							)
 							const result = await get({ sku: 'p1' })
 							return { outcome: result.outcome, name: null }
 						},
@@ -170,7 +177,11 @@ describe('a captured ctx.connect method sends nothing outside its own request', 
 			},
 		})
 		const visitor = consumer.testCaller([{ role: 'visitor' }])
-		return { consumer, visitor, kept, outcomes, sent: () => sent, afterwards: () => afterwards, use }
+		const afterRequest = (): Promise<ConnectResult<unknown>> | null => {
+			ended.resolve()
+			return afterwards
+		}
+		return { consumer, visitor, kept, outcomes, sent: () => sent, afterwards: afterRequest, use }
 	}
 
 	test('the handler the import names reaches the owner', async () => {
