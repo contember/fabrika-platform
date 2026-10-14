@@ -24,9 +24,11 @@ export async function buildWeb(outdir: string, options: { readonly metafile?: bo
 }
 
 if (import.meta.main) {
-	const built = await buildWeb(join(import.meta.dir, 'dist', 'web'))
+	const built = await buildWeb(join(import.meta.dir, 'dist', 'web'), { metafile: true })
 	if (!built.success) {
 		for (const log of built.logs) console.error(String(log))
 		process.exit(1)
 	}
+	// What the bundle holds, beside it and not served: `web/__tests__/bundle.test.ts` reads it.
+	await Bun.write(join(import.meta.dir, 'dist', 'web.inputs.json'), JSON.stringify(Object.keys(built.metafile?.inputs ?? {})))
 }

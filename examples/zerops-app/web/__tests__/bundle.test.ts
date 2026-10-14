@@ -2,7 +2,8 @@
 // it holds no handler code and reaches no server module, however the shell imports them.
 
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildWeb } from '../../build-web'
 
@@ -11,10 +12,7 @@ const SERVER_MODULE =
 const HANDLER_CODE = ['getForUpdate', 'only a note in the trash is restored', 'ConflictError', 'fromRow', 'ctx.transaction']
 
 test('the SPA bundle holds the client and the contract, no handler and no server module', async () => {
-	// Under the application, beside the real build's `dist/web`.
-	const dist = join(import.meta.dir, '..', '..', 'dist')
-	mkdirSync(dist, { recursive: true })
-	const outdir = mkdtempSync(join(dist, 'bundle-test-'))
+	const outdir = mkdtempSync(join(tmpdir(), 'notes-web-'))
 	try {
 		const built = await buildWeb(outdir, { metafile: true, minify: false })
 		expect(built.logs.map(String)).toEqual([])

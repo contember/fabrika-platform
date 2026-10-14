@@ -6,7 +6,7 @@
 		"build:manifest": "fabrika app build --env=prod",
 		"build:web": "bun build-web.ts",
 		"typecheck": "tsc --noEmit",
-		"test": "bun test --isolate"
+		"test": "bun run build:web && bun test --isolate"
 	},
 	"dependencies": {
 		"@fabrika/app": "^0.0.4",
