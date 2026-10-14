@@ -28,13 +28,35 @@ type AppMutation = EndpointContext<
 	Declared<never, never, never, never>
 >
 type Reached<H> = { [P in keyof H]: H[P] extends Unavailable<string> ? never : P }[keyof H]
+type Scoped<A extends string> = EndpointContext<
+	Kit,
+	'human',
+	'mutation',
+	{ readonly action: A; readonly on: 'candidate'; readonly from: 'id' },
+	Declared<never, never, never, never>
+>
+type Over<A extends string> = EndpointContext<
+	Kit,
+	'human',
+	'query',
+	{ readonly action: A; readonly over: 'candidate' },
+	Declared<never, never, never, never>
+>
 
 /** The types of an `app` endpoint: its capability, every table of the application in its handle, and no target. */
 export type AppContext = [
 	Expect<Equal<AppMutation['app'], AppCapability<'candidates.read'>>>,
-	Expect<Equal<Reached<AppMutation['db']['app']>, 'candidates' | 'exports' | 'positions'>>,
+	Expect<Equal<Reached<AppMutation['db']['app']>, 'candidates' | 'exports' | 'positions' | 'reasons'>>,
 	Expect<AppMutation['target'] extends Unavailable<string> ? true : false>,
 	Expect<AppMutation['members'] extends Unavailable<string> ? true : false>,
+]
+
+/** A scoped site reads each application table whose read action is its own, every row and read-only, and no other. */
+export type ScopedAppContext = [
+	Expect<Equal<Reached<Scoped<'candidates.review'>['db']['app']>, 'reasons'>>,
+	Expect<Equal<Reached<Over<'audit.read'>['db']['app']>, 'exports'>>,
+	Expect<Equal<Reached<Scoped<'candidates.read'>['db']['app']>, never>>,
+	Expect<Equal<Reached<Scoped<'candidates.review'>['db']['app']['reasons']>, 'list' | 'count' | 'aggregate' | 'get'>>,
 ]
 
 const fixtureRoot = join(import.meta.dir, 'app-wide-fixture')
@@ -97,6 +119,30 @@ if (postgres !== null) {
 			expect(await statusOf(admin.admin.columns({ id: added.id }))).toBe(404)
 		})
 
+		test('a decision on one candidate reads the reasons by their read action, and refuses an unknown or retired one with 400', async () => {
+			const registrar = as([{ action: 'reasons.manage' }])
+			const kept = await registrar.admin.reason({ label: `Kept ${crypto.randomUUID()}` })
+			const retired = await registrar.admin.reason({ label: `Retired ${crypto.randomUUID()}` })
+			await registrar.admin.retire({ id: retired.id, expectVersion: 1 })
+			const worlds = await postgres.seedWorlds(tables, 'candidates')
+			const reviewer = as([{ action: 'candidates.review', scope: { type: 'candidate', value: worlds.own.key } }])
+			const decide = (reasonId: string | null, expectVersion: number) => reviewer.admin.decide({ id: worlds.own.key, expectVersion, reasonId })
+			const refusal = async (reasonId: string): Promise<string> => {
+				try {
+					await decide(reasonId, 1)
+				} catch (error) {
+					if (error instanceof RpcError) return `${error.httpStatus} ${error.message}`
+					throw error
+				}
+				return 'answered'
+			}
+			const unknown = crypto.randomUUID()
+			expect(await refusal(unknown)).toBe(`400 the reason ${unknown} is unknown or retired`)
+			expect(await refusal(retired.id)).toBe(`400 the reason ${retired.id} is unknown or retired`)
+			expect(await decide(kept.id, 1)).toEqual({ id: worlds.own.key, version: 2 })
+			expect(await decide(null, 2)).toEqual({ id: worlds.own.key, version: 3 })
+		})
+
 		test('an app endpoint reads every candidate with its action, and the export writes its log row in the same transaction', async () => {
 			const worlds = await postgres.seedWorlds(tables, 'candidates')
 			const counts = await hr.admin.counts()
@@ -136,6 +182,12 @@ if (postgres !== null) {
 			expect((await positions.remove('scoped')).status).toBe(403)
 			expect(await positions.updateWithRead()).toEqual({ status: 200, refused: true })
 			expect(await positions.removeWithRead()).toEqual({ status: 200, refused: true })
+		})
+
+		test('the policy probe of an application table: a scoped site of its read action reads every row, of another action none', async () => {
+			const reasons = appPolicyIsolationKit(contract, tables, 'reasons', postgres)
+			expect(await reasons.scopedList()).toEqual({ status: 200, rows: ['own'] })
+			expect(await reasons.scopedListWithOther()).toEqual({ status: 200, refused: true })
 		})
 
 		test('the probe of an append-only application table inserts with its insert action alone', async () => {

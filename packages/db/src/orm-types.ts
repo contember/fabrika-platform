@@ -392,6 +392,35 @@ export type ApplicationTables<Ix extends AnyDbIndex, A extends string, K extends
 /** The row a site reads without a capability of its own: through the table's read action. */
 type TableRow<E extends IndexedTable> = RowFor<E, E['actions']['read']>
 
+/**
+ * An application table read from an `on`, `in` or `over` endpoint whose action is its read action: every row, as a
+ * reference table is read, and no write.
+ */
+export interface ScopedApplicationRows<E extends IndexedTable> {
+	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>
+	count(options?: CountOptions<TableRow<E>>): Promise<number>
+	aggregate<const S extends AggregateSpec<TableRow<E>>>(spec: S): Promise<AggregateRow<TableRow<E>, S>[]>
+	/** One row by its key. */
+	get(key: string): Promise<TableRow<E>>
+	readonly getForUpdate: Unavailable<
+		'a scoped endpoint only reads an application table: write it from an endpoint declared access: { action, app: true }'
+	>
+	readonly insert: Unavailable<'a scoped endpoint only reads an application table: write it from an endpoint declared access: { action, app: true }'>
+	readonly update: Unavailable<'a scoped endpoint only reads an application table: write it from an endpoint declared access: { action, app: true }'>
+	readonly remove: Unavailable<'a scoped endpoint only reads an application table: write it from an endpoint declared access: { action, app: true }'>
+}
+
+/**
+ * `ctx.db.app` of an `on`, `in` or `over` endpoint of action `A`: each application table whose read action is `A`,
+ * read-only; any other is the message that names its read action.
+ */
+export type ScopedApplicationTables<Ix extends AnyDbIndex, A extends string> = {
+	readonly [T in Ix['applications']]: [A] extends [Ix['tables'][T]['actions']['read']] ? ScopedApplicationRows<Ix['tables'][T]>
+		: Unavailable<
+			`a scoped endpoint reads ${T} with its read action '${Ix['tables'][T]['actions']['read'] & string}', and this endpoint holds '${A}'`
+		>
+}
+
 /** A reference table: every endpoint reads it, through its read action, and none writes it. */
 export interface ReferenceRows<E extends IndexedTable> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>

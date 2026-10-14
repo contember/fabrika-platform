@@ -242,8 +242,10 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   the whole application has a form of its own: an endpoint declared `{ action, app: true }` is admitted only for a
   global grant of its action, and `ctx.db.app.<table>` reads and writes the application tables (`scope: { app:
   '<why>' }`) with that action and reads every row of each dimension and child table whose read action it is, as
-  `over` with `'all'` would. So a code list an administrator edits and the log row of an export across every record
-  stay on the road; a reference table stays migration-managed and read-only. A
+  `over` with `'all'` would. An `on`, `in` or `over` endpoint reads an application table too, read-only and every
+  row, where its action is the table's read action: the table's read action decides who reads it. So a code list an
+  administrator edits, the check of a value against it in a scoped mutation, and the log row of an export across
+  every record stay on the road; a reference table stays migration-managed and read-only. A
   capability reads its own target, except a column that declares another action's read
   ([ADR-0050](0050-approved-access.md) §3). Writes answer `{ id, version }`; `update` and `remove` take
   `expectVersion`; `getForUpdate()` is the precondition read a concurrent write waits behind. `fromRow(Schema, row)`

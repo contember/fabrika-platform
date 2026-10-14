@@ -82,6 +82,13 @@ export interface AppIsolationKit {
 	updateWithRead(): Promise<MisuseOutcome>
 	/** The capability of the read action handed to remove. */
 	removeWithRead(): Promise<MisuseOutcome>
+	/**
+	 * Lists from an `over` endpoint of the table's read action, for a caller who holds it in one scope only: a scoped
+	 * site reads every row of an application table by its read action.
+	 */
+	scopedList(): Promise<ListOutcome>
+	/** The same list from an `over` endpoint of another action the table names: the data layer must refuse it. */
+	scopedListWithOther(): Promise<MisuseOutcome>
 }
 
 export type AppCaller = 'global' | 'scoped'
@@ -157,6 +164,11 @@ function childProbe(vocabulary: Vocabulary<string, string, string>, parent: stri
 	}))
 }
 
+/** An action the table names besides its read action, or `null` when it names none. */
+function otherAction(actions: ProbeActions): string | null {
+	return [actions.insert, actions.update, actions.delete].find((action) => action !== null && action !== actions.read) ?? null
+}
+
 function appProbe(vocabulary: Vocabulary<string, string, string>, actions: ProbeActions) {
 	const { read } = actions
 	return defineContract(vocabulary, (c) => ({
@@ -168,6 +180,16 @@ function appProbe(vocabulary: Vocabulary<string, string, string>, actions: Probe
 			remove: c.mutation({ input: ById, output: Done, access: { action: actions.delete ?? read, app: true } }),
 			updateWithRead: c.mutation({ input: Edit, output: Refused, access: { action: read, app: true } }),
 			removeWithRead: c.mutation({ input: ById, output: Refused, access: { action: read, app: true } }),
+		}),
+	}))
+}
+
+/** Scoped sites over an application table: `over` the vocabulary's first dimension, of its read action and of another. */
+function scopedAppProbe(vocabulary: Vocabulary<string, string, string>, actions: ProbeActions, dimension: string) {
+	return defineContract(vocabulary, (c) => ({
+		probe: c.rpc('/probe', { callers: ['human'] }, {
+			list: c.query({ output: Keys, access: { action: actions.read, over: dimension } }),
+			listWithOther: c.query({ output: Refused, access: { action: otherAction(actions) ?? actions.read, over: dimension } }),
 		}),
 	}))
 }
@@ -254,6 +276,14 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 	)
 	const held = [...new Set([actions.read, actions.insert, actions.update, actions.delete].filter((action) => action !== null))]
 	const dimension = scopeTypeOf(contract.vocabulary.dimensions)
+	let scopedSites: ReturnType<typeof scopedAppKit> | undefined
+	const inOneScope = (action: string) => {
+		if (!Object.hasOwn(contract.vocabulary.dimensions, dimension)) {
+			throw new Error(`the vocabulary declares no dimension, so no scoped site reads ${table}`)
+		}
+		scopedSites ??= scopedAppKit(scopedAppProbe(contract.vocabulary, actions, dimension), tables, table, scope.key, postgres)
+		return scopedSites.as(action, dimension)
+	}
 	const grantsOf = (caller: AppCaller): TestGrant<AnyContract>[] =>
 		caller === 'global'
 			? held.map((action) => ({ action }))
@@ -307,8 +337,70 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 			const api = session('global')
 			return attempt(async () => ({ status: 200, ...(await api.removeWithRead({ id: row.key })) }), (status) => ({ status, refused: false }))
 		},
+		async scopedList() {
+			const row = await seed()
+			const api = inOneScope(actions.read)
+			return attempt(async () => {
+				const { keys } = await api.list()
+				const rows: IsolationRow[] = keys.includes(row.key) ? ['own'] : []
+				return { status: 200, rows }
+			}, (status) => ({ status, rows: [] }))
+		},
+		async scopedListWithOther() {
+			const other = otherAction(actions)
+			if (other === null) {
+				throw new Error(`the policy of ${table} names no action besides its read action`)
+			}
+			await seed()
+			const api = inOneScope(other)
+			return attempt(async () => ({ status: 200, ...(await api.listWithOther()) }), (status) => ({ status, refused: false }))
+		},
 	}
 	return Object.freeze(appKit)
+}
+
+/**
+ * The kit of `scopedAppProbe`, on a data layer of its own (a layer binds once): its handlers read `table` through the
+ * `Within` of each `over` site.
+ */
+function scopedAppKit<DB, P>(
+	probeContract: ReturnType<typeof scopedAppProbe>,
+	tables: Tables<DB, P>,
+	table: string,
+	key: string,
+	postgres: TestDatabase,
+) {
+	const layer = scoped(withoutInboxes(tables))
+	const probe = tableProbe(layer, table)
+	const kit = testKit(
+		implement(probeContract, {
+			database: layer,
+			deps: () => ({}),
+			handlers: () => ({
+				probe: {
+					list: async ({ ctx }) => ({ keys: (await probe.select(ctx.within)).map((row) => String(row[key])) }),
+					listWithOther: async ({ ctx }) => {
+						try {
+							await probe.select(ctx.within)
+							return { refused: false }
+						} catch (error) {
+							if (isCapabilityError(error)) {
+								return { refused: true }
+							}
+							throw error
+						}
+					},
+				},
+			}),
+		}),
+		{ database: postgres.database },
+	)
+	return {
+		as: (action: string, dimension: string) =>
+			createClient(probeContract, 'probe', {
+				fetch: kit.browser(kit.testCaller([{ action, scope: { type: dimension, value: `${dimension}-scoped-${crypto.randomUUID()}` } }])),
+			}),
+	}
 }
 
 /**

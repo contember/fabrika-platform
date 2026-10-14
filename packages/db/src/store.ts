@@ -468,6 +468,26 @@ export function appListPredicate(context: TableContext, capability: unknown): Op
 	return everything()
 }
 
+/**
+ * Every row of an application table, for a `Ref` or a `Within` of its read action: what `ctx.db.app` of an `on`, `in`
+ * or `over` endpoint reads, read-only, as a reference table is read. The table's read action decides who reads it.
+ */
+export function scopedApplicationRead(context: TableContext, capability: unknown): OperationNode {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const model = context.model
+	if (model.scope.mode !== 'app') {
+		throw new CapabilityError(`${model.name} is not an application table: a scoped site reads it through its own handles`)
+	}
+	if (grant.kind === 'app') {
+		throw new CapabilityError(`a read of ${model.name} from a scoped site needs a Ref or a Within, got ${describeGrant(grant)}`)
+	}
+	const read = requiredAction(context, 'read')
+	if (grant.action !== read) {
+		throw new CapabilityError(`a scoped site reads ${model.name} with its read action ${read} only; the capability holds ${grant.action}`)
+	}
+	return everything()
+}
+
 /** One row of an application table by its key, for an `app` capability of `operation`'s action. */
 export function appRowPredicate(context: TableContext, capability: unknown, key: unknown, operation: Operation): OperationNode {
 	checkApplicationTable(context, operation)
@@ -1170,14 +1190,21 @@ function probeOf(context: TableContext): TableProbe {
 	})
 }
 
-/** The probe of an application table: every operation takes an `app` capability and, but for an insert, a key. */
+/**
+ * The probe of an application table: every operation takes an `app` capability and, but for an insert, a key; a read
+ * also takes a scoped site's `Ref` or `Within` of the table's read action.
+ */
 function appProbeOf(context: TableContext): TableProbe {
 	const run = storeRunner(context)
+	// A scoped site reads an application table too: the probe answers both, as ctx.db.app does.
+	const scoped = (capability: unknown): boolean => runtimeOf(context.connection).capabilities.resolve(capability).kind !== 'app'
+	const every = (capability: unknown): OperationNode =>
+		scoped(capability) ? scopedApplicationRead(context, capability) : appListPredicate(context, capability)
 	const count = async (capability: unknown): Promise<string> => {
 		const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(
 			context,
 			run,
-			appListPredicate(context, capability),
+			every(capability),
 			{ count: true },
 		)
 		const value = row === undefined ? '0' : ownEntry(row, 'count')
@@ -1185,13 +1212,18 @@ function appProbeOf(context: TableContext): TableProbe {
 	}
 	return freeze({
 		mode: 'app',
-		get: async (capability: unknown, key?: string) =>
-			selectOne<Readonly<Record<string, unknown>>>(context, run, appRowPredicate(context, capability, key, 'read')),
+		get: async (capability: unknown, key?: string) => {
+			if (scoped(capability)) {
+				scopedApplicationRead(context, capability)
+				return selectOne<Readonly<Record<string, unknown>>>(context, run, appKeyPredicate(context.model, key))
+			}
+			return selectOne<Readonly<Record<string, unknown>>>(context, run, appRowPredicate(context, capability, key, 'read'))
+		},
 		select: async (capability: unknown) => {
 			const start = startSelect<Readonly<Record<string, unknown>>, NoColumns>(context.shape)
 			return selectRows<Readonly<Record<string, unknown>>>(
 				context,
-				appListPredicate(context, capability),
+				every(capability),
 				finishSelect(start, start),
 				requiredAction(context, 'read'),
 			)

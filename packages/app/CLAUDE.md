@@ -479,6 +479,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   nothing and mints `ctx.app` (`AppCapability`, `mint.app`); `ctx.db.app` (`endpointData`) holds every application
   table (`scope: { app }`) and, read-only, every dimension and child table whose read action is the action. It has no
   `ctx.members`, `ctx.links` or delegation. Never add a check of the grant's scope here: the requirement is the check.
+  An `on`, `in` or `over` endpoint's `ctx.db.app` is built from its `Ref` or `Within` (`endpointData`): every
+  application table, read-only, read where the endpoint's action is the table's read action.
 - **An `attachment()` output answers a file, encoded by the framework only** (`implement/attachment.ts`). Its value
   is the zod schema of the rows' array, marked (`attachmentOf`), so the handler's types, projection and validation are
   a list's; `describeContract` describes it as that array beside `attachment`, and `buildArtifact` writes the row's

@@ -396,6 +396,30 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		await transaction.commit()
 	})
 
+	test('an application table read from a scoped site: every row by its read action, read-only, refused for another action', async () => {
+		const id = `setting-${Bun.randomUUIDv7()}`
+		await admin((sql) => sql.unsafe(`insert into ${schema}.settings (id, value) values ($1, 'on')`, [id]))
+		const { transaction, handles } = invocation('mutation')
+		const within = handles.app(alice.within('workspace', 'settings.read', ['w1']))
+		expect(keysOf(within)).toEqual(['settings'])
+		expect(itemsOf(await call(within, 'settings.list', { limit: 500 })).map((item) => item['id'])).toContain(id)
+		expect(await call(within, 'settings.get', id)).toEqual({ id, value: 'on' })
+		expect(await call(within, 'settings.count', { where: [['id', '=', id]] })).toBe(1)
+		expect(await call(within, 'settings.aggregate', { groupBy: ['id'], count: true })).toContainEqual({ id, count: '1' })
+		const onNote = handles.app(note('settings.read', await seedNote('reads settings')))
+		expect(await call(onNote, 'settings.get', id)).toEqual({ id, value: 'on' })
+		for (const method of ['insert', 'update', 'remove', 'getForUpdate']) {
+			expect(Reflect.get(Reflect.get(onNote, 'settings'), method)).toBeUndefined()
+		}
+		const other = handles.app(note('notes.read', await seedNote('reads no settings')))
+		await expect(call(other, 'settings.list')).rejects.toThrow(
+			'a scoped site reads settings with its read action settings.read only; the capability holds notes.read',
+		)
+		await expect(call(other, 'settings.get', id)).rejects.toBeInstanceOf(CapabilityError)
+		await expect(call(handles.app(alice.within('workspace', 'settings.edit', ['w1'])), 'settings.count')).rejects.toBeInstanceOf(CapabilityError)
+		await transaction.commit()
+	})
+
 	test('unscoped: only the declared tables, scope predicate true, the mode enforced, containment named on insert', async () => {
 		const elsewhere = await seedNote('in another organization', 'w3', 'o2')
 		const { transaction, handles } = invocation('mutation', { notes: 'read', note_comments: 'write' })

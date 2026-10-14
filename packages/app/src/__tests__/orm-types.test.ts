@@ -1,5 +1,5 @@
 // The type half of the mini-ORM: each file in `orm-mistakes/` is one data mistake a handler makes, refused on the line
-// after its `// mistake:` marker. 08–11 run on the probe task tracker (`probe-tasks/`), 12–14 on application-wide data
+// after its `// mistake:` marker. 08–11 run on the probe task tracker (`probe-tasks/`), 12–16 on application-wide data
 // (`app-wide-fixture/`). The API matrix itself is pinned by `kit-fixture/matrix.ts` (`kit-types.test.ts`).
 
 import { describe } from 'bun:test'
@@ -24,9 +24,13 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'12-app-insert-with-the-read-action.ts':
 		`Type 'Unavailable<"insert on positions needs the action 'positions.manage', and this endpoint holds 'positions.read'">' has no call signatures.`,
 	'13-application-table-under-on.ts':
-		`Property 'count' does not exist on type 'Unavailable<"positions is an application table: declare access: { action, app: true } and use ctx.db.app.positions">'.`,
+		`Property 'count' does not exist on type 'Unavailable<"positions is an application table: read it through ctx.db.app.positions, or declare access: { action, app: true }">'.`,
 	'14-app-list-with-another-read-action.ts':
 		`Type 'Unavailable<"a list of candidates needs its read action 'candidates.read', and this endpoint holds 'positions.manage'">' has no call signatures.`,
+	'15-scoped-read-of-an-application-table-with-another-action.ts':
+		`Property 'count' does not exist on type 'Unavailable<"a scoped endpoint reads reasons with its read action 'candidates.review', and this endpoint holds 'candidates.read'">'.`,
+	'16-scoped-write-of-an-application-table.ts':
+		`Type 'Unavailable<"a scoped endpoint only reads an application table: write it from an endpoint declared access: { action, app: true }">' has no call signatures.`,
 }
 
 /**

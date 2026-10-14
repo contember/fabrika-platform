@@ -228,9 +228,9 @@ export const tables = defineTables(vocabulary, columns)({
   application, such as a code list an administrator edits) or `{ reference: '<why>' }` (shared rows every endpoint
   reads and none writes; a migration changes them).
 - An application table takes `actions`, `insert`, `update`, `version`, `createdBy` and `columns` like a dimension
-  table, and no container. Only an `app: true` endpoint reaches it (`ctx.db.app.<table>`, `references/endpoint.md`),
-  and only a caller who holds the operation's action as a global grant. Data that a link holder or a scoped member
-  reads stays a reference table.
+  table, and no container. An `app: true` endpoint reads and writes it (`ctx.db.app.<table>`, `references/endpoint.md`),
+  for a caller who holds the operation's action as a global grant. An `on`, `in` or `over` endpoint whose action is
+  its read action reads it, every row and read-only, so its read action decides who reads it.
 - A reference table (`priorities`) takes `actions: { read: '<action>' }` and, at most, `columns` with read actions: no
   `insert`, `update`, `version` or `createdBy`. Its rows change by a migration only. No handle writes it, and
   `unscoped: { priorities: 'write' }` is refused by tsc and the checker.

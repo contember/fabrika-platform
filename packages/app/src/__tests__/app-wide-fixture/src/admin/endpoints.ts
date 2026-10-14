@@ -1,6 +1,8 @@
-// Application-wide data on the paved road: the positions an administrator edits, the counts and the audited export of
-// every candidate. Each endpoint's action must be held as a global grant; the proxy refuses a scoped holder.
+// Application-wide data on the paved road: the positions and the reasons an administrator edits, the counts and the
+// audited export of every candidate. Each app endpoint's action must be held as a global grant; the proxy refuses a
+// scoped holder. A decision on one candidate reads the reasons by their read action from its own scoped site.
 
+import { BadRequestError } from '@fabrika/app'
 import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
@@ -16,6 +18,9 @@ const Counts = z.strictObject({ items: z.array(z.strictObject({ status: z.string
 const Columns = z.strictObject({ columns: z.array(z.string()) })
 const Row = z.strictObject({ id: z.string(), name: z.string(), status: z.string() })
 const Log = z.strictObject({ items: z.array(z.strictObject({ rows: z.int(), createdBy: z.string() })) })
+const Label = z.strictObject({ label: z.string().min(1).max(200) })
+const Retire = z.strictObject({ id: z.uuid(), expectVersion: z.int() })
+const Decide = z.strictObject({ id: z.uuid(), expectVersion: z.int(), reasonId: z.nullable(z.uuid()) })
 
 export const admin = app.group({ callers: ['human'] }, (r) => ({
 	positions: r.query({ output: Positions, access: { action: 'positions.read', app: true } })
@@ -49,6 +54,20 @@ export const admin = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.db.app.exports.list({ orderBy: [['created_at', 'asc']] })).items.map((row) => ({ rows: row.rows, createdBy: row.created_by })),
 		})),
+	reason: r.mutation({ input: Label, output: Saved, access: { action: 'reasons.manage', app: true } })
+		.handle(async ({ input, ctx }) => ctx.db.app.reasons.insert({ label: input.label })),
+	retire: r.mutation({ input: Retire, output: Saved, access: { action: 'reasons.manage', app: true } })
+		.handle(async ({ input, ctx }) => ctx.db.app.reasons.update(input.id, { active: false }, { expectVersion: input.expectVersion })),
+	decide: r.mutation({ input: Decide, output: Saved, access: { action: 'candidates.review', on: 'candidate', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			if (input.reasonId !== null) {
+				const known = await ctx.db.app.reasons.count({ where: [['id', '=', input.reasonId], ['active', '=', true]] })
+				if (known === 0) {
+					throw new BadRequestError(`the reason ${input.reasonId} is unknown or retired`)
+				}
+			}
+			return ctx.db.target.update({ reason_id: input.reasonId }, { expectVersion: input.expectVersion })
+		}),
 	export: r.mutation({
 		output: attachment({ format: 'csv', filename: 'candidates.csv', row: Row, maxBytes: 1048576, maxRows: 500 }),
 		access: { action: 'candidates.read', app: true },

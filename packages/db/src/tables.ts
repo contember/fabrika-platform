@@ -27,6 +27,8 @@ export type {
 	RowFor,
 	RowOf,
 	Saved,
+	ScopedApplicationRows,
+	ScopedApplicationTables,
 	ScopeTarget,
 	TableNameOf,
 	TargetForm,

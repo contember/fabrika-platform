@@ -258,13 +258,13 @@ export function endpointData(
 	const shared = { reference: handles.reference, ...(handles.unscoped === undefined ? {} : { unscoped: handles.unscoped }) }
 	switch (form) {
 		case 'on':
-			return Object.freeze({ target: handles.target(access.target, 'on'), ...shared })
+			return Object.freeze({ target: handles.target(access.target, 'on'), app: handles.app(access.target), ...shared })
 		case 'in':
-			return Object.freeze({ target: handles.target(access.target, 'in'), ...shared })
+			return Object.freeze({ target: handles.target(access.target, 'in'), app: handles.app(access.target), ...shared })
 		case 'creates':
 			return Object.freeze({ created: handles.target(access.created, 'in'), ...shared })
 		case 'over':
-			return Object.freeze({ within: handles.within(access.within), ...shared })
+			return Object.freeze({ within: handles.within(access.within), app: handles.app(access.within), ...shared })
 		case 'app':
 			return Object.freeze({ app: handles.app(access.app), ...shared })
 		case 'member':

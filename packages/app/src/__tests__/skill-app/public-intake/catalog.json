@@ -48,6 +48,16 @@
 		},
 		{
 			"table_name": "candidate_events",
+			"column_name": "reason_id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidate_events",
 			"column_name": "created_by",
 			"type_name": "text",
 			"type_type": "b",
@@ -778,6 +788,56 @@
 		},
 		{
 			"table_name": "positions",
+			"column_name": "version",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "reasons",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "reasons",
+			"column_name": "label",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "reasons",
+			"column_name": "active",
+			"type_name": "bool",
+			"type_type": "b",
+			"type_category": "B",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "reasons",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "reasons",
 			"column_name": "version",
 			"type_name": "int4",
 			"type_type": "b",

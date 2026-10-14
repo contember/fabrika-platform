@@ -1,10 +1,10 @@
 # references/public-intake.md — the public intake recipe
 
 A visitor who has no account submits a form on a public page, confirms the e-mail address through a link, attaches
-files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code list of
-open positions, HR exports every candidate with an audit row, and a member checks the mail setup with a test e-mail to
-their own address. This file is an application of its own (`intake`);
-its `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
+files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code lists of
+open positions and of the reasons a decision records, HR exports every candidate with an audit row, and a member
+checks the mail setup with a test e-mail to their own address. This file is an application of its own (`intake`); its
+`package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
 
 Every piece lets in someone who is not signed in, so ask the human before you build it, and say what each one lets the
 visitor do. The visitor never reaches a handler without a credential:
@@ -35,11 +35,20 @@ export const vocabulary = defineVocabulary({
 		'candidates.process': 'Register candidates and send their links',
 		'positions.read': 'Read the open positions',
 		'positions.manage': 'Edit the open positions',
+		'reasons.manage': 'Edit the reasons a decision records',
 		'exports.read': 'Read the log of candidate exports',
 	},
 	roles: {
 		hr: { grants: ['candidates.read', 'candidates.review', 'positions.read'] },
-		hr_lead: { grants: ['positions.read', 'positions.manage', 'exports.read'] },
+		hr_lead: {
+			grants: [
+				'candidates.review',
+				'positions.read',
+				'positions.manage',
+				'reasons.manage',
+				'exports.read',
+			],
+		},
 	},
 })
 ```
@@ -75,6 +84,7 @@ CREATE TABLE candidate_events (
 	candidate_id UUID NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
 	status candidate_status NOT NULL,
 	note TEXT,
+	reason_id UUID,
 	created_by TEXT NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -94,10 +104,17 @@ CREATE TABLE resend_requests (
 ```
 
 ```sql db/migrations/20261013090050_application_data.sql
--- Data of the whole application: the code list an HR lead edits, and the log of every export of all candidates.
+-- Data of the whole application: the code lists an HR lead edits, and the log of every export of all candidates.
 CREATE TABLE positions (
 	id UUID PRIMARY KEY,
 	title TEXT NOT NULL,
+	active BOOLEAN NOT NULL DEFAULT true,
+	created_by TEXT NOT NULL,
+	version INTEGER NOT NULL
+);
+CREATE TABLE reasons (
+	id UUID PRIMARY KEY,
+	label TEXT NOT NULL,
 	active BOOLEAN NOT NULL DEFAULT true,
 	created_by TEXT NOT NULL,
 	version INTEGER NOT NULL
@@ -165,7 +182,7 @@ export const tables = defineTables(vocabulary, columns)({
 	candidate_events: {
 		scope: { child: 'candidates' },
 		actions: { read: 'candidates.read', insert: 'candidates.review' },
-		insert: ['status', 'note'],
+		insert: ['status', 'note', 'reason_id'],
 		createdBy: 'created_by',
 	},
 	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
@@ -182,6 +199,18 @@ export const tables = defineTables(vocabulary, columns)({
 		version: 'version',
 		createdBy: 'created_by',
 	},
+	reasons: {
+		scope: { app: 'the reasons a decision records, which an HR lead edits' },
+		actions: {
+			read: 'candidates.review',
+			insert: 'reasons.manage',
+			update: 'reasons.manage',
+		},
+		insert: ['label'],
+		update: ['label', 'active'],
+		version: 'version',
+		createdBy: 'created_by',
+	},
 	candidate_exports: {
 		scope: { app: 'the log of every export of all candidates' },
 		actions: { read: 'exports.read', insert: 'candidates.read' },
@@ -193,10 +222,12 @@ export const tables = defineTables(vocabulary, columns)({
 
 - `{ inbox: '<form>', read }` is a form's table: only that form appends to it, and only a site that holds `read` and
   declares the reach reads it. No site writes it: `unscoped: { registrations: 'write' }` is refused.
-- `{ app: '<why>' }` is an application table: its rows belong to no candidate. Only an endpoint declared
-  `access: { action, app: true }` reaches it, through `ctx.db.app`, with the action the operation names. A position is
-  deactivated, never deleted, so the table has no delete action. `candidate_exports` is appended with the export's own
-  action, `candidates.read`, and read with `exports.read`.
+- `{ app: '<why>' }` is an application table: its rows belong to no candidate. An endpoint declared
+  `access: { action, app: true }` reads and writes it through `ctx.db.app`, with the action the operation names. An
+  endpoint `on`, `in` or `over` a candidate reads it, read-only and every row, where its action is the table's read
+  action: `decide` reads `reasons` with `candidates.review`. A position or a reason is deactivated, never deleted, so
+  neither table has a delete action. `candidate_exports` is appended with the export's own action, `candidates.read`,
+  and read with `exports.read`.
 - The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
   name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
 - The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
@@ -236,6 +267,7 @@ import { candidates } from './src/candidates/endpoints'
 import { intake } from './src/intake/endpoints'
 import { portal } from './src/portal/endpoints'
 import { positions } from './src/positions/endpoints'
+import { reasons } from './src/reasons/endpoints'
 import { Register, Resend } from './src/schemas'
 import { settings } from './src/settings/endpoints'
 
@@ -256,7 +288,7 @@ export const contract = app.contract((c) => ({
 		then: 'intake',
 	}),
 	portal,
-	api: c.rpc('/api', { candidates, positions, settings }),
+	api: c.rpc('/api', { candidates, positions, reasons, settings }),
 	hr: c.spa('/hr', {
 		dir: 'dist/hr',
 		access: { action: 'candidates.read', over: 'candidate' },
@@ -672,7 +704,7 @@ export const stageOf = (
 ```
 
 ```ts src/candidates/endpoints.ts
-import { ConflictError, fromPage, fromRow } from '@fabrika/app'
+import { BadRequestError, ConflictError, fromPage, fromRow } from '@fabrika/app'
 import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
@@ -713,6 +745,7 @@ const Decide = z.strictObject({
 	expectVersion: z.int().positive(),
 	status: CandidateStatus,
 	note: z.nullable(z.string().max(2000)),
+	reasonId: z.nullable(z.uuid()),
 })
 const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
 const ExportRow = z.strictObject({
@@ -791,9 +824,20 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 					`a ${candidate.status} candidate does not move to ${input.status}`,
 				)
 			}
+			if (input.reasonId !== null) {
+				const known = await ctx.db.app.reasons.count({
+					where: [['id', '=', input.reasonId], ['active', '=', true]],
+				})
+				if (known === 0) {
+					throw new BadRequestError(
+						`the reason ${input.reasonId} is unknown or retired`,
+					)
+				}
+			}
 			await ctx.db.target.candidate_events.insert({
 				status: input.status,
 				note: input.note,
+				reason_id: input.reasonId,
 			})
 			return ctx.db.target.update({ status: input.status }, {
 				expectVersion: input.expectVersion,
@@ -840,6 +884,10 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
+- **A code list an administrator edits is validated by reading it.** `decide` runs `on` one candidate with
+  `candidates.review`, the read action of `reasons`, so `ctx.db.app.reasons` reads every reason there, read-only. A
+  reason that is unknown or retired answers 400 that names it, before anything is written. Do not let a foreign key
+  stand in for the check: its failure is a 500 that names no value.
 - **Application history is a table on the paved road.** `decide` writes its `candidate_events` row through the
   handle, in the invocation's one transaction: the status and its history row commit together or not at all, and
   `created_by` is the caller. There is no framework audit API; never write history from a job or after the answer.
@@ -862,6 +910,7 @@ export const fixtures = {
 		expectVersion: 1,
 		status: 'screening',
 		note: null,
+		reasonId: null,
 	},
 }
 ```
@@ -930,13 +979,79 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
+```ts src/reasons/endpoints.ts
+import { fromPage } from '@fabrika/app'
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+
+const Reason = z.strictObject({
+	id: z.uuid(),
+	label: z.string(),
+	active: z.boolean(),
+	version: z.int(),
+})
+const Reasons = z.strictObject({
+	items: z.array(Reason),
+	next: z.nullable(z.string()),
+})
+const Page = z.strictObject({ after: z.string().max(500).optional() })
+const NewReason = z.strictObject({ label: z.string().min(1).max(200) })
+const EditReason = z.strictObject({
+	id: z.uuid(),
+	expectVersion: z.int().positive(),
+	label: z.string().min(1).max(200),
+	active: z.boolean(),
+})
+const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+
+export const reasons = app.group({ callers: ['human'] }, (r) => ({
+	list: r.query({
+		input: Page,
+		output: Reasons,
+		access: { action: 'candidates.review', app: true },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Reason,
+				await ctx.db.app.reasons.list({
+					orderBy: [['label', 'asc']],
+					after: input.after,
+				}),
+			)
+		),
+	add: r.mutation({
+		input: NewReason,
+		output: Saved,
+		access: { action: 'reasons.manage', app: true },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.app.reasons.insert({ label: input.label })
+		),
+	edit: r.mutation({
+		input: EditReason,
+		output: Saved,
+		access: { action: 'reasons.manage', app: true },
+	})
+		.handle(({ input, ctx }) =>
+			ctx.db.app.reasons.update(input.id, {
+				label: input.label,
+				active: input.active,
+			}, { expectVersion: input.expectVersion })
+		),
+}))
+```
+
 - `ctx.db.app.<table>` of an application table has `list`, `count` and `aggregate` with its read action, `get(id)`
   with any action it names, and in a mutation `getForUpdate(id)`, `insert(v)`, `update(id, v, { expectVersion })` and
   `remove(id, { expectVersion })` with the operation's action. Its key is generated on insert.
 - The HR SPA reads the list with `positions.read`; an HR lead's page adds and edits with `positions.manage`. A
-  position that is no longer open is deactivated, so a record that names it keeps its meaning.
-- Only an `app` endpoint reads an application table. A code list that a link holder or a scoped endpoint must read
-  is a reference table instead (`references/table-and-migration.md`), changed by a migration.
+  position that is no longer open is deactivated, so a record that names it keeps its meaning. The reasons work the
+  same way under `reasons.manage`.
+- The table's read action decides who reads it. An endpoint `on`, `in` or `over` a candidate reads `reasons` (`list`,
+  `count`, `aggregate`, `get(id)`, every row, no write) only where its action is `candidates.review`; with another
+  action `ctx.db.app.reasons` is a type error that names the read action, and a refusal at run time. So the HR lead's
+  list of reasons runs with `candidates.review` too, and the role grants it.
+- A list no person edits, changed only with the code, is a reference table (`references/table-and-migration.md`).
 
 ## A test e-mail to yourself
 
@@ -972,8 +1087,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
 
 - The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
   link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
-  its action in one candidate only is 403, and a global holder reaches it. `positions` and `candidate_exports` get a
-  policy probe of their actions, held globally and in one scope. An endpoint that `issues` gets the cases of any `on`
+  its action in one candidate only is 403, and a global holder reaches it. `positions`, `reasons` and
+  `candidate_exports` get a policy probe of their actions, held globally and in one scope, and of a scoped site that
+  reads every row with the read action and none with another. An endpoint that `issues` gets the cases of any `on`
   endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }

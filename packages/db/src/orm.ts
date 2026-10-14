@@ -38,6 +38,7 @@ import {
 	removeRow,
 	type Runner,
 	runtimeOf,
+	scopedApplicationRead,
 	scopeTerms,
 	selectOne,
 	selfLinks,
@@ -77,8 +78,9 @@ export interface DataHandles {
 	/** `ctx.db.within` (or a job's `ctx.db.over`): every table listed in a `Within`'s dimension. */
 	within(capability: unknown): object
 	/**
-	 * `ctx.db.app` of an `app` endpoint: each application table, and each dimension and child table, read-only, by the
-	 * capability's action held application-wide.
+	 * `ctx.db.app`. Of an `app` endpoint: each application table, and each dimension and child table, read-only, by the
+	 * capability's action held application-wide. Of an `on`, `in` or `over` endpoint (a `Ref` or a `Within`): each
+	 * application table, read-only, every row, where the capability's action is its read action.
 	 */
 	app(capability: unknown): object
 	/** `ctx.db.reference`. */
@@ -404,7 +406,7 @@ function listedRows(context: TableContext, site: DataSite, run: Runner, scope: (
 function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown): object {
 	const grant = resolved(parts, capability)
 	if (grant.kind !== 'app') {
-		throw new CapabilityError(`ctx.db.app is built from the capability of an app endpoint, got ${describeGrant(grant)}`)
+		return scopedApplicationTables(parts, site, run, capability)
 	}
 	const handle: Record<string, unknown> = {}
 	const tables = ownKeys(parts.models)
@@ -421,6 +423,36 @@ function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, c
 		}
 	}
 	return freeze(handle)
+}
+
+/** `ctx.db.app` of a scoped site: every application table, each read only under its read action (`scopedApplicationRead`). */
+function scopedApplicationTables(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown): object {
+	const handle: Record<string, unknown> = {}
+	const tables = ownKeys(parts.models)
+	for (let index = 0; index < tables.length; index++) {
+		const model = modelOf(parts.models, tables[index] ?? '')
+		if (model?.scope.mode === 'app') {
+			setOwn(handle, model.name, scopedApplicationRows(parts.contextOf(model.name), site, run, capability))
+		}
+	}
+	return freeze(handle)
+}
+
+/** An application table read from a scoped site: listed, counted, aggregated and read by key, every row, writing nothing. */
+function scopedApplicationRows(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
+	const model = context.model
+	const visible = model.visible
+	const key = [keyOf(model)]
+	const scope = () => scopedApplicationRead(context, capability)
+	return freeze({
+		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key)),
+		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
+		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), spec)),
+		get: bound(site, async (id: unknown) => {
+			scope()
+			return selectOne(context, run, appKeyPredicate(model, id), visible)
+		}),
+	})
 }
 
 /** An `app` capability whose action the application table names: it reads one row with the columns of its action. */

@@ -9,6 +9,7 @@ import type {
 	DataKind,
 	NoUnscoped,
 	ReferenceTables,
+	ScopedApplicationTables,
 	ScopeTarget,
 	TargetForm,
 	Unavailable,
@@ -180,7 +181,8 @@ type Reach<Ix extends AnyDbIndex, T extends string, Form extends 'target' | 'ove
 type Unreached<Ix extends AnyDbIndex, T extends string, Where extends string, Form extends 'target' | 'over'> = T extends Ix['references']
 	? Unavailable<`${T} is a reference table: read it through ctx.db.reference.${T}`>
 	: TableOf<Ix, T>['mode'] extends 'inbox' ? Unavailable<`${T} is a form inbox, which no ctx.db handle reads`>
-	: T extends Ix['applications'] ? Unavailable<`${T} is an application table: declare access: { action, app: true } and use ctx.db.app.${T}`>
+	: T extends Ix['applications']
+		? Unavailable<`${T} is an application table: read it through ctx.db.app.${T}, or declare access: { action, app: true }`>
 	: Unavailable<`${T} is not under ${Where} (${Lies<Ix, T>}): ${Reach<Ix, T, Form>}`>
 
 /**
@@ -202,6 +204,15 @@ type WithinData<Ix extends AnyDbIndex, D extends string, A extends string> = Rea
 
 type AppData<Ix extends AnyDbIndex, A extends string, K extends DataKind> = Reaching<Ix, ApplicationTables<Ix, A, K>, 'app: true', 'over'>
 
+/** `ctx.db.app` of an `on`, `in` or `over` endpoint: the application tables it reads; every other table names its handle. */
+type ScopedAppData<Ix extends AnyDbIndex, A extends string> =
+	& ScopedApplicationTables<Ix, A>
+	& {
+		readonly [T in Exclude<TableName<Ix>, Ix['applications']>]: Unavailable<
+			`${T} is not an application table: a scoped endpoint's ctx.db.app reads application tables only`
+		>
+	}
+
 /** `ctx.db` by access form (the API matrix of `docs/reference/application-runtime.md`). */
 type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends InvalidAccess ? {
 		readonly target: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
@@ -213,6 +224,7 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 		}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
 			readonly within: WithinData<Ix, D, A>
+			readonly app: ScopedAppData<Ix, A>
 			readonly target: Unavailable<'an over endpoint lists through ctx.db.within: declare access with on or in for ctx.db.target'>
 		}
 	: Acc extends { readonly action: infer A extends string; readonly app: true } ? {
@@ -220,8 +232,10 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 			readonly target: Unavailable<'an app endpoint reaches its data through ctx.db.app: declare access with on or in for ctx.db.target'>
 			readonly within: Unavailable<'an app endpoint reaches its data through ctx.db.app: declare access with over for ctx.db.within'>
 		}
-	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? { readonly target: Target<Ix, D, A, K, 'in'> }
-	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: Target<Ix, D, A, K, 'on'> }
+	: Acc extends { readonly action: infer A extends string; readonly in: infer D extends string }
+		? { readonly target: Target<Ix, D, A, K, 'in'>; readonly app: ScopedAppData<Ix, A> }
+	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string }
+		? { readonly target: Target<Ix, D, A, K, 'on'>; readonly app: ScopedAppData<Ix, A> }
 	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Target<Ix, D, A, K, 'in'> }
 	: never
 

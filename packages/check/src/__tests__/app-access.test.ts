@@ -116,6 +116,8 @@ describe('the generated cases of application-wide data', () => {
 			'remove by a global holder succeeds',
 			'remove by a holder in one scope only is 403',
 			'remove refuses a capability of positions.read',
+			'a scoped site of positions.read reads every row',
+			'a scoped site of positions.manage reads no row',
 		])
 		expect(tests.get(policyTestPath('exports'))?.cases).toEqual([
 			'get by a global holder succeeds',
@@ -124,6 +126,8 @@ describe('the generated cases of application-wide data', () => {
 			'a list by a holder in one scope only is 403',
 			'insert by a global holder succeeds',
 			'insert by a holder in one scope only is 403',
+			'a scoped site of audit.read reads every row',
+			'a scoped site of candidates.read reads no row',
 		])
 	})
 })

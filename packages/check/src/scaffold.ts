@@ -101,9 +101,10 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 
 /**
  * An application table's cases: its rows lie in no scope, so the boundary is the grant. A holder of the table's actions
- * as global grants reaches each operation; a holder of the same actions in one scope only is refused by the proxy.
+ * as global grants reaches each operation; a holder of the same actions in one scope only is refused by the proxy. Where
+ * the vocabulary has a dimension, a scoped site of the read action reads every row, and one of another action none.
  */
-const appIsolationCases = (policy: TablePolicyArtifact): readonly Case[] => {
+const appIsolationCases = (policy: TablePolicyArtifact, scopedSites: boolean): readonly Case[] => {
 	const { actions } = policy
 	const writes = policy.update.length > 0 || policy.version !== null
 	const pair = (operation: string, call: string, done: string): Case[] => [
@@ -131,6 +132,15 @@ const appIsolationCases = (policy: TablePolicyArtifact): readonly Case[] => {
 			)
 		}
 	}
+	if (scopedSites) {
+		cases.push(testCase(`a scoped site of ${actions.read} reads every row`, "expect(await kit.scopedList()).toEqual({ status: 200, rows: ['own'] })"))
+		const other = [actions.insert, actions.update, actions.delete].find((action) => action !== null && action !== actions.read)
+		if (other !== undefined) {
+			cases.push(
+				testCase(`a scoped site of ${other} reads no row`, 'expect(await kit.scopedListWithOther()).toEqual({ status: 200, refused: true })'),
+			)
+		}
+	}
 	return cases
 }
 
@@ -138,13 +148,17 @@ const describeBlock = (title: string, cases: readonly Case[]): string =>
 	[`\tdescribe(${quote(title)}, () => {`, cases.map(renderCase).join('\n\n'), '\t})'].join('\n')
 
 /** `table`'s policy isolation test (everything after the header), or `undefined` for a table no store reaches. */
-const policyTestBody = (policies: Policies, table: string): { readonly body: string; readonly cases: readonly string[] } | undefined => {
+const policyTestBody = (
+	policies: Policies,
+	table: string,
+	scopedSites: boolean,
+): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const policy = policies[table]
 	if (policy === undefined) return undefined
 	const app = policy.scope.mode === 'app'
 	const dimension = grantDimension(policies, policy)
 	if (dimension === undefined && !app) return undefined
-	const isolation = dimension === undefined ? appIsolationCases(policy) : isolationCases(policy, dimension)
+	const isolation = dimension === undefined ? appIsolationCases(policy, scopedSites) : isolationCases(policy, dimension)
 	const own = app ? "'global'" : "'own'"
 	// A column with only its own write action is read by the table's read action, so it is returned like any other.
 	const hidden = Object.keys(policy.columns).filter((column) => policy.columns[column]?.read !== undefined).sort().map((column) =>
@@ -421,8 +435,10 @@ export const generatedTests = async (
 	fixtures: EndpointFixtures = NO_FIXTURES,
 ): Promise<ReadonlyMap<string, GeneratedTest>> => {
 	const files = new Map<string, GeneratedTest>()
+	// The kit's scoped sites are `over` the vocabulary's first dimension: without one, no scoped site exists.
+	const scopedSites = artifact !== null && Object.keys(artifact.dimensions).length > 0
 	for (const table of Object.keys(policies).sort()) {
-		const test = policyTestBody(policies, table)
+		const test = policyTestBody(policies, table, scopedSites)
 		if (test !== undefined) files.set(policyTestPath(table), await generated(test))
 	}
 	const endpoints = artifact === null || files.size === 0 ? undefined : endpointTestBody(artifact, policies, fixtures)
