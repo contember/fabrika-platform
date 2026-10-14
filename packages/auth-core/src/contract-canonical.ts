@@ -86,8 +86,14 @@ function canonicalMount(mount: MountArtifact): MountArtifact {
 }
 
 function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
+	const { appRead, appCount } = table.actions
 	return {
 		...table,
+		actions: {
+			...table.actions,
+			...(appRead === undefined ? {} : { appRead: sorted(appRead) }),
+			...(appCount === undefined ? {} : { appCount: sorted(appCount) }),
+		},
 		scope: table.scope.mode === 'child' ? { ...table.scope, inherit: sorted(table.scope.inherit) } : table.scope,
 		insert: sorted(table.insert),
 		update: sorted(table.update),

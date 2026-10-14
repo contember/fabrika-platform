@@ -9,6 +9,7 @@ refuseInProduction('@fabrika/app/testing/isolation')
 export { type DeniedOutcome, type EndpointAccessKit, endpointAccessKit, type LeakOutcome, type ReachOutcome } from './endpoint-access'
 export {
 	type AppCaller,
+	type AppCountOutcome,
 	type AppIsolationKit,
 	appPolicyIsolationKit,
 	type ChildIsolationRow,

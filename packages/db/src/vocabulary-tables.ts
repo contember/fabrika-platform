@@ -1,7 +1,7 @@
 // The table policies of the vocabulary form, `defineTables(vocabulary, columns)`: how an application writes them, with
 // containment taken from the vocabulary, and the normalized policies the kit and the handles read. Types only.
 
-import type { ColumnList, ColumnPolicies, InboxPolicy, ReferencePolicy, TableActions, Tables, VersionColumn } from './policy'
+import type { ColumnList, ColumnPolicies, InboxPolicy, RecordActions, ReferencePolicy, TableActions, Tables, VersionColumn } from './policy'
 
 declare const databaseType: unique symbol
 
@@ -67,8 +67,8 @@ export type VocabularyChildScope<Table extends string, Col extends string> =
 	& { readonly child: Table; readonly column?: Col; readonly inherit?: readonly Col[] }
 	& KeyField<Col>
 
-interface WritableFields<Col extends string, A extends string, Ver extends Col> {
-	readonly actions: TableActions<A>
+interface WritableFields<Col extends string, A extends string, Ver extends Col, Acts = TableActions<A>> {
+	readonly actions: Acts
 	readonly insert?: readonly Col[]
 	readonly update?: readonly Col[]
 	readonly version?: Ver
@@ -116,12 +116,14 @@ type ChildScopes<Table extends string, Col extends string, S, P> = unknown exten
 		: ChildTableScope<Parent, StatedDimensionOf<P, Parent>, Col>
 	: VocabularyChildScope<Table, Col>
 
-type AuthoredDimensionPolicy<Col extends string, A extends string, V, Ver extends Col, S> = WritableFields<Col, A, Ver> & {
+type AuthoredDimensionPolicy<Col extends string, A extends string, V, Ver extends Col, S> = WritableFields<Col, A, Ver, RecordActions<A>> & {
 	readonly scope: DimensionScopes<V, Col, S>
 }
-type AuthoredChildPolicy<Table extends string, Col extends string, A extends string, Ver extends Col, S, P> = WritableFields<Col, A, Ver> & {
-	readonly scope: ChildScopes<Table, Col, S, P>
-}
+type AuthoredChildPolicy<Table extends string, Col extends string, A extends string, Ver extends Col, S, P> =
+	& WritableFields<Col, A, Ver, RecordActions<A>>
+	& {
+		readonly scope: ChildScopes<Table, Col, S, P>
+	}
 /** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
 type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver> & {
 	readonly scope: { readonly app: string } & KeyField<Col>

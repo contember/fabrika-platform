@@ -96,6 +96,23 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 			cases.push(testCase(`remove refuses a Ref for ${actions.read}`, 'expect(await kit.removeWithRead()).toEqual({ status: 200, refused: true })'))
 		}
 	}
+	for (const action of actions.appRead ?? []) {
+		cases.push(
+			testCase(
+				`an app endpoint of ${action} lists every row`,
+				`expect(await kit.appList(${quote(action)})).toEqual({ status: 200, rows: ['own', 'other'] })`,
+			),
+		)
+	}
+	for (const action of actions.appCount ?? []) {
+		cases.push(
+			testCase(`an app endpoint of ${action} counts every row`, `expect(await kit.appCount(${quote(action)})).toEqual({ status: 200, counted: 2 })`),
+			testCase(
+				`an app endpoint of ${action} lists no row`,
+				`expect(await kit.appListWithCount(${quote(action)})).toEqual({ status: 200, refused: true })`,
+			),
+		)
+	}
 	return cases
 }
 

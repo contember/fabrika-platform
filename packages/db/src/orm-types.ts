@@ -40,6 +40,11 @@ type ModeOf<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S exten
 	: 'inbox'
 	: never
 
+/** The actions a table's `actions.appRead` or `actions.appCount` lists; `never` when it lists none. */
+type AppActionsOf<P, T, F extends 'appRead' | 'appCount'> = PolicyOf<P, T> extends
+	{ readonly actions: { readonly [K in F]: readonly (infer A extends string)[] } } ? A
+	: never
+
 type ReadActionOf<P, T> = PolicyOf<P, T> extends { readonly scope: { readonly read: infer A extends string } } ? A : ActionOf<P, T, 'read'>
 
 /** Each column that declares its own read action, by column. */
@@ -77,6 +82,10 @@ export interface IndexedTable {
 	/** A child table's parent table. */
 	readonly parent: string
 	readonly actions: { readonly read: string; readonly insert: string; readonly update: string; readonly delete: string }
+	/** The actions besides `read` with which an `app` endpoint lists every row (`actions.appRead`). */
+	readonly appRead: string
+	/** The actions with which an `app` endpoint only counts and aggregates every row (`actions.appCount`). */
+	readonly appCount: string
 	/** Every column, before any is hidden. */
 	readonly row: object
 	/** The columns that declare their own read action. */
@@ -101,6 +110,8 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 		readonly update: ActionOf<P, T, 'update'>
 		readonly delete: ActionOf<P, T, 'delete'>
 	}
+	readonly appRead: AppActionsOf<P, T, 'appRead'>
+	readonly appCount: AppActionsOf<P, T, 'appCount'>
 	readonly row: RowType<DB[T]>
 	readonly reads: ColumnReadsOf<P, T>
 	readonly insert: InsertValues<DB, P, T>
@@ -381,13 +392,31 @@ export interface ApplicationRows<T extends string, E extends IndexedTable, A ext
 	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
 }
 
+/** A dimension or child table under an `app` endpoint of action `A`: every row read-only, or only its counts. */
+export interface AppRecordRows<T extends string, E extends IndexedTable, A extends string> {
+	readonly list: [A] extends [E['actions']['read'] | E['appRead']] ? (options?: ListOptions<TableRow<E>>) => Promise<ListPage<TableRow<E>>>
+		: Unavailable<
+			`a list of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead, and this endpoint holds '${A}'`
+		>
+	readonly count: [A] extends [E['actions']['read'] | E['appRead'] | E['appCount']] ? (options?: CountOptions<TableRow<E>>) => Promise<number>
+		: Unavailable<
+			`a count of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead or appCount, and this endpoint holds '${A}'`
+		>
+	readonly aggregate: [A] extends [E['actions']['read'] | E['appRead'] | E['appCount']]
+		? <const S extends AggregateSpec<TableRow<E>>>(spec: S) => Promise<AggregateRow<TableRow<E>, S>[]>
+		: Unavailable<
+			`a count of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead or appCount, and this endpoint holds '${A}'`
+		>
+}
+
 /**
  * `ctx.db.app` of an `app` endpoint: every application table, and every dimension and child table read-only, all
- * rows, where the endpoint's action is its read action (`over` with `'all'` reads them so).
+ * rows, where the endpoint's action is its read action or an action of its `appRead` (`over` with `'all'` reads them
+ * so), or only their counts and aggregates with an action of its `appCount`.
  */
 export type ApplicationTables<Ix extends AnyDbIndex, A extends string, K extends DataKind> =
 	& { readonly [T in Ix['applications']]: ApplicationRows<T, Ix['tables'][T], A, K> }
-	& { readonly [T in Ix['records']]: WithinRows<T, Ix['tables'][T], A> }
+	& { readonly [T in Ix['records']]: AppRecordRows<T, Ix['tables'][T], A> }
 
 /** The row a site reads without a capability of its own: through the table's read action. */
 type TableRow<E extends IndexedTable> = RowFor<E, E['actions']['read']>

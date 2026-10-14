@@ -316,7 +316,14 @@ describe('an application table', () => {
 		const model = modelOf(tableModels(withSettings(settings)), 'settings')
 		expect(model?.scope).toEqual({ mode: 'app', reason: 'settings an administrator edits', key: 'id' })
 		expect(model?.chain).toEqual([])
-		expect(model?.actions).toEqual({ read: 'notes.read', insert: 'notes.admin', update: 'notes.admin', delete: 'notes.admin' })
+		expect(model?.actions).toEqual({
+			read: 'notes.read',
+			insert: 'notes.admin',
+			update: 'notes.admin',
+			delete: 'notes.admin',
+			appRead: [],
+			appCount: [],
+		})
 	})
 
 	test('names its key off the convention, and refuses a field another scope takes', () => {
@@ -336,4 +343,52 @@ describe('an application table', () => {
 		)
 		expect(() => withSettings({ ...settings, columns: { id: { read: 'notes.admin' } } })).toThrow('settings: the key id takes no action of its own')
 	})
+})
+
+describe('actions that reach every row app-wide besides the read action', () => {
+	const vocabularyOf = { dimensions: vocabulary.dimensions, actions: { ...actions, 'notes.export': 'Export', 'notes.count': 'Count' } }
+	const defineWith = (policies: unknown) => readTables(listOf(columns, keys), policies, vocabularyOf)
+	const withActions = (extra: object, table: 'notes' | 'countries' = 'notes') =>
+		defineWith({
+			notes: table === 'notes' ? { ...notes, actions: { ...notes.actions, ...extra } } : notes,
+			note_comments: comments,
+			countries: table === 'countries' ? { ...countries, actions: { ...countries.actions, ...extra } } : countries,
+		})
+
+	test('a dimension or child table names actions that read every row (appRead) and that only count (appCount)', () => {
+		const model = modelOf(tableModels(withActions({ appRead: ['notes.export'], appCount: ['notes.count'] })), 'notes')
+		expect(model?.actions.appRead).toEqual(['notes.export'])
+		expect(model?.actions.appCount).toEqual(['notes.count'])
+		expect(modelOf(tableModels(withActions({})), 'notes')?.actions).toMatchObject({ appRead: [], appCount: [] })
+		const child = defineWith({ notes, note_comments: { ...comments, actions: { read: 'notes.read', appCount: ['notes.count'] } }, countries })
+		expect(modelOf(tableModels(child), 'note_comments')?.actions.appCount).toEqual(['notes.count'])
+	})
+
+	test('an action the vocabulary does not declare, the read action itself, one named twice or in both lists', () => {
+		expect(() => withActions({ appRead: ['notes.exprot'] })).toThrow(
+			'notes: actions.appRead names notes.exprot, which is not an action of the vocabulary',
+		)
+		expect(() => withActions({ appRead: ['notes.read'] })).toThrow(
+			'notes: actions.appRead names notes.read, its read action, which reads every row app-wide already',
+		)
+		expect(() => withActions({ appCount: ['notes.count', 'notes.count'] })).toThrow('notes: actions.appCount names notes.count twice')
+		expect(() => withActions({ appRead: ['notes.export'], appCount: ['notes.export'] })).toThrow(
+			'notes: actions.appRead and actions.appCount both name notes.export',
+		)
+		expect(() => withActions({ appRead: [] })).toThrow('notes: actions.appRead lists no action; leave it out')
+		expect(() => withActions({ appRead: 'notes.export' })).toThrow('notes: actions.appRead takes a plain array of actions')
+	})
+
+	test('a reference table takes neither: only a dimension or child table is read through ctx.db.app by another action', () => {
+		expect(() => withActions({ appRead: ['notes.export'] }, 'countries')).toThrow(
+			'countries: actions.appRead is for a dimension or child table; a reference table takes none',
+		)
+	})
+})
+
+test('an application table takes neither: its read action reads every row app-wide already', () => {
+	const settings = { scope: { app: 'settings' }, actions: { read: 'notes.read', update: 'notes.admin', appRead: ['notes.write'] } }
+	expect(() => define({ ...columns, settings: ['id', 'name'] }, { notes, note_comments: comments, countries, settings })).toThrow(
+		'settings: actions.appRead is for a dimension or child table; an application table takes none',
+	)
 })

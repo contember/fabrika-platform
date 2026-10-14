@@ -238,6 +238,9 @@ export const tables = defineTables(vocabulary, columns)({
   are derived. State `in: { column }` or `column` only off that convention.
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
   that those actions write; nothing else is writable.
+- A dimension or child table may also list `appRead: ['<action>', …]`, actions besides `read` with which an `app: true`
+  endpoint lists every row, read-only (an export, a bulk send), and `appCount: ['<action>', …]`, actions with which it
+  only counts and aggregates every row and reads none (an operations counter). Each is a widening the approver sees.
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.

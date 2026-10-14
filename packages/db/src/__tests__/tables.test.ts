@@ -31,7 +31,14 @@ describe('the policies as data', () => {
 		expect(Object.keys(artifacts)).toEqual(Object.keys(columns))
 		expect(noteTable).toEqual({
 			scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
-			actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
+			actions: {
+				read: 'notes.read',
+				insert: 'notes.write',
+				update: 'notes.write',
+				delete: 'notes.delete',
+				appRead: ['notes.export'],
+				appCount: ['notes.count'],
+			},
 			insert: ['title', 'body', 'word_count', 'internal'],
 			update: ['title', 'body', 'word_count'],
 			version: 'version',
@@ -216,7 +223,14 @@ function policiesOf(): unknown {
 		},
 		notes: {
 			scope: { dimension: 'note' },
-			actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
+			actions: {
+				read: 'notes.read',
+				insert: 'notes.write',
+				update: 'notes.write',
+				delete: 'notes.delete',
+				appRead: ['notes.export'],
+				appCount: ['notes.count'],
+			},
 			insert: ['title', 'body', 'word_count', 'internal'],
 			update: ['title', 'body', 'word_count'],
 			version: 'version',

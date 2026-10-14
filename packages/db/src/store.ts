@@ -411,8 +411,45 @@ export function updatingRef(context: TableContext, capability: unknown, dimensio
 }
 
 /**
+ * What an `app` capability reaches of a dimension or child table: its rows (`list`, a scope fragment) with the read
+ * action or an action of `appRead`; its counts (`count`, `aggregate`) with those or an action of `appCount`.
+ */
+export type AppReach = 'rows' | 'counts'
+
+/** Refuses an `app` capability whose action does not reach `reach` of a dimension or child table. */
+function checkRecordReach(context: TableContext, grant: AppGrant, reach: AppReach): void {
+	const model = context.model
+	const { read, appRead, appCount } = model.actions
+	if (grant.action === read || includesName(appRead, grant.action) || (reach === 'counts' && includesName(appCount, grant.action))) {
+		return
+	}
+	if (includesName(appCount, grant.action)) {
+		throw new CapabilityError(
+			`an app capability of ${grant.action} only counts ${model.name} (its appCount): it reads no row, so list and a scope fragment need its read action ${read}${
+				appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
+			}`,
+		)
+	}
+	throw new CapabilityError(
+		`an app capability of ${grant.action} does not reach ${model.name}: ctx.db.app lists it for its read action ${read}${
+			appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
+		} only`,
+	)
+}
+
+function includesName(names: readonly string[], name: string): boolean {
+	for (let index = 0; index < names.length; index++) {
+		if (names[index] === name) {
+			return true
+		}
+	}
+	return false
+}
+
+/**
  * Refuses a table `ctx.db.app` does not list for the capability (`applicationTables` in `orm.ts`): it lists an
- * application table under any action the table names, and a dimension or child table under its read action only.
+ * application table under any action the table names, and the rows of a dimension or child table under its read
+ * action or an action of its `appRead`.
  */
 function checkAppReach(context: TableContext, grant: AppGrant): void {
 	const model = context.model
@@ -426,12 +463,24 @@ function checkAppReach(context: TableContext, grant: AppGrant): void {
 	if (mode !== 'dimension' && mode !== 'child') {
 		throw new CapabilityError(`an app capability does not reach ${model.name}: ctx.db.app lists application, dimension and child tables only`)
 	}
-	const action = requiredAction(context, 'read')
-	if (grant.action !== action) {
-		throw new CapabilityError(
-			`an app capability of ${grant.action} does not reach ${model.name}: ctx.db.app lists it for its read action ${action} only`,
-		)
+	checkRecordReach(context, grant, 'rows')
+}
+
+/**
+ * Every row of a dimension or child table an `app` capability reads through `ctx.db.app`: `true`, for an action that
+ * reaches `reach` (`checkRecordReach`).
+ */
+export function appRecordPredicate(context: TableContext, capability: unknown, reach: AppReach): OperationNode {
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+	const model = context.model
+	if (grant.kind !== 'app') {
+		throw new CapabilityError(`a read of ${model.name} through ctx.db.app needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
+	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
+		throw new CapabilityError(`${model.name} is not a dimension or child table`)
+	}
+	checkRecordReach(context, grant, reach)
+	return everything()
 }
 
 /** An `app` capability addresses a row by its key, and writes, only in an application table. */
@@ -1162,20 +1211,33 @@ function probeOf(context: TableContext): TableProbe {
 		}
 		return objectPredicate(context, capability, operation)
 	}
-	const list = (capability: unknown): OperationNode | undefined =>
-		child ? childListPredicate(context, capability, 'read') : dimensionListPredicate(context, capability, 'read')
+	// An `app` capability reads every row through ctx.db.app: its rows with appRead, its counts with appCount too.
+	const list = (capability: unknown, reach: AppReach): OperationNode | undefined => {
+		if (runtimeOf(context.connection).capabilities.resolve(capability).kind === 'app') {
+			return appRecordPredicate(context, capability, reach)
+		}
+		return child ? childListPredicate(context, capability, 'read') : dimensionListPredicate(context, capability, 'read')
+	}
 	const run = storeRunner(context)
 	return freeze({
 		mode: child ? 'child' : 'dimension',
 		get: async (capability: unknown, key?: string) => selectOne<Readonly<Record<string, unknown>>>(context, run, object(capability, key, 'read')),
 		select: async (capability: unknown) => {
 			const start = startSelect<Readonly<Record<string, unknown>>, NoColumns>(context.shape)
-			return selectRows<Readonly<Record<string, unknown>>>(context, list(capability), finishSelect(start, start), requiredAction(context, 'read'))
+			return selectRows<Readonly<Record<string, unknown>>>(
+				context,
+				list(capability, 'rows'),
+				finishSelect(start, start),
+				requiredAction(context, 'read'),
+			)
 		},
 		count: async (capability: unknown) => {
-			const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(context, run, list(capability), {
-				count: true,
-			})
+			const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(
+				context,
+				run,
+				list(capability, 'counts'),
+				{ count: true },
+			)
 			const count = row === undefined ? '0' : ownEntry(row, 'count')
 			return typeof count === 'string' ? count : '0'
 		},

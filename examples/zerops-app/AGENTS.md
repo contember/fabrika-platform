@@ -660,16 +660,21 @@ dimension value takes `access: { action, app: true }`.
   grant in any one scope is 403. So declare it only where every caller is application-wide; a list a scoped member
   also uses stays `over`.
 - `ctx.db.app` holds every application table (`scope: { app: '<why>' }`, `references/table-and-migration.md`), with
-  each operation's own action, and every scoped table whose read action is the endpoint's action: `list`, `count` and
-  `aggregate` over all its rows, as `over` reads them for a global holder. `ctx.app` is the capability.
+  each operation's own action, and every scoped table, read-only and every row: `list`, `count` and `aggregate` where
+  the endpoint's action is its read action or one its policy names in `actions.appRead`, and only `count` and
+  `aggregate` where it is one of `actions.appCount`. `ctx.app` is the capability.
+- So an export, a bulk send or an operations counter runs under an action of its own, not the read action: the table
+  names it (`appRead: ['candidates.export']`, `appCount: ['candidates.count']`), and a global holder of only the read
+  action gets 403 from that endpoint. An `aggregate` with `groupBy` answers each group's values, so an `appCount`
+  action sees the values of the columns it groups by.
 - An endpoint `on`, `in` or `over` a dimension reads an application table too, read-only and every row, where its
   action is the table's read action: `list`, `count`, `aggregate` and `get(id)` of `ctx.db.app.<table>`, and no write.
   With another action the table is a type error that names its read action, and a refusal at run time. So a code list
   an administrator edits is validated by reading it: an unknown or retired value answers `BadRequestError` (400) that
   names it (`decide` in `references/public-intake.md`), not a foreign key's 500.
-- An audited export of every record is one `app` mutation: it lists the records through `ctx.db.app.<table>` and
-  inserts its log row into an application table whose insert action is the export's action
-  (`references/public-intake.md`). It needs no `sql` and no `unscoped`.
+- An audited export of every record is one `app` mutation of its own action, which the records' policy names in
+  `appRead`: it lists the records through `ctx.db.app.<table>` and inserts its log row into an application table whose
+  insert action is the export's action (`references/public-intake.md`). It needs no `sql` and no `unscoped`.
 - An `app` endpoint has no `ctx.target`, `ctx.within`, `ctx.members` or `ctx.links`. A link procedure and an export
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
@@ -684,7 +689,7 @@ dimension value takes `access: { action, app: true }`.
 | `within.<table>` (`over`)                              | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
 | `reference.<table>`                                    | `list(options)`, `count({ where })`: no `get`; look a row up by its key with `where` (`priorities.get` below)                                                                                   |
 | `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
-| `app.<table>` (`app: true`), a scoped table            | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
+| `app.<table>` (`app: true`), a scoped table            | `list(options)` (read action or `appRead`), `count({ where })`, `aggregate(spec)` (also `appCount`)                                                                                             |
 | `app.<table>` (`on`, `in`, `over`)                     | an application table whose read action is the endpoint's: `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; no write                                                           |
 | `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table or an inbox, which have no key); with `'write'` also `insert`, `update`, `remove`                                             |
 
@@ -1586,6 +1591,7 @@ export const vocabulary = defineVocabulary({
 	dimensions: { candidate: {} },
 	actions: {
 		'candidates.read': 'Read candidate records and their files',
+		'candidates.export': 'Download every candidate as a file',
 		'candidates.review': 'Move a candidate through the review',
 		'candidates.verify': "Confirm a candidate's e-mail address",
 		'candidates.attach': 'Attach files to a candidate record',
@@ -1601,6 +1607,7 @@ export const vocabulary = defineVocabulary({
 		hr_lead: {
 			grants: [
 				'candidates.review',
+				'candidates.export',
 				'positions.read',
 				'positions.manage',
 				'reasons.manage',
@@ -1723,6 +1730,7 @@ export const tables = defineTables(vocabulary, columns)({
 			read: 'candidates.read',
 			insert: 'candidates.process',
 			update: 'candidates.verify',
+			appRead: ['candidates.export'],
 		},
 		insert: ['email', 'name'],
 		update: ['verified_at'],
@@ -1771,7 +1779,7 @@ export const tables = defineTables(vocabulary, columns)({
 	},
 	candidate_exports: {
 		scope: { app: 'the log of every export of all candidates' },
-		actions: { read: 'exports.read', insert: 'candidates.read' },
+		actions: { read: 'exports.read', insert: 'candidates.export' },
 		insert: ['row_count'],
 		createdBy: 'created_by',
 	},
@@ -1784,7 +1792,7 @@ export const tables = defineTables(vocabulary, columns)({
   `access: { action, app: true }` reads and writes it through `ctx.db.app`, with the action the operation names. An
   endpoint `on`, `in` or `over` a candidate reads it, read-only and every row, where its action is the table's read
   action: `decide` reads `reasons` with `candidates.review`. A position or a reason is deactivated, never deleted, so
-  neither table has a delete action. `candidate_exports` is appended with the export's own action, `candidates.read`,
+  neither table has a delete action. `candidate_exports` is appended with the export's own action, `candidates.export`,
   and read with `exports.read`.
 - The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
   name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
@@ -2403,7 +2411,7 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 		}),
 	export: r.mutation({
 		output: CandidateFile,
-		access: { action: 'candidates.read', app: true },
+		access: { action: 'candidates.export', app: true },
 	})
 		.handle(async ({ ctx }) => {
 			const rows: z.output<typeof ExportRow>[] = []
@@ -2449,10 +2457,12 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
 - **Application history is a table on the paved road.** `decide` writes its `candidate_events` row through the
   handle, in the invocation's one transaction: the status and its history row commit together or not at all, and
   `created_by` is the caller. There is no framework audit API; never write history from a job or after the answer.
-- **An audited export of every candidate** is one `app` mutation. `ctx.db.app.candidates` lists every candidate,
-  because the endpoint's action is the table's read action, and the log row goes into `candidate_exports`, whose
-  insert action is that same action, in the invocation's one transaction. The file is encoded before the commit, so
-  no file leaves without its row (`references/endpoint.md`). It needs no `sql` and no `unscoped`.
+- **An audited export of every candidate** is one `app` mutation under an action of its own, `candidates.export`.
+  `ctx.db.app.candidates` lists every candidate, read-only, because the candidates' policy names that action in its
+  `appRead`, and the log row goes into `candidate_exports`, whose insert action is the export's, in the invocation's
+  one transaction. The file is encoded before the commit, so no file leaves without its row
+  (`references/endpoint.md`). It needs no `sql` and no `unscoped`. HR reads every candidate and may not export them:
+  a global holder of only `candidates.read` gets 403 from the export; the HR lead's role grants `candidates.export`.
 - **`app: true` is for data of the whole application.** The proxy admits the endpoint only for a caller who holds the
   action as a global grant: an HR member granted `candidates.read` on one candidate gets 403. `list` and `get` stay
   `over` and `on`, which serve a scoped grant too.
@@ -2647,8 +2657,11 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
   link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
   its action in one candidate only is 403, and a global holder reaches it. `positions`, `reasons` and
   `candidate_exports` get a policy probe of their actions, held globally and in one scope, and of a scoped site that
-  reads every row with the read action and none with another. An endpoint that `issues` gets the cases of any `on`
+  reads every row with the read action and none with another. The probe of `candidates` also lists every candidate
+  from an `app` endpoint of `candidates.export`, its `appRead`. An endpoint that `issues` gets the cases of any `on`
   endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
+- Test the export's own action beside its refused twin: a global holder of `candidates.export` downloads the file, a
+  global holder of only `candidates.read` gets 403.
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:
   'candidate', value: id } }], { kind: 'link', link: { mount: 'portal', chain: [{ type: 'candidate', value: id }] }
   })` and calls `createClient(contract, 'portal', { fetch: kit.fetch, key: holder.key ?? '' })`.
@@ -3181,6 +3194,9 @@ export const tables = defineTables(vocabulary, columns)({
   are derived. State `in: { column }` or `column` only off that convention.
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
   that those actions write; nothing else is writable.
+- A dimension or child table may also list `appRead: ['<action>', …]`, actions besides `read` with which an `app: true`
+  endpoint lists every row, read-only (an export, a bulk send), and `appCount: ['<action>', …]`, actions with which it
+  only counts and aggregates every row and reads none (an operations counter). Each is a widening the approver sees.
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.

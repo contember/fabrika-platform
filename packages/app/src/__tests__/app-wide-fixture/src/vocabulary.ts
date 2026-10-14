@@ -6,6 +6,8 @@ export const vocabulary = defineVocabulary({
 	actions: {
 		'candidates.read': 'Read candidate records',
 		'candidates.review': 'Record the reason of a decision on a candidate',
+		'candidates.export': 'Export every candidate',
+		'candidates.count': 'Count the candidates, reading none of them',
 		'reasons.manage': 'Edit the decision reasons',
 		'positions.read': 'Read the open positions',
 		'positions.manage': 'Edit the open positions',
@@ -13,6 +15,7 @@ export const vocabulary = defineVocabulary({
 	},
 	roles: {
 		hr: { grants: ['candidates.read', 'candidates.review', 'positions.read'] },
-		registrar: { grants: ['positions.read', 'positions.manage', 'audit.read', 'candidates.review', 'reasons.manage'] },
+		registrar: { grants: ['positions.read', 'positions.manage', 'audit.read', 'candidates.review', 'reasons.manage', 'candidates.export'] },
+		operator: { grants: ['candidates.count'] },
 	},
 })

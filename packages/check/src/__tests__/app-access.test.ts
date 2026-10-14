@@ -40,7 +40,7 @@ describe('application-wide data in the static reader', () => {
 		expect(canonicalArtifactJson(read)).toBe(canonicalArtifactJson(compileContract(contract, tables)))
 		expect(read.endpoints.find((row) => row.id === 'api.admin.export')?.requirement).toEqual({
 			kind: 'action',
-			action: 'candidates.read',
+			action: 'candidates.export',
 			access: { form: 'app' },
 		})
 		expect(readTablesSource(files)['exports']?.scope).toEqual({ mode: 'app', reason: 'the log of every export across all candidates', key: 'id' })
@@ -119,6 +119,11 @@ describe('the generated cases of application-wide data', () => {
 			'a scoped site of positions.read reads every row',
 			'a scoped site of positions.manage reads no row',
 		])
+		expect(tests.get(policyTestPath('candidates'))?.cases.slice(-3)).toEqual([
+			'an app endpoint of candidates.export lists every row',
+			'an app endpoint of candidates.count counts every row',
+			'an app endpoint of candidates.count lists no row',
+		])
 		expect(tests.get(policyTestPath('exports'))?.cases).toEqual([
 			'get by a global holder succeeds',
 			'get by a holder in one scope only is 403',
@@ -127,7 +132,7 @@ describe('the generated cases of application-wide data', () => {
 			'insert by a global holder succeeds',
 			'insert by a holder in one scope only is 403',
 			'a scoped site of audit.read reads every row',
-			'a scoped site of candidates.read reads no row',
+			'a scoped site of candidates.export reads no row',
 		])
 	})
 })

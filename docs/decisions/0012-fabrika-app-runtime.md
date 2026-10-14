@@ -242,7 +242,9 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   the whole application has a form of its own: an endpoint declared `{ action, app: true }` is admitted only for a
   global grant of its action, and `ctx.db.app.<table>` reads and writes the application tables (`scope: { app:
   '<why>' }`) with that action and reads every row of each dimension and child table whose read action it is, as
-  `over` with `'all'` would. An `on`, `in` or `over` endpoint reads an application table too, read-only and every
+  `over` with `'all'` would. A dimension or child table may name further actions that read every row app-wide,
+  read-only (`actions.appRead`: an export, a bulk send), and actions that only count and aggregate it
+  (`actions.appCount`: an operations counter), so an export is granted apart from reading. An `on`, `in` or `over` endpoint reads an application table too, read-only and every
   row, where its action is the table's read action: the table's read action decides who reads it. So a code list an
   administrator edits, the check of a value against it in a scoped mutation, and the log row of an export across
   every record stay on the road; a reference table stays migration-managed and read-only. A
@@ -392,8 +394,12 @@ damage to the application's own schema.
   `Within` is `'all'`.** Rejected: the approver reads "over candidate" for data that belongs to no candidate, and
   whether such an endpoint may write would depend on each caller's grants at run time, so a scoped caller would fail
   inside the handler. The `app` form puts the requirement where the proxy checks it: the action held as a global
-  grant. Its reads of the dimension tables add no authority, because that holder already lists every row through
-  `over`.
+  grant. Its reads of the dimension tables by the read action add no authority, because that holder already lists
+  every row through `over`; an `appRead` or `appCount` action does add authority, so the table's policy names it and
+  the approver sees it as a widening of that table.
+- **An `app` endpoint that names the read action it reads with** (`{ action: 'candidates.export', app: true, reads:
+  'candidates.read' }`), the proxy requiring both global grants. Rejected: a second action in the requirement, and in
+  the proxy, for what a table action states as data of the policy, which the approval diff already shows.
 - **Deriving zod inputs from table rows.** Rejected: a spike lost bounds silently and turned a migration into an API
   change. `fromRow` covers outputs.
 - **Refuse raw SQL and add declared report kinds to the scoped builder instead.** Rejected: every report shape

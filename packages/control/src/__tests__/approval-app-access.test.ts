@@ -10,6 +10,8 @@ import type { AccessSnapshot } from '../approval/snapshot'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'app-wide-fixture')
 const ENDPOINTS = 'src/admin/endpoints.ts'
+const TABLES = 'src/db/tables.ts'
+const REACH = "actions: { read: 'candidates.read', appRead: ['candidates.export'], appCount: ['candidates.count'] }"
 const ADD = "access: { action: 'positions.manage', app: true } })\n\t\t.handle(async ({ input, ctx }) => ctx.db.app.positions.insert"
 
 const fixture = (): Map<string, string> => {
@@ -41,8 +43,33 @@ describe('application-wide data in the approval diff', () => {
 		})
 		expect(changes).toContainEqual({
 			widens: true,
-			line: 'New application table `exports` (the log of every export across all candidates), read with `audit.read`, inserted with `candidates.read`',
+			line: 'New application table `exports` (the log of every export across all candidates), read with `audit.read`, inserted with `candidates.export`',
 		})
+		expect(changes).toContainEqual({
+			widens: true,
+			line:
+				'New table policy `candidates` read with `candidates.read`, read app-wide with `candidates.export`, counted app-wide with `candidates.count`',
+		})
+	})
+
+	test("an action the candidates' appRead or appCount gains widens; one it loses narrows", () => {
+		const files = fixture()
+		const narrower = new Map(files)
+		const tables = files.get(TABLES) ?? ''
+		expect(tables).toContain(REACH)
+		narrower.set(TABLES, tables.replace(REACH, "actions: { read: 'candidates.read' }"))
+		const gained = classifyAccess(snapshot(narrower), snapshot(files))
+		expect(gained.outcome).toBe('widening')
+		expect(gained.changes).toEqual([
+			{ widens: true, line: 'Table `candidates` is read app-wide with `candidates.export`' },
+			{ widens: true, line: 'Table `candidates` is counted app-wide with `candidates.count`' },
+		])
+		const lost = classifyAccess(snapshot(files), snapshot(narrower))
+		expect(lost.outcome).toBe('removal')
+		expect(lost.changes).toEqual([
+			{ widens: false, line: 'Table `candidates` is no longer read app-wide with `candidates.export`' },
+			{ widens: false, line: 'Table `candidates` is no longer counted app-wide with `candidates.count`' },
+		])
 	})
 
 	test('an endpoint whose requirement becomes the app form widens, and so does the way back', () => {

@@ -77,16 +77,21 @@ dimension value takes `access: { action, app: true }`.
   grant in any one scope is 403. So declare it only where every caller is application-wide; a list a scoped member
   also uses stays `over`.
 - `ctx.db.app` holds every application table (`scope: { app: '<why>' }`, `references/table-and-migration.md`), with
-  each operation's own action, and every scoped table whose read action is the endpoint's action: `list`, `count` and
-  `aggregate` over all its rows, as `over` reads them for a global holder. `ctx.app` is the capability.
+  each operation's own action, and every scoped table, read-only and every row: `list`, `count` and `aggregate` where
+  the endpoint's action is its read action or one its policy names in `actions.appRead`, and only `count` and
+  `aggregate` where it is one of `actions.appCount`. `ctx.app` is the capability.
+- So an export, a bulk send or an operations counter runs under an action of its own, not the read action: the table
+  names it (`appRead: ['candidates.export']`, `appCount: ['candidates.count']`), and a global holder of only the read
+  action gets 403 from that endpoint. An `aggregate` with `groupBy` answers each group's values, so an `appCount`
+  action sees the values of the columns it groups by.
 - An endpoint `on`, `in` or `over` a dimension reads an application table too, read-only and every row, where its
   action is the table's read action: `list`, `count`, `aggregate` and `get(id)` of `ctx.db.app.<table>`, and no write.
   With another action the table is a type error that names its read action, and a refusal at run time. So a code list
   an administrator edits is validated by reading it: an unknown or retired value answers `BadRequestError` (400) that
   names it (`decide` in `references/public-intake.md`), not a foreign key's 500.
-- An audited export of every record is one `app` mutation: it lists the records through `ctx.db.app.<table>` and
-  inserts its log row into an application table whose insert action is the export's action
-  (`references/public-intake.md`). It needs no `sql` and no `unscoped`.
+- An audited export of every record is one `app` mutation of its own action, which the records' policy names in
+  `appRead`: it lists the records through `ctx.db.app.<table>` and inserts its log row into an application table whose
+  insert action is the export's action (`references/public-intake.md`). It needs no `sql` and no `unscoped`.
 - An `app` endpoint has no `ctx.target`, `ctx.within`, `ctx.members` or `ctx.links`. A link procedure and an export
   keep their own forms.
 - The approver sees it as "app-wide: a global grant", and a change of an endpoint to or from `app: true` widens.
@@ -101,7 +106,7 @@ dimension value takes `access: { action, app: true }`.
 | `within.<table>` (`over`)                              | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
 | `reference.<table>`                                    | `list(options)`, `count({ where })`: no `get`; look a row up by its key with `where` (`priorities.get` below)                                                                                   |
 | `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
-| `app.<table>` (`app: true`), a scoped table            | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
+| `app.<table>` (`app: true`), a scoped table            | `list(options)` (read action or `appRead`), `count({ where })`, `aggregate(spec)` (also `appCount`)                                                                                             |
 | `app.<table>` (`on`, `in`, `over`)                     | an application table whose read action is the endpoint's: `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; no write                                                           |
 | `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table or an inbox, which have no key); with `'write'` also `insert`, `update`, `remove`                                             |
 

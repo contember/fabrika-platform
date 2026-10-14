@@ -69,7 +69,9 @@ each staged-kit site's `ctx.db`, which read `reference` tables too. An applicati
 capability (`AppGrant`, the action held as a global grant) reaches it, through `ctx.db.app` (`applicationTables` in
 `orm.ts`; `appGrant`, `checkAppReach`, `appListPredicate`, `appRowPredicate`, `updatingApp` and `insertIntoApplication`
 in `store.ts`, which address a row and write in an application table only),
-which also lists every dimension and child table whose read action is the capability's, with the predicate `true`.
+which also lists every dimension and child table, read-only with the predicate `true`: its rows where the capability's
+action is its read action or one of `actions.appRead`, and its counts and aggregates, no row, for one of
+`actions.appCount` too (`appRecordPredicate`, `checkRecordReach`).
 A scoped site's `ctx.db.app` (a `Ref` or a `Within`) lists every application table read-only, and reads one (every
 row, its read action's columns) only where the capability's action is its read action (`scopedApplicationRead`).
 Not built yet: reading an inbox on the road (an `unscoped` declaration reads it).

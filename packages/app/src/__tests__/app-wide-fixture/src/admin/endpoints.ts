@@ -1,5 +1,6 @@
 // Application-wide data on the paved road: the positions and the reasons an administrator edits, the counts and the
-// audited export of every candidate. Each app endpoint's action must be held as a global grant; the proxy refuses a
+// audited export of every candidate, each under an action of its own that the candidates' policy names (appCount,
+// appRead). Each app endpoint's action must be held as a global grant; the proxy refuses a
 // scoped holder. A decision on one candidate reads the reasons by their read action from its own scoped site.
 
 import { BadRequestError } from '@fabrika/app'
@@ -46,7 +47,7 @@ export const admin = app.group({ callers: ['human'] }, (r) => ({
 		}),
 	columns: r.query({ input: z.strictObject({ id: z.uuid() }), output: Columns, access: { action: 'positions.manage', app: true } })
 		.handle(async ({ input, ctx }) => ({ columns: Object.keys(await ctx.db.app.positions.get(input.id)).sort() })),
-	counts: r.query({ output: Counts, access: { action: 'candidates.read', app: true } })
+	counts: r.query({ output: Counts, access: { action: 'candidates.count', app: true } })
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.db.app.candidates.aggregate({ groupBy: ['status'], count: true })).map((row) => ({ status: row.status, count: row.count })),
 		})),
@@ -70,7 +71,7 @@ export const admin = app.group({ callers: ['human'] }, (r) => ({
 		}),
 	export: r.mutation({
 		output: attachment({ format: 'csv', filename: 'candidates.csv', row: Row, maxBytes: 1048576, maxRows: 500 }),
-		access: { action: 'candidates.read', app: true },
+		access: { action: 'candidates.export', app: true },
 	})
 		.handle(async ({ ctx }) => {
 			const page = await ctx.db.app.candidates.list({ orderBy: [['name', 'asc']], limit: 500 })

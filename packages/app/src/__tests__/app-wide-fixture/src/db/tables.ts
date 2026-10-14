@@ -5,7 +5,7 @@ import { columns } from './schema.generated'
 export const tables = defineTables(vocabulary, columns)({
 	candidates: {
 		scope: { dimension: 'candidate' },
-		actions: { read: 'candidates.read' },
+		actions: { read: 'candidates.read', appRead: ['candidates.export'], appCount: ['candidates.count'] },
 		version: 'version',
 		createdBy: 'created_by',
 		columns: { reason_id: { write: 'candidates.review' } },
@@ -28,7 +28,7 @@ export const tables = defineTables(vocabulary, columns)({
 	},
 	exports: {
 		scope: { app: 'the log of every export across all candidates' },
-		actions: { read: 'audit.read', insert: 'candidates.read' },
+		actions: { read: 'audit.read', insert: 'candidates.export' },
 		insert: ['rows'],
 		createdBy: 'created_by',
 	},

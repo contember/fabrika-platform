@@ -443,6 +443,13 @@ export interface TablePolicyArtifact {
 		readonly insert: string | null
 		readonly update: string | null
 		readonly delete: string | null
+		/**
+		 * A dimension or child table's actions besides `read` with which an `app` endpoint reads every row, read-only;
+		 * present only when the policy names one.
+		 */
+		readonly appRead?: readonly string[]
+		/** The actions with which an `app` endpoint counts and aggregates every row and reads none; present only when named. */
+		readonly appCount?: readonly string[]
 	}
 	readonly insert: readonly string[]
 	readonly update: readonly string[]

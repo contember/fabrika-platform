@@ -711,8 +711,17 @@ function fileChanges(name: string, from: FileCollectionArtifact, to: FileCollect
  * A new table's line. An application table names its reason and every action, because each one reaches every row of
  * it for a global holder.
  */
+/** The actions besides the read action with which an `app` endpoint reads every row, or counts it only. */
+function appReachClauses(table: TablePolicyArtifact): string {
+	const { appRead = [], appCount = [] } = table.actions
+	return [
+		...(appRead.length === 0 ? [] : [`, read app-wide with ${listOf(appRead, '')}`]),
+		...(appCount.length === 0 ? [] : [`, counted app-wide with ${listOf(appCount, '')}`]),
+	].join('')
+}
+
 function newTableLine(name: string, table: TablePolicyArtifact): string {
-	if (table.scope.mode !== 'app') return `New table policy \`${name}\` read with \`${table.actions.read}\``
+	if (table.scope.mode !== 'app') return `New table policy \`${name}\` read with \`${table.actions.read}\`${appReachClauses(table)}`
 	const { read, insert, update, delete: remove } = table.actions
 	const writes = [
 		...(insert === null ? [] : [`inserted with \`${insert}\``]),
@@ -752,6 +761,9 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		...valueChange(`${table} insert action`, from.actions.insert, to.actions.insert),
 		...valueChange(`${table} update action`, from.actions.update, to.actions.update),
 		...valueChange(`${table} delete action`, from.actions.delete, to.actions.delete),
+		// An appRead action reads every row app-wide and an appCount action counts it: each new one widens.
+		...setChanges(table, from.actions.appRead ?? [], to.actions.appRead ?? [], 'is read app-wide with', 'is no longer read app-wide with'),
+		...setChanges(table, from.actions.appCount ?? [], to.actions.appCount ?? [], 'is counted app-wide with', 'is no longer counted app-wide with'),
 		...setChanges(table, from.insert, to.insert, 'accepts inserts of', 'no longer accepts inserts of'),
 		...setChanges(table, from.update, to.update, 'accepts updates of', 'no longer accepts updates of'),
 		...valueChange(`${table} version column`, from.version, to.version),

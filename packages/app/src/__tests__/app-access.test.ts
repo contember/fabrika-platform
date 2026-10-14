@@ -7,7 +7,7 @@ import { createClient, download, RpcError } from '@fabrika/app/client'
 import { type App, compileContract, type Declared, type EndpointContext, type KitTypes, type Unavailable } from '@fabrika/app/contract'
 import { type AppCapability, serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
-import { appPolicyIsolationKit, endpointAccessKit } from '@fabrika/app/testing/isolation'
+import { appPolicyIsolationKit, endpointAccessKit, policyIsolationKit } from '@fabrika/app/testing/isolation'
 import { checkApplication } from '@fabrika/check'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing'
@@ -49,6 +49,22 @@ export type AppContext = [
 	Expect<Equal<Reached<AppMutation['db']['app']>, 'candidates' | 'exports' | 'positions' | 'reasons'>>,
 	Expect<AppMutation['target'] extends Unavailable<string> ? true : false>,
 	Expect<AppMutation['members'] extends Unavailable<string> ? true : false>,
+]
+
+type AppQuery<A extends string> = EndpointContext<
+	Kit,
+	'human',
+	'query',
+	{ readonly action: A; readonly app: true },
+	Declared<never, never, never, never>
+>
+type Candidates<A extends string> = AppQuery<A>['db']['app']['candidates']
+
+/** An action of the candidates' appRead lists every row; one of their appCount counts them and lists none. */
+export type AppReachContext = [
+	Expect<Equal<Reached<Candidates<'candidates.export'>>, 'list' | 'count' | 'aggregate'>>,
+	Expect<Equal<Reached<Candidates<'candidates.count'>>, 'count' | 'aggregate'>>,
+	Expect<Equal<Reached<Candidates<'positions.read'>>, never>>,
 ]
 
 /** A scoped site reads each application table whose read action is its own, every row and read-only, and no other. */
@@ -96,15 +112,15 @@ if (postgres !== null) {
 	const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
 	const as = (grants: Parameters<typeof kit.testCaller>[0]) => createClient(contract, 'api', { fetch: kit.browser(kit.testCaller(grants)) })
 	const admin = as([{ action: 'positions.read' }, { action: 'positions.manage' }])
-	const reviewer = kit.testCaller([{ action: 'candidates.read' }, { action: 'audit.read' }])
+	const reviewer = kit.testCaller([{ action: 'candidates.export' }, { action: 'candidates.count' }, { action: 'audit.read' }])
 	const hr = createClient(contract, 'api', { fetch: kit.browser(reviewer) })
 
 	describe('ctx.db.app through the proxy decision', () => {
 		test('a caller who holds the action in one scope only is refused by the proxy', async () => {
 			const scopedAdmin = as([{ action: 'positions.manage', scope: { type: 'candidate', value: crypto.randomUUID() } }])
 			expect(await statusOf(scopedAdmin.admin.add({ title: 'Nurse' }))).toBe(403)
-			const scopedReader = as([{ action: 'candidates.read', scope: { type: 'candidate', value: crypto.randomUUID() } }])
-			expect(await statusOf(scopedReader.admin.counts())).toBe(403)
+			const scopedCounter = as([{ action: 'candidates.count', scope: { type: 'candidate', value: crypto.randomUUID() } }])
+			expect(await statusOf(scopedCounter.admin.counts())).toBe(403)
 		})
 
 		test('a global holder inserts, reads, updates under expectVersion and removes a row of an application table', async () => {
@@ -141,6 +157,15 @@ if (postgres !== null) {
 			expect(await refusal(retired.id)).toBe(`400 the reason ${retired.id} is unknown or retired`)
 			expect(await decide(kept.id, 1)).toEqual({ id: worlds.own.key, version: 2 })
 			expect(await decide(null, 2)).toEqual({ id: worlds.own.key, version: 3 })
+		})
+
+		test('the export and the counts have actions of their own: a global holder of only the read action gets 403 on both', async () => {
+			const reader = as([{ action: 'candidates.read' }, { action: 'audit.read' }])
+			expect(await statusOf(download(reader.admin.export, {}))).toBe(403)
+			expect(await statusOf(reader.admin.counts())).toBe(403)
+			const operator = as([{ action: 'candidates.count' }])
+			expect((await operator.admin.counts()).items.length).toBeGreaterThan(0)
+			expect(await statusOf(download(operator.admin.export, {}))).toBe(403)
 		})
 
 		test('an app endpoint reads every candidate with its action, and the export writes its log row in the same transaction', async () => {
@@ -188,6 +213,13 @@ if (postgres !== null) {
 			const reasons = appPolicyIsolationKit(contract, tables, 'reasons', postgres)
 			expect(await reasons.scopedList()).toEqual({ status: 200, rows: ['own'] })
 			expect(await reasons.scopedListWithOther()).toEqual({ status: 200, refused: true })
+		})
+
+		test("the policy probe of the candidates' app reach: appRead lists every row, appCount counts every row and lists none", async () => {
+			const candidates = policyIsolationKit(contract, tables, 'candidates', postgres)
+			expect(await candidates.appList('candidates.export')).toEqual({ status: 200, rows: ['own', 'other'] })
+			expect(await candidates.appCount('candidates.count')).toEqual({ status: 200, counted: 2 })
+			expect(await candidates.appListWithCount('candidates.count')).toEqual({ status: 200, refused: true })
 		})
 
 		test('the probe of an append-only application table inserts with its insert action alone', async () => {

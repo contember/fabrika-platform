@@ -20,6 +20,7 @@ import {
 	type AggregateSpec,
 	appKeyPredicate,
 	appListPredicate,
+	appRecordPredicate,
 	appRowPredicate,
 	childObjectPredicate,
 	childScope,
@@ -419,10 +420,27 @@ function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, c
 		if (model.scope.mode === 'app') {
 			setOwn(handle, model.name, applicationRows(context, site, run, capability))
 		} else if (model.scope.mode === 'dimension' || model.scope.mode === 'child') {
-			setOwn(handle, model.name, listedRows(context, site, run, () => appListPredicate(context, capability)))
+			setOwn(handle, model.name, appRecordRows(context, site, run, capability))
 		}
 	}
 	return freeze(handle)
+}
+
+/**
+ * A dimension or child table under an `app` capability, read-only and every row: listed with its read action or an
+ * action of its `appRead`, counted and aggregated with those or an action of its `appCount`.
+ */
+function appRecordRows(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
+	const visible = context.model.visible
+	const key = [keyOf(context.model)]
+	return freeze({
+		list: bound(site, async (options?: unknown) => listRows(context, run, appRecordPredicate(context, capability, 'rows'), visible, options, key)),
+		count: bound(site, async (options?: unknown) => countRows(context, run, appRecordPredicate(context, capability, 'counts'), visible, options)),
+		aggregate: bound(
+			site,
+			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appRecordPredicate(context, capability, 'counts'), spec),
+		),
+	})
 }
 
 /** `ctx.db.app` of a scoped site: every application table, each read only under its read action (`scopedApplicationRead`). */

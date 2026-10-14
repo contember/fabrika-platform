@@ -1534,8 +1534,8 @@ class ArtifactBuilder {
 		const tables: Record<string, TablePolicyArtifact> = {}
 		for (const [name, table] of Object.entries(this.#tables)) {
 			const where = `table '${name}'`
-			const { read, insert, update, delete: remove } = table.actions
-			for (const action of [read, insert, update, remove]) {
+			const { read, insert, update, delete: remove, appRead = [], appCount = [] } = table.actions
+			for (const action of [read, insert, update, remove, ...appRead, ...appCount]) {
 				if (action !== null) {
 					this.#knownAction(where, action)
 				}

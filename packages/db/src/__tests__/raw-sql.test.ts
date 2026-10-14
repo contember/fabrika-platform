@@ -319,11 +319,22 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 
 	test('a dimension or child table by any other action is refused, as ctx.db.app does not list it', () => {
 		expect(() => sql.scope(authority.app('secrets.admin'), 'notes')).toThrow(
-			'an app capability of secrets.admin does not reach notes: ctx.db.app lists it for its read action notes.read only',
+			'an app capability of secrets.admin does not reach notes: ctx.db.app lists it for its read action notes.read or one of its appRead (notes.export) only',
 		)
-		expect(() => sql.scope(authority.app('notes.write'), 'notes')).toThrow('ctx.db.app lists it for its read action notes.read only')
+		expect(() => sql.scope(authority.app('notes.write'), 'notes')).toThrow(
+			'ctx.db.app lists it for its read action notes.read or one of its appRead (notes.export) only',
+		)
 		expect(() => sql.scope(authority.app('notes.read'), 'note_flags')).toThrow('ctx.db.app lists it for its read action notes.delete only')
 		expect(() => sql.scope(authority.app('notes.read'), 'secrets')).toThrow(CapabilityError)
+	})
+
+	test('an action of the appRead of a dimension table reads every row; one of its appCount reads none, so it is refused', async () => {
+		dialect.log.length = 0
+		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.export'), 'notes', 'n')}`
+		expect(dialect.log.map((statement) => statement.sql)).toEqual(['select n.id from notes n where (true)'])
+		expect(() => sql.scope(authority.app('notes.count'), 'notes')).toThrow(
+			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list and a scope fragment need its read action notes.read',
+		)
 	})
 
 	test('an application table by any action its policy names, and by no other', async () => {
@@ -613,7 +624,9 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 			expect(await settings('settings.read')).toEqual(['setting-1', 'setting-2'])
 			expect(await settings('settings.edit')).toEqual(['setting-1', 'setting-2'])
 			expect(() => work.sql.scope(alice.app('notes.read'), 'settings')).toThrow('settings does not name the action')
-			expect(() => work.sql.scope(alice.app('secrets.admin'), 'notes')).toThrow('ctx.db.app lists it for its read action notes.read only')
+			expect(() => work.sql.scope(alice.app('secrets.admin'), 'notes')).toThrow(
+				'ctx.db.app lists it for its read action notes.read or one of its appRead (notes.export) only',
+			)
 			expect(() => work.sql.scope(alice.app('notes.read'), 'countries')).toThrow('an app capability does not reach countries')
 		} finally {
 			await work.transaction.rollback()

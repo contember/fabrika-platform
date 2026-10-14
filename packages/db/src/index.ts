@@ -80,6 +80,7 @@ export {
 	type InsertValues,
 	isTables,
 	readTables,
+	type RecordActions,
 	type ReferencePolicy,
 	type ReferenceScope,
 	type RowOf,

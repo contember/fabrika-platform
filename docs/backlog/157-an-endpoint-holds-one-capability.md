@@ -18,7 +18,8 @@ raw SQL and `unscoped` reads. Effort: M–L; it needs a decision first.
   request through `unscoped`; the handover holds the request and reads the records, and their related rows
   `unscoped`, and writes in raw SQL (`sql: 'write'`). Two declared deviations for one ordinary workflow.
 - [97](97-the-generated-tests-have-no-move-case.md) needs the same: a move takes two `Ref`s.
-  [132](132-an-export-of-every-record-needs-the-records-read-action.md)'s option (b) is a two-action requirement.
+  An export of every record no longer needs one: a table names its export action in `actions.appRead`
+  ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §7).
 
 ## Approach / acceptance
 

@@ -58,8 +58,17 @@ export interface TableActions<A extends string> {
 	readonly delete?: A
 }
 
-interface WritablePolicy<Col extends string, A extends string, V extends Col> {
-	readonly actions: TableActions<A>
+/**
+ * A dimension or child table's actions: also those besides `read` with which an `app` endpoint lists every row,
+ * read-only (`appRead`), and those with which it only counts and aggregates every row (`appCount`).
+ */
+export interface RecordActions<A extends string> extends TableActions<A> {
+	readonly appRead?: readonly A[]
+	readonly appCount?: readonly A[]
+}
+
+interface WritablePolicy<Col extends string, A extends string, V extends Col, Acts = TableActions<A>> {
+	readonly actions: Acts
 	readonly insert?: readonly Col[]
 	readonly update?: readonly Col[]
 	/** An INTEGER (int4) column: Postgres returns a BIGINT as a string, so it cannot be compared as a number. */
@@ -84,11 +93,13 @@ export interface ColumnPolicy<A extends string> {
 /** A table no handler writes (a reference or an inbox) declares column read actions only. */
 export type ColumnReadPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
 
-export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
+export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V, RecordActions<A>> {
 	readonly scope: DimensionScope<Col>
 }
 
-export interface ChildPolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
+export interface ChildPolicy<Table extends string, Col extends string, A extends string, V extends Col = Col>
+	extends WritablePolicy<Col, A, V, RecordActions<A>>
+{
 	readonly scope: ChildScope<Table, Col>
 }
 
@@ -155,6 +166,10 @@ export interface ActionModel {
 	readonly insert: string | undefined
 	readonly update: string | undefined
 	readonly delete: string | undefined
+	/** A dimension or child table's actions besides `read` with which an `app` endpoint reads every row, read-only. */
+	readonly appRead: readonly string[]
+	/** A dimension or child table's actions with which an `app` endpoint counts and aggregates every row, and reads none. */
+	readonly appCount: readonly string[]
 }
 
 /** One table's policy, checked against its column list. */
@@ -311,7 +326,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
-const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete'])
+const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete', 'appRead', 'appCount'])
 const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
 const CONTAINER_FIELDS = nameSet(['dimension', 'column'])
 const CHILD_FIELDS = nameSet(['child', 'key', 'column', 'inherit'])
@@ -692,7 +707,14 @@ function parseActions(
 		if (actionsInput !== undefined) {
 			throw new PolicyError(`${table}: an inbox table takes its read action as scope.read and no actions; only its form appends`)
 		}
-		return freeze({ read: action(ownEntry(scope, 'read'), 'scope.read'), insert: undefined, update: undefined, delete: undefined })
+		return freeze({
+			read: action(ownEntry(scope, 'read'), 'scope.read'),
+			insert: undefined,
+			update: undefined,
+			delete: undefined,
+			appRead: freeze([]),
+			appCount: freeze([]),
+		})
 	}
 	if (actionsInput === undefined) {
 		throw new PolicyError(`${table}: the policy needs actions`)
@@ -703,12 +725,46 @@ function parseActions(
 		const value = ownEntry(actions, field)
 		return value === undefined ? undefined : action(value, `actions.${field}`)
 	}
-	return freeze({
-		read: action(ownEntry(actions, 'read'), 'actions.read'),
-		insert: optional('insert'),
-		update: optional('update'),
-		delete: optional('delete'),
-	})
+	const read = action(ownEntry(actions, 'read'), 'actions.read')
+	const records = hasOwn(scope, 'dimension') || hasOwn(scope, 'child')
+	const kind = hasOwn(scope, 'app') ? 'an application table' : 'a reference table'
+	const reach = (field: 'appRead' | 'appCount'): readonly string[] => {
+		const input = ownEntry(actions, field)
+		if (input === undefined) {
+			return freeze([])
+		}
+		if (!records) {
+			throw new PolicyError(`${table}: actions.${field} is for a dimension or child table; ${kind} takes none`)
+		}
+		const names = parseList(input, (value) => action(value, `actions.${field}`))
+		if (names === undefined) {
+			throw new PolicyError(`${table}: actions.${field} takes a plain array of actions`)
+		}
+		if (names.length === 0) {
+			throw new PolicyError(`${table}: actions.${field} lists no action; leave it out`)
+		}
+		for (let index = 0; index < names.length; index++) {
+			const name = names[index] ?? ''
+			if (name === read) {
+				throw new PolicyError(`${table}: actions.${field} names ${name}, its read action, which reads every row app-wide already`)
+			}
+			for (let earlier = 0; earlier < index; earlier++) {
+				if (names[earlier] === name) {
+					throw new PolicyError(`${table}: actions.${field} names ${name} twice`)
+				}
+			}
+		}
+		return freeze(names)
+	}
+	const appRead = reach('appRead')
+	const appCount = reach('appCount')
+	for (let index = 0; index < appCount.length; index++) {
+		const name = appCount[index] ?? ''
+		if (includes(appRead, name)) {
+			throw new PolicyError(`${table}: actions.appRead and actions.appCount both name ${name}`)
+		}
+	}
+	return freeze({ read, insert: optional('insert'), update: optional('update'), delete: optional('delete'), appRead, appCount })
 }
 
 function nonEmpty(table: string, value: unknown, field: string): string {

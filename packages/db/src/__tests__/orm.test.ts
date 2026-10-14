@@ -420,6 +420,27 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		await transaction.commit()
 	})
 
+	test('an app capability reads every row of a dimension table with an action of its appRead, and only counts with one of its appCount', async () => {
+		const elsewhere = await seedNote('exported from another organization', 'w3', 'o2')
+		const { transaction, handles } = invocation('mutation')
+		const exporting = handles.app(alice.app('notes.export'))
+		expect(itemsOf(await call(exporting, 'notes.list', { limit: 500 })).map((item) => item['id'])).toContain(elsewhere)
+		expect(await call(exporting, 'notes.count', { where: [['id', '=', elsewhere]] })).toBe(1)
+		const counting = handles.app(alice.app('notes.count'))
+		expect(await call(counting, 'notes.count', { where: [['id', '=', elsewhere]] })).toBe(1)
+		expect(await call(counting, 'notes.aggregate', { groupBy: ['workspace_id'], count: true })).toContainEqual({ workspace_id: 'w3', count: '1' })
+		await expect(call(counting, 'notes.list')).rejects.toThrow(
+			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list and a scope fragment need its read action notes.read or one of its appRead (notes.export)',
+		)
+		expect(Reflect.get(Reflect.get(counting, 'notes'), 'get')).toBeUndefined()
+		const other = handles.app(alice.app('notes.write'))
+		await expect(call(other, 'notes.count')).rejects.toThrow(
+			'an app capability of notes.write does not reach notes: ctx.db.app lists it for its read action notes.read or one of its appRead (notes.export) only',
+		)
+		await expect(call(handles.app(alice.app('notes.export')), 'note_comments.list')).rejects.toBeInstanceOf(CapabilityError)
+		await transaction.commit()
+	})
+
 	test('unscoped: only the declared tables, scope predicate true, the mode enforced, containment named on insert', async () => {
 		const elsewhere = await seedNote('in another organization', 'w3', 'o2')
 		const { transaction, handles } = invocation('mutation', { notes: 'read', note_comments: 'write' })

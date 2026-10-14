@@ -41,6 +41,11 @@ export interface CountOutcome extends IsolationOutcome {
 	readonly count: string
 }
 
+export interface AppCountOutcome extends IsolationOutcome {
+	/** How many more rows the count answered after the seed than before it. */
+	readonly counted: number
+}
+
 export interface MisuseOutcome extends IsolationOutcome {
 	/** Whether the data layer refused the read capability (`CapabilityError`). */
 	readonly refused: boolean
@@ -63,6 +68,15 @@ export interface PolicyIsolationKit {
 	updateWithRead(): Promise<MisuseOutcome>
 	/** A `Ref` for the read action handed to remove. */
 	removeWithRead(): Promise<MisuseOutcome>
+	/** Lists from an `app` endpoint of `action`, one of the table's `appRead`, for a global holder: every row. */
+	appList(action: string): Promise<ListOutcome>
+	/**
+	 * Counts from an `app` endpoint of `action`, one of the table's `appCount`, for a global holder, before and after
+	 * two rows of two scopes are seeded: `counted` is 2 when the count reaches every row.
+	 */
+	appCount(action: string): Promise<AppCountOutcome>
+	/** Lists from an `app` endpoint of `action`, one of the table's `appCount`: the data layer must refuse it. */
+	appListWithCount(action: string): Promise<MisuseOutcome>
 }
 
 /**
@@ -359,6 +373,87 @@ export function appPolicyIsolationKit<C extends AnyContract, DB, P>(
 	return Object.freeze(appKit)
 }
 
+/** `app` endpoints of one action over a dimension or child table: what its `appRead` and `appCount` reach. */
+function appReachProbe(vocabulary: Vocabulary<string, string, string>, action: string) {
+	return defineContract(vocabulary, (c) => ({
+		probe: c.rpc('/probe', { callers: ['human'] }, {
+			list: c.query({ output: Keys, access: { action, app: true } }),
+			count: c.query({ output: Count, access: { action, app: true } }),
+			listRefused: c.query({ output: Refused, access: { action, app: true } }),
+		}),
+	}))
+}
+
+/**
+ * The `app` reach of a dimension or child table, one kit per action on a data layer of its own (a layer binds once),
+ * each asked by a global holder of the action. `seed` writes the two rows of two scopes the lists must both reach.
+ */
+function appReachKit<DB, P>(
+	contract: AnyContract,
+	tables: Tables<DB, P>,
+	table: string,
+	key: string,
+	postgres: TestDatabase,
+	seed: () => Promise<IsolationWorlds>,
+) {
+	const kits = new Map<string, ReturnType<typeof appReachClient>>()
+	const appReachClient = (action: string) => {
+		const probeContract = appReachProbe(contract.vocabulary, action)
+		const layer = scoped(withoutInboxes(tables))
+		const probe = tableProbe(layer, table)
+		const kit = testKit(
+			implement(probeContract, {
+				database: layer,
+				deps: () => ({}),
+				handlers: () => ({
+					probe: {
+						list: async ({ ctx }) => ({ keys: (await probe.select(ctx.app)).map((row) => String(row[key])) }),
+						count: async ({ ctx }) => ({ count: await probe.count(ctx.app) }),
+						listRefused: async ({ ctx }) => {
+							try {
+								await probe.select(ctx.app)
+								return { refused: false }
+							} catch (error) {
+								if (isCapabilityError(error)) {
+									return { refused: true }
+								}
+								throw error
+							}
+						},
+					},
+				}),
+			}),
+			{ database: postgres.database },
+		)
+		return createClient(probeContract, 'probe', { fetch: kit.browser(kit.testCaller([{ action }])) })
+	}
+	const client = (action: string) => {
+		const known = kits.get(action)
+		if (known !== undefined) return known
+		const made = appReachClient(action)
+		kits.set(action, made)
+		return made
+	}
+	return {
+		async appList(action: string): Promise<ListOutcome> {
+			const worlds = await seed()
+			return attempt(async () => ({ status: 200, rows: reached(worlds, (await client(action).list()).keys) }), (status) => ({ status, rows: [] }))
+		},
+		async appCount(action: string): Promise<AppCountOutcome> {
+			const api = client(action)
+			return attempt(async () => {
+				const before = Number((await api.count()).count)
+				await seed()
+				return { status: 200, counted: Number((await api.count()).count) - before }
+			}, (status) => ({ status, counted: 0 }))
+		},
+		async appListWithCount(action: string): Promise<MisuseOutcome> {
+			await seed()
+			return attempt(async () => ({ status: 200, ...(await client(action).listRefused()) }), (status) => ({ status, refused: false }))
+		},
+	}
+}
+
 /**
  * The kit of `scopedAppProbe`, on a data layer of its own (a layer binds once): its handlers read `table` through the
  * `Within` of each `over` site.
@@ -459,6 +554,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 		}
 	}
 	const seed = (): Promise<IsolationWorlds> => postgres.seedWorlds(tables, table)
+	const appReach = appReachKit(contract, tables, table, scope.key, postgres, seed)
 	const grantsIn = (worlds: IsolationWorlds): TestGrant<AnyContract>[] => {
 		const held = new Set([actions.read, actions.insert, actions.update, actions.delete].filter((action) => action !== null))
 		return [...held].map((action) => ({ action, scope: { type: worlds.dimension, value: worlds.own.scope } }))
@@ -504,6 +600,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 			return worlds[row].key
 		}
 		const dimensionKit: PolicyIsolationKit = {
+			...appReach,
 			table,
 			dimension: list,
 			async get(row) {
@@ -608,6 +705,7 @@ export function policyIsolationKit<C extends AnyContract, DB, P>(
 		return { parent: parentOf, key: worlds[row === 'own' ? 'own' : 'other'].key }
 	}
 	const childKit: PolicyIsolationKit = {
+		...appReach,
 		table,
 		dimension: list,
 		async get(row) {
