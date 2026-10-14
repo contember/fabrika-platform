@@ -61,7 +61,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [127](127-a-form-records-no-request-evidence.md) — A form cannot record a client address or user agent as consent evidence.
 - [128](128-a-public-page-cannot-read-a-public-configuration-value.md) — A public page has no per-environment public value, such as a challenge site key.
 - [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
-- [130](130-codegen-reports-an-empty-migration-bundle-as-a-connection-failure.md) — `fabrika db codegen` masks "bundle is empty" as a connection failure.
 - [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
 - [132](132-an-export-of-every-record-needs-the-records-read-action.md) — An audited export of every record takes the records' read action; a separate export permission is a deviation.
 - [133](133-a-scoped-endpoint-cannot-read-an-application-table.md) — Only an `app` endpoint reads an application table, so a scoped endpoint cannot validate against an edited code list.

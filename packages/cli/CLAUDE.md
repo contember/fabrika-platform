@@ -81,8 +81,9 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
   the start script never passes it.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
-  An error reaches the output only as the runner's own message or a server-reported
-  Postgres error; any other driver error is replaced, because it may quote the URL.
+  An error reaches the output only as the runner's own message (a `PostgresMigrationError`, which every refusal of
+  the bundle is: it names files, never a URL) or a server-reported Postgres error; any other driver error is replaced,
+  because it may quote the URL.
 
 ## The `job` area
 

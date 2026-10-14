@@ -266,6 +266,16 @@ describe('fabrika db configuration', () => {
 		expect(await failure(run(misnamed, 'migrate', [], { source }))).toBe('Application migration 0001_init.sql is not named YYYYMMDDHHMMSS_slug.sql')
 	})
 
+	test('codegen names an empty migration bundle or file before it connects, not as a connection failure', async () => {
+		const source = { FABRIKA_APP_ID: 'notes', FABRIKA_APP_DATABASE_URL: 'postgres://user:secret@127.0.0.1:1/db' }
+		const empty = appRoot()
+		mkdirSync(join(empty, 'db', 'migrations'), { recursive: true })
+		expect(await failure(run(empty, 'codegen', [], { source }))).toBe('Postgres migration bundle app is empty')
+		const blank = appRoot()
+		writeMigration(blank, '20261008120000_init.sql', '  \n')
+		expect(await failure(run(blank, 'codegen', [], { source }))).toBe('Postgres migration app/20261008120000_init.sql is empty')
+	})
+
 	test('a connection failure does not repeat the URL', async () => {
 		const root = appRoot()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT)')

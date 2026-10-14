@@ -225,13 +225,13 @@ export async function applyPostgresMigrations(
 
 function validateBundle(bundle: PostgresMigrationBundle): void {
 	validateBundleName(bundle.name)
-	if (bundle.migrations.length === 0) throw new Error(`Postgres migration bundle ${bundle.name} is empty`)
+	if (bundle.migrations.length === 0) throw new PostgresMigrationError(`Postgres migration bundle ${bundle.name} is empty`)
 	const names = new Set<string>()
 	let previous = ''
 	for (const migration of bundle.migrations) {
 		validateMigrationName(migration.name)
-		if (migration.sql.trim() === '') throw new Error(`Postgres migration ${bundle.name}/${migration.name} is empty`)
-		if (names.has(migration.name)) throw new Error(`Duplicate Postgres migration ${bundle.name}/${migration.name}`)
+		if (migration.sql.trim() === '') throw new PostgresMigrationError(`Postgres migration ${bundle.name}/${migration.name} is empty`)
+		if (names.has(migration.name)) throw new PostgresMigrationError(`Duplicate Postgres migration ${bundle.name}/${migration.name}`)
 		const refused = refusedStatement(migration.sql)
 		if (refused !== undefined) {
 			throw new PostgresMigrationError(
@@ -239,7 +239,7 @@ function validateBundle(bundle: PostgresMigrationBundle): void {
 			)
 		}
 		if (previous !== '' && migration.name.localeCompare(previous) < 0) {
-			throw new Error(`Postgres migration bundle ${bundle.name} is not ordered by filename`)
+			throw new PostgresMigrationError(`Postgres migration bundle ${bundle.name} is not ordered by filename`)
 		}
 		names.add(migration.name)
 		previous = migration.name
@@ -276,11 +276,11 @@ function validateTimeout(value: number, label: string): void {
 }
 
 function validateBundleName(value: string): void {
-	if (!BUNDLE_NAME.test(value)) throw new Error(`Invalid Postgres migration bundle name: ${value}`)
+	if (!BUNDLE_NAME.test(value)) throw new PostgresMigrationError(`Invalid Postgres migration bundle name: ${value}`)
 }
 
 function validateMigrationName(value: string): void {
-	if (!MIGRATION_NAME.test(value)) throw new Error(`Invalid Postgres migration filename: ${value}`)
+	if (!MIGRATION_NAME.test(value)) throw new PostgresMigrationError(`Invalid Postgres migration filename: ${value}`)
 }
 
 /** The service ledgers keep their original shape; an application's ledger also records each file's checksum. */
