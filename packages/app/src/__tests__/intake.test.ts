@@ -136,25 +136,54 @@ function gate(): Gate {
 	}
 }
 
+/** The sealing key of every world: AES-GCM, as the recipe's mail dependency seals a link. */
+const SEAL_KEY = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+
 /**
  * The e-mail provider and the faults a test arms: a stop or a pause after an effect of a delivery, a refused message,
- * and a message held in flight, which the provider abandons once the attempt's signal aborts.
+ * a message held in flight, which the provider abandons once its signal aborts, a recipient whose e-mail hangs, and an
+ * accepted message whose answer is lost. The provider sends one message per idempotency key, as a real one does.
  */
 class World implements IntakeWorld {
 	readonly origin = ORIGIN
+	/** The messages the provider sent: one per idempotency key. */
 	readonly mails: IntakeMail[] = []
+	/** How often the job handed a message over, repeats under a known key included. */
+	handovers = 0
+	sendTimeoutMs?: number
 	stopAfter: DeliveryStep | null = null
 	pauseAfter: { readonly step: DeliveryStep; readonly gate: Gate } | null = null
 	holdSend: Gate | null = null
 	failSend = false
+	/** The next accepted message's answer is lost: the provider sends it, and the job hears an error. */
+	loseAnswer = false
 	/** Recipients the provider refuses every time. */
 	readonly refused = new Set<string>()
+	/** Recipients whose e-mail never answers: it ends only when its signal aborts. */
+	readonly hanging = new Set<string>()
 	abandoned = 0
 
+	async seal(url: string): Promise<string> {
+		const iv = crypto.getRandomValues(new Uint8Array(12))
+		const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, SEAL_KEY, new TextEncoder().encode(url))
+		return `${Buffer.from(iv).toString('base64')}.${Buffer.from(sealed).toString('base64')}`
+	}
+
+	async open(sealed: string): Promise<string> {
+		const [iv = '', data = ''] = sealed.split('.')
+		const url = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(iv, 'base64') }, SEAL_KEY, Buffer.from(data, 'base64'))
+		return new TextDecoder().decode(url)
+	}
+
 	async send(message: IntakeMail, signal: AbortSignal): Promise<void> {
+		this.handovers++
 		if (this.failSend || this.refused.has(message.to)) {
 			this.failSend = false
 			throw new Error('the provider refused the message')
+		}
+		if (this.hanging.has(message.to)) {
+			await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+			throw new Error('the provider did not answer')
 		}
 		const hold = this.holdSend
 		if (hold !== null) {
@@ -168,7 +197,13 @@ class World implements IntakeWorld {
 			}
 		}
 		// A message the job hands over is sent, whatever its signal says: the job checks before it sends.
-		this.mails.push(message)
+		if (!this.mails.some((sent) => sent.idempotencyKey === message.idempotencyKey)) {
+			this.mails.push(message)
+		}
+		if (this.loseAnswer) {
+			this.loseAnswer = false
+			throw new Error('the answer was lost')
+		}
 	}
 
 	async after(step: DeliveryStep): Promise<void> {
@@ -320,8 +355,10 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 			expect(await candidate(`${step}@example.test`)).toMatchObject({ attempts: 1, last_failure: step === 'mailed' ? 'send' : 'issue' })
 			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 			await deliveredOnce(running, `${step}@example.test`)
-			// Only a stop after the e-mail left sends a second one; the first link it carried is revoked.
-			expect(running.world.mails).toHaveLength(step === 'mailed' ? 2 : 1)
+			// A recorded link is handed over again under its key, so the provider sends one e-mail even after a stop
+			// that came once it had left; only an unrecorded link is replaced.
+			expect(running.world.mails).toHaveLength(1)
+			expect(running.world.handovers).toBe(step === 'mailed' ? 2 : 1)
 			// A link issued and never recorded was never e-mailed: its key never left the job.
 			const orphans = running.iam.live().filter((link) => !running.world.mails.some((mail) => mail.url.endsWith(`#${link.key}`)))
 			expect(orphans.map((link) => link.id)).toEqual(step === 'issued' ? ['link-1'] : [])
@@ -336,7 +373,8 @@ describe.skipIf(!hasPostgres)('a run stopped between two effects is finished by 
 		expect(await candidate('refused@example.test')).toMatchObject({ link_state: 'issued', attempts: 1, last_failure: 'send' })
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		await deliveredOnce(running, 'refused@example.test')
-		expect(running.iam.links.map((link) => link.revoked)).toEqual([true, false])
+		// The refused link is sent again, not replaced.
+		expect(running.iam.links.map((link) => link.revoked)).toEqual([false])
 	})
 
 	test('after IAM could not be asked to issue', async () => {
@@ -427,18 +465,21 @@ describe.skipIf(!hasPostgres)('the daily budget', () => {
 			running.world.stopAfter = 'mailed'
 			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		}
-		expect(running.world.mails).toHaveLength(SENDS_PER_DAY)
+		// Each run handed the same link over under the same key: one e-mail, three charged to the budget.
+		expect(running.world.handovers).toBe(SENDS_PER_DAY)
+		expect(running.world.mails).toHaveLength(1)
 		expect(await candidate('often@example.test')).toMatchObject({ link_state: 'issued', sends: SENDS_PER_DAY })
-		// The budget is spent: the run sends nothing and leaves the delivery as it was.
+		// The budget is spent: the run hands nothing over and leaves the delivery as it was.
 		running.world.stopAfter = 'mailed'
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
 		running.world.stopAfter = null
-		expect(running.world.mails).toHaveLength(SENDS_PER_DAY)
+		expect(running.world.handovers).toBe(SENDS_PER_DAY)
 		expect(await candidate('often@example.test')).toMatchObject({ link_state: 'issued', sends: SENDS_PER_DAY })
 
 		await admin((sql) => sql.unsafe(`update ${schema}.candidates set window_started_at = now() - interval '2 days' where email = 'often@example.test'`))
 		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
-		expect(running.world.mails).toHaveLength(SENDS_PER_DAY + 1)
+		expect(running.world.handovers).toBe(SENDS_PER_DAY + 1)
+		expect(running.world.mails).toHaveLength(1)
 		expect((await candidate('often@example.test')).sends).toBe(1)
 		await deliveredOnce(running, 'often@example.test')
 	})
@@ -563,5 +604,71 @@ describe.skipIf(!hasPostgres)('each record is its own work', () => {
 		const [count] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.candidates`))
 		expect(count).toEqual({ n: BATCH + 1 })
 		expect(running.world.mails).toHaveLength(BATCH + 1)
+	})
+})
+
+describe.skipIf(!hasPostgres)('a delivery is its link', () => {
+	test('a lost answer is retried under the same key: the provider sends one e-mail, and its link works', async () => {
+		const running = start()
+		await submit(running.app, '/register', { email: 'lost@example.test', name: 'L' })
+		running.world.loseAnswer = true
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(await candidate('lost@example.test')).toMatchObject({ link_state: 'issued', attempts: 1, last_failure: 'send' })
+		// The row keeps the waiting link sealed: the key it carries is nowhere in plain text.
+		const [waiting] = await admin((sql) => sql.unsafe(`select link_seal from ${schema}.candidates where email = 'lost@example.test'`))
+		expect(String(waiting?.link_seal)).not.toContain(running.world.lastKey('lost@example.test'))
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(running.world.handovers).toBe(2)
+		expect(running.world.mails).toHaveLength(1)
+		await deliveredOnce(running, 'lost@example.test')
+		const [sent] = await admin((sql) => sql.unsafe(`select link_seal from ${schema}.candidates where email = 'lost@example.test'`))
+		expect(sent?.link_seal).toBeNull()
+		const holder = await holderToken(running.iam, running.world.lastKey('lost@example.test'))
+		expect(resultOf(await send(running.app, '/p/api/me', { token: holder, body: {} }))).toMatchObject({ email: 'lost@example.test' })
+	})
+
+	test('a recipient whose e-mail hangs counts an attempt each run and ends dead; the next recipient is delivered', async () => {
+		const running = start()
+		running.world.sendTimeoutMs = 50
+		running.world.hanging.add('slow@example.test')
+		await submit(running.app, '/register', { email: 'slow@example.test', name: 'S' })
+		await submit(running.app, '/register', { email: 'fast@example.test', name: 'F' })
+		for (let run = 1; run <= MAX_ATTEMPTS; run++) {
+			await admin((sql) => sql.unsafe(`update ${schema}.candidates set sends = 0 where email = 'slow@example.test'`))
+			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+			expect(await candidate('slow@example.test')).toMatchObject({ attempts: run, last_failure: 'send' })
+		}
+		expect(await candidate('slow@example.test')).toMatchObject({ link_state: 'failed' })
+		await deliveredOnce(running, 'fast@example.test')
+		expect(running.world.mails.map((mail) => mail.to)).toEqual(['fast@example.test'])
+	})
+
+	test('a registration other work holds is skipped, not waited for, and the rest are processed', async () => {
+		const running = start()
+		await admin((sql) =>
+			sql.unsafe(`insert into ${schema}.registrations (email, name, received_at) values ('held@example.test', 'H', now() - interval '1 hour')`)
+		)
+		await submit(running.app, '/register', { email: 'free@example.test', name: 'F' })
+		const locked = Promise.withResolvers<void>()
+		const release = Promise.withResolvers<void>()
+		const holding = admin((sql) =>
+			sql.begin(async (tx) => {
+				await tx.unsafe(`select id from ${schema}.registrations where email = 'held@example.test' for update`)
+				locked.resolve()
+				await release.promise
+			})
+		)
+		await locked.promise
+		try {
+			expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+			await deliveredOnce(running, 'free@example.test')
+			const left = await admin((sql) => sql.unsafe(`select email, attempts from ${schema}.registrations`))
+			expect(left).toEqual([{ email: 'held@example.test', attempts: 0 }])
+		} finally {
+			release.resolve()
+			await holding
+		}
+		expect(await running.run()).toEqual({ status: 'succeeded', attempts: 1 })
+		await deliveredOnce(running, 'held@example.test')
 	})
 })

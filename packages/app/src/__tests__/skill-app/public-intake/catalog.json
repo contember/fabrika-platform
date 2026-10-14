@@ -199,6 +199,16 @@
 		},
 		{
 			"table_name": "candidates",
+			"column_name": "link_seal",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidates",
 			"column_name": "revoke_link_id",
 			"type_name": "text",
 			"type_type": "b",

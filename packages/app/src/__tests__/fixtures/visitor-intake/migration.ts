@@ -1,7 +1,8 @@
 // The fixture's migrations, as `db/migrations/` would hold them. A form appends to its inbox; the intake job drains
 // both inboxes and keeps each candidate's link delivery in the candidate's own row; a candidate owns its attachments.
 // An inbox row and a delivery each count their failed attempts and keep the step that failed last; one that failed
-// MAX_ATTEMPTS times is dead (a registration left in its inbox, a delivery 'failed') until an operator acts.
+// MAX_ATTEMPTS times is dead (a registration left in its inbox, a delivery 'failed') until an operator acts. A link
+// waiting to be e-mailed keeps its URL sealed (link_seal), never in plain text, so a retry sends the same link.
 import { fileTableSql } from '@fabrika/db'
 
 export const migration = `
@@ -12,6 +13,7 @@ create table candidates (
 	verified_at timestamptz,
 	link_state text not null default 'due' check (link_state in ('due', 'issued', 'sent', 'failed')),
 	link_id text,
+	link_seal text,
 	revoke_link_id text,
 	sends integer not null default 0,
 	window_started_at timestamptz not null default now(),

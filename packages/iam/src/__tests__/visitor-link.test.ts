@@ -106,6 +106,15 @@ class World implements IntakeWorld {
 		return Promise.resolve()
 	}
 
+	/** Every e-mail here succeeds at once, so no row waits with a sealed link for long: an encoding stands in. */
+	seal(url: string): Promise<string> {
+		return Promise.resolve(btoa(url))
+	}
+
+	open(sealed: string): Promise<string> {
+		return Promise.resolve(atob(sealed))
+	}
+
 	lastKey(to: string): string {
 		const mail = this.mails.filter((message) => message.to === to).at(-1)
 		if (mail === undefined) throw new Error(`no link was e-mailed to ${to}`)

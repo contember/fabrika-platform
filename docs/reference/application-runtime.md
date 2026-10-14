@@ -691,29 +691,31 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   `attempts`, keeps a fixed step code in `last_failure`, and the run goes on; a record that
   failed five times is dead (a registration left in its inbox, a delivery `failed`), logged
   once by id, and left to an operator; a resend revives a dead delivery. A failure after the
-  attempt ended is the attempt's, never the record's. The lease runs one attempt at a time,
-  so a batch takes no row lock, and a job's statements carry no scope fragment (a job is
-  app-wide). IAM and the e-mail do not roll back with a transaction, so a delivery keeps
-  four invariants:
+  attempt ended is the attempt's, never the record's, so each e-mail has its own deadline
+  inside the attempt's and a hanging one fails its record. Each record is claimed
+  `for update skip locked` in the transaction that consumes it, so a row another session
+  holds waits for a later run and blocks nothing behind it. A job's statements carry no
+  scope fragment (a job is app-wide). IAM and the e-mail do not roll back with a
+  transaction, so a delivery keeps four invariants:
   1. **It charges the budget first.** One transaction reserves an e-mail of the recipient's
      daily budget (a counter and a window in the row) before any effect, so a delivery that
      fails after its e-mail left still counts; without one left, the row waits for the next
      window as it is.
   2. **It records each step before the next effect**: revoke a superseded link → record it;
-     issue → record the link id (`issued`); e-mail → record `sent`. The next run finishes a
-     stopped delivery: a link in state `issued` may have been e-mailed, so it is revoked and
-     replaced; a link issued but not recorded was never e-mailed (its key existed only in the
-     job) and expires with its `days`; IAM's `issue` takes no idempotency key, so that window
-     stays. Never store a link's key. The e-mail is at-least-once.
+     issue → record the link id and its URL sealed (AES-GCM under the application variable
+     `LINK_SEAL_KEY`, never in plain text) (`issued`); e-mail → record `sent` and drop the
+     seal. The next run finishes a stopped delivery: a link in state `issued` may have been
+     e-mailed, so it is sent again from its seal, never replaced; a link issued but not
+     recorded was never e-mailed (its key existed only in the job) and expires with its
+     `days`; IAM's `issue` takes no idempotency key, so that window stays.
   3. **An effect starts only while the attempt is live**: `ctx.signal.throwIfAborted()`
      before each revoke, issue and e-mail, and the e-mail transport takes `ctx.signal`. The
      runner aborts the signal before a replacement attempt starts, and `ctx.links` of an
      ended attempt asks IAM nothing, so no effect of a stale attempt follows its
      replacement's.
-  4. **Every external call carries a key derived from the record**: the e-mail's
-     `Idempotency-Key` is `intake-link-<link id>`, so the provider sends one message per
-     link however often the job hands it over. A delivery whose answer was lost e-mails a
-     new link, since the job cannot resend one it never stored.
+  4. **The link is the delivery's identity**: the e-mail's `Idempotency-Key` is
+     `intake-link-<link id>`, and a retry sends the same message under it, so the provider
+     sends one e-mail per link even when its answer or the commit after it was lost.
 
   A resend (a second form, `{ email }`) marks an unverified record due while its budget has
   an e-mail left; the job revokes the sent link before it issues the next. Verification is

@@ -16,8 +16,13 @@ export interface IntakeMail {
 
 export interface IntakeWorld {
 	readonly origin: string
+	/** How long one e-mail may take; `SEND_TIMEOUT_MS` when unset. */
+	readonly sendTimeoutMs?: number
 	/** Sends one e-mail; it throws when the provider refuses, and abandons the request once `signal` aborts. */
 	send(message: IntakeMail, signal: AbortSignal): Promise<void>
+	/** Seals a link's URL for the row that waits to e-mail it: what `open` reads back, never the URL itself. */
+	seal(url: string): Promise<string>
+	open(sealed: string): Promise<string>
 	/** Runs after each effect of a delivery: a test throws here to stop the run between two effects. */
 	after(step: DeliveryStep, candidate: string): Promise<void>
 }

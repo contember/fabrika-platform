@@ -147,16 +147,20 @@ transaction: a form's inbox row, or a state of its record (`link_state = 'due'`)
 service. `references/public-intake.md` is the whole recipe; its rules:
 
 - **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
-  first; the next run takes the rest. The job's lease runs one attempt at a time, so no `for update skip locked`.
+  first; the next run takes the rest.
+- **Claim a record where you consume it**: read it `for update skip locked` in the transaction that writes it, so a
+  row another session holds waits for a later run and blocks nothing behind it.
 - **Each record is its own work.** Run it in its own transactions, inside a `try`: a failure adds one to the record's
   `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
   run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
-  run meets the record as it is.
+  run meets the record as it is. So give each external call a deadline of its own inside the attempt's
+  (`AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)])`): a call that hangs then fails its record, not the run.
 - **A dead state.** A record that failed `MAX_ATTEMPTS` times is dead: the batch skips it, the job logs it once by its
   id (never an address), and an operator fixes or deletes it. Give the record a way back when the cause can go away
   (a resend revives a dead delivery).
 - **A key on every external call**, derived from the record: the e-mail's `Idempotency-Key`, a provider's request id.
-  The provider then acts once per key, however often the job hands the call over.
+  The provider then acts once per key, however often the job hands the call over. A retry sends the same request
+  under the same key: keep what it needs in the row until the call is known done (sealed, when it holds a secret).
 - **Each step recorded before the next effect**, so the next run finishes a stopped one.
 - An inbox needs a row key for this: `id UUID NOT NULL DEFAULT gen_random_uuid()`, since a form writes only its input
   fields.

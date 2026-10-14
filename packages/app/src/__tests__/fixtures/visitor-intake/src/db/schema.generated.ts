@@ -10,6 +10,7 @@ export interface CandidatesTable {
 	verified_at: ColumnType<Date | null, Date | string | null, Date | string | null>
 	link_state: Generated<'due' | 'issued' | 'sent' | 'failed'>
 	link_id: string | null
+	link_seal: string | null
 	revoke_link_id: string | null
 	sends: Generated<number>
 	window_started_at: Generated<Date>
@@ -49,6 +50,7 @@ export const columns: TypedColumnList<DB> = {
 			'verified_at',
 			'link_state',
 			'link_id',
+			'link_seal',
 			'revoke_link_id',
 			'sends',
 			'window_started_at',

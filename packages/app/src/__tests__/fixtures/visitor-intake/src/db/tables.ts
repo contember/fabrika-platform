@@ -14,6 +14,7 @@ export const tables = defineTables(vocabulary, columns)({
 		columns: {
 			link_state: { read: 'candidates.process' },
 			link_id: { read: 'candidates.process' },
+			link_seal: { read: 'candidates.process' },
 			revoke_link_id: { read: 'candidates.process' },
 			sends: { read: 'candidates.process' },
 			window_started_at: { read: 'candidates.process' },
