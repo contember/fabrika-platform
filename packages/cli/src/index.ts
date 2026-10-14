@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import { CONTRACT_FILE, type EntryRuntime, writeGeneratedEntry } from '@fabrika/app/build'
-import { BUILDER_USAGE, runBuilderCli } from '@fabrika/builder'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -132,13 +131,29 @@ const selectedAppProvider = async (parsed: ParsedCommand): Promise<string> => {
 	return provider
 }
 
-const installationModule = async (provider: string): Promise<unknown> => {
-	const packageName = provider === 'cloudflare'
+const packageNameOf = (specifier: string): string => specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/')
+
+/**
+ * The builder and the providers are optional peers: an application installs only the ones its commands load. A
+ * command whose package is absent names the package to add, instead of a resolver error.
+ */
+const requireInstalled = (specifier: string, command: string): void => {
+	try {
+		Bun.resolveSync(specifier, import.meta.dir)
+	} catch {
+		const packageName = packageNameOf(specifier)
+		throw new Error(`\`${command}\` needs ${packageName}, which is not installed. Add it: bun add -d ${packageName}`)
+	}
+}
+
+const installationModule = async (provider: string, command: string): Promise<unknown> => {
+	const specifier = provider === 'cloudflare'
 		? '@fabrika/provider-cloudflare/installation'
 		: provider === 'zerops'
 		? '@fabrika/provider-zerops/installation'
 		: provider
-	return import(packageName)
+	requireInstalled(specifier, command)
+	return import(specifier)
 }
 
 export type AppCliRunner = (argv: readonly string[]) => Promise<void>
@@ -154,7 +169,8 @@ export const appCliRunnerFromModule = (loaded: unknown, packageName: string, exp
 	return runner
 }
 
-const appCliRunner = async (packageName: string, exportName: string): Promise<AppCliRunner> => {
+const appCliRunner = async (packageName: string, exportName: string, command: string): Promise<AppCliRunner> => {
+	requireInstalled(packageName, command)
 	const loaded: unknown = await import(packageName)
 	return appCliRunnerFromModule(loaded, packageName, exportName)
 }
@@ -165,7 +181,10 @@ const runPlatform = async (parsed: ParsedCommand): Promise<void> => {
 	}
 	const provider = requireExplicitProvider(parsed)
 	const expectedProvider = provider === 'cloudflare' || provider === 'zerops' ? provider : undefined
-	const installation = installationCliFromModule(await installationModule(provider), expectedProvider)
+	const installation = installationCliFromModule(
+		await installationModule(provider, `fabrika platform ${parsed.command} --provider=${provider}`),
+		expectedProvider,
+	)
 	if (!supportsInstallationCommand(installation, parsed.command)) {
 		throw new Error(`${installation.provider} installation does not support \`platform ${parsed.command}\`\n\n${installation.usage}`)
 	}
@@ -180,6 +199,7 @@ const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
 		if (provider !== 'zerops') {
 			throw new Error(`${provider} app tooling does not support \`app register\``)
 		}
+		requireInstalled('@fabrika/provider-zerops/cli', 'fabrika app register')
 		const { buildZeropsManifestText } = await import('@fabrika/provider-zerops/cli')
 		return { provider, text: await buildZeropsManifestText({ config, env }) }
 	})
@@ -218,7 +238,7 @@ const runApp = async (parsed: ParsedCommand): Promise<void> => {
 		if (parsed.command !== 'deploy') {
 			throw new Error(`Cloudflare app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
 		}
-		const runCloudflareCli = await appCliRunner('@fabrika/provider-cloudflare/cli', 'runCloudflareCli')
+		const runCloudflareCli = await appCliRunner('@fabrika/provider-cloudflare/cli', 'runCloudflareCli', 'fabrika app deploy')
 		await runCloudflareCli(['deploy', ...parsed.rest])
 		return
 	}
@@ -226,7 +246,7 @@ const runApp = async (parsed: ParsedCommand): Promise<void> => {
 		if (parsed.command !== 'build') {
 			throw new Error(`Zerops app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
 		}
-		const runZeropsCli = await appCliRunner('@fabrika/provider-zerops/cli', 'runZeropsCli')
+		const runZeropsCli = await appCliRunner('@fabrika/provider-zerops/cli', 'runZeropsCli', 'fabrika app build')
 		await runZeropsCli(['build', ...parsed.rest])
 		return
 	}
@@ -241,6 +261,7 @@ const runNamespace = async (parsed: ParsedCommand): Promise<void> => {
 	if (parsed.command === undefined) {
 		throw new Error('Namespace command is required')
 	}
+	requireInstalled('@fabrika/provider-zerops', 'fabrika namespace')
 	const { runZeropsNamespaceCli } = await import('./namespace.js')
 	await runZeropsNamespaceCli(parsed.command, parsed.rest)
 }
@@ -250,7 +271,7 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	if (parsed.help && parsed.area === 'platform' && parsed.provider !== undefined && parsed.provider !== '') {
 		// A platform command's real surface is the installation's, not this router's — and on Zerops that
 		// text is what backlog 62 generates the operator's workflow from, so `--help` must reach it.
-		console.info(installationCliFromModule(await installationModule(parsed.provider)).usage)
+		console.info(installationCliFromModule(await installationModule(parsed.provider, `fabrika platform --provider=${parsed.provider}`)).usage)
 		return
 	}
 	if (parsed.help && parsed.area === 'control') {
@@ -258,6 +279,7 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		return
 	}
 	if (parsed.help && parsed.area === 'namespace') {
+		requireInstalled('@fabrika/provider-zerops', 'fabrika namespace')
 		const { NAMESPACE_USAGE } = await import('./namespace.js')
 		console.info(NAMESPACE_USAGE)
 		return
@@ -283,6 +305,8 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		return
 	}
 	if (parsed.help && parsed.area === 'builder') {
+		requireInstalled('@fabrika/builder', 'fabrika builder')
+		const { BUILDER_USAGE } = await import('@fabrika/builder')
 		console.info(BUILDER_USAGE)
 		return
 	}
@@ -322,6 +346,8 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		return
 	}
 	if (parsed.area === 'builder') {
+		requireInstalled('@fabrika/builder', 'fabrika builder')
+		const { runBuilderCli } = await import('@fabrika/builder')
 		const exitCode = await runBuilderCli(parsed.command === undefined ? [] : [parsed.command, ...parsed.rest])
 		if (exitCode !== 0) process.exitCode = exitCode
 		return

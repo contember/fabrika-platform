@@ -137,7 +137,9 @@ The narrow contract packages keep wire types away from runtime entrypoints:
   semantics.
 - `@fabrika/cli` loads `@fabrika/provider-<cloud>/installation` through the open
   contract in `@fabrika/provider-contract/installation` and exposes the guided
-  builder through `@fabrika/builder` under `fabrika builder …`.
+  builder through `@fabrika/builder` under `fabrika builder …`. The builder and
+  both providers are its optional peers: an application installs only its own
+  provider, and a command whose package is absent names the package to add.
 
 ## Operator console
 

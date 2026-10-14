@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { z } from 'zod'
 import {
 	collectBinTargets,
 	collectExportTargets,
@@ -339,4 +340,63 @@ describe('staging the whole public set', () => {
 			await rm(root, { recursive: true, force: true })
 		}
 	}, 120_000)
+})
+
+describe('the packages a Zerops application installs', () => {
+	// What an installer follows from a shipped manifest: every dependency and optional dependency, and each peer that
+	// is not marked optional. An optional peer is installed only when the application declares it itself.
+	const shippedSchema = z.object({
+		dependencies: z.record(z.string()).optional(),
+		optionalDependencies: z.record(z.string()).optional(),
+		peerDependencies: z.record(z.string()).optional(),
+		peerDependenciesMeta: z.record(z.object({ optional: z.boolean().optional() })).optional(),
+	})
+	const installed = (manifest: z.infer<typeof shippedSchema>): string[] => [
+		...Object.keys(manifest.dependencies ?? {}),
+		...Object.keys(manifest.optionalDependencies ?? {}),
+		...Object.keys(manifest.peerDependencies ?? {}).filter((name) => manifest.peerDependenciesMeta?.[name]?.optional !== true),
+	]
+
+	test('are what it imports and the dev tooling, without the builder or the Cloudflare provider', async () => {
+		const { publicPackages } = packageGraph(await readPackages())
+		const publicNames = new Set(publicPackages.map((item) => item.name))
+		const shipped = new Map(publicPackages.map((item) => [item.name, shippedSchema.parse(stagedManifest(item, '9.8.7', publicNames))]))
+		const closure = new Set<string>()
+		const visit = (name: string): void => {
+			const manifest = shipped.get(name)
+			if (manifest === undefined || closure.has(name)) return
+			closure.add(name)
+			for (const dependency of installed(manifest)) visit(dependency)
+		}
+		for (
+			const name of [
+				'@fabrika/app',
+				'@fabrika/db',
+				'@fabrika/provider-zerops',
+				'@fabrika/proxy-core',
+				'@fabrika/cli',
+				'@fabrika/check',
+				'@fabrika/platform',
+			]
+		) {
+			visit(name)
+		}
+		expect([...closure].sort()).toEqual([
+			'@fabrika/app',
+			'@fabrika/auth',
+			'@fabrika/auth-core',
+			'@fabrika/check',
+			'@fabrika/cli',
+			'@fabrika/control-contract',
+			'@fabrika/db',
+			'@fabrika/iam-contract',
+			'@fabrika/installation-init',
+			'@fabrika/jwks',
+			'@fabrika/platform',
+			'@fabrika/platform-node',
+			'@fabrika/provider-contract',
+			'@fabrika/provider-zerops',
+			'@fabrika/proxy-core',
+		])
+	})
 })

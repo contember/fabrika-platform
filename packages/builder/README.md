@@ -17,10 +17,11 @@ The current phase is derived from files in `.fabrika/`; it is not stored as a mu
 
 ## Usage
 
-Install the public CLI and initialize the builder in an application repository:
+Install the public CLI with this package, which it loads but does not install, and initialize the builder in an
+application repository:
 
 ```bash
-bun add --global @fabrika/cli
+bun add --global @fabrika/cli @fabrika/builder
 fabrika builder init
 ```
 

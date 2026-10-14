@@ -159,6 +159,15 @@ arguments and reports.
 - `cloudflare` and `zerops` are built-in aliases for `@fabrika/provider-<cloud>/installation`. Any other value is
   loaded as a package specifier implementing `@fabrika/provider-contract/installation`.
 
+## Optional packages
+
+`@fabrika/builder`, `@fabrika/provider-cloudflare` and `@fabrika/provider-zerops` are optional `peerDependencies`
+(and workspace `devDependencies`), so an application installs only the provider its `fabrika.config.ts` imports.
+Not `optionalDependencies`: an installer installs those regardless. Import them only with a dynamic `import()` in the
+command that needs them, after `requireInstalled`, which names the package to add when it is absent. A static import
+of one puts it back into every application's install; `scripts/__tests__/release-validation.test.ts` lists the
+packages a Zerops application installs.
+
 ## Invariants
 
 - Keep `fabrika` as the only public operator executable.

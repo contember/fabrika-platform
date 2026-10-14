@@ -32,18 +32,33 @@
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/builder": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
-		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
-		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/db": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/check": "workspace:*"
 	},
+	"peerDependencies": {
+		"@fabrika/builder": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*"
+	},
+	"peerDependenciesMeta": {
+		"@fabrika/builder": {
+			"optional": true
+		},
+		"@fabrika/provider-cloudflare": {
+			"optional": true
+		},
+		"@fabrika/provider-zerops": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
 		"@types/bun": "latest",
-		"@fabrika/check": "workspace:*"
+		"@fabrika/builder": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*"
 	}
 }

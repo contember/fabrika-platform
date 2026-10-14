@@ -166,6 +166,15 @@ describe('installation capabilities', () => {
 		)
 	})
 
+	test('names the package to add when the installation package is not installed', async () => {
+		// The builder and the providers are optional peers resolved the same way; the release pack witness runs
+		// `fabrika builder` in an application without @fabrika/builder.
+		await expect(runCli(['platform', 'init', '--provider=@fabrika/not-installed/installation'])).rejects.toThrow(
+			'`fabrika platform init --provider=@fabrika/not-installed/installation` needs @fabrika/not-installed, which is not installed. '
+				+ 'Add it: bun add -d @fabrika/not-installed',
+		)
+	})
+
 	test('`--help` on a platform command shows the INSTALLATION surface, not this router', async () => {
 		const lines: string[] = []
 		const info = console.info

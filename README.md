@@ -75,10 +75,11 @@ dispatch through the selected provider's `/installation` subpath.
 ## Install
 
 Installing fabrika means bringing the platform up in your own cloud account. The `fabrika` command
-runs on [Bun](https://bun.sh) (≥ 1.3):
+runs on [Bun](https://bun.sh) (≥ 1.3). It loads the provider package of the cloud you install on, so install
+both:
 
 ```bash
-bun add --global @fabrika/cli
+bun add --global @fabrika/cli @fabrika/provider-zerops
 ```
 
 On Zerops, the bring-up is three commands run from your machine, in this order:

@@ -31,7 +31,8 @@ to. Step 2 needs only step 1, so it may run before or after step 3.
 ## Prerequisites
 
 - **[Bun](https://bun.sh) ≥ 1.3.** The CLI is TypeScript and runs on Bun.
-- **The `fabrika` command.** `bun add --global @fabrika/cli`, then `fabrika --help`.
+- **The `fabrika` command.** `bun add --global @fabrika/cli @fabrika/provider-zerops`, then `fabrika --help`. The CLI
+  loads the provider package and does not install it.
 - **`git` and the [GitHub CLI](https://cli.github.com) (`gh`), signed in** with permission to create a
   repository and write Environment secrets in the organization that will own the sidecar. `init` and
   `upgrade` use the operator's own `gh` login and hold no GitHub credential themselves.

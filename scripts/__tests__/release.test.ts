@@ -273,6 +273,37 @@ describe.skipIf(!runPackWitness)('an application outside the repository on a loc
 			const rules = refused.stdout.split('\n').filter((line) => line !== '').map((line) => line.split(' ')[1])
 			// One refusal per package in each of dependencies and bun.lock, and one for overrides.
 			expect(rules).toEqual(Array.from({ length: manifest.packages.length * 2 + 1 }, () => 'package-replacement'))
+
+			// A Zerops application declares only what it imports and its dev tooling; the overrides stay whole.
+			const minimal = join(scratch, 'zerops-minimal')
+			await cp(join(application, LOCAL_TARBALL_DIRECTORY), join(minimal, LOCAL_TARBALL_DIRECTORY), { recursive: true })
+			const declared = [
+				'@fabrika/app',
+				'@fabrika/db',
+				'@fabrika/provider-zerops',
+				'@fabrika/proxy-core',
+				'@fabrika/cli',
+				'@fabrika/check',
+				'@fabrika/platform',
+			]
+			const dependencies = Object.fromEntries(Object.entries(block.dependencies).filter(([name]) => declared.includes(name)))
+			await writeFile(
+				join(minimal, 'package.json'),
+				`${JSON.stringify({ name: 'zerops-minimal', private: true, type: 'module', dependencies, overrides: block.overrides }, null, '\t')}\n`,
+			)
+			expect((await exec(['bun', 'install', '--ignore-scripts'], minimal)).code).toBe(0)
+			const installedNames = (await readdir(join(minimal, 'node_modules', '@fabrika'))).map((name) => `@fabrika/${name}`).sort()
+			for (
+				const absent of ['@fabrika/builder', '@fabrika/canvas-kernel', '@fabrika/annotations', '@fabrika/daemon-kit', '@fabrika/provider-cloudflare']
+			) {
+				expect(installedNames).not.toContain(absent)
+			}
+			console.info(`a Zerops application installs ${installedNames.length} @fabrika packages: ${installedNames.join(' ')}`)
+			const builder = await exec([join(minimal, 'node_modules', '.bin', 'fabrika'), 'builder', '--help'], minimal)
+			expect({ code: builder.code, stderr: builder.stderr.trim() }).toEqual({
+				code: 1,
+				stderr: 'fabrika: `fabrika builder` needs @fabrika/builder, which is not installed. Add it: bun add -d @fabrika/builder',
+			})
 		} finally {
 			await rm(scratch, { recursive: true, force: true })
 		}
