@@ -1,6 +1,30 @@
-/** A capability of the wrong kind, dimension or action, or one the framework did not mint for this request. */
+/**
+ * Why the layer refused a capability, as a closed catalog: a server log names the reason and its fixed text, never the
+ * message, which can name a table, a dimension or a value.
+ */
+export const CAPABILITY_ERRORS = {
+	wrong_capability: 'the operation takes another capability than it was given: another kind (a Ref, a Within or an app capability) or dimension',
+	wrong_action: 'the capability holds another action than the table names for the operation',
+	out_of_reach: "the table does not lie in the capability's dimension, or the capability does not reach it",
+	unenforceable: "the table carries no column for a dimension of the capability's chain, so the layer cannot enforce it",
+	undeclared_operation: "the table's policy declares no action for the operation, or handlers do not write the table",
+	table_kind: 'the operation needs another kind of table (a dimension, a child or an application table)',
+	within_size: 'a Within carries more scope values than one statement binds',
+	layer_unbound: 'the data layer was used before the framework connected it at boot, or connected a second time',
+} as const
+
+export type CapabilityErrorReason = keyof typeof CAPABILITY_ERRORS
+
+/** A capability of the wrong kind, dimension or action for the operation, or the layer used outside its binding. */
 export class CapabilityError extends Error {
 	override name = 'CapabilityError'
+	/** What a log may say; the message is for the author's own run. */
+	readonly reason: CapabilityErrorReason
+
+	constructor(reason: CapabilityErrorReason, message: string) {
+		super(message)
+		this.reason = reason
+	}
 }
 
 /**

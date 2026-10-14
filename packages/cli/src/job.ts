@@ -14,8 +14,9 @@ FABRIKA_APP_DATABASE_URL, FABRIKA_IAM_*, FABRIKA_CONTRACT_DIGEST, FABRIKA_PROXY_
 come from the environment only and leave the process before ${IMPLEMENTATION_FILE} loads; the run itself happens in a
 process started again with the runtime role's credential in place of FABRIKA_APP_DATABASE_URL. A run takes the job's lease
 or does not start. It exits 1 when the job failed, and 0 when it succeeded or a previous run still holds the lease.
-A failure is named by a fixed code (timeout, lease_lost, handler_failed, driver_failed, boot_failed), never by the
-application's error.
+A failure is named by a fixed code (timeout, lease_lost, handler_failed, query_refused, capability_refused,
+driver_failed, crashed, unauthorized, iam_unavailable, boot_failed), never by the application's error; a refusal adds
+its catalog reason (query_refused: undeclared_reach).
 `
 
 export interface JobCommandDependencies {
@@ -41,7 +42,7 @@ const summary = (name: string, result: JobRunResult): string => {
 		case 'succeeded':
 			return `job ${name} succeeded after ${plural(result.attempts)}`
 		case 'failed':
-			return `job ${name} failed after ${plural(result.attempts)}: ${result.code}`
+			return `job ${name} failed after ${plural(result.attempts)}: ${result.code}${result.reason === undefined ? '' : `: ${result.reason}`}`
 		case 'skipped':
 			return `job ${name} did not start: a previous run still holds its lease`
 	}

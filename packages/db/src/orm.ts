@@ -188,10 +188,11 @@ function namedRef(context: TableContext, capability: unknown, dimension: string)
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'ref' || grant.dimension !== dimension) {
-		throw new CapabilityError(`a read of ${table} here needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `a read of ${table} here needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	if (!namesAction(context.model, grant.action)) {
 		throw new CapabilityError(
+			'wrong_action',
 			`${table} does not name the action '${grant.action}': read it from an endpoint whose action ${table} names, or declare unscoped`,
 		)
 	}
@@ -234,7 +235,7 @@ function addTable(handle: Record<string, unknown>, table: string, rows: object):
 function scopeTarget(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown, form: TargetForm): object {
 	const grant = resolved(parts, capability)
 	if (grant.kind !== 'ref') {
-		throw new CapabilityError('ctx.db.target is built from a Ref; an over endpoint lists through ctx.db.within')
+		throw new CapabilityError('wrong_capability', 'ctx.db.target is built from a Ref; an over endpoint lists through ctx.db.within')
 	}
 	const dimension = grant.dimension
 	const owner = ownerOf(parts.models, dimension)
@@ -371,7 +372,7 @@ function ownerRow(context: TableContext, site: DataSite, run: Runner, capability
 function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown): object {
 	const grant = resolved(parts, capability)
 	if (grant.kind !== 'within') {
-		throw new CapabilityError('ctx.db.within is built from a Within; an on or in endpoint reaches its rows through ctx.db.target')
+		throw new CapabilityError('wrong_capability', 'ctx.db.within is built from a Within; an on or in endpoint reaches its rows through ctx.db.target')
 	}
 	const handle: Record<string, unknown> = {}
 	const tables = ownKeys(parts.models)
@@ -473,10 +474,13 @@ function namedApp(context: TableContext, capability: unknown): string {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
-		throw new CapabilityError(`a read of ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `a read of ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
 	if (!namesAction(context.model, grant.action)) {
-		throw new CapabilityError(`${table} does not name the action '${grant.action}': read it from an app endpoint whose action ${table} names`)
+		throw new CapabilityError(
+			'wrong_action',
+			`${table} does not name the action '${grant.action}': read it from an app endpoint whose action ${table} names`,
+		)
 	}
 	return grant.action
 }

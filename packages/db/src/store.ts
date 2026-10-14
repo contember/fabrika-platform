@@ -126,6 +126,7 @@ export function runtimeOf(connection: Connection): DataLayerRuntime {
 	const runtime = connection.runtime
 	if (runtime === undefined) {
 		throw new CapabilityError(
+			'layer_unbound',
 			'the data layer is not connected: the framework connects it at boot, so a store runs inside a handler, never while a module loads',
 		)
 	}
@@ -140,7 +141,7 @@ export interface DimensionScopeModel {
 
 export function dimensionScope(model: TableModel): DimensionScopeModel {
 	if (model.scope.mode !== 'dimension') {
-		throw new CapabilityError(`${model.name} is not a dimension table`)
+		throw new CapabilityError('table_kind', `${model.name} is not a dimension table`)
 	}
 	return model.scope
 }
@@ -148,7 +149,7 @@ export function dimensionScope(model: TableModel): DimensionScopeModel {
 export function childScope(context: TableContext): { readonly key: string; readonly column: string; readonly parent: DimensionScopeModel } {
 	const scope = context.model.scope
 	if (scope.mode !== 'child' || context.parent === undefined) {
-		throw new CapabilityError(`${context.model.name} is not a child table`)
+		throw new CapabilityError('table_kind', `${context.model.name} is not a child table`)
 	}
 	return { key: scope.key, column: scope.column, parent: dimensionScope(context.parent) }
 }
@@ -161,7 +162,7 @@ export function listDimension(scope: DimensionScopeModel): string {
 export function requiredAction(context: TableContext, operation: Operation): string {
 	const action = context.model.actions[operation]
 	if (action === undefined) {
-		throw new CapabilityError(`${context.model.name} allows no ${operation}; its policy declares no ${operation} action`)
+		throw new CapabilityError('undeclared_operation', `${context.model.name} allows no ${operation}; its policy declares no ${operation} action`)
 	}
 	return action
 }
@@ -169,17 +170,20 @@ export function requiredAction(context: TableContext, operation: Operation): str
 function checkGrant(context: TableContext, grant: RefGrant | WithinGrant, dimension: string, operation: Operation): void {
 	const action = requiredAction(context, operation)
 	if (grant.dimension !== dimension) {
-		throw new CapabilityError(`${operation} on ${context.model.name} needs a ${grant.kind} of ${dimension}, got a ${grant.kind} of ${grant.dimension}`)
+		throw new CapabilityError(
+			'wrong_capability',
+			`${operation} on ${context.model.name} needs a ${grant.kind} of ${dimension}, got a ${grant.kind} of ${grant.dimension}`,
+		)
 	}
 	if (grant.action !== action) {
-		throw new CapabilityError(`${operation} on ${context.model.name} requires ${action}; the capability holds ${grant.action}`)
+		throw new CapabilityError('wrong_action', `${operation} on ${context.model.name} requires ${action}; the capability holds ${grant.action}`)
 	}
 }
 
 function refGrant(context: TableContext, capability: unknown, dimension: string, operation: Operation): RefGrant {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind !== 'ref') {
-		throw new CapabilityError(`${operation} on ${context.model.name} needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `${operation} on ${context.model.name} needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	checkGrant(context, grant, dimension, operation)
 	return grant
@@ -188,7 +192,7 @@ function refGrant(context: TableContext, capability: unknown, dimension: string,
 function withinGrant(context: TableContext, capability: unknown, dimension: string, operation: Operation): WithinGrant {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind !== 'within') {
-		throw new CapabilityError(`${operation} on ${context.model.name} needs a Within of ${dimension}, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `${operation} on ${context.model.name} needs a Within of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	checkGrant(context, grant, dimension, operation)
 	return grant
@@ -239,6 +243,7 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 		}
 		if (link === undefined) {
 			throw new CapabilityError(
+				'unenforceable',
 				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
 			)
 		}
@@ -248,7 +253,7 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 		}
 	}
 	if (count > MAX_WITHIN_VALUES) {
-		throw new CapabilityError(`a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
+		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
 	}
 	return predicates.length === 0 ? undefined : anyOf(predicates)
 }
@@ -286,7 +291,7 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 		return parentPredicate(context, grant)
 	}
 	if (grant.kind === 'app') {
-		throw new CapabilityError(`a list of ${context.model.name} by its parent needs a Ref or a Within, got an app capability`)
+		throw new CapabilityError('wrong_capability', `a list of ${context.model.name} by its parent needs a Ref or a Within, got an app capability`)
 	}
 	checkGrant(context, grant, listDimension(scope.parent), operation)
 	return withinPredicate(context.model, scope.parent.container?.column ?? scope.column, grant)
@@ -317,15 +322,18 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'within') {
-		throw new CapabilityError(`a list of ${table} needs a Within, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `a list of ${table} needs a Within, got ${describeGrant(grant)}`)
 	}
 	const action = requiredAction(context, 'read')
 	if (grant.action !== action) {
-		throw new CapabilityError(`read on ${table} requires ${action}; the capability holds ${grant.action}`)
+		throw new CapabilityError('wrong_action', `read on ${table} requires ${action}; the capability holds ${grant.action}`)
 	}
 	const column = reachColumn(context.model, grant.dimension)
 	if (column === undefined) {
-		throw new CapabilityError(`a Within of ${grant.dimension} does not reach ${table}: its containment chain does not hold ${grant.dimension}`)
+		throw new CapabilityError(
+			'out_of_reach',
+			`a Within of ${grant.dimension} does not reach ${table}: its containment chain does not hold ${grant.dimension}`,
+		)
 	}
 	return withinPredicate(context.model, column, grant)
 }
@@ -338,17 +346,17 @@ function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'u
 	const model = context.model
 	const statement = `${use === 'update' ? 'UPDATE' : 'DELETE'} of ${model.name}`
 	if (grant.kind === 'app' && model.scope.mode !== 'app') {
-		throw new CapabilityError(`an app capability writes application tables only: ${statement} needs a Ref or a Within`)
+		throw new CapabilityError('table_kind', `an app capability writes application tables only: ${statement} needs a Ref or a Within`)
 	}
 	if (grant.kind !== 'app' && model.scope.mode === 'app') {
-		throw new CapabilityError(`a scoped site writes no application table: ${statement} needs the capability of an app endpoint`)
+		throw new CapabilityError('table_kind', `a scoped site writes no application table: ${statement} needs the capability of an app endpoint`)
 	}
 	const action = model.actions[use]
 	if (action === undefined) {
-		throw new CapabilityError(`${statement}: its policy declares no ${use} action`)
+		throw new CapabilityError('undeclared_operation', `${statement}: its policy declares no ${use} action`)
 	}
 	if (grant.action !== action) {
-		throw new CapabilityError(`${statement} needs its ${use} action ${action}; the capability holds ${grant.action}`)
+		throw new CapabilityError('wrong_action', `${statement} needs its ${use} action ${action}; the capability holds ${grant.action}`)
 	}
 }
 
@@ -385,19 +393,28 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 			if (links[index]?.dimension === grant.dimension) start = index
 		}
 		if (start === -1) {
-			throw new CapabilityError(`a Ref of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
+			throw new CapabilityError(
+				'out_of_reach',
+				`a Ref of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`,
+			)
 		}
 		if (use === 'read' && !namesAction(model, grant.action)) {
-			throw new CapabilityError(`${model.name} does not name the action ${grant.action}: a Ref reads it with an action it names`)
+			throw new CapabilityError('wrong_action', `${model.name} does not name the action ${grant.action}: a Ref reads it with an action it names`)
 		}
 		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
 	}
 	const column = reachColumn(model, grant.dimension)
 	if (column === undefined) {
-		throw new CapabilityError(`a Within of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
+		throw new CapabilityError(
+			'out_of_reach',
+			`a Within of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`,
+		)
 	}
 	if (use === 'read' && grant.action !== model.actions.read) {
-		throw new CapabilityError(`a Within of ${grant.action} does not read ${model.name}: it reads with its read action ${model.actions.read}`)
+		throw new CapabilityError(
+			'wrong_action',
+			`a Within of ${grant.action} does not read ${model.name}: it reads with its read action ${model.actions.read}`,
+		)
 	}
 	if (grant.values === 'all') {
 		return 'all'
@@ -412,6 +429,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		const link = above.find((candidate) => candidate.dimension === container.dimension)
 		if (link === undefined) {
 			throw new CapabilityError(
+				'unenforceable',
 				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
 			)
 		}
@@ -421,7 +439,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		}
 	}
 	if (count > MAX_WITHIN_VALUES) {
-		throw new CapabilityError(`a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
+		throw new CapabilityError('within_size', `a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
 	}
 	return groups
 }
@@ -434,21 +452,21 @@ export function updatingRef(context: TableContext, capability: unknown, dimensio
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'ref') {
-		throw new CapabilityError(`update on ${table} needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `update on ${table} needs a Ref of ${dimension}, got ${describeGrant(grant)}`)
 	}
 	if (grant.dimension !== dimension) {
-		throw new CapabilityError(`update on ${table} needs a ref of ${dimension}, got a ref of ${grant.dimension}`)
+		throw new CapabilityError('wrong_capability', `update on ${table} needs a ref of ${dimension}, got a ref of ${grant.dimension}`)
 	}
 	const actions = updateActions(context.model)
 	if (actions.length === 0) {
-		throw new CapabilityError(`${table} allows no update; its policy declares no update action`)
+		throw new CapabilityError('undeclared_operation', `${table} allows no update; its policy declares no update action`)
 	}
 	for (let index = 0; index < actions.length; index++) {
 		if (actions[index] === grant.action) {
 			return grant
 		}
 	}
-	throw new CapabilityError(`update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
+	throw new CapabilityError('wrong_action', `update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
 }
 
 /**
@@ -466,12 +484,14 @@ function checkRecordReach(context: TableContext, grant: AppGrant, reach: AppReac
 	}
 	if (includesName(appCount, grant.action)) {
 		throw new CapabilityError(
+			'wrong_action',
 			`an app capability of ${grant.action} only counts ${model.name} (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action ${read}${
 				appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
 			}`,
 		)
 	}
 	throw new CapabilityError(
+		'wrong_action',
 		`an app capability of ${grant.action} does not reach ${model.name}: ctx.db.app lists it for its read action ${read}${
 			appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
 		} only`,
@@ -497,12 +517,18 @@ function checkAppReach(context: TableContext, grant: AppGrant): void {
 	const mode = model.scope.mode
 	if (mode === 'app') {
 		if (!namesAction(model, grant.action)) {
-			throw new CapabilityError(`an app capability of ${grant.action} does not reach ${model.name}: ${model.name} does not name the action`)
+			throw new CapabilityError(
+				'wrong_action',
+				`an app capability of ${grant.action} does not reach ${model.name}: ${model.name} does not name the action`,
+			)
 		}
 		return
 	}
 	if (mode !== 'dimension' && mode !== 'child') {
-		throw new CapabilityError(`an app capability does not reach ${model.name}: ctx.db.app lists application, dimension and child tables only`)
+		throw new CapabilityError(
+			'table_kind',
+			`an app capability does not reach ${model.name}: ctx.db.app lists application, dimension and child tables only`,
+		)
 	}
 	checkRecordReach(context, grant, 'rows')
 }
@@ -515,10 +541,13 @@ export function appRecordPredicate(context: TableContext, capability: unknown, r
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
 	if (grant.kind !== 'app') {
-		throw new CapabilityError(`a read of ${model.name} through ctx.db.app needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+		throw new CapabilityError(
+			'wrong_capability',
+			`a read of ${model.name} through ctx.db.app needs the capability of an app endpoint, got ${describeGrant(grant)}`,
+		)
 	}
 	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
-		throw new CapabilityError(`${model.name} is not a dimension or child table`)
+		throw new CapabilityError('table_kind', `${model.name} is not a dimension or child table`)
 	}
 	checkRecordReach(context, grant, reach)
 	return everything()
@@ -527,7 +556,10 @@ export function appRecordPredicate(context: TableContext, capability: unknown, r
 /** An `app` capability addresses a row by its key, and writes, only in an application table. */
 function checkApplicationTable(context: TableContext, operation: Operation): void {
 	if (context.model.scope.mode !== 'app') {
-		throw new CapabilityError(`${operation} of a ${context.model.name} row needs a Ref: an app capability addresses and writes application tables only`)
+		throw new CapabilityError(
+			'table_kind',
+			`${operation} of a ${context.model.name} row needs a Ref: an app capability addresses and writes application tables only`,
+		)
 	}
 }
 
@@ -539,7 +571,7 @@ function appGrant(context: TableContext, capability: unknown, operation: Operati
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
-		throw new CapabilityError(`${operation} on ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `${operation} on ${table} here needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
 	if (operation !== 'read') {
 		checkApplicationTable(context, operation)
@@ -547,7 +579,7 @@ function appGrant(context: TableContext, capability: unknown, operation: Operati
 	checkAppReach(context, grant)
 	const action = requiredAction(context, operation)
 	if (grant.action !== action) {
-		throw new CapabilityError(`${operation} on ${table} requires ${action}; the capability holds ${grant.action}`)
+		throw new CapabilityError('wrong_action', `${operation} on ${table} requires ${action}; the capability holds ${grant.action}`)
 	}
 	return grant
 }
@@ -566,14 +598,17 @@ export function scopedApplicationRead(context: TableContext, capability: unknown
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
 	if (model.scope.mode !== 'app') {
-		throw new CapabilityError(`${model.name} is not an application table: a scoped site reads it through its own handles`)
+		throw new CapabilityError('table_kind', `${model.name} is not an application table: a scoped site reads it through its own handles`)
 	}
 	if (grant.kind === 'app') {
-		throw new CapabilityError(`a read of ${model.name} from a scoped site needs a Ref or a Within, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `a read of ${model.name} from a scoped site needs a Ref or a Within, got ${describeGrant(grant)}`)
 	}
 	const read = requiredAction(context, 'read')
 	if (grant.action !== read) {
-		throw new CapabilityError(`a scoped site reads ${model.name} with its read action ${read} only; the capability holds ${grant.action}`)
+		throw new CapabilityError(
+			'wrong_action',
+			`a scoped site reads ${model.name} with its read action ${read} only; the capability holds ${grant.action}`,
+		)
 	}
 	return everything()
 }
@@ -601,19 +636,19 @@ export function updatingApp(context: TableContext, capability: unknown): AppGran
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const table = context.model.name
 	if (grant.kind !== 'app') {
-		throw new CapabilityError(`update on ${table} needs the capability of an app endpoint, got ${describeGrant(grant)}`)
+		throw new CapabilityError('wrong_capability', `update on ${table} needs the capability of an app endpoint, got ${describeGrant(grant)}`)
 	}
 	checkApplicationTable(context, 'update')
 	const actions = updateActions(context.model)
 	if (actions.length === 0) {
-		throw new CapabilityError(`${table} allows no update; its policy declares no update action`)
+		throw new CapabilityError('undeclared_operation', `${table} allows no update; its policy declares no update action`)
 	}
 	for (let index = 0; index < actions.length; index++) {
 		if (actions[index] === grant.action) {
 			return grant
 		}
 	}
-	throw new CapabilityError(`update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
+	throw new CapabilityError('wrong_action', `update on ${table} requires ${actions.join(' or ')}; the capability holds ${grant.action}`)
 }
 
 export function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
@@ -751,7 +786,7 @@ async function selectRows<S>(
 	for (let index = 0; index < state.joins.length; index++) {
 		const join = state.joins[index]
 		if (join !== undefined && join.join.readAction !== action) {
-			throw new CapabilityError(`joining ${join.join.shape.table} requires ${join.join.readAction}; the capability holds ${action}`)
+			throw new CapabilityError('wrong_action', `joining ${join.join.shape.table} requires ${join.join.readAction}; the capability holds ${action}`)
 		}
 	}
 	if (scope === undefined) {
@@ -815,7 +850,7 @@ function checkVersion(context: TableContext, row: unknown): void {
 
 export function keyOf(model: TableModel): string {
 	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child' && model.scope.mode !== 'app') {
-		throw new CapabilityError(`${model.name} is not written by handlers`)
+		throw new CapabilityError('undeclared_operation', `${model.name} is not written by handlers`)
 	}
 	return model.scope.key
 }
@@ -1152,7 +1187,7 @@ export class DimensionTable<DB, P, T extends string> {
 		const context = this.#context
 		const container = dimensionScope(context.model).container
 		if (container === undefined) {
-			throw new CapabilityError(`${context.model.name} has no container to move between`)
+			throw new CapabilityError('table_kind', `${context.model.name} has no container to move between`)
 		}
 		const scope = objectPredicate(context, ref, 'delete')
 		const target = refGrant(context, to, container.dimension, 'insert')
@@ -1481,7 +1516,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		},
 		bind(runtime: DataLayerRuntime): Locator {
 			if (connection.runtime !== undefined) {
-				throw new CapabilityError('the data layer is already connected; only the framework connects it, once, at boot')
+				throw new CapabilityError('layer_unbound', 'the data layer is already connected; only the framework connects it, once, at boot')
 			}
 			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities, readOnly: runtime.readOnly })
 			connection.runtime = bound

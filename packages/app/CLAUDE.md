@@ -512,7 +512,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   `capability_refused`, `query_refused`, `handler_status` (a thrown 5xx status) or `handler_failed`, chosen by
   `instanceof` against the framework's own classes, never by `name`. The server log gets one line,
   `fabrika: <endpoint>: <code>`, plus a framework failure's `reason` and its fixed catalog text (`SERVER_FAULTS`,
-  `CAPABILITY_REFUSALS`, `@fabrika/db`'s `QUERY_REFUSALS`); never a message, which can quote request data, and nothing
+  `CAPABILITY_REFUSALS`, `@fabrika/db`'s `QUERY_REFUSALS` and `CAPABILITY_ERRORS`, whose `CapabilityError` is
+  `capability_refused` too); never a message, which can quote request data, and nothing
   of any other error, its name included. Each of those classes takes its reason first: a new failure picks one. Every other runtime
   log line follows the same rule: a failed webhook delivery logs `delivery_failed`, a file cleanup or sweep the step that
   failed (`object_delete_failed` …), a job its failure code; none interpolates an error, its name or message, or a
@@ -873,9 +874,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   `scoped(tables)` (the lease and the fence live in the application's schema), a schedule `schedule.ts` cannot read,
   a missing handler and a `handlers.jobs` entry the contract does not declare. An Operations DSN that is not an
   ingest DSN stops every boot, jobs or not: no failure would reach anyone.
-- **A failure is a fixed code**: `timeout`, `lease_lost`, `handler_failed`, `driver_failed`, `crashed` in the run's
-  result, its log lines and its report, and `boot_failed` in the CLI. The code is chosen by `instanceof` against the
-  framework's own classes (`LeaseLostError` of `@fabrika/db/framework`), never by `name`. An application error's
+- **A failure is a fixed code**: `timeout`, `lease_lost`, `handler_failed`, `query_refused`, `capability_refused`,
+  `driver_failed`, `crashed`, `unauthorized`, `iam_unavailable` in the run's result, its log lines and its report, and
+  `boot_failed` in the CLI. The code is chosen by `instanceof` against the framework's own classes (`LeaseLostError`,
+  then `failureCode`, so a refusal is named as a request names it), never by `name`. A refusal also carries its catalog
+  `reason`: in the result, in each log line with its fixed text, and as the report's `reason` tag. An application error's
   name and message are never logged, returned or reported: either may carry a secret.
 - **Reports go through the ingest every application has** (`FABRIKA_OPERATIONS_DSN`): a run that failed after its
   retries, or crashed (its lease expired before it finished, found by the next run or the check), is one `JobFailed`

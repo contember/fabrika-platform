@@ -11,6 +11,7 @@ import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
+import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase } from '../implement/implement'
 import {
@@ -53,6 +54,10 @@ export type JobFailureCode =
 	| 'timeout'
 	| 'lease_lost'
 	| 'handler_failed'
+	/** The data layer refused a statement or an operation tree (`QueryRefusedError`): its reason names why. */
+	| 'query_refused'
+	/** A capability or a handle was refused: forged, ended, of other work, or of another kind than the call takes. */
+	| 'capability_refused'
 	| 'driver_failed'
 	| 'crashed'
 	/** IAM refused the job's key: the attempt mints no capability. */
@@ -62,7 +67,8 @@ export type JobFailureCode =
 
 export type JobRunResult =
 	| { readonly status: 'succeeded'; readonly attempts: number }
-	| { readonly status: 'failed'; readonly attempts: number; readonly code: JobFailureCode }
+	/** `reason` is a framework refusal's catalog key (`query_refused`, `capability_refused`), present only for one. */
+	| { readonly status: 'failed'; readonly attempts: number; readonly code: JobFailureCode; readonly reason?: string }
 	/** Another run holds the lease: an overlapping run does not start. */
 	| { readonly status: 'skipped' }
 
@@ -441,7 +447,7 @@ async function runOnce(job: BoundJob, context: RunnerContext, clock: JobClock, a
 		return await runLeased(job, context, clock, progress, acquisition)
 	} catch {
 		// Only the lease store throws here: the handler's errors stay inside its attempt. Its message may quote the URL.
-		return failed(job, progress.attempts, 'driver_failed', context.reporter)
+		return failed(job, progress.attempts, failure('driver_failed'), context.reporter)
 	}
 }
 
@@ -469,35 +475,51 @@ async function runLeased(
 	await pendingTaken(job, context)
 	const attempts = job.artifact.retries + 1
 	progress.attempts = 1
-	let code = await attemptOnce(job, fence, progress.attempts, clock, context)
-	while (code !== null && progress.attempts < attempts) {
-		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${code}`)
+	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context)
+	while (outcome !== null && progress.attempts < attempts) {
+		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}`)
 		const delay = backoffMs(progress.attempts, clock.random())
 		// A new generation at once: nothing the failed attempt still has in flight commits from here on.
 		const next = await leases.renew(fence, attemptId(), delay + job.timeoutMs, delay + leaseMs)
 		if (next === null) {
-			return failed(job, progress.attempts, 'lease_lost', context.reporter)
+			return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
 		}
 		fence = next
 		await clock.wait(delay, new AbortController().signal)
 		progress.attempts++
-		code = await attemptOnce(job, fence, progress.attempts, clock, context)
+		outcome = await attemptOnce(job, fence, progress.attempts, clock, context)
 	}
-	if (code === null) {
+	if (outcome === null) {
 		if (await leases.finish(fence, 'succeeded')) {
 			return { status: 'succeeded', attempts: progress.attempts }
 		}
-		return failed(job, progress.attempts, 'lease_lost', context.reporter)
+		return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
 	}
 	await leases.finish(fence, 'failed')
-	return failed(job, progress.attempts, code, context.reporter)
+	return failed(job, progress.attempts, outcome, context.reporter)
 }
 
-async function failed(job: { readonly name: string }, attempts: number, code: JobFailureCode, reporter: OperationsReporter): Promise<JobRunResult> {
+/** Why an attempt or a run failed: its code and, for a framework refusal, its reason and the reason's catalog text. */
+interface JobFailure {
+	readonly code: JobFailureCode
+	readonly why: FailureReason | null
+}
+
+const failure = (code: JobFailureCode): JobFailure => ({ code, why: null })
+
+/** The code, then a refusal's reason and its fixed text: the same words a request's log line uses. */
+const describeFailure = ({ code, why }: JobFailure): string => (why === null ? code : `${code}: ${why.reason}: ${why.text}`)
+
+async function failed(job: { readonly name: string }, attempts: number, outcome: JobFailure, reporter: OperationsReporter): Promise<JobRunResult> {
+	const { code, why } = outcome
 	const message = `job '${job.name}' failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${code}`
-	console.error(`fabrika: ${message}`)
-	await reporter.report({ fingerprint: ['fabrika-job-failed', job.name], type: 'JobFailed', message, tags: { job: job.name, code } })
-	return { status: 'failed', attempts, code }
+	console.error(`fabrika: job '${job.name}' failed after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${describeFailure(outcome)}`)
+	const tags: Record<string, string> = { job: job.name, code }
+	if (why !== null) {
+		tags['reason'] = why.reason
+	}
+	await reporter.report({ fingerprint: ['fabrika-job-failed', job.name], type: 'JobFailed', message, tags })
+	return why === null ? { status: 'failed', attempts, code } : { status: 'failed', attempts, code, reason: why.reason }
 }
 
 const TIMED_OUT: unique symbol = Symbol('fabrika.job.timedOut')
@@ -511,7 +533,7 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 		await surveil(bound, context)
 		fence = await leases.acquire(bound.name, attemptId(), bound.job.timeoutMs, bound.job.timeoutMs + LEASE_GRACE_MS)
 	} catch {
-		return failed(bound, 0, 'driver_failed', context.reporter)
+		return failed(bound, 0, failure('driver_failed'), context.reporter)
 	}
 	if (fence === null) {
 		console.error(`fabrika: a previous run of job '${bound.name}' still holds its lease; this run does not start`)
@@ -520,12 +542,12 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
 	const timer = new AbortController()
-	let code: JobFailureCode | null
+	let outcome: JobFailure | null
 	try {
 		const ran = runInRequest(frame, () => bound.job.run(context.reporter, cancel.signal)).then(() => null, failureOf)
 		const timeout = clock.wait(bound.job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
 		const result = await Promise.race([ran, timeout])
-		code = result === TIMED_OUT ? 'timeout' : result
+		outcome = result === TIMED_OUT ? failure('timeout') : result
 	} finally {
 		frame.end()
 		timer.abort()
@@ -537,14 +559,14 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 		} finally {
 			cancel.abort()
 		}
-		const finished = await leases.finish(fence, code === null ? 'succeeded' : 'failed')
-		if (code === null) {
-			return finished ? { status: 'succeeded', attempts: 1 } : failed(bound, 1, 'lease_lost', context.reporter)
+		const finished = await leases.finish(fence, outcome === null ? 'succeeded' : 'failed')
+		if (outcome === null) {
+			return finished ? { status: 'succeeded', attempts: 1 } : failed(bound, 1, failure('lease_lost'), context.reporter)
 		}
 	} catch {
-		return failed(bound, 1, 'driver_failed', context.reporter)
+		return failed(bound, 1, failure('driver_failed'), context.reporter)
 	}
-	return failed(bound, 1, code, context.reporter)
+	return failed(bound, 1, outcome, context.reporter)
 }
 
 /**
@@ -557,11 +579,11 @@ async function attemptOnce(
 	attempt: number,
 	clock: JobClock,
 	context: RunnerContext,
-): Promise<JobFailureCode | null> {
+): Promise<JobFailure | null> {
 	// The job's authority is what IAM signs for its key at the start of the attempt; a revoked key stops the next one.
 	const authority = await job.credential.authority()
 	if (!authority.ok) {
-		return authority.reason === 'unavailable' ? 'iam_unavailable' : 'unauthorized'
+		return failure(authority.reason === 'unavailable' ? 'iam_unavailable' : 'unauthorized')
 	}
 	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
@@ -573,7 +595,7 @@ async function attemptOnce(
 		}).then(() => null, failureOf)
 		const timeout = clock.wait(job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
 		const result = await Promise.race([ran, timeout])
-		return result === TIMED_OUT ? 'timeout' : result
+		return result === TIMED_OUT ? failure('timeout') : result
 	} finally {
 		frame.end()
 		cancel.abort()
@@ -582,9 +604,16 @@ async function attemptOnce(
 	}
 }
 
-/** By class, never by name: an application error can call itself anything. */
-function failureOf(error: unknown): JobFailureCode {
-	return error instanceof LeaseLostError ? 'lease_lost' : 'handler_failed'
+/**
+ * By class, never by name: an application error can call itself anything. A refusal is classified as a request's is
+ * (`failureCode`), so both name it alike; every other thrown value is `handler_failed`.
+ */
+function failureOf(error: unknown): JobFailure {
+	if (error instanceof LeaseLostError) {
+		return failure('lease_lost')
+	}
+	const code = failureCode(error)
+	return code === 'query_refused' || code === 'capability_refused' ? { code, why: failureReason(error) } : failure('handler_failed')
 }
 
 function jobContext(

@@ -2,7 +2,7 @@
 // and bounded identifiers only, never an error's name or message: application code, drivers and even the framework's
 // own refusals can put request data there. A framework failure adds its reason and the reason's catalog text.
 
-import { QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
+import { CAPABILITY_ERRORS, CapabilityError, QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { isStructuralError } from '../errors'
 import type { OperationsReporter } from '../jobs/report'
 import { CAPABILITY_REFUSALS, CapabilityRefusedError } from './capability'
@@ -28,7 +28,7 @@ export function failureCode(error: unknown): RequestFailureCode {
 	if (error instanceof ServerFault) {
 		return error.status === 503 ? 'unavailable' : 'framework_fault'
 	}
-	if (error instanceof CapabilityRefusedError) {
+	if (error instanceof CapabilityRefusedError || error instanceof CapabilityError) {
 		return 'capability_refused'
 	}
 	if (error instanceof QueryRefusedError) {
@@ -37,13 +37,22 @@ export function failureCode(error: unknown): RequestFailureCode {
 	return isStructuralError(error) ? 'handler_status' : 'handler_failed'
 }
 
+/** What a log may say of a framework failure: the reason its catalog keys it by, and that reason's fixed text. */
+export interface FailureReason {
+	readonly reason: string
+	readonly text: string
+}
+
 /** A framework failure's reason and the fixed text its catalog gives it; `null` for any other thrown value. */
-export function failureReason(error: unknown): { readonly reason: string; readonly text: string } | null {
+export function failureReason(error: unknown): FailureReason | null {
 	if (error instanceof ServerFault) {
 		return { reason: error.reason, text: SERVER_FAULTS[error.reason] }
 	}
 	if (error instanceof CapabilityRefusedError) {
 		return { reason: error.reason, text: CAPABILITY_REFUSALS[error.reason] }
+	}
+	if (error instanceof CapabilityError) {
+		return { reason: error.reason, text: CAPABILITY_ERRORS[error.reason] }
 	}
 	if (error instanceof QueryRefusedError) {
 		return { reason: error.reason, text: QUERY_REFUSALS[error.reason] }

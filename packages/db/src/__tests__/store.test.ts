@@ -55,6 +55,17 @@ describe('every statement carries its scope predicate', () => {
 		}
 	})
 
+	test('a refused capability carries a reason of the closed catalog, which a log names instead of the message', async () => {
+		const layer = recordingLayer()
+		const reasonOf = (outcome: Outcome) => (outcome.error instanceof CapabilityError ? outcome.error.reason : null)
+		const deeper = layer.capabilities.ref('note', 'notes.read', 'n1', { workspace: 'w1', organization: 'o1', region: 'eu' })
+		expect(reasonOf(await layer.attempt(() => layer.stores.notes.get(deeper)))).toBe('unenforceable')
+		expect(reasonOf(await layer.attempt(() => call(layer.raw.notes, 'get', layer.workspaceRef('notes.read'))))).toBe('wrong_capability')
+		const values = Array.from({ length: MAX_WITHIN_VALUES + 1 }, (_, index) => `w${index}`)
+		const overCap = layer.capabilities.within('workspace', 'notes.read', values, [])
+		expect(reasonOf(await layer.attempt(() => layer.stores.notes.all(overCap)))).toBe('within_size')
+	})
+
 	test('a chain entry the table carries no column for is refused, not ignored', async () => {
 		const layer = recordingLayer()
 		const deeper = layer.capabilities.ref('note', 'notes.read', 'n1', { workspace: 'w1', organization: 'o1', region: 'eu' })

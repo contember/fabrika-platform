@@ -43,6 +43,10 @@ describe('fabrika job run', () => {
 		expect(await runJobCommand('run', ['purge'], failed.dependencies)).toBe(1)
 		expect(failed.output).toEqual(['job purge failed after 1 attempt: timeout\n'])
 
+		const refused = deps({ status: 'failed', attempts: 1, code: 'query_refused', reason: 'undeclared_reach' })
+		expect(await runJobCommand('run', ['purge'], refused.dependencies)).toBe(1)
+		expect(refused.output).toEqual(['job purge failed after 1 attempt: query_refused: undeclared_reach\n'])
+
 		const skipped = deps({ status: 'skipped' })
 		expect(await runJobCommand('run', ['purge'], skipped.dependencies)).toBe(0)
 		expect(skipped.output).toEqual(['job purge did not start: a previous run still holds its lease\n'])

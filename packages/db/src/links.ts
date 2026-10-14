@@ -11,7 +11,7 @@ import type { Container } from './policy'
 function chainValue(grant: RefGrant, chain: Readonly<Record<string, string>>, dimension: string): string {
 	const value = ownEntry(chain, dimension)
 	if (value === undefined) {
-		throw new CapabilityError(`the Ref of ${grant.dimension} carries no ${dimension} in its chain`)
+		throw new CapabilityError('out_of_reach', `the Ref of ${grant.dimension} carries no ${dimension} in its chain`)
 	}
 	return value
 }
@@ -28,7 +28,7 @@ export interface LinkValue {
 export function linkValues(table: string, links: readonly Container[], grant: RefGrant): readonly LinkValue[] {
 	const first = links[0]
 	if (first === undefined) {
-		throw new CapabilityError(`${table} has no containment link for a Ref of ${grant.dimension}`)
+		throw new CapabilityError('out_of_reach', `${table} has no containment link for a Ref of ${grant.dimension}`)
 	}
 	const chain = recordOf(grant.chain)
 	const covered: string[] = []
@@ -40,7 +40,10 @@ export function linkValues(table: string, links: readonly Container[], grant: Re
 	for (let index = 0; index < dimensions.length; index++) {
 		const dimension = dimensions[index] ?? ''
 		if (!inSet(coveredSet, dimension)) {
-			throw new CapabilityError(`the Ref of ${grant.dimension} lies in ${dimension}, which ${table} carries no column for; the layer cannot enforce it`)
+			throw new CapabilityError(
+				'unenforceable',
+				`the Ref of ${grant.dimension} lies in ${dimension}, which ${table} carries no column for; the layer cannot enforce it`,
+			)
 		}
 	}
 	const values: LinkValue[] = [{ link: first, value: grant.id }]

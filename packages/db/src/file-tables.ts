@@ -272,6 +272,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		const grant = runtime().capabilities.resolve(capability)
 		if (grant.kind !== 'ref' || grant.dimension !== dimension || grant.action !== action) {
 			throw new CapabilityError(
+				'wrong_capability',
 				`files '${spec.name}' needs a Ref of ${dimension} for ${action}, got ${describeGrant(grant)} for ${grant.action}`,
 			)
 		}

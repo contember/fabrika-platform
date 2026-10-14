@@ -93,7 +93,16 @@ handler decides what to answer. Any thrown value with a numeric `httpStatus` bel
 with its message; throw the three business errors for the application's own refusals.
 
 A 500 answers a fixed message; the server log has one line, `fabrika: <endpoint>: <code>: <reason>: <text>`, with a
-fixed failure code and, for a framework refusal, its reason and the reason's fixed text (`sql_read_only`,
-`undeclared_reach`, `unknown_column` …), never a value or your error's message. With an Operations DSN the same 500
-is a `RequestFailed` issue in Operations. A `DatabaseError` carries
+fixed failure code and, for a framework refusal, its reason and the reason's fixed text, never a value or your error's
+message. The codes you meet most:
+
+| Code                 | Means                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction` …; the reason's text names the rule |
+| `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)    |
+| `handler_failed`     | your handler threw something else; the log has no more, so test the handler                                                                                                           |
+
+With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. A job attempt names its failure with the
+same codes and reasons: `fabrika job run` prints `job <name> failed after 1 attempt: query_refused: undeclared_reach`,
+its log line adds the text, and `kit.runJob` answers `{ status: 'failed', code, reason }`. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.

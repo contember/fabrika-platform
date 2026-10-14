@@ -161,7 +161,7 @@ describe.skipIf(!hasPostgres)('a column write action', () => {
 		await expect(mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', { assignee: 'x' }, { expectVersion: 1 })))
 			.rejects.toThrow('assignee is not an update column of tasks (update columns: title, status, due_on, closed_at, overdue)')
 		await expect(mutate((handles) => call(handles.target(task('tasks.read', id), 'on'), 'update', { title: 'x' }, { expectVersion: 1 })))
-			.rejects.toThrow(new CapabilityError('update on tasks requires tasks.write or tasks.assign; the capability holds tasks.read'))
+			.rejects.toThrow(new CapabilityError('wrong_action', 'update on tasks requires tasks.write or tasks.assign; the capability holds tasks.read'))
 		expect(await row('tasks', id)).toMatchObject({ assignee: null, title: 'task', version: 1 })
 	})
 

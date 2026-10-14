@@ -241,9 +241,9 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 		const narrowed = workloadTokensFor(app, (workload) => workload.actions.filter((action) => action !== 'notes.delete'))
 		const { reports, reporter } = recorder()
 		const result = await quietly(() => bootApp(app, { database, workloadTokens: narrowed }).jobs.run('sweep', { reporter }))
-		expect(result).toEqual({ status: 'failed', attempts: 1, code: 'handler_failed' })
+		expect(result).toEqual({ status: 'failed', attempts: 1, code: 'capability_refused', reason: 'undeclared_action' })
 		expect(await noteExists(expired)).toBe(true)
-		expect(kinds(reports)).toEqual([['JobFailed', 'handler_failed']])
+		expect(kinds(reports)).toEqual([['JobFailed', 'capability_refused']])
 	})
 
 	test('a key IAM refuses fails the run as unauthorized, and an IAM it cannot reach as iam_unavailable; no handler runs', async () => {
@@ -385,19 +385,20 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 		expect(await leaseOf('flaky')).toMatchObject({ generation: 2, last_status: 'succeeded' })
 	})
 
-	test('a job asking for an action it does not declare fails as handler_failed', async () => {
+	test('a job asking for an action it does not declare fails as capability_refused, naming the reason', async () => {
 		const { clock } = testClock()
+		const { reports, reporter } = recorder()
 		const app = boot({
 			...passing,
 			flaky: async (ctx) => {
 				Reflect.apply(ctx.within, ctx, ['notes.delete', 'note'])
 			},
 		})
-		expect(await quietly(() => app.jobs.run('flaky', { clock, reporter: recorder().reporter }))).toEqual({
-			status: 'failed',
-			attempts: 2,
-			code: 'handler_failed',
-		})
+		const { result, lines } = await logged(() => app.jobs.run('flaky', { clock, reporter }))
+		expect(result).toEqual({ status: 'failed', attempts: 2, code: 'capability_refused', reason: 'undeclared_action' })
+		const why = "capability_refused: undeclared_action: the job's declaration or its token does not carry the action"
+		expect(lines).toEqual([`fabrika: job 'flaky' attempt 1 of 2 failed: ${why}`, `fabrika: job 'flaky' failed after 2 attempts: ${why}`])
+		expect(kinds(reports)).toEqual([['JobFailed', 'capability_refused']])
 	})
 
 	test('an application error dressed as a framework error reaches no log, result or report', async () => {

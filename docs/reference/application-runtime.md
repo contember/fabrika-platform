@@ -825,9 +825,11 @@ process first — and runs one job:
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
    times with jittered exponential backoff, under a new generation each time.
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
-   `driver_failed`, `crashed`, `unauthorized` (IAM refused the job's key),
-   `iam_unavailable` (IAM could not be asked for its token), and `boot_failed` from the
-   CLI. An application error's name and message are never logged or reported.
+   `query_refused` and `capability_refused` (a framework refusal, chosen by class as a
+   request's 5xx is, with the refusal's catalog reason in the result, the log line and the
+   report's `reason` tag), `driver_failed`, `crashed`, `unauthorized` (IAM refused the
+   job's key), `iam_unavailable` (IAM could not be asked for its token), and `boot_failed`
+   from the CLI. An application error's name and message are never logged or reported.
 5. A run that failed after its retries, and a run that crashed (its lease expired
    before it finished), is a `JobFailed` error event in Operations. A job that has not
    succeeded within twice its period is `JobMissed`, at most once per period. The
@@ -1401,7 +1403,10 @@ proves the round trip against it on the local stack.
 A request that answers 5xx is one error event too (`RequestFailed`, logger
 `fabrika.requests`): the endpoint id, the proxy's request id, a fixed failure code and the
 release, at most `MAX_FAILURE_REPORTS_PER_MINUTE` (30) per process and minute. It never
-carries the input, a header, row data, or the error's name or message.
+carries the input, a header, row data, or the error's name or message. A framework refusal adds
+its reason from a closed catalog — `@fabrika/db`'s `QUERY_REFUSALS` and `CAPABILITY_ERRORS`,
+the runtime's `CAPABILITY_REFUSALS` and `SERVER_FAULTS` — and the log line adds that reason's
+fixed text.
 
 The tested compatibility profile is deliberately narrow. Fabrika accepts the
 SDK's envelope authentication query and an `event` item for a captured browser

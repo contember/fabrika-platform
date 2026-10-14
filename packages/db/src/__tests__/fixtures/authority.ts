@@ -92,7 +92,7 @@ export class TestAuthority implements CapabilityAuthority {
 	resolve(capability: unknown): CapabilityGrant {
 		const grant = TestRef.read(capability, this) ?? TestWithin.read(capability, this) ?? TestApp.read(capability, this)
 		if (grant === undefined) {
-			throw new CapabilityError('not a capability of this request')
+			throw new CapabilityError('wrong_capability', 'not a capability of this request')
 		}
 		return grant
 	}

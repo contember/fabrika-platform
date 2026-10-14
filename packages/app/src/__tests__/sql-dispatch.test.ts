@@ -39,6 +39,8 @@ interface Hooks {
 	renameThrows: boolean
 	whileKept: () => Promise<void>
 	kept: SqlCall | undefined
+	/** A table `deals.columns` scopes its `Ref` on before it reads, as a handler whose types were defeated would. */
+	scopeOf: string | null
 	/** What each site's `ctx` (and a job's `tx`) held as `sql`, by site name. */
 	readonly sql: Record<string, SqlMember>
 }
@@ -125,6 +127,10 @@ function sqlApp(hooks: Hooks): ContractImplementation<typeof contract> {
 		api: {
 			deals: {
 				columns: siteHandler(async ({ input, ctx }) => {
+					if (hooks.scopeOf !== null) {
+						const sql = field(ctx, 'sql')
+						Reflect.apply(Reflect.get(Object(sql), 'scope'), sql, [field(ctx, 'target'), hooks.scopeOf])
+					}
 					const rows = await sqlOf(ctx, Title)`select d.title from deals d join companies c on c.id = d.company_id where d.id = ${targetId(ctx)}`
 					return { columns: rows.map((row) => String(field(row, 'title'))) }
 				}, { sql: 'read' }),
@@ -175,7 +181,7 @@ function sqlApp(hooks: Hooks): ContractImplementation<typeof contract> {
 }
 
 function hooksOf(): Hooks {
-	return { renameThrows: false, whileKept: () => Promise.resolve(), kept: undefined, sql: {} }
+	return { renameThrows: false, whileKept: () => Promise.resolve(), kept: undefined, scopeOf: null, sql: {} }
 }
 
 function start(hooks: Hooks = hooksOf()): { app: ContractApp; hooks: Hooks } {
@@ -279,6 +285,16 @@ describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
 		hooks.renameThrows = false
 		expect(resultOf(await rename('kept', 1))).toEqual({ id, version: 2 })
 		expect(await deal(id)).toEqual({ title: 'kept', stage: 'won', version: 2 })
+	})
+
+	test('a scope on a table the capability does not reach fails as capability_refused, with the reason and its fixed text', async () => {
+		const { app, hooks } = start()
+		const id = await seedDeal()
+		hooks.scopeOf = 'companies'
+		const log = await failed(async () => send(app, '/api/deals.columns', { token: await reader(), body: { id } }))
+		expect(log).toBe(
+			"fabrika: api.deals.columns: capability_refused: out_of_reach: the table does not lie in the capability's dimension, or the capability does not reach it",
+		)
 	})
 
 	test("a 'read' site's write is refused, and nothing is written", async () => {
