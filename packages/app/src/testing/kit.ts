@@ -55,6 +55,9 @@ export const TEST_ENVIRONMENT = 'test'
 const KEY_ID = 'test-key'
 const TOKEN_TTL_SECONDS = 300
 
+/** Why the kit's IAM signs no token for a caller, as IAM answers the proxy. */
+type MintRefusal = { readonly ok: false; readonly reason: 'disabled' | 'token_too_large' }
+
 export interface TestKitOptions {
 	/** The application's own variables, as `deps` receives them. */
 	readonly env?: ApplicationEnvironment
@@ -283,9 +286,14 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 				}
 			}
 		}
+		const disabled = callerOptions.disabled ?? false
+		if (disabled && kind === 'link') {
+			throw new Error('a link holder is no principal, so no operator disables it: disable a person, a script or a connector')
+		}
 		const credentials = {
 			id: callerOptions.id ?? `${kind}-${issued}`,
 			affiliation,
+			disabled,
 			perms: Object.freeze(resolveGrants(app.contract, grants)),
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,
@@ -316,8 +324,9 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 
 	const scope = <D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D> => Object.freeze({ type: dimension, value })
 
-	/** The caller's token, or `null` above `MAX_ACCESS_TOKEN_BYTES`, which IAM refuses to sign. */
-	async function mint(caller: TestCaller): Promise<{ readonly token: string; readonly expiresAt: number } | null> {
+	/** The caller's token, or why IAM signs none: a disabled principal, or a token above `MAX_ACCESS_TOKEN_BYTES`. */
+	async function mint(caller: TestCaller): Promise<{ readonly ok: true; readonly token: string; readonly expiresAt: number } | MintRefusal> {
+		if (caller.disabled) return { ok: false, reason: 'disabled' }
 		const now = Math.floor(Date.now() / 1000)
 		const claims = buildAccessClaims({
 			iss: TEST_ISSUER,
@@ -333,9 +342,9 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		})
 		const { privateKey } = await signing
 		const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
-		if (token.length > MAX_ACCESS_TOKEN_BYTES) return null
+		if (token.length > MAX_ACCESS_TOKEN_BYTES) return { ok: false, reason: 'token_too_large' }
 		byToken.set(token, { caller, expiresAt: claims.exp })
-		return { token, expiresAt: claims.exp }
+		return { ok: true, token, expiresAt: claims.exp }
 	}
 
 	const iam: IamGateway = {
@@ -344,16 +353,14 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 			if (caller === undefined) {
 				return { ok: false, reason: session === null ? 'no_session' : 'invalid_session' }
 			}
-			const minted = await mint(caller)
-			return minted === null ? { ok: false, reason: 'token_too_large' } : { ok: true, ...minted }
+			return mint(caller)
 		},
 		async mintFromKey({ app: audience, key }) {
 			const caller = audience === appId ? byKey.get(key) : undefined
 			if (caller === undefined) {
 				return { ok: false, reason: 'invalid_key' }
 			}
-			const minted = await mint(caller)
-			return minted === null ? { ok: false, reason: 'token_too_large' } : { ok: true, ...minted }
+			return mint(caller)
 		},
 		// The kit issues sessions directly, so no handoff code exists to redeem.
 		exchangeAuthCode: () => Promise.resolve({ ok: false, reason: 'invalid_code' }),

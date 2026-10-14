@@ -114,7 +114,7 @@ if (postgres !== null) {
 			expect((await outsiderApi.tasks.list({})).items).toEqual([])
 		})
 
-		test('a task is assigned to a member of the org, under the directory’s label; an outsider or a forged label is refused', async () => {
+		test('a task is assigned to a member of the org, under the directory’s label; an outsider, a disabled member or a forged label is refused', async () => {
 			const dealId = await newDeal(await newCompany('Delegate'), 'Hand over')
 			const { id } = await salesApi.tasks.create({ dealId, title: 'Approve', dueOn: '2026-11-04', assignee: managerCaller.id })
 			expect((await viewerApi.tasks.list({})).items.find((item) => item.id === id)).toMatchObject({
@@ -123,6 +123,8 @@ if (postgres !== null) {
 			})
 			expect(await statusOf(salesApi.tasks.create({ dealId, title: 'No', dueOn: '2026-11-04', assignee: outsider.id }))).toBe(400)
 			expect(await statusOf(salesApi.tasks.create({ dealId, title: 'No', dueOn: '2026-11-04', assignee: 'user:nobody' }))).toBe(400)
+			const disabled = kit.testCaller([{ role: 'sales', scope: acme }], { disabled: true })
+			expect(await statusOf(salesApi.tasks.create({ dealId, title: 'No', dueOn: '2026-11-04', assignee: disabled.id }))).toBe(400)
 			const forged = await kit.browser(sales)('/api/tasks.create', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },

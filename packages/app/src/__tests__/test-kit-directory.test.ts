@@ -1,6 +1,7 @@
 // The test kit answers a member directory (`ctx.members.list()`) from its own callers without a membership transport:
 // the members of the scope with their roles, labels only where the dimension declares `directory: 'labels'`, and a
-// refusal for a caller who may not list there. A contract that writes through IAM still needs `options.membership`.
+// refusal for a caller who may not list there, and a disabled caller as disabled. A contract that writes through IAM
+// still needs `options.membership`.
 
 import { defineApp, defineVocabulary } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
@@ -27,12 +28,24 @@ const InTeam = z.strictObject({ teamId: z.string() })
 const Members = z.strictObject({
 	items: z.array(z.strictObject({ principalId: z.string(), label: z.nullable(z.string()), roles: z.array(z.string()) })),
 })
+const Roster = z.strictObject({ items: z.array(z.strictObject({ principalId: z.string(), disabled: z.boolean() })) })
+const Lookup = z.strictObject({ orgId: z.string(), principalId: z.string() })
+const Found = z.strictObject({ member: z.nullable(z.strictObject({ principalId: z.string(), disabled: z.boolean() })) })
 
 const members = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({ input: InOrg, output: Members, access: { action: 'org.read', in: 'org', from: 'orgId' } })
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.members.list()).map((member) => ({ principalId: member.principalId, label: member.label, roles: [...member.roles] })),
 		})),
+	roster: r.query({ input: InOrg, output: Roster, access: { action: 'org.read', in: 'org', from: 'orgId' } })
+		.handle(async ({ ctx }) => ({
+			items: (await ctx.members.list()).map((member) => ({ principalId: member.principalId, disabled: member.disabled })),
+		})),
+	find: r.query({ input: Lookup, output: Found, access: { action: 'org.read', in: 'org', from: 'orgId' } })
+		.handle(async ({ input, ctx }) => {
+			const member = await ctx.members.get(input.principalId)
+			return { member: member === null ? null : { principalId: member.principalId, disabled: member.disabled } }
+		}),
 	team: r.query({ input: InTeam, output: Members, access: { action: 'org.read', in: 'team', from: 'teamId' } })
 		.handle(async ({ ctx }) => ({
 			items: (await ctx.members.list()).map((member) => ({ principalId: member.principalId, label: member.label, roles: [...member.roles] })),
@@ -78,5 +91,21 @@ describe("the test kit's member directory", () => {
 		expect((await call(kit.browser(mate), '/api/members.team', { teamId: 't1' })).body).toEqual({
 			result: { items: [{ principalId: 'eve', label: 'eve@teams.test', roles: ['teammate'] }] },
 		})
+	})
+
+	test('a disabled caller is listed and found with disabled: true, and its own session signs no request in', async () => {
+		const kit = testKit(serve(contract, { database: null }))
+		const acme = kit.scope('org', 'acme')
+		const reader = kit.testCaller([{ role: 'member', scope: acme }], { id: 'di' })
+		const gone = kit.testCaller([{ role: 'member', scope: acme }], { id: 'gone', disabled: true })
+		expect(gone.disabled).toBe(true)
+		expect((await call(kit.browser(reader), '/api/members.roster', { orgId: 'acme' })).body).toEqual({
+			result: { items: [{ principalId: 'di', disabled: false }, { principalId: 'gone', disabled: true }] },
+		})
+		expect((await call(kit.browser(reader), '/api/members.find', { orgId: 'acme', principalId: 'gone' })).body).toEqual({
+			result: { member: { principalId: 'gone', disabled: true } },
+		})
+		expect((await call(kit.browser(gone), '/api/members.roster', { orgId: 'acme' })).status).toBe(401)
+		expect(() => kit.testCaller([], { kind: 'link', disabled: true })).toThrow('a link holder is no principal')
 	})
 })

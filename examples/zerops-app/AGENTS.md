@@ -3093,8 +3093,9 @@ if (postgres !== null) {
   management, pass your own `IamMembershipRpc` as `testKit(app, { membership })`; without one `boot` names it.
 - `@fabrika/app/testing` exports the types of those options: `IamMembershipRpc` (`membership`), `ChallengeFetch`
   (`challengeFetch`) and `FileScanner` (`scanner`). Import them from there, beside `testKit`.
-- The kit's directory answers every member as enabled: it cannot make a disabled one. Test the `disabled` branch of a
-  pure function in `logic.ts` instead.
+- `kit.testCaller(grants, { disabled: true })` is a person an operator disabled: the directory lists and finds them
+  with `disabled: true`, so an assignment of them answers your handler's 400, and their own requests are refused (401 for
+  a session, 403 for a key).
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until

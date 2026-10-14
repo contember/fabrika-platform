@@ -41,7 +41,7 @@ function callersOf(callers: readonly Held[], tokens: ReadonlyMap<string, MintedT
 }
 
 function person(id: string, perms: readonly PermissionEntry[], kind: LabelledTestCaller['kind'] = 'human'): LabelledTestCaller {
-	return { kind, app: null, link: null, id, label: `${id}@notes.test`, affiliation: 'internal', perms, key: `px_${id}`, cookie: null }
+	return { kind, app: null, link: null, id, label: `${id}@notes.test`, affiliation: 'internal', disabled: false, perms, key: `px_${id}`, cookie: null }
 }
 
 const holder: LinkTestCaller = {
@@ -51,6 +51,7 @@ const holder: LinkTestCaller = {
 	id: 'link-1',
 	label: null,
 	affiliation: 'internal',
+	disabled: false,
 	perms: [entry('notes.read', NOTE)],
 	key: 'px_holder',
 	cookie: null,
@@ -94,6 +95,14 @@ async function delegation(membership: ReturnType<typeof standIn>, caller: TestCa
 }
 
 describe('the stand-in issues a delegation grant as IAM does', () => {
+	test('a disabled principal is refused as IAM refuses it, and its directory entry says disabled', async () => {
+		const disabledOwner = { ...person('disabled-owner', roleEntries('owner', ACME)), disabled: true }
+		const membership = standIn([{ caller: disabledOwner, memberships: [{ role: 'owner', scope: ACME }] }])
+		expect(await delegation(membership, disabledOwner, 'api.members.invite')).toBe('disabled')
+		const listed = await membership.rpc.listMembers({ ...as(owner), scope: ACME })
+		expect(listed.ok && listed.members.find((member) => member.principalId === 'disabled-owner')?.disabled).toBe(true)
+	})
+
 	test('to a person who holds the endpoint action somewhere, for an endpoint that spends one', async () => {
 		const membership = standIn()
 		expect(await delegation(membership, owner, 'api.members.invite')).toStartWith('grant_')

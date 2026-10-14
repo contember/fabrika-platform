@@ -234,6 +234,14 @@ describe('test callers', () => {
 		expect(() => kit.browser(bot)).toThrow("pass the machine's key to createClient")
 	})
 
+	test("a disabled caller's key and session sign nothing in, as IAM refuses a disabled principal", async () => {
+		const bot = kit.testCaller([{ action: 'notes.write', scope: W1 }], { kind: 'machine', disabled: true })
+		const keyed = await kit.fetch('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }, { Authorization: `Bearer ${bot.key}` }))
+		expect(keyed.status).toBe(403)
+		const person = kit.testCaller([{ role: 'editor', scope: W1 }], { disabled: true })
+		expect((await kit.browser(person)('/api/me', post({}))).status).toBe(401)
+	})
+
 	test('a machine key reaches its mount without a browser header', async () => {
 		const bot = kit.testCaller([{ action: 'notes.write', scope: W1 }], { kind: 'machine' })
 		const machine = createClient(contract, 'machine', { fetch: kit.fetch, key: bot.key ?? '' })

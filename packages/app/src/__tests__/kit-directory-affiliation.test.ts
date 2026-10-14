@@ -18,6 +18,7 @@ function caller(id: string, affiliation: TestCaller['affiliation'], actions: rea
 		id,
 		label: `${id}@notes.test`,
 		affiliation,
+		disabled: false,
 		perms: actions.map((action) => ({ action, scope: W1, source: 'grant' })),
 		key: `px_${id}`,
 		cookie: null,

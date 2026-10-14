@@ -93,10 +93,12 @@ if (postgres !== null) {
 			expect(await viewer.deals.get({ id })).toMatchObject({ owner: ola.id, ownerLabel: 'ola@acme.example' })
 		})
 
-		test('the new owner must be a member of the org, and the stored label is the directory’s', async () => {
+		test('the new owner must be an enabled member of the org, and the stored label is the directory’s', async () => {
 			const { id } = await newDeal('Picky')
+			const disabled = kit.testCaller([{ role: 'sales', scope: kit.scope('org', 'acme') }], { disabled: true })
 			expect(await statusOf(manager.deals.assign({ id, newOwner: outsiderCaller.id, expectVersion: 1 }))).toBe(400)
 			expect(await statusOf(manager.deals.assign({ id, newOwner: 'user:nobody', expectVersion: 1 }))).toBe(400)
+			expect(await statusOf(manager.deals.assign({ id, newOwner: disabled.id, expectVersion: 1 }))).toBe(400)
 			const forged = await kit.browser(managerCaller)('/api/deals.assign', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },

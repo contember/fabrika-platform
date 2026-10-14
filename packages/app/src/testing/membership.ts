@@ -151,6 +151,7 @@ function memberCaller(callers: DirectoryCallers, input: MembershipCaller, userOn
 	if (input.credential === null) return { ok: false, reason: 'missing_token' }
 	const caller = callers.byCredential(input.app, input.credential)
 	if (caller === undefined || caller.kind === 'app') return { ok: false, reason: 'invalid_token' }
+	if (caller.disabled) return { ok: false, reason: 'disabled' }
 	if (caller.kind === 'link' || (userOnly && caller.kind !== 'human')) return NOT_ALLOWED
 	return caller
 }
@@ -192,7 +193,7 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, inpu
 			label: manager || dimension.directory === 'labels' ? member.label : null,
 			email: manager ? member.label : null,
 			roles,
-			disabled: false,
+			disabled: member.disabled,
 			affiliation: member.affiliation,
 		})
 	}
@@ -223,7 +224,7 @@ function findMember(artifact: ContractArtifact, callers: DirectoryCallers, input
 		member: {
 			principalId: found.caller.id,
 			label: manager || dimension.directory === 'labels' ? found.caller.label : null,
-			disabled: false,
+			disabled: found.caller.disabled,
 			affiliation: found.caller.affiliation,
 		},
 	}

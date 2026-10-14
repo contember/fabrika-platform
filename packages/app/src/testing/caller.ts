@@ -29,6 +29,11 @@ export interface TestCallerOptions {
 	 * (ADR-0051); the kit refuses any other grant for one.
 	 */
 	readonly affiliation?: PrincipalAffiliation
+	/**
+	 * An operator disabled the principal in IAM: a member directory lists and finds it with `disabled: true`, and the kit's
+	 * IAM signs no token for its session or key, so its requests are refused as IAM refuses a disabled principal's.
+	 */
+	readonly disabled?: boolean
 	/** The consuming application's id, for an `app` caller. */
 	readonly app?: string
 	/**
@@ -48,6 +53,8 @@ interface TestCallerCredential {
 	readonly id: string
 	/** `internal` for every caller but an `external` human. */
 	readonly affiliation: PrincipalAffiliation
+	/** `true` for a principal an operator disabled; `false` for every other caller, a link holder included. */
+	readonly disabled: boolean
 	readonly perms: readonly PermissionEntry[]
 	/** The `px_` key a key caller presents as a bearer; `null` for a session. */
 	readonly key: string | null
