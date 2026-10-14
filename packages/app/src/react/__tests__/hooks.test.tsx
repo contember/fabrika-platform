@@ -338,13 +338,23 @@ describe('useInfiniteQuery', () => {
 describe('useAction', () => {
 	test('a call that is no procedure gets the same state and error union', async () => {
 		const { api } = scripted(() => ok(note('n1', 'x')))
-		let seen: string | null = null
+		const seen: string[] = []
 		function Upload(): ReactNode {
 			const upload = useAction(async (name: string) => {
 				if (name === '') throw Object.assign(new Error('Forbidden'), { httpStatus: 403, type: 'forbidden' })
 				return { name }
 			})
-			return <button type="button" onClick={async () => (seen = (await upload.mutate('')).ok ? 'ok' : upload.error?.kind ?? 'refused')}>up</button>
+			return (
+				<button
+					type="button"
+					onClick={async () => {
+						const outcome = await upload.mutate('')
+						seen.push(outcome.ok ? 'ok' : outcome.error.kind)
+					}}
+				>
+					up
+				</button>
+			)
 		}
 		const view = await mount(
 			<FabrikaProvider clients={[api]}>
@@ -352,7 +362,7 @@ describe('useAction', () => {
 			</FabrikaProvider>,
 		)
 		await press(view.container.querySelector('button'))
-		expect(seen).toBe('refused')
+		expect(seen).toEqual(['forbidden'])
 		await view.unmount()
 	})
 })
