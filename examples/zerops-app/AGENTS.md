@@ -4987,7 +4987,9 @@ if (postgres !== null) {
 - `kit.testCaller(grants, { disabled: true })` is a person an operator disabled: the directory lists and finds them
   with `disabled: true`, so an assignment of them answers your handler's 400, and their own requests are refused (401 for
   a session, 403 for a key).
-- `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`.
+- `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`. A job's `ctx.links`
+  reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
+  plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
   `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`

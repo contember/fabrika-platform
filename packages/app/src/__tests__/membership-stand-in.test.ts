@@ -17,7 +17,7 @@ import { z } from 'zod/v4'
 import { compileContract } from '../contract/compile'
 import type { LabelledTestCaller, LinkTestCaller, TestCaller } from '../testing/caller'
 import { managerGrants } from '../testing/endpoint-access'
-import { credentialCallers, kitMembership, type MintedToken, type TestMembership } from '../testing/membership'
+import { credentialCallers, type JobCredential, kitMembership, type MintedToken, type TestMembership } from '../testing/membership'
 import { contract } from './fixtures/multi-tenant/fabrika.contract'
 import { tables } from './fixtures/multi-tenant/src/db/tables'
 
@@ -228,6 +228,49 @@ describe('the stand-in issues a share link for a holder of issuedBy and every gr
 		expect(await membership.rpc.revokeLink({ ...as(outsider), id })).toEqual({ ok: false, reason: 'not_allowed' })
 		expect(await membership.rpc.revokeLink({ ...as(owner), id })).toEqual({ ok: true })
 		expect(await membership.rpc.revokeLink({ ...as(editor), id: 'link-unknown' })).toEqual({ ok: false, reason: 'not_found' })
+	})
+})
+
+describe("a job's link operations, under its own workload key or token", () => {
+	const at = Math.floor(Date.now() / 1000)
+	const sharing = { id: 'job-share', actions: ['notes.read', 'notes.share'], issues: 'shared' }
+	const silent = { id: 'job-silent', actions: ['notes.read', 'notes.share'], issues: null }
+	const jobs = new Map<string, JobCredential>([
+		['px_job_share', { job: sharing, expiresAt: null }],
+		['token-share', { job: sharing, expiresAt: at + 60 }],
+		['token-spent', { job: sharing, expiresAt: at }],
+		['px_job_silent', { job: silent, expiresAt: null }],
+	])
+	const membership = () =>
+		kitMembership(artifact, credentialCallers(APP, new Map([[editor.key ?? '', editor]]), new Map(), () => [{ caller: editor, memberships: [] }], jobs))
+	const asJob = (credential: string): MembershipCaller => ({ app: APP, credential, requestId: 'req-1' })
+
+	test('a job that declares issues issues for any object of the mount, by its key or a live token', async () => {
+		const stand = membership()
+		expect(await stand.rpc.issueLink({ ...asJob('px_job_share'), mount: 'shared', chain: [NOTE, ACME], days: 3 })).toMatchObject({ ok: true })
+		expect(await stand.rpc.issueLink({ ...asJob('token-share'), mount: 'shared', chain: [NOTE, ACME], days: 3 })).toMatchObject({ ok: true })
+		expect(stand.asked.map((write) => write.principalId)).toEqual(['job-share', 'job-share'])
+	})
+
+	test('a spent token, a job without issues, and every other membership call are refused as IAM refuses them', async () => {
+		const stand = membership()
+		expect(await stand.rpc.issueLink({ ...asJob('token-spent'), mount: 'shared', chain: [NOTE, ACME], days: 3 })).toEqual({
+			ok: false,
+			reason: 'invalid_token',
+		})
+		expect(await stand.rpc.issueLink({ ...asJob('px_job_silent'), mount: 'shared', chain: [NOTE, ACME], days: 3 })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
+		expect(await stand.rpc.listMembers({ ...asJob('px_job_share'), scope: ACME })).toEqual({ ok: false, reason: 'invalid_token' })
+	})
+
+	test('a job revokes only a link it issued', async () => {
+		const stand = membership()
+		const own = await stand.rpc.issueLink({ ...asJob('px_job_share'), mount: 'shared', chain: [NOTE, ACME], days: 3 })
+		const theirs = await stand.rpc.issueLink({ ...as(editor), mount: 'shared', chain: [NOTE, ACME], days: 3 })
+		expect(await stand.rpc.revokeLink({ ...asJob('px_job_share'), id: theirs.ok ? theirs.id : '' })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await stand.rpc.revokeLink({ ...asJob('token-share'), id: own.ok ? own.id : '' })).toEqual({ ok: true })
 	})
 })
 

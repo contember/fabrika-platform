@@ -55,7 +55,15 @@ import {
 	type TestGrant,
 	type TestScope,
 } from './caller'
-import { credentialCallers, type KitMembership, kitMembership, type MintedToken, type TestMembership } from './membership'
+import {
+	credentialCallers,
+	type JobCredential,
+	type KitJobCaller,
+	type KitMembership,
+	kitMembership,
+	type MintedToken,
+	type TestMembership,
+} from './membership'
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
@@ -231,6 +239,12 @@ export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C
 	// The kit stands in for Control too: every job and webhook gets a key, which its stand-in IAM signs the declared actions for.
 	const workloadVariables: Record<string, string> = {}
 	const workloadsByKey = new Map<string, { readonly kind: WorkloadKindOf; readonly name: string; readonly actions: readonly string[] }>()
+	// A job's key and the tokens signed for it are its credential at the stand-in IAM's link operations, as at IAM's.
+	const jobCredentials = new Map<string, JobCredential>()
+	const jobCallerOf = (name: string): KitJobCaller | undefined => {
+		const job = Object.hasOwn(artifact.jobs, name) ? artifact.jobs[name] : undefined
+		return job === undefined ? undefined : { id: `job-${name}`, actions: job.actions, issues: artifact.declared?.[`job:${name}`]?.issues ?? null }
+	}
 	const declaredWorkloads = [
 		...Object.entries(artifact.jobs).map(([workload, job]) => ({ kind: 'job' as const, name: workload, actions: job.actions })),
 		...Object.entries(artifact.mounts).flatMap(([workload, mount]) =>
@@ -241,6 +255,8 @@ export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C
 		const key = `${API_KEY_PREFIX}test_${crypto.randomUUID().replaceAll('-', '')}`
 		workloadVariables[workloadKeyVariable(workload.kind, workload.name)] = key
 		workloadsByKey.set(key, workload)
+		const job = workload.kind === 'job' ? jobCallerOf(workload.name) : undefined
+		if (job !== undefined) jobCredentials.set(key, { job, expiresAt: null })
 	}
 	const workloadTokens: WorkloadTokenSource = {
 		async exchange({ app: audience, key }) {
@@ -261,18 +277,23 @@ export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C
 				expiresAt: now + TOKEN_TTL_SECONDS,
 			})
 			const { privateKey } = await signing
-			return {
-				ok: true,
-				token: await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey),
-				expiresAt: claims.exp,
-			}
+			const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
+			const job = jobCredentials.get(key)?.job
+			if (job !== undefined) jobCredentials.set(token, { job, expiresAt: claims.exp })
+			return { ok: true, token, expiresAt: claims.exp }
 		},
 	}
 	const byKey = new Map<string, TestCaller>()
 	const bySession = new Map<string, TestCaller>()
 	const byToken = new Map<string, MintedToken>()
 	const memberships = new Map<TestCaller, readonly TestMembership[]>()
-	const directoryCallers = credentialCallers(appId, byKey, byToken, () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })))
+	const directoryCallers = credentialCallers(
+		appId,
+		byKey,
+		byToken,
+		() => [...memberships].map(([caller, held]) => ({ caller, memberships: held })),
+		jobCredentials,
+	)
 	// The stand-in answers the member directory from the kit's own callers and the writes under IAM's rules; it also
 	// issues the proxy's delegation grants.
 	const standIn = options.membership === undefined ? kitMembership(artifact, directoryCallers) : null

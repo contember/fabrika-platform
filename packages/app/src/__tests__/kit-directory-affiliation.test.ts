@@ -37,6 +37,7 @@ describe("the kit's member directory", () => {
 		]
 		const directory = kitMembership(notesArtifact, {
 			byCredential: (_app, credential) => members.find((member) => member.caller.key === credential)?.caller,
+			jobByCredential: () => undefined,
 			all: () => members,
 		}).rpc
 
@@ -59,6 +60,7 @@ describe("the kit's member directory", () => {
 		]
 		const directory = kitMembership(notesArtifact, {
 			byCredential: (_app, credential) => members.find((member) => member.caller.key === credential)?.caller,
+			jobByCredential: () => undefined,
 			all: () => members,
 		}).rpc
 		const signIns = async (credential: string) => {

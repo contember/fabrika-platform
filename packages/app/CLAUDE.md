@@ -823,7 +823,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
 - The kit stands in for Control and IAM for workloads too: each job and webhook gets a random `px_` key, and the
-  kit's token exchange signs its declared actions for it, with the kit's own key.
+  kit's token exchange signs its declared actions for it, with the kit's own key. A job's key and the tokens signed for
+  it are its credential at `kitMembership`'s link operations (`jobByCredential`), held to IAM's rules for a job: its
+  declared actions app-wide, issuing for its declared `issues` mount only, revoking only links it issued; every other
+  membership call of a workload answers `invalid_token`, as IAM's `resolveCaller` does.
 - `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
   it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision. The owner kit's
   `testCaller(grants, { kind: 'app', app })` is the consumer's key: an `app` token naming the consumer.

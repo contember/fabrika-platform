@@ -43,7 +43,16 @@ const sharing = app.group({ callers: ['human'] }, (r) => ({
 			return { id: ctx.target.value }
 		}),
 }))
-const contract = app.contract((c) => ({ api: c.rpc('/api', { sharing }), shared }))
+/** The issuing job's input and output, for the test: the note it shares, whether it revokes, the link's URL. */
+const jobRun: { note: string; url: string; revoke: boolean } = { note: '', url: '', revoke: false }
+
+const shareNote = app.cron('0 4 * * *', { actions: ['notes.read', 'notes.share'], scope: 'app', issues: 'shared' }).handle(async ({ ctx }) => {
+	const link = await ctx.links.issue(await ctx.ref('notes.share', 'note', jobRun.note), { mount: 'shared', days: 3 })
+	jobRun.url = link.url
+	if (jobRun.revoke) await ctx.links.revoke(link.id)
+})
+
+const contract = app.contract((c) => ({ api: c.rpc('/api', { sharing }), shared, jobs: { shareNote } }))
 const served = serve(contract, { database: scoped(tables) })
 
 const post = (body: unknown, headers: Record<string, string> = {}): RequestInit => ({
@@ -73,6 +82,27 @@ describe.skipIf(postgres === null)('a share link the application issued through 
 		const revoked = await kit.browser(editor)('/api/sharing.unshare', post({ id: worlds.own.key, linkId: result.id }))
 		expect(revoked.status).toBe(200)
 		expect((await read()).status).toBe(401)
+	})
+})
+
+describe.skipIf(postgres === null)("a job's ctx.links through the kit's stand-in IAM", () => {
+	test("issues a link under the job's own credential, which then opens as its holder, and revokes what it issued", async () => {
+		if (postgres === null) return
+		const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
+		const worlds = await postgres.seedWorlds(tables, 'notes', {})
+		jobRun.note = worlds.own.key
+		jobRun.url = ''
+		jobRun.revoke = false
+		expect(await kit.runJob('shareNote')).toEqual({ status: 'succeeded', attempts: 1 })
+		const key = jobRun.url.slice(jobRun.url.indexOf('#') + 1)
+		const opened = await kit.fetch('/s/api/note', post({}, { Authorization: `Bearer ${key}` }))
+		expect(opened.status).toBe(200)
+		expect(await opened.json()).toMatchObject({ result: { id: worlds.own.key } })
+
+		jobRun.revoke = true
+		expect(await kit.runJob('shareNote')).toEqual({ status: 'succeeded', attempts: 1 })
+		const revoked = await kit.fetch('/s/api/note', post({}, { Authorization: `Bearer ${jobRun.url.slice(jobRun.url.indexOf('#') + 1)}` }))
+		expect(revoked.status).toBe(401)
 	})
 })
 

@@ -63,8 +63,23 @@ export interface DirectoryCallers {
 	 * none for a credential of another application or an expired token.
 	 */
 	byCredential(app: string, credential: string): TestCaller | undefined
+	/** The job a link operation's credential (its workload key or token) belongs to, as IAM resolves it for `app`. */
+	jobByCredential(app: string, credential: string): KitJobCaller | undefined
 	/** Every caller with its role grants. */
 	all(): readonly { readonly caller: TestCaller; readonly memberships: readonly TestMembership[] }[]
+}
+
+/** A job's principal, as IAM holds it to its declaration: its actions app-wide, and the one link mount it issues. */
+export interface KitJobCaller {
+	readonly id: string
+	readonly actions: readonly string[]
+	readonly issues: string | null
+}
+
+/** A job's workload key (`expiresAt: null`) or a token the kit signed for it. */
+export interface JobCredential {
+	readonly job: KitJobCaller
+	readonly expiresAt: number | null
 }
 
 /** A write `kitMembership` allowed, by the principal that asked; the credential and the delegation grant are left out. */
@@ -181,6 +196,7 @@ export function credentialCallers(
 	keys: ReadonlyMap<string, TestCaller>,
 	tokens: ReadonlyMap<string, MintedToken>,
 	memberships: () => ReturnType<DirectoryCallers['all']>,
+	jobs: ReadonlyMap<string, JobCredential> = new Map(),
 ): DirectoryCallers {
 	return {
 		byCredential(audience, credential) {
@@ -188,6 +204,10 @@ export function credentialCallers(
 			const minted = tokens.get(credential)
 			if (minted === undefined) return keys.get(credential)
 			return minted.expiresAt > now() ? minted.caller : undefined
+		},
+		jobByCredential(audience, credential) {
+			const held = audience === app ? jobs.get(credential) : undefined
+			return held !== undefined && (held.expiresAt === null || held.expiresAt > now()) ? held.job : undefined
 		},
 		all: memberships,
 	}
@@ -220,6 +240,13 @@ function memberCaller(callers: DirectoryCallers, input: MembershipCaller, userOn
 }
 
 const isFailure = (outcome: LabelledTestCaller | MembershipFailure): outcome is MembershipFailure => 'ok' in outcome
+
+/** Who asks for a link operation: a member caller (`issues: null`), or a job and the mount it issues. */
+interface LinkCaller {
+	readonly id: string
+	readonly perms: readonly PermissionEntry[]
+	readonly issues: string | null
+}
 
 function dimensionOf(artifact: ContractArtifact, type: string) {
 	return Object.hasOwn(artifact.dimensions, type) ? artifact.dimensions[type] : undefined
@@ -416,6 +443,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const links = new Map<string, KitLink>()
 	const live: DirectoryCallers = {
 		byCredential: (app, credential) => callers.byCredential(app, credential),
+		jobByCredential: (app, credential) => callers.jobByCredential(app, credential),
 		all: () => callers.all().map(({ caller, memberships }) => ({ caller, memberships: changes.heldBy(caller.id, memberships) })),
 	}
 
@@ -638,10 +666,28 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return expected === null ? null : `the link chain stops before '${expected}'`
 	}
 
-	/** A share link, for a holder of the mount's `issuedBy` and of every action it grants on some value of the chain. */
-	const issueLink = (input: IssueLinkInput): IssueLinkResult => {
+	/**
+	 * The caller of a link operation, as IAM resolves it: a member caller, or a job that declares `issues`, which holds
+	 * its declared actions app-wide.
+	 */
+	const linkCaller = (input: MembershipCaller): LinkCaller | MembershipFailure => {
+		const job = input.credential === null ? undefined : callers.jobByCredential(input.app, input.credential)
+		if (job !== undefined) {
+			if (job.issues === null) return NOT_ALLOWED
+			return { id: job.id, perms: job.actions.map((action) => ({ action, scope: null, source: 'grant' })), issues: job.issues }
+		}
 		const caller = memberCaller(callers, input, false)
-		if (isFailure(caller)) return caller
+		return isFailure(caller) ? caller : { id: caller.id, perms: permsOf(caller), issues: null }
+	}
+
+	/**
+	 * A share link, for a holder of the mount's `issuedBy` and of every action it grants on some value of the chain; a
+	 * job issues only for the mount it declares.
+	 */
+	const issueLink = (input: IssueLinkInput): IssueLinkResult => {
+		const caller = linkCaller(input)
+		if ('ok' in caller) return caller
+		if (caller.issues !== null && caller.issues !== input.mount) return NOT_ALLOWED
 		const mount = Object.hasOwn(artifact.mounts, input.mount) ? artifact.mounts[input.mount] : undefined
 		if (mount?.kind !== 'link') return invalid(`unknown link mount '${input.mount}'`)
 		const problem = chainProblem(mount.dimension, input.chain)
@@ -649,7 +695,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (!Number.isSafeInteger(input.days) || input.days < 1 || input.days > mount.maxDays) {
 			return invalid(`a link of '${input.mount}' lives 1 to ${mount.maxDays} days`)
 		}
-		const perms = [...permsOf(caller)]
+		const perms = [...caller.perms]
 		const heldOnChain = (action: string): boolean => input.chain.some((scope) => permits(perms, action, scope))
 		if (!heldOnChain(mount.issuedBy) || !mount.grants.every(heldOnChain)) return NOT_ALLOWED
 		const id = `link-${randomId()}`
@@ -659,15 +705,19 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return { ok: true, key, id, expiresAt: now() + input.days * DAY_SECONDS }
 	}
 
-	/** A link this stand-in issued, by its issuer or a holder of `members.manage` on a value of its chain. */
+	/**
+	 * A link this stand-in issued, by its issuer or a holder of `members.manage` on a value of its chain; a job revokes
+	 * only a link it issued, of the mount it declares.
+	 */
 	const revokeLink = (input: RevokeLinkInput): RevokeLinkResult => {
-		const caller = memberCaller(callers, input, false)
-		if (isFailure(caller)) return caller
+		const caller = linkCaller(input)
+		if ('ok' in caller) return caller
 		const link = links.get(input.id)
 		if (link === undefined) return NOT_FOUND
-		const manager = link.chain.some((scope) => {
+		if (caller.issues !== null && (link.issuer !== caller.id || link.mount !== caller.issues)) return NOT_ALLOWED
+		const manager = caller.issues === null && link.chain.some((scope) => {
 			const members = dimensionOf(artifact, scope.type)?.members
-			return members !== null && members !== undefined && permits([...permsOf(caller)], members.manage, scope)
+			return members !== null && members !== undefined && permits([...caller.perms], members.manage, scope)
 		})
 		if (link.issuer !== caller.id && !manager) return NOT_ALLOWED
 		links.set(link.id, { ...link, revoked: true })
