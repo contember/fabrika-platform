@@ -32,6 +32,15 @@ errors, timeouts, rate limits, concurrent matching requests, server
 failures, and malformed success responses are retryable. Other provider 4xx
 responses are permanent.
 
+## Directory capture
+
+`DirectoryEmailSender` (`@fabrika/email/directory`, Bun and Node only) delivers
+nothing: it writes each message as a JSON file in an existing directory, one file
+per idempotency key, so a repeated send keeps the first message and answers the
+same message ID. `readCapturedEmails` reads them back, oldest first. It exists for
+a local composition and its tests; the files hold the bodies and their one-time
+links.
+
 ## IAM composition
 
 IAM selects email independently from its authentication methods:
@@ -44,6 +53,11 @@ Cloudflare materialization maps the public installation variables
 the secret `FABRIKA_EMAIL_RESEND_API_KEY` to `EMAIL_API_KEY`. The Bun composition
 accepts the same public names and keeps the API key out of non-secret runtime
 configuration.
+
+The Bun composition also takes a sender as a composition input
+(`createRuntime(source, { emailSender })`, the `EMAIL_SENDER` port). IAM refuses it
+outside `ENVIRONMENT=local` and beside a configured provider. The local stack passes
+a `DirectoryEmailSender` this way; no environment variable selects it.
 
 IAM owns its enrollment and reset templates, one-time action state, and delivery
 behavior. An installation without a sender uses an explicit manual action-link

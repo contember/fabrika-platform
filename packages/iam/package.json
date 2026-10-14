@@ -13,6 +13,16 @@
 			"bun": "./src/service.ts",
 			"types": "./src/service.ts",
 			"default": "./src/service.ts"
+		},
+		"./node/runtime": {
+			"bun": "./src/node/runtime.ts",
+			"types": "./src/node/runtime.ts",
+			"default": "./src/node/runtime.ts"
+		},
+		"./node/server": {
+			"bun": "./src/node/server.ts",
+			"types": "./src/node/server.ts",
+			"default": "./src/node/server.ts"
 		}
 	},
 	"scripts": {

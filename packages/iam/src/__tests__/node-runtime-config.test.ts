@@ -1,5 +1,7 @@
+import type { EmailSender } from '@fabrika/email'
 import { describe, expect, test } from 'bun:test'
 import { createRuntime } from '../node/runtime'
+import { buildServices } from '../services'
 
 const DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:1/iam'
 const RPC_KEY = 'rpc-key-with-at-least-thirty-two-characters'
@@ -95,6 +97,31 @@ describe('the IAM Bun runtime environment', () => {
 		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_FROM: '' })).toThrow('FABRIKA_EMAIL_FROM is required')
 		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is required')
 		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('FABRIKA_EMAIL_PROVIDER must be none or resend')
+	})
+
+	test('a composition email sender serves only a local IAM with no provider configured', async () => {
+		const sender: EmailSender = { send: () => Promise.reject(new Error('not sent in this test')) }
+		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL }
+		const runtime = createRuntime(source, { emailSender: sender })
+		try {
+			expect(runtime.env.EMAIL_SENDER).toBe(sender)
+			expect(buildServices(runtime.env).email).toBe(sender)
+			expect(() => buildServices({ ...runtime.env, ENVIRONMENT: 'stage' })).toThrow('A composition email sender is local-only')
+			expect(() => buildServices({ ...runtime.env, EMAIL_PROVIDER: 'resend' })).toThrow('which must then be none')
+		} finally {
+			await runtime.shutdown()
+		}
+
+		const refusal = 'A composition email sender needs ENVIRONMENT=local and FABRIKA_EMAIL_PROVIDER=none'
+		expect(() => createRuntime({ ...source, ENVIRONMENT: 'stage', ISSUER: 'https://iam.example.com' }, { emailSender: sender })).toThrow(refusal)
+		expect(() =>
+			createRuntime({
+				...source,
+				FABRIKA_EMAIL_PROVIDER: 'resend',
+				FABRIKA_EMAIL_FROM: 'auth@example.com',
+				FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
+			}, { emailSender: sender })
+		).toThrow(refusal)
 	})
 
 	test('maps the retention settings, and a bad value refuses the boot', async () => {

@@ -39,8 +39,8 @@ export function createFetchHandler(runtime: Runtime): (request: Request) => Prom
 	return createBunHandler(app, runtime.env, { executionContext: runtime.ctx }).fetch
 }
 
-async function main(): Promise<void> {
-	const runtime = createRuntime()
+/** Serve an assembled runtime until SIGTERM or SIGINT. A composition root with its own overrides starts here. */
+export function startIamServer(runtime: Runtime): void {
 	const server = Bun.serve({
 		port: runtime.config.port,
 		// Bun closes an idle socket after 10s by default, and a handler that is still working counts as
@@ -89,6 +89,10 @@ async function main(): Promise<void> {
 	process.on('SIGINT', () => {
 		stop('SIGINT')
 	})
+}
+
+async function main(): Promise<void> {
+	startIamServer(createRuntime())
 }
 
 if (import.meta.main) {

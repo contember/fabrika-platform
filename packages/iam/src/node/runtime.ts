@@ -10,7 +10,8 @@
 //   SqlDatabase → PostgresDatabase      (D1's place)
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
-import { readEnvironmentName } from '@fabrika/auth-core'
+import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
+import type { EmailSender } from '@fabrika/email'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -39,6 +40,12 @@ export interface ProcessConfig {
 	proxyKey: string
 }
 
+/** What a composition root hands the process besides `process.env` — never an environment variable. */
+export interface RuntimeOverrides {
+	/** Replaces `FABRIKA_EMAIL_PROVIDER`'s sender, only with `ENVIRONMENT=local`: the local stack's mail capture. */
+	readonly emailSender?: EmailSender
+}
+
 export interface Runtime {
 	env: Env
 	ctx: RequestContext
@@ -58,7 +65,7 @@ const MIN_RPC_KEY_LENGTH = 32
  * then refuses logins at 3am is strictly worse than one that never came up. Nothing here ever logs a
  * value — the database URL and the RPC key are credentials, and only their absence is reportable.
  */
-export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
+export function createRuntime(source: Record<string, string | undefined> = process.env, overrides: RuntimeOverrides = {}): Runtime {
 	const databaseUrl = required(source, 'FABRIKA_IAM_DATABASE_URL')
 	const issuer = required(source, 'ISSUER')
 	// Checked at BOOT as well as in `buildServices`: a process that comes up and then throws per request
@@ -75,6 +82,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const emailProvider = source['FABRIKA_EMAIL_PROVIDER'] ?? 'none'
 	if (emailProvider !== 'none' && emailProvider !== 'resend') {
 		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
+	}
+	if (overrides.emailSender !== undefined && (environment !== LOCAL_ENVIRONMENT || emailProvider !== 'none')) {
+		throw new Error('A composition email sender needs ENVIRONMENT=local and FABRIKA_EMAIL_PROVIDER=none')
 	}
 	const emailFrom = emailProvider === 'resend' ? required(source, 'FABRIKA_EMAIL_FROM') : source['FABRIKA_EMAIL_FROM'] ?? ''
 	const emailApiKey = emailProvider === 'resend'
@@ -127,6 +137,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		EMAIL_PROVIDER: emailProvider,
 		EMAIL_FROM: emailFrom,
 		EMAIL_API_KEY: emailApiKey,
+		...(overrides.emailSender === undefined ? {} : { EMAIL_SENDER: overrides.emailSender }),
 	}
 
 	return {

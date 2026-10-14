@@ -1,3 +1,4 @@
+import type { EmailSender } from '@fabrika/email'
 import type { SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { IamRepositories } from './db'
 
@@ -61,6 +62,11 @@ export interface Env {
 	EMAIL_PROVIDER?: string
 	EMAIL_FROM?: string
 	EMAIL_API_KEY?: string
+	/**
+	 * A sender the composition root supplies in place of `EMAIL_PROVIDER`: the local stack's mail capture. A port, not
+	 * a variable, and refused by `buildServices` outside `ENVIRONMENT=local` or beside a configured provider.
+	 */
+	EMAIL_SENDER?: EmailSender
 
 	// ── propustka-native auth (propustka issues its own tokens; see token.ts / signing.ts) ──
 

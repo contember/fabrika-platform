@@ -19,7 +19,7 @@ SMTP is not an equal primitive across the supported compositions. A fetch-based 
 
 We will publish a separate `@fabrika/email` package with one runtime-neutral `EmailSender` contract. Domain services own recipients, templates, action tokens, durable outboxes, and retry scheduling. The email package owns message validation, provider request translation, credential-safe errors, and the classification of delivery failures as retryable or permanent.
 
-The first adapter is Resend over `fetch`. The adapter accepts an injected fetch implementation for conformance tests and uses a caller-supplied idempotency key. Its public result and error contracts do not expose Resend response types.
+The first adapter is Resend over `fetch`. A second, `DirectoryEmailSender`, delivers nothing: it writes each message to a directory for a local composition's tests, and IAM accepts it only as a composition input with `ENVIRONMENT=local`. The adapter accepts an injected fetch implementation for conformance tests and uses a caller-supplied idempotency key. Its public result and error contracts do not expose Resend response types.
 
 Email availability is an explicit optional service capability. A missing sender never silently drops a message and never changes whether an authentication or notification feature is enabled. The consuming domain must select a defined non-email flow or report that delivery is unavailable.
 

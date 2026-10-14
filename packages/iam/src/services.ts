@@ -121,7 +121,7 @@ export function buildServices(env: Env): Services {
 		repositories: env.REPOSITORIES,
 		oidc,
 		passwordHasher: new WebCryptoPasswordHasher(),
-		email: buildEmailSender(env),
+		email: buildEmailSender(env, environment),
 		config: {
 			human: {
 				emailDomains: parseJsonStringArray(env.HUMAN_EMAIL_DOMAINS),
@@ -174,8 +174,13 @@ function buildOidc(env: Env): OidcClient {
 	})
 }
 
-function buildEmailSender(env: Env): EmailSender | null {
+function buildEmailSender(env: Env, environment: string): EmailSender | null {
 	const provider = env.EMAIL_PROVIDER ?? 'none'
+	if (env.EMAIL_SENDER !== undefined) {
+		if (environment !== LOCAL_ENVIRONMENT) throw new Error('A composition email sender is local-only; set ENVIRONMENT=local or remove it')
+		if (provider !== 'none') throw new Error('A composition email sender replaces EMAIL_PROVIDER, which must then be none')
+		return env.EMAIL_SENDER
+	}
 	if (provider === 'none') return null
 	if (provider === 'resend') {
 		return new ResendEmailSender({

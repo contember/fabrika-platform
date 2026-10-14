@@ -24,6 +24,11 @@
 			"bun": "./src/resend.ts",
 			"types": "./src/resend.ts",
 			"default": "./src/resend.ts"
+		},
+		"./directory": {
+			"bun": "./src/directory.ts",
+			"types": "./src/directory.ts",
+			"default": "./src/directory.ts"
 		}
 	},
 	"scripts": {
