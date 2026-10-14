@@ -18,6 +18,8 @@ request answers 500 and the log line says only `handler_failed`. The author cann
   `ctx.sql.scope(ctx.app, '<table>')` under an action the table does not read with started to throw (`checkAppReach`,
   `packages/db/src/store.ts:417`). The log line was `fabrika: <endpoint id>: handler_failed`. The author found the
   message only by printing the error in a local copy of `node_modules`.
+  That fragment is now a type error at its table argument (`FragmentTable`, `packages/db/src/orm-types.ts`), so tsc
+  catches this case; a fragment the types cannot judge (a write under a read action) still fails at run time.
 - The job runner has the same blind spot (`failureOf`, `packages/app/src/jobs/runner.ts`); see
   [120](120-a-job-attempt-reports-a-refused-statement-as-handler-failed.md).
 

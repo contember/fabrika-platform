@@ -58,7 +58,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [128](128-a-public-page-cannot-read-a-public-configuration-value.md) — A public page has no per-environment public value, such as a challenge site key.
 - [129](129-a-job-cannot-remove-a-records-files.md) — An erasure job cannot remove a record's files, and no scheduled sweep runs.
 - [131](131-an-application-outside-the-monorepo-cannot-use-locally-packed-packages.md) — No supported install or check of locally packed packages outside the repository.
-- [134](134-a-sql-scope-fragment-does-not-tie-its-action-to-the-statement.md) — `ctx.sql.scope` checks neither the statement's operation nor, for a `Ref` or `Within`, the table's actions.
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [139](139-an-application-cannot-author-the-html-of-iams-e-mails.md) — application e-mail templates are plain text; IAM builds the HTML.
 - [141](141-an-acceptance-is-not-serialized-with-every-grant-of-its-inviter.md) — removing a supplementing grant of the inviter is not serialized with an acceptance.

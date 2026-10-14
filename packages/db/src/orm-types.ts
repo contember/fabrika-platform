@@ -96,6 +96,10 @@ export interface IndexedTable {
 	readonly writes: object
 	/** The containment columns a row carries: what a scoped write stamps from its capability, and an unscoped one takes. */
 	readonly chain: string
+	/** The dimensions whose `Ref` reaches the table: a dimension table's own and every dimension of its chain. */
+	readonly refs: string
+	/** The dimensions whose `Within` lists the table: every dimension of its chain, and a top-level table's own. */
+	readonly reach: string
 	readonly versioned: boolean
 }
 
@@ -118,6 +122,8 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 	readonly update: UpdateValues<DB, P, T>
 	readonly writes: UpdatesOf<DB, P, T>
 	readonly chain: ChainColumns<P, T, V>
+	readonly refs: DimensionOf<P, T> | ChainDimensions<P, T, V>
+	readonly reach: ReachOf<P, T, V>
 	readonly versioned: PolicyOf<P, T> extends { readonly version: string } ? true : false
 }
 
@@ -539,3 +545,47 @@ export type RowOf<
 		T
 	>['actions']['read'],
 > = RowFor<TableEntry<Tb, T>, A>
+
+/** What a capability type says of itself: its kind, and its dimension and action. */
+type GrantOf<C> = C extends { readonly '~capability': infer G } ? G : never
+
+/** The tables a fragment of a `Ref` of `D` and `A` reads: its chain's with an action they name, and an application table's by its read action. */
+type RefFragment<Ix extends AnyDbIndex, D extends string, A extends string> = {
+	[T in TableName<Ix>]: Ix['tables'][T]['mode'] extends 'app' ? (A extends Ix['tables'][T]['actions']['read'] ? T : never)
+		: D extends Ix['tables'][T]['refs'] ? (A extends NamedActions<Ix['tables'][T]> ? T : never)
+		: never
+}[TableName<Ix>]
+
+/** What a `Within` writes on a `'write'` site: the target of an UPDATE or DELETE whose action it holds. */
+type WithinWrites<E extends IndexedTable, M extends 'read' | 'write'> = M extends 'write' ? E['actions']['update'] | E['actions']['delete'] : never
+
+/** The tables a fragment of a `Within` of `D` and `A` reaches: those it lists by their read action, or writes on `M`. */
+type WithinFragment<Ix extends AnyDbIndex, D extends string, A extends string, M extends 'read' | 'write'> = {
+	[T in TableName<Ix>]: Ix['tables'][T]['mode'] extends 'app' ? (A extends Ix['tables'][T]['actions']['read'] ? T : never)
+		: D extends Ix['tables'][T]['reach'] ? (A extends Ix['tables'][T]['actions']['read'] | WithinWrites<Ix['tables'][T], M> ? T : never)
+		: never
+}[TableName<Ix>]
+
+/** The tables a fragment of an `app` capability of `A` reaches: as `ctx.db.app` lists them for that action. */
+type AppFragment<Ix extends AnyDbIndex, A extends string> = {
+	[T in TableName<Ix>]: Ix['tables'][T]['mode'] extends 'app' ? (A extends NamedActions<Ix['tables'][T]> ? T : never)
+		: Ix['tables'][T]['mode'] extends 'dimension' | 'child' ? (A extends Ix['tables'][T]['actions']['read'] | Ix['tables'][T]['appRead'] ? T : never)
+		: never
+}[TableName<Ix>]
+
+/**
+ * The tables `ctx.sql.scope(capability, table)` takes for a capability of type `C` on a site of mode `M`: those its
+ * fragment reaches for a use the site may make of it, so a fragment the runtime refuses for every use is a type error
+ * at the table. A dimension or an action widened to `string` proves nothing, so it takes any table.
+ */
+export type FragmentTable<Ix extends AnyDbIndex, C, M extends 'read' | 'write'> = GrantOf<C> extends
+	{ readonly kind: 'ref'; readonly dimension: infer D extends string; readonly action: infer A extends string }
+	? string extends D | A ? TableName<Ix> : OrNoTable<RefFragment<Ix, D, A>, A>
+	: GrantOf<C> extends { readonly kind: 'within'; readonly dimension: infer D extends string; readonly action: infer A extends string }
+		? string extends D | A ? TableName<Ix> : OrNoTable<WithinFragment<Ix, D, A, M>, A>
+	: GrantOf<C> extends { readonly kind: 'app'; readonly action: infer A extends string }
+		? string extends A ? TableName<Ix> : OrNoTable<AppFragment<Ix, A>, A>
+	: TableName<Ix>
+
+/** The tables, or the message that says none takes a fragment of `A`: a parameter of type `never` names no fix. */
+type OrNoTable<T, A extends string> = [T] extends [never] ? `no table takes a scope fragment of ${A}: reach its tables through ctx.db` : T

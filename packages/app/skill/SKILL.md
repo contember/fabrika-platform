@@ -221,7 +221,7 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
 of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
 job's minted `Ref` or `Within` with `tx.sql.scope`. It binds the capability's whole predicate, chain included, as the
-handles apply it; a reference table needs none. A deviation is fine: declare it, and do not contort the code to
+handles apply it, and on an `update` or `delete` target it needs that operation's action; a reference table needs none. A deviation is fine: declare it, and do not contort the code to
 avoid it. The approver sees every declaration marked
 "needs closer review". Do not hide reach in a helper; the runtime builds `ctx.sql` and `ctx.db.unscoped` only where
 they are declared. A query or an export declares only `'read'`.

@@ -16,6 +16,7 @@ export type {
 	CountOptions,
 	DataKind,
 	DbIndex,
+	FragmentTable,
 	IndexedTable,
 	ListOptions,
 	ListPage,

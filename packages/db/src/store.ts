@@ -21,6 +21,7 @@ import {
 import {
 	type AppGrant,
 	type CapabilityAuthority,
+	type CapabilityGrant,
 	describeGrant,
 	MAX_WITHIN_VALUES,
 	type Ref,
@@ -94,7 +95,7 @@ import {
 	type VersionArguments,
 } from './policy'
 import { frameworkSideOf, type Locator, register } from './registry'
-import type { ScopeTerms, ScopeTest } from './sql'
+import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
 import { type TablePolicies, tablePolicies } from './tables'
 import { answerDays, dayInput, timestampInput } from './temporal'
 
@@ -329,15 +330,53 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 }
 
 /**
- * `ctx.sql.scope`'s predicate: what the handles of `capability` match in the table, as column tests. A `Ref` matches
- * its object's column and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values,
- * each container grant on its own column, or every row for `all`); an `app` capability matches every row of a table
- * `ctx.db.app` lists for it. A capability whose dimension the table does not carry, or a table `ctx.db.app` does not
- * list, is refused, as the handles refuse it.
+ * A fragment on an UPDATE or DELETE target: the capability's action is that operation's, and an application table is
+ * written by an `app` capability only, a dimension or child table never by one.
  */
-export function scopeTerms(context: TableContext, capability: unknown): ScopeTerms {
+function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'update' | 'delete'): void {
+	const model = context.model
+	const statement = `${use === 'update' ? 'UPDATE' : 'DELETE'} of ${model.name}`
+	if (grant.kind === 'app' && model.scope.mode !== 'app') {
+		throw new CapabilityError(`an app capability writes application tables only: ${statement} needs a Ref or a Within`)
+	}
+	if (grant.kind !== 'app' && model.scope.mode === 'app') {
+		throw new CapabilityError(`a scoped site writes no application table: ${statement} needs the capability of an app endpoint`)
+	}
+	const action = model.actions[use]
+	if (action === undefined) {
+		throw new CapabilityError(`${statement}: its policy declares no ${use} action`)
+	}
+	if (grant.action !== action) {
+		throw new CapabilityError(`${statement} needs its ${use} action ${action}; the capability holds ${grant.action}`)
+	}
+}
+
+/**
+ * `ctx.sql.scope`'s predicate: what the handles of `capability` match in the table for `use`, as column tests. A
+ * fragment that reads (`'read'`) needs an action the handles read the table with: any action it names for a `Ref`,
+ * its read action for a `Within`, an action `ctx.db.app` lists it for with an `app` capability, and its read action
+ * for a scoped site's read of an application table. A fragment on the statement's UPDATE or DELETE target needs that
+ * operation's own action, and an `app` capability writes application tables only. A `Ref` matches its object's column
+ * and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values, each container grant on
+ * its own column, or every row for `all`); an `app` capability, and a scoped read of an application table, every row.
+ */
+export function scopeTerms(context: TableContext, capability: unknown, use: ScopeUse): ScopeTerms {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
+	if (use !== 'read') {
+		checkWriteTarget(context, grant, use)
+	}
+	if (grant.kind === 'app') {
+		if (use === 'read') {
+			// The action is held as a global grant, so its scope is every row of a table it reaches.
+			checkAppReach(context, grant)
+		}
+		return 'all'
+	}
+	if (model.scope.mode === 'app') {
+		scopedApplicationRead(context, capability)
+		return 'all'
+	}
 	if (grant.kind === 'ref') {
 		const links = model.scope.mode === 'dimension' ? selfLinks(model) : model.chain
 		let start = -1
@@ -347,16 +386,17 @@ export function scopeTerms(context: TableContext, capability: unknown): ScopeTer
 		if (start === -1) {
 			throw new CapabilityError(`a Ref of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
 		}
+		if (use === 'read' && !namesAction(model, grant.action)) {
+			throw new CapabilityError(`${model.name} does not name the action ${grant.action}: a Ref reads it with an action it names`)
+		}
 		return [linkValues(model.name, links.slice(start), grant).map(({ link, value }) => ({ column: link.column, value }))]
-	}
-	if (grant.kind === 'app') {
-		// The action is held as a global grant, so its scope is every row of a table it reaches.
-		checkAppReach(context, grant)
-		return 'all'
 	}
 	const column = reachColumn(model, grant.dimension)
 	if (column === undefined) {
 		throw new CapabilityError(`a Within of ${grant.dimension} does not reach ${model.name}: its containment chain does not hold ${grant.dimension}`)
+	}
+	if (use === 'read' && grant.action !== model.actions.read) {
+		throw new CapabilityError(`a Within of ${grant.action} does not read ${model.name}: it reads with its read action ${model.actions.read}`)
 	}
 	if (grant.values === 'all') {
 		return 'all'

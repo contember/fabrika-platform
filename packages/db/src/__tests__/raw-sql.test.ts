@@ -53,9 +53,14 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 		},
 	}
 	return {
-		sql: sqlTag(site, SCHEMA, () => {
-			throw new QueryRefusedError('unknown_table', 'no table reaches this tag')
-		}),
+		sql: sqlTag(
+			site,
+			SCHEMA,
+			() => {
+				throw new QueryRefusedError('unknown_table', 'no table reaches this tag')
+			},
+			() => {},
+		),
 		sent: () => sent,
 	}
 }
@@ -199,7 +204,7 @@ function scopedTag(terms: ScopeTerms): { sql: SqlTag; sent: () => number } {
 			return Promise.reject(new Error('the statement reached the session'))
 		},
 	}
-	return { sql: sqlTag(site, SCHEMA, () => terms), sent: () => sent }
+	return { sql: sqlTag(site, SCHEMA, () => terms, () => {}), sent: () => sent }
 }
 
 const REACHED = 'the statement reached the session'
@@ -355,6 +360,90 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 			'an app capability does not reach countries: ctx.db.app lists application, dimension and child tables only',
 		)
 		expect(() => sql.scope(authority.app('contact.read'), 'contact_messages')).toThrow('an app capability does not reach contact_messages')
+	})
+})
+
+describe("ctx.sql.scope takes the statement's operation: a fragment on its UPDATE or DELETE target needs that operation's action", () => {
+	const dialect = new RecordingDialect()
+	const authority = new TestAuthority('user:alice')
+	const layer = scoped(tables)
+	bindScopedDatabase(layer, { database: Database.fromDialect(dialect), capabilities: authority })
+	const access = dataAccessOf(layer)
+	const session = access.direct()
+	const sql = access.sql({ mode: 'write', check() {}, session: async () => session, fail: () => session.fail() })
+	const reader = access.sql({ mode: 'read', check() {}, session: async () => session, fail: () => session.fail() })
+	const Row = z.object({})
+	const note = <const A extends string>(action: A) => authority.ref('note', action, 'n1', { workspace: 'w1', organization: 'o1' })
+	const sent = () => dialect.log.map((statement) => statement.sql)
+
+	test('a write under a read action is refused, whatever the grant kind', async () => {
+		dialect.log.length = 0
+		await expect(sql(Row)`update notes set title = ${'x'} where ${sql.scope(authority.app('notes.read'), 'notes')}`).rejects.toThrow(
+			'an app capability writes application tables only: UPDATE of notes',
+		)
+		await expect(sql(Row)`update notes set title = ${'x'} where ${sql.scope(note('notes.read'), 'notes')}`).rejects.toThrow(
+			'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
+		)
+		await expect(sql(Row)`delete from notes where ${sql.scope(note('notes.write'), 'notes')}`).rejects.toThrow(
+			'DELETE of notes needs its delete action notes.delete; the capability holds notes.write',
+		)
+		const within = authority.within('workspace', 'notes.read', ['w1'])
+		await expect(sql(Row)`update notes set title = ${'x'} where ${sql.scope(within, 'notes')}`).rejects.toThrow(
+			'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
+		)
+		await expect(sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.app('settings.read'), 'settings')}`).rejects.toThrow(
+			'UPDATE of settings needs its update action settings.edit; the capability holds settings.read',
+		)
+		await expect(
+			sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.within('workspace', 'settings.read', ['w1']), 'settings')}`,
+		).rejects.toThrow('a scoped site writes no application table: UPDATE of settings')
+		expect(sent()).toEqual([])
+	})
+
+	test("the operation's own action writes its rows, and a fragment elsewhere in the statement reads", async () => {
+		dialect.log.length = 0
+		await sql(Row)`update notes set title = ${'x'} where ${sql.scope(note('notes.write'), 'notes')}`
+		await sql(Row)`delete from notes n where ${sql.scope(note('notes.delete'), 'notes', 'n')}`
+		await sql(Row)`update notes set title = ${'x'} where ${sql.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes')}`
+		await sql(Row)`update settings set value = ${'x'} where ${sql.scope(authority.app('settings.edit'), 'settings')}`
+		await sql(Row)`delete from note_comments c where c.note_id in (select n.id from notes n where ${
+			sql.scope(authority.within('workspace', 'notes.read', ['w1']), 'notes', 'n')
+		})`
+		await sql(Row)`insert into note_comments (id, note_id, workspace_id, organization_id, body)
+			select ${'c1'}, n.id, n.workspace_id, n.organization_id, ${'copied'} from notes n where ${sql.scope(note('notes.read'), 'notes', 'n')}`
+		expect(sent()).toHaveLength(6)
+		expect(sent()[3]).toBe('update settings set value = $1 where (true)')
+	})
+
+	test('a read under an action the table does not name, or a list under one its Within does not read with, is refused', async () => {
+		expect(() => reader.scope(note('secrets.admin'), 'notes')).toThrow('notes does not name the action secrets.admin')
+		expect(() => reader.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes')).toThrow(
+			'a Within of notes.write does not read notes: it reads with its read action notes.read',
+		)
+		await expect(
+			sql(Row)`select n.id from notes n where ${sql.scope(authority.within('workspace', 'notes.write', ['w1']), 'notes', 'n')}`,
+		).rejects.toThrow('a Within of notes.write does not read notes: it reads with its read action notes.read')
+	})
+
+	test('a scoped site reads an application table with its read action, as ctx.db.app does', async () => {
+		dialect.log.length = 0
+		await reader(Row)`select s.id from settings s where ${reader.scope(authority.within('workspace', 'settings.read', ['w1']), 'settings', 's')}`
+		expect(sent()).toEqual(['select s.id from settings s where (true)'])
+		expect(() => reader.scope(note('notes.read'), 'settings')).toThrow('a scoped site reads settings with its read action settings.read only')
+	})
+
+	test('a reference table as a write target is refused, with a fragment or without', async () => {
+		dialect.log.length = 0
+		await expect(sql(Row)`update countries set name = ${'x'} where code = ${'CZ'}`).rejects.toThrow(
+			'countries is a reference table, which no statement writes: its rows come from a migration',
+		)
+		await expect(sql(Row)`insert into countries (code, name) values (${'PL'}, ${'Poland'})`).rejects.toThrow('countries is a reference table')
+		await expect(sql(Row)`delete from countries where code = ${'CZ'}`).rejects.toThrow('countries is a reference table')
+		await expect(sql(Row)`with gone as (delete from countries returning code) select code from gone`).rejects.toThrow(
+			'countries is a reference table',
+		)
+		await sql(Row)`delete from contact_messages returning id`
+		expect(sent()).toEqual(['delete from contact_messages returning id'])
 	})
 })
 

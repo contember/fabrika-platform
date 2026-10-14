@@ -9,6 +9,7 @@ import {
 	frameworkReference,
 	lexSql,
 	nameReferences,
+	nameText,
 	nestedStatement,
 	parenthesizedTarget,
 	refusedFunctionCall,
@@ -40,8 +41,20 @@ export interface ScopeTest {
 /** A capability's predicate on one table: every row (`'all'`), or an OR of AND groups; no group matches nothing. */
 export type ScopeTerms = 'all' | readonly (readonly ScopeTest[])[]
 
-/** The scope of `capability` on `table`, as the data layer predicates its handles; throws when it does not reach it. */
-export type ScopeOf = (capability: unknown, table: string) => ScopeTerms
+/** What a fragment's table is to its statement: read, or the target of its UPDATE or DELETE. */
+export type ScopeUse = 'read' | 'update' | 'delete'
+
+/**
+ * The scope of `capability` on `table` for `use`, as the data layer predicates its handles; throws when it does not
+ * reach it for that use.
+ */
+export type ScopeOf = (capability: unknown, table: string, use: ScopeUse) => ScopeTerms
+
+/** The operation a write statement performs on one of its targets. */
+export type WriteOperation = 'insert' | 'update' | 'delete'
+
+/** Throws for a table no statement may write with `operation`: a reference table. */
+export type WriteTarget = (table: string, operation: WriteOperation) => void
 
 /**
  * `ctx.sql.scope(capability, table, alias?)`: the capability's whole predicate on one table, as SQL with bound values.
@@ -54,8 +67,9 @@ export interface SqlScope {
 
 interface ScopeData {
 	readonly site: SqlSite
-	readonly parts: readonly string[]
-	readonly values: readonly SqlValue[]
+	readonly capability: unknown
+	readonly table: string
+	readonly alias: string
 }
 
 const scopes = new WeakMap<object, ScopeData>()
@@ -68,7 +82,7 @@ function newScope(data: ScopeData): SqlScope {
 	const scope: SqlScope = { kind: 'sql-scope' }
 	withoutPrototype(scope, null)
 	freeze(scope)
-	register(scope, freeze({ site: data.site, parts: freeze([...data.parts]), values: freeze([...data.values]) }))
+	register(scope, freeze({ site: data.site, capability: data.capability, table: data.table, alias: data.alias }))
 	return scope
 }
 
@@ -352,9 +366,9 @@ function rowIssue(
 }
 
 /** The predicate `terms` make over `alias`'s columns: static parts around one bound value per test. */
-function scopeFragment(site: SqlSite, terms: ScopeTerms, alias: string): SqlScope {
-	if (terms === 'all') return newScope({ site, parts: ['(true)'], values: [] })
-	if (terms.length === 0) return newScope({ site, parts: ['(false)'], values: [] })
+function scopeFragment(terms: ScopeTerms, alias: string): { readonly parts: readonly string[]; readonly values: readonly SqlValue[] } {
+	if (terms === 'all') return { parts: ['(true)'], values: [] }
+	if (terms.length === 0) return { parts: ['(false)'], values: [] }
 	const parts: string[] = []
 	const values: SqlValue[] = []
 	let text = '('
@@ -369,7 +383,55 @@ function scopeFragment(site: SqlSite, terms: ScopeTerms, alias: string): SqlScop
 		text += ')'
 	})
 	parts.push(`${text})`)
-	return newScope({ site, parts, values })
+	return { parts, values }
+}
+
+/** One table a write statement writes, at any depth (a data-modifying CTE too), and how. */
+interface Target {
+	readonly table: string
+	readonly operation: WriteOperation
+}
+
+/** The name at `index`, `schema.name` read as its name; `undefined` when no name is there. */
+function targetName(tokens: readonly SqlToken[], index: number): string | undefined {
+	const at = upperWord(tokens[index]) === 'ONLY' ? index + 1 : index
+	return isPunct(tokens[at + 1], '.') ? nameText(tokens[at + 2]) : nameText(tokens[at])
+}
+
+/**
+ * Every `INSERT INTO`, `UPDATE` and `DELETE FROM` target of the statement. `ON CONFLICT … DO UPDATE` and a locking
+ * clause (`FOR UPDATE`, `FOR NO KEY UPDATE`) name no target.
+ */
+function writeTargets(tokens: readonly SqlToken[]): Target[] {
+	const targets: Target[] = []
+	for (let index = 0; index < tokens.length; index++) {
+		const word = upperWord(tokens[index])
+		const next = upperWord(tokens[index + 1])
+		let at: number | undefined
+		let operation: WriteOperation | undefined
+		if (word === 'INSERT' && next === 'INTO') {
+			at = index + 2
+			operation = 'insert'
+		} else if (word === 'DELETE' && next === 'FROM') {
+			at = index + 2
+			operation = 'delete'
+		} else if (word === 'UPDATE' && !['DO', 'FOR', 'KEY'].includes(upperWord(tokens[index - 1]) ?? '')) {
+			at = index + 1
+			operation = 'update'
+		}
+		const table = at === undefined ? undefined : targetName(tokens, at)
+		if (table !== undefined && operation !== undefined) targets.push({ table, operation })
+	}
+	return targets
+}
+
+/** What a fragment on `table` is to the statement: the target of each UPDATE and DELETE of it, or else read. */
+function usesOf(targets: readonly Target[], table: string): ScopeUse[] {
+	const uses: ScopeUse[] = []
+	for (const target of targets) {
+		if (target.table === table && target.operation !== 'insert' && !uses.includes(target.operation)) uses.push(target.operation)
+	}
+	return uses.length === 0 ? ['read'] : uses
 }
 
 /** Words that open the clause a scope may stand in. */
@@ -500,9 +562,20 @@ function checkInterpolations(parts: readonly string[], values: readonly unknown[
 	}
 }
 
-/** The template with every scope spliced in as text around its own values, and the values a parameter each. */
-function expandScopes(site: SqlSite, parts: readonly string[], values: readonly unknown[]): { parts: string[]; values: unknown[] } {
+/**
+ * The template with every scope spliced in as text around its own values, and the values a parameter each. Each
+ * fragment is rendered for what its table is to the statement: the target of its UPDATE or DELETE, or read.
+ */
+function expandScopes(
+	site: SqlSite,
+	parts: readonly string[],
+	values: readonly unknown[],
+	termsOf: ScopeOf,
+	writeTarget: WriteTarget,
+): { parts: string[]; values: unknown[] } {
 	checkInterpolations(parts, values)
+	const targets = site.mode === 'write' ? writeTargets(lexSql(statementText(parts)).tokens) : []
+	for (const target of targets) writeTarget(target.table, target.operation)
 	const expanded: string[] = [parts[0] ?? '']
 	const bound: unknown[] = []
 	for (let index = 0; index < values.length; index++) {
@@ -517,10 +590,13 @@ function expandScopes(site: SqlSite, parts: readonly string[], values: readonly 
 		if (fragment.site !== site) {
 			refuse('sql_scope', 'a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
 		}
-		expanded[expanded.length - 1] += fragment.parts[0] ?? ''
-		for (let position = 0; position < fragment.values.length; position++) {
-			bound.push(fragment.values[position])
-			expanded.push(fragment.parts[position + 1] ?? '')
+		let terms: ScopeTerms = []
+		for (const use of usesOf(targets, fragment.table)) terms = termsOf(fragment.capability, fragment.table, use)
+		const rendered = scopeFragment(terms, fragment.alias)
+		expanded[expanded.length - 1] += rendered.parts[0] ?? ''
+		for (let position = 0; position < rendered.values.length; position++) {
+			bound.push(rendered.values[position])
+			expanded.push(rendered.parts[position + 1] ?? '')
 		}
 		expanded[expanded.length - 1] += after
 	}
@@ -540,11 +616,34 @@ async function failing<T>(site: SqlSite, work: () => Promise<T>): Promise<T> {
 	}
 }
 
+const WRITE_USES: readonly ScopeUse[] = ['update', 'delete']
+
+/**
+ * Throws unless `capability` reaches `table` for some use the site may make of it: reading, or on a `'write'` site
+ * the target of an UPDATE or a DELETE. The statement's own use is checked when the tag renders the fragment.
+ */
+function reaches(site: SqlSite, termsOf: ScopeOf, capability: unknown, table: string): void {
+	try {
+		termsOf(capability, table, 'read')
+	} catch (error) {
+		if (site.mode !== 'write') throw error
+		for (const use of WRITE_USES) {
+			try {
+				termsOf(capability, table, use)
+				return
+			} catch {
+				// The read refusal names what a read needs, which is what most fragments are.
+			}
+		}
+		throw error
+	}
+}
+
 /**
  * `ctx.sql` of one site. Every call first checks that the work running now is the site's invocation, then classifies
  * the text, then binds the values; only then does it reach the session, so a refused statement sends nothing.
  */
-export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: ScopeOf): SqlTag {
+export function sqlTag(site: SqlSite, schema: string | undefined, termsOf: ScopeOf, writeTarget: WriteTarget): SqlTag {
 	const tag = <S extends z.core.$ZodType>(row: S) => {
 		site.check()
 		if (!(row instanceof z.core.$ZodType)) {
@@ -554,7 +653,7 @@ export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: Scope
 		return async (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]): Promise<z.output<S>[]> => {
 			site.check()
 			return failing(site, async () => {
-				const expanded = expandScopes(site, templateParts(text), values)
+				const expanded = expandScopes(site, templateParts(text), values, termsOf, writeTarget)
 				const statement = classifySql(expanded.parts, site.mode, schema ?? '')
 				const parameters = expanded.values.map((value, index) => parameterOf(value, index + 1))
 				const session = await site.session()
@@ -573,7 +672,8 @@ export function sqlTag(site: SqlSite, schema: string | undefined, scopeOf: Scope
 			if (!isPlainIdentifier(table) || !isPlainIdentifier(name)) {
 				refuse('invalid_argument', 'ctx.sql.scope(capability, table, alias?) takes a table name and an alias of lowercase letters, digits and _')
 			}
-			return scopeFragment(site, scopeOf(capability, table), name)
+			reaches(site, termsOf, capability, table)
+			return newScope({ site, capability, table, alias: name })
 		} catch (error) {
 			site.fail()
 			throw error

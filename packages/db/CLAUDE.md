@@ -289,11 +289,19 @@ and the target `Ref`, so no handler can call it.
   private execute, so a statement the database refuses fails the invocation. Any refusal of the tag after its binding check (a statement, a value, a row) fails the site's transaction too (`SqlSite.fail`: `InvocationTransaction.fail` or `Session.fail`), so a handler that catches it still commits nothing; a nested `Session.transaction` with a failed statement throws instead of committing. A row error names the schema's top-level field and the issue's code and expected type, never the issue's message, a deeper path or a value. `QueryRefusedError` carries a `reason` from the closed `QUERY_REFUSALS` catalog; `@fabrika/app` logs only the reason and its catalog text, never the message, which may quote a value the request sent. A new refusal picks a reason, or adds one with its fixed text. Do not add another method that takes
   SQL, a builder or an unguarded node.
 - **`ctx.sql.scope(capability, table, alias?)` is the one interpolation that is not a single parameter.** It renders
-  `scopeTerms` (`store.ts`): a `Ref`'s object column and every link of its chain (`linkValues`), a `Within`'s values
-  and container grants as `ctx.db.within` matches them, `(true)` for `all`, `(false)` when empty, and `(true)` for an
-  `app` capability on a table `ctx.db.app` lists for it (`checkAppReach`: an application table under any action it
-  names, a dimension or child table under its read action only); a table the capability does not reach is refused as
-  the handles refuse it. A fragment is a frozen object without a prototype;
+  `scopeTerms` (`store.ts`) for what its table is to the statement (`ScopeUse`): a `Ref`'s object column and every link
+  of its chain (`linkValues`), a `Within`'s values and container grants as `ctx.db.within` matches them, `(true)` for
+  `all`, `(false)` when empty, and `(true)` for an `app` capability and for a scoped read of an application table. The
+  tag lexes the statement's `INSERT INTO`, `UPDATE` and `DELETE FROM` targets (`writeTargets` in `sql.ts`, data-modifying
+  CTEs too) before it renders a fragment. A fragment on an `UPDATE` or `DELETE` target, matched by table name, needs
+  that operation's own action (`checkWriteTarget`), and an `app` capability writes application tables only, a `Ref` or
+  `Within` never one. A fragment anywhere else reads, with an action the handles read the table with: any action it
+  names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it for with an `app` capability
+  (`checkAppReach`: an application table under any action it names, a dimension or child table under its read action
+  or one of `actions.appRead`), and its read action for a scoped site's application table (`scopedApplicationRead`).
+  A reference table as any write target is refused, with a fragment or without. `scope` itself refuses a table the
+  capability reaches for no use the site may make of it, and its types (`FragmentTable` in `orm-types.ts`) make that
+  a type error at the table argument when the capability's dimension and action are literal. A fragment is a frozen object without a prototype;
   what it holds lives in a module-private `WeakMap` read through methods bound at load, so no object an application
   builds or patches passes for one, and the tag refuses a fragment of another site. Before it splices anything, the
   tag checks every interpolation's place in the original text (code level, not a literal, a quoted name, a dollar

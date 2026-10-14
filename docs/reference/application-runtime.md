@@ -447,7 +447,16 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
   `ctx.sql` has no scope predicate of its own: `${ctx.sql.scope(capability, table, alias?)}` interpolates the
   capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
   a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty, an `app`
-  capability's every row — with each value a bound parameter. A table the capability does not reach is refused, and a fragment of another site is refused.
+  capability's every row — with each value a bound parameter. A fragment carries the action of its capability, and
+  the tag checks it against what the statement does with its table: on the target of an `UPDATE` or `DELETE` (matched
+  by table name, at any depth) it needs that operation's own action from the table's policy, an `app` capability
+  writes only application tables and a `Ref` or `Within` none; anywhere else it reads, with an action the handles read
+  the table with (any action the table names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it
+  for with an `app` capability, a scoped site's application table by its read action). A reference table as an
+  `INSERT`, `UPDATE` or `DELETE` target is refused. A fragment that reaches its table for no use the site may make
+  of it is a type error at the table argument (`FragmentTable`) and is refused by `scope` at run time; a fragment of
+  another site is refused. The statement's own tables are not declared: `sql: 'read' | 'write'` stays one declaration
+  per site, and an `INSERT` or a write without a fragment is the declared deviation the approver reviews.
   The fragment must be a conjunct: alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose top
   level holds no OR (`where (<filter>) and ${…}`); any interpolation inside a literal, a quoted name, a dollar body or a
   comment is refused, a fragment with no value included. A reference table needs no fragment.

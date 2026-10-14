@@ -435,9 +435,14 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `Ref` the object's column and every link of its chain, so a project moved to another org is out; for a `Within` its
   values, each container grant on its own column, every row for a global grant and none for an empty one. The
   capability is the access form's: `ctx.target` for `on` and `in`, `ctx.within` for `over`; a job passes the `Ref` or
-  `Within` it minted to `tx.sql.scope`. A table the capability does not reach is refused. A reference table is shared
-  by every scope and needs no fragment. A form's inbox needs none either; read it from a site that holds the inbox's
+  `Within` it minted to `tx.sql.scope`. A table the capability does not reach is a type error at the table name. A
+  reference table is shared by every scope and needs no fragment, and no statement writes it. A form's inbox needs none either; read it from a site that holds the inbox's
   `read` action (the intake job of `references/public-intake.md`).
+- **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
+  table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
+  never scopes a write; anywhere else it needs an action the handles read the table with. A refused fragment fails
+  the call before anything is sent. A read of the written table in the same statement is held to the write action
+  too: scope it with that capability.
 - **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
   top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
   The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a

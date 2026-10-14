@@ -11,9 +11,8 @@ the checker, which by the runtime, and which only by the human review of a decla
 
 ## Problem
 
-- The same rule is enforced at different layers: a scope fragment is checked only at run time
-  ([134](134-a-sql-scope-fragment-does-not-tie-its-action-to-the-statement.md)), a form's field names at boot, a
-  table's actions by the types. An application built on the paved road met several of these first as a failing
+- The same rule is enforced at different layers: a scope fragment's statement use only at run time, a form's field
+  names at boot, a table's actions by the types. An application built on the paved road met several of these first as a failing
   generated case.
 - The declared exceptions (`sql`, `unscoped`, link `issues`, anonymous mounts) are guarantees only through the
   approver's review. Their reach is coarse: `sql: 'read' | 'write'` names no table.

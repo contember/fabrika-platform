@@ -7,6 +7,7 @@ import type {
 	AnyDbIndex,
 	ApplicationTables,
 	DataKind,
+	FragmentTable,
 	NoUnscoped,
 	ReferenceTables,
 	ScopedApplicationTables,
@@ -99,15 +100,21 @@ export type SqlValue = string | number | boolean | bigint | Date | null | readon
  * `ctx.sql(Row)\`select …\``: one statement, every interpolation a bound parameter, run in the invocation's
  * transaction; each row is parsed (snake_case → camelCase, `Date` → ISO text, then `Row`).
  */
-export interface SqlTag<T extends string = string> {
+export interface SqlTag<Ix extends AnyDbIndex = AnyDbIndex, M extends SqlMode = SqlMode> {
 	<Row extends Schema>(row: Row): (text: TemplateStringsArray, ...values: readonly (SqlValue | SqlScope)[]) => Promise<z.output<Row>[]>
 	/**
 	 * The capability's whole predicate on `table` (`alias` its name in the statement, the table's by default): the
 	 * object's key and every link of its chain for a `Ref`, what `ctx.db.within` matches for a `Within`, every row for
-	 * `ctx.app`. Interpolated as `where ${ctx.sql.scope(ctx.target, 'tasks', 't')}`, its values are bound parameters; a
-	 * table the capability does not reach is refused.
+	 * `ctx.app`. Interpolated as `where ${ctx.sql.scope(ctx.target, 'tasks', 't')}`, its values are bound parameters.
+	 * A table the capability reaches for no use of this site is a type error here; at run time the fragment on the
+	 * statement's UPDATE or DELETE target needs that operation's action, and anywhere else an action the table reads
+	 * with.
 	 */
-	scope(capability: Ref<string, string> | Within<string, string> | AppCapability<string>, table: T, alias?: string): SqlScope
+	scope<C extends Ref<string, string> | Within<string, string> | AppCapability<string>, T extends FragmentTable<Ix, C, M>>(
+		capability: C,
+		table: T,
+		alias?: string,
+	): SqlScope
 }
 
 declare const sqlScope: unique symbol
@@ -117,9 +124,9 @@ export interface SqlScope {
 	readonly [sqlScope]: true
 }
 
-type SqlContext<S, T extends string> = {
+type SqlContext<S, Ix extends AnyDbIndex> = {
 	readonly sql: [S] extends [never] ? Unavailable<"ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site">
-		: SqlTag<T>
+		: SqlTag<Ix, S & SqlMode>
 }
 
 type UnscopedData<Ix extends AnyDbIndex, U, K extends DataKind> = {
@@ -317,7 +324,7 @@ export type EndpointContext<
 	& MembersContext<K, Acc>
 	& LinksContext<Acc, Of<D, 'issues'>>
 	& ConnectContext<K, Of<D, 'connect'>>
-	& SqlContext<Of<D, 'sql'>, K['tables']>
+	& SqlContext<Of<D, 'sql'>, K['index']>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
 
 /** A link procedure acts on the one object its key is bound to. */
@@ -330,7 +337,7 @@ export type LinkContext<
 > =
 	& RequestContext<PrincipalOf<'link'>>
 	& { readonly target: Ref<LD, A> }
-	& SqlContext<Of<D, 'sql'>, K['tables']>
+	& SqlContext<Of<D, 'sql'>, K['index']>
 	& {
 		readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>>>
 	}
@@ -339,7 +346,7 @@ export type LinkContext<
 export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', unknown, never, never>> =
 	& RequestContext<ServicePrincipal | AppPrincipal>
 	& CapabilityContext<Acc>
-	& SqlContext<Of<D, 'sql'>, K['tables']>
+	& SqlContext<Of<D, 'sql'>, K['index']>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>>> }
 
 /**
@@ -360,7 +367,7 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
 export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string>> =
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
-	& SqlContext<Of<D, 'sql'>, K['tables']>
+	& SqlContext<Of<D, 'sql'>, K['index']>
 
 /**
  * `ctx.links` of a cron job that declares the link mount it issues (`issues: '<mount>'`): a link for an object the job
@@ -382,7 +389,7 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& RequestContext<WebhookPrincipal>
 	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
-	& SqlContext<Of<D, 'sql'>, K['tables']>
+	& SqlContext<Of<D, 'sql'>, K['index']>
 	& { readonly db: SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>> }
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never
