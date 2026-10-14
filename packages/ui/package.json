@@ -1,0 +1,45 @@
+{
+	"name": "@fabrika/ui",
+	"version": "0.0.4",
+	"type": "module",
+	"description": "React component kit for the paved road: accessible admin components styled through CSS custom properties.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/ui"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./styles.css": "./src/styles.css",
+		"./theme.css": "./src/theme.css"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test --isolate"
+	},
+	"peerDependencies": {
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	},
+	"devDependencies": {
+		"@happy-dom/global-registrator": "^20.11.2",
+		"@types/bun": "latest",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0",
+		"typescript": "^5.9.3"
+	}
+}

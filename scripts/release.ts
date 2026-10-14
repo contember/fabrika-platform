@@ -34,6 +34,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/provider-contract',
 	'@fabrika/provider-zerops',
 	'@fabrika/proxy-core',
+	'@fabrika/ui',
 ]
 const TAG_PATTERN =
 	/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/

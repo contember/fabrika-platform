@@ -1,0 +1,125 @@
+/*
+ * The @fabrika/ui design tokens. This file holds custom properties and `color-scheme` only: an application overrides any of them in its
+ * own stylesheet, imported after `@fabrika/ui/styles.css`. Every component rule reads these tokens and nothing else.
+ */
+
+:root {
+	/* Native controls (file inputs, date pickers, scrollbars) follow the token set. */
+	color-scheme: light;
+	--fui-font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+	--fui-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+	--fui-text-xs: 11px;
+	--fui-text-sm: 12px;
+	--fui-text-md: 14px;
+	--fui-text-lg: 16px;
+	--fui-text-xl: 18px;
+	--fui-text-2xl: 22px;
+	--fui-line-height: 1.45;
+	--fui-line-height-tight: 1.2;
+	--fui-weight-regular: 400;
+	--fui-weight-medium: 500;
+	--fui-weight-semibold: 600;
+
+	--fui-bg: #f6f7f9;
+	--fui-surface: #ffffff;
+	--fui-surface-muted: #f0f2f5;
+	--fui-border: #e1e4ea;
+	--fui-border-strong: #c7ccd6;
+	--fui-text: #1b1f27;
+	--fui-text-muted: #545c6b;
+	--fui-text-subtle: #7d8595;
+	--fui-accent: #3b5bdb;
+	--fui-accent-hover: #3049b8;
+	--fui-accent-contrast: #ffffff;
+	--fui-accent-soft: #e9edfc;
+	--fui-focus: #5b78e8;
+	--fui-overlay: rgba(17, 21, 30, 0.42);
+	--fui-skeleton: #e6e9ee;
+
+	--fui-success: #2b8a57;
+	--fui-success-soft: #e5f4ec;
+	--fui-success-text: #1d6b42;
+	--fui-warning: #c27a12;
+	--fui-warning-soft: #fbf1df;
+	--fui-warning-text: #8a5409;
+	--fui-danger: #c93a3a;
+	--fui-danger-soft: #fbe9e9;
+	--fui-danger-text: #a12a2a;
+	--fui-info: #2f7fb8;
+	--fui-info-soft: #e5f1f9;
+	--fui-info-text: #1f6190;
+
+	--fui-space-1: 4px;
+	--fui-space-2: 8px;
+	--fui-space-3: 12px;
+	--fui-space-4: 16px;
+	--fui-space-5: 20px;
+	--fui-space-6: 24px;
+	--fui-space-7: 32px;
+	--fui-space-8: 40px;
+	--fui-radius-sm: 4px;
+	--fui-radius-md: 6px;
+	--fui-radius-lg: 10px;
+	--fui-radius-full: 999px;
+	--fui-border-width: 1px;
+	--fui-focus-width: 2px;
+	--fui-shadow-sm: 0 1px 2px rgba(17, 21, 30, 0.06);
+	--fui-shadow-md: 0 2px 8px rgba(17, 21, 30, 0.08), 0 1px 2px rgba(17, 21, 30, 0.06);
+	--fui-shadow-lg: 0 12px 32px rgba(17, 21, 30, 0.16), 0 2px 6px rgba(17, 21, 30, 0.08);
+
+	--fui-sidebar-width: 232px;
+	--fui-shell-min-height: 100vh;
+	--fui-side-panel-width: 320px;
+	--fui-content-max-width: 1280px;
+	--fui-dialog-width: 480px;
+	--fui-toast-width: 360px;
+	--fui-control-height: 32px;
+	--fui-control-height-sm: 26px;
+	--fui-row-height: 36px;
+	--fui-check-size: 14px;
+	--fui-spinner-size: 14px;
+	--fui-dot-size: 6px;
+	--fui-transition: 120ms ease-out;
+	--fui-disabled-opacity: 0.6;
+	--fui-spin-duration: 700ms;
+	--fui-pulse-duration: 1.2s;
+	--fui-z-sticky: 2;
+	--fui-z-overlay: 100;
+	--fui-z-toast: 110;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--fui-bg: #12151b;
+	--fui-surface: #191d25;
+	--fui-surface-muted: #20252f;
+	--fui-border: #2c323d;
+	--fui-border-strong: #3d4552;
+	--fui-text: #e6e9ef;
+	--fui-text-muted: #a8b0bf;
+	--fui-text-subtle: #7c8596;
+	--fui-accent: #7390f0;
+	--fui-accent-hover: #8ba3f4;
+	--fui-accent-contrast: #0e1220;
+	--fui-accent-soft: #232d4d;
+	--fui-focus: #8ba3f4;
+	--fui-overlay: rgba(5, 7, 11, 0.6);
+	--fui-skeleton: #262b35;
+
+	--fui-success: #4cb27c;
+	--fui-success-soft: #173326;
+	--fui-success-text: #7fd0a4;
+	--fui-warning: #e0a043;
+	--fui-warning-soft: #3a2c14;
+	--fui-warning-text: #f0c27e;
+	--fui-danger: #e46a6a;
+	--fui-danger-soft: #3b1d1f;
+	--fui-danger-text: #f2a0a0;
+	--fui-info: #5aa6db;
+	--fui-info-soft: #16293a;
+	--fui-info-text: #93c6ea;
+
+	--fui-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+	--fui-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
+	--fui-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
