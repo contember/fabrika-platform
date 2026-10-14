@@ -46,9 +46,9 @@ export type ScopeUse = 'read' | 'update' | 'delete'
 
 /**
  * The scope of `capability` on `table` for `use`, as the data layer predicates its handles; throws when it does not
- * reach it for that use.
+ * reach it for that use. `assigned` is the columns an UPDATE's SET names, and `undefined` before a statement is known.
  */
-export type ScopeOf = (capability: unknown, table: string, use: ScopeUse) => ScopeTerms
+export type ScopeOf = (capability: unknown, table: string, use: ScopeUse, assigned?: readonly string[]) => ScopeTerms
 
 /** The operation a write statement performs on one of its targets. */
 export type WriteOperation = 'insert' | 'update' | 'delete'
@@ -392,11 +392,13 @@ interface Target {
 	readonly operation: WriteOperation
 }
 
-/** The relation an UPDATE or DELETE writes: its table, under its alias (the table's name without one). */
+/** The relation an UPDATE or DELETE writes: its table, under its alias (the table's name without one), and what it sets. */
 interface Written {
 	readonly table: string
 	readonly alias: string
 	readonly operation: 'update' | 'delete'
+	/** The columns an UPDATE's SET assigns; none for a DELETE. */
+	readonly assigned: readonly string[]
 }
 
 /** What a statement writes, and for each interpolation, in order, the UPDATE or DELETE of the query block it stands in. */
@@ -466,22 +468,66 @@ function statementWrites(tokens: readonly SqlToken[]): StatementWrites {
 			}
 		} else if (word === 'DELETE' && next === 'FROM') {
 			const target = targetAt(tokens, index + 2)
-			enter(target === undefined ? undefined : { ...target, operation: 'delete' })
+			enter(target === undefined ? undefined : { ...target, operation: 'delete', assigned: [] })
 			if (target !== undefined) targets.push({ table: target.table, operation: 'delete' })
 		} else if (word === 'UPDATE') {
 			const before = upperWord(tokens[index - 1])
 			if (before === 'FOR' || before === 'KEY') continue
 			const target = before === 'DO' ? inserts.get(depth) : targetAt(tokens, index + 1)
-			enter(target === undefined ? undefined : { ...target, operation: 'update' })
+			enter(target === undefined ? undefined : { ...target, operation: 'update', assigned: assignedColumns(tokens, index + 1) })
 			if (target !== undefined) targets.push({ table: target.table, operation: 'update' })
 		}
 	}
 	return { targets, blocks }
 }
 
+/** Words that end an UPDATE's SET list at its own depth. */
+const SET_ENDS: ReadonlySet<string> = new Set(['FROM', 'WHERE', 'RETURNING'])
+
+/**
+ * The columns the SET of the UPDATE whose target starts at `from` assigns: `a = …` and `(a, b) = …` items, a column's
+ * subfield or subscript by the column. Nothing when the SET cannot be found at the UPDATE's depth.
+ */
+function assignedColumns(tokens: readonly SqlToken[], from: number): readonly string[] {
+	let index = from
+	let depth = 0
+	while (index < tokens.length && !(depth === 0 && upperWord(tokens[index]) === 'SET')) {
+		const token = tokens[index]
+		if (isPunct(token, '(')) depth++
+		if (isPunct(token, ')') && --depth < 0) return []
+		if (depth === 0 && SET_ENDS.has(upperWord(token) ?? '')) return []
+		index++
+	}
+	const columns: string[] = []
+	let expectColumn = true
+	depth = 0
+	for (index++; index < tokens.length; index++) {
+		const token = tokens[index]
+		if (depth === 0 && expectColumn) {
+			expectColumn = false
+			if (isPunct(token, '(')) {
+				for (index++; index < tokens.length && !isPunct(tokens[index], ')'); index++) {
+					const name = nameText(tokens[index])
+					if (name !== undefined) columns.push(name)
+				}
+				continue
+			}
+			const name = nameText(token)
+			if (name !== undefined) columns.push(name)
+			continue
+		}
+		if (isPunct(token, '(') || isPunct(token, '[')) depth++
+		else if (isPunct(token, ')') || isPunct(token, ']')) {
+			if (--depth < 0) break
+		} else if (depth === 0 && isPunct(token, ',')) expectColumn = true
+		else if (depth === 0 && SET_ENDS.has(upperWord(token) ?? '')) break
+	}
+	return columns
+}
+
 /** What a fragment on `table` under `alias` is to its block: the relation its UPDATE or DELETE writes, or else read. */
-function fragmentUse(written: Written | undefined, table: string, alias: string): ScopeUse {
-	return written !== undefined && written.table === table && written.alias === alias ? written.operation : 'read'
+function fragmentUse(written: Written | undefined, table: string, alias: string): Written | undefined {
+	return written !== undefined && written.table === table && written.alias === alias ? written : undefined
 }
 
 /** Words that open the clause a scope may stand in. */
@@ -640,7 +686,10 @@ function expandScopes(
 		if (fragment.site !== site) {
 			refuse('sql_scope', 'a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
 		}
-		const terms = termsOf(fragment.capability, fragment.table, fragmentUse(writes.blocks[index], fragment.table, fragment.alias))
+		const written = fragmentUse(writes.blocks[index], fragment.table, fragment.alias)
+		const terms = written === undefined
+			? termsOf(fragment.capability, fragment.table, 'read')
+			: termsOf(fragment.capability, fragment.table, written.operation, written.assigned)
 		const rendered = scopeFragment(terms, fragment.alias)
 		expanded[expanded.length - 1] += rendered.parts[0] ?? ''
 		for (let position = 0; position < rendered.values.length; position++) {

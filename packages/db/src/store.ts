@@ -90,6 +90,7 @@ import {
 	type TableModels,
 	tableModels,
 	type Tables,
+	updatableBy,
 	updateActions,
 	type UpdateValues,
 	type VersionArguments,
@@ -340,9 +341,11 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 
 /**
  * A fragment on an UPDATE or DELETE target: the capability's action is that operation's, and an application table is
- * written by an `app` capability only, a dimension or child table never by one.
+ * written by an `app` capability only, a dimension or child table never by one. An UPDATE may instead hold a column's
+ * own write action when every column it assigns declares that action (`updatingRef`'s rule); `assigned` is
+ * `undefined` before the statement is known, and then any such action is taken.
  */
-function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'update' | 'delete'): void {
+function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'update' | 'delete', assigned: readonly string[] | undefined): void {
 	const model = context.model
 	const statement = `${use === 'update' ? 'UPDATE' : 'DELETE'} of ${model.name}`
 	if (grant.kind === 'app' && model.scope.mode !== 'app') {
@@ -352,11 +355,39 @@ function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'u
 		throw new CapabilityError('table_kind', `a scoped site writes no application table: ${statement} needs the capability of an app endpoint`)
 	}
 	const action = model.actions[use]
-	if (action === undefined) {
+	if (grant.action === action) {
+		return
+	}
+	const columnWrites: string[] = []
+	const updates = use === 'update' ? updateActions(model) : []
+	for (let index = 0; index < updates.length; index++) {
+		const write = updates[index]
+		if (write !== undefined && write !== action) columnWrites[columnWrites.length] = write
+	}
+	if (action === undefined && columnWrites.length === 0) {
 		throw new CapabilityError('undeclared_operation', `${statement}: its policy declares no ${use} action`)
 	}
-	if (grant.action !== action) {
-		throw new CapabilityError('wrong_action', `${statement} needs its ${use} action ${action}; the capability holds ${grant.action}`)
+	if (!columnWrites.includes(grant.action)) {
+		const needs = action === undefined ? [] : [`its ${use} action ${action}`]
+		if (columnWrites.length > 0) needs[needs.length] = `a column's own write action (${columnWrites.join(', ')})`
+		throw new CapabilityError('wrong_action', `${statement} needs ${needs.join(' or ')}; the capability holds ${grant.action}`)
+	}
+	if (assigned === undefined) {
+		return
+	}
+	const written = updatableBy(model, grant.action)
+	const outside: string[] = assigned.length === 0 ? ['no column it can name'] : []
+	for (let index = 0; index < assigned.length; index++) {
+		const column = assigned[index]
+		if (column !== undefined && !inSet(written, column)) outside[outside.length] = column
+	}
+	if (outside.length > 0) {
+		throw new CapabilityError(
+			'wrong_action',
+			`${statement} assigns ${
+				outside.join(', ')
+			}, which ${grant.action} does not write: a column's own write action scopes an UPDATE of its columns only`,
+		)
 	}
 }
 
@@ -369,11 +400,11 @@ function checkWriteTarget(context: TableContext, grant: CapabilityGrant, use: 'u
  * and every link of the chain it carries; a `Within` matches like `ctx.db.within` (its values, each container grant on
  * its own column, or every row for `all`); an `app` capability, and a scoped read of an application table, every row.
  */
-export function scopeTerms(context: TableContext, capability: unknown, use: ScopeUse): ScopeTerms {
+export function scopeTerms(context: TableContext, capability: unknown, use: ScopeUse, assigned?: readonly string[]): ScopeTerms {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
 	if (use !== 'read') {
-		checkWriteTarget(context, grant, use)
+		checkWriteTarget(context, grant, use, assigned)
 	}
 	if (grant.kind === 'app') {
 		if (use === 'read') {

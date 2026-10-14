@@ -561,8 +561,13 @@ type RefFragment<Ix extends AnyDbIndex, D extends string, A extends string> = {
 		: never
 }[TableName<Ix>]
 
-/** What a `Within` writes on a `'write'` site: the target of an UPDATE or DELETE whose action it holds. */
-type WithinWrites<E extends IndexedTable, M extends 'read' | 'write'> = M extends 'write' ? E['actions']['update'] | E['actions']['delete'] : never
+/**
+ * What a `Within` writes on a `'write'` site: the target of an UPDATE or DELETE whose action it holds, a column's own
+ * write action included (the statement's SET is checked against its columns at run time).
+ */
+type WithinWrites<E extends IndexedTable, M extends 'read' | 'write'> = M extends 'write'
+	? E['actions']['update'] | E['actions']['delete'] | (keyof E['writes'] & string)
+	: never
 
 /** The tables a fragment of a `Within` of `D` and `A` reaches: those it lists by their read action, or writes on `M`. */
 type WithinFragment<Ix extends AnyDbIndex, D extends string, A extends string, M extends 'read' | 'write'> = {

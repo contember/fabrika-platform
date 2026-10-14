@@ -463,7 +463,9 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `read` action (the intake job of `references/public-intake.md`).
 - **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
   table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
-  never scopes a write; anywhere else it needs an action the handles read the table with. `insert … on conflict do
+  never scopes a write. A column's own write action (`columns: { assignee: { write: 'tasks.assign' } }`) scopes an
+  `update` too, when every column its `set` assigns declares that action: a table with only column writes is updated
+  this way; anywhere else it needs an action the handles read the table with. `insert … on conflict do
   update … where ${…}` is an update of the inserted table. The fragment answers for its own query block: a CTE that
   updates and a statement that deletes take one capability each, and another occurrence of the written table (a
   subquery, `from tasks other`) reads with a read capability under its own alias. A refused fragment fails the call

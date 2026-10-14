@@ -125,11 +125,11 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 			sqlTag(
 				site,
 				parts.runtime().database.schema,
-				(capability, table, use) => {
+				(capability, table, use, assigned) => {
 					if (!hasOwn(parts.models, table)) {
 						throw new QueryRefusedError('unknown_table', `ctx.sql.scope: ${table} is not a table of src/db/tables.ts`)
 					}
-					return scopeTerms(parts.contextOf(table), capability, use)
+					return scopeTerms(parts.contextOf(table), capability, use, assigned)
 				},
 				(table) => {
 					if (modelOf(parts.models, table)?.scope.mode === 'reference') {

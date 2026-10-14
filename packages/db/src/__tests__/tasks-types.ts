@@ -1,7 +1,8 @@
 // The task tracker fixture's types, pinned: tsc fails when one drifts. `RowOf` is the row an action reads; an `over`
 // of the org lists tasks two levels down; a column write action updates exactly its columns; a day is text.
 
-import type { DbIndex, RowOf, ScopeTarget, Tables, Unavailable, WithinTables } from '../tables'
+import type { Within } from '../capability'
+import type { DbIndex, FragmentTable, RowOf, ScopeTarget, Tables, Unavailable, WithinTables } from '../tables'
 import type { DB, tables } from './fixtures/tasks'
 
 type Equal<A, B> = (<X>() => X extends A ? 1 : 2) extends <X>() => X extends B ? 1 : 2 ? true : false
@@ -35,4 +36,12 @@ export type TaskTypes = [
 	Expect<Equal<keyof WithinTables<Index, 'org', 'tasks.read'>, 'projects' | 'tasks' | 'task_comments'>>,
 	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read'>, 'tasks' | 'task_comments'>>,
 	Expect<Equal<keyof WithinTables<Index, 'task', 'tasks.read'>, 'task_comments'>>,
+	// A column's own write action scopes an UPDATE of its table on a 'write' site, and reads nothing.
+	Expect<Equal<FragmentTable<Index, Within<'project', 'tasks.assign'>, 'write'>, 'tasks' | 'task_comments'>>,
+	Expect<
+		Equal<
+			FragmentTable<Index, Within<'project', 'tasks.assign'>, 'read'>,
+			'no table takes a scope fragment of tasks.assign: reach its tables through ctx.db'
+		>
+	>,
 ]
