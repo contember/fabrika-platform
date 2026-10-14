@@ -136,7 +136,9 @@ src/
     bounded.ts        readBoundedBytes: a body under a byte budget and a deadline
     attachment.ts     encodeCsv and the response of an attachment output: RFC 4180, formula escape, size bounds
   files/              c.files: served by boot, never imported by an application
-    collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep
+    collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep, ctx.files
+    handle.ts         the types of ctx.files (types only, browser-safe)
+    schemas.ts        the list endpoint's zod schemas, shared with the client (browser-safe)
     scan.ts           the scan pass of scan: true collections and the FileScanner contract (FILE_SCAN_JOB)
     archive.ts        checkArchive: what a ZIP must be for the scanner's OK to cover it
     clamscan.ts       clamscanScanner: ClamAV's clamscan over a batch (Bun; @fabrika/app/bun only)
@@ -723,6 +725,13 @@ vocabulary (`packages/db/CLAUDE.md`).
   are the declared type, and the recorded type is what a download sends; `boot` refuses a
   collection that admits a type `sniff.ts` cannot verify. The size bound is the object
   store's (`FileObjectStore.write`), enforced while the body streams.
+- **`ctx.files(<name>)` takes the owner's `Ref` for one of the collection's actions** (`FileCollections.site`):
+  `list` for `read` or `write`, `open` for `read`, `removeAll` for `delete`, each checked before any statement
+  (`wrong_capability`). `open` locates the file, requires it beneath the owner where the `Ref` says, mints a
+  `file:<name>` `Ref` for the same principal and action and reads through `find` and the download's version check;
+  never read a file by its id alone. Its statements run in the site's session (`FileSite.session`), so `removeAll`
+  commits or rolls back with the invocation; it runs only where `FileSite.readOnly` is `null`. An export gets no
+  `ctx.files`. The name is checked at the call (`file_collection_unknown`), because groups type before the contract.
 - `FileCollections.sweep()` is the seam a framework job calls on a schedule; until then a
   remove sweeps its collection, and the scan job sweeps the scanning ones. `serveContract` opens the object storage from
   `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or presign one.

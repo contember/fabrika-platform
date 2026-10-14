@@ -10,6 +10,7 @@ import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type Permissi
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
+import type { FileCollections } from '../files/collections'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
 import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
@@ -22,6 +23,7 @@ import {
 	jobHandles,
 	jobSql,
 	jobSqlOutsideTransaction,
+	noFileCollections,
 	siteData,
 	type SiteDeclaration,
 	undeclaredSql,
@@ -152,6 +154,7 @@ interface RunnerContext {
 	readonly reporter: OperationsReporter
 	readonly mint: CapabilityMint
 	readonly data: DataAccess | null
+	readonly files: FileCollections | null
 	readonly membership: IamMembership | null
 	readonly capabilities: CapabilityAuthority
 	readonly containers: ReadonlyMap<string, readonly string[]>
@@ -173,6 +176,8 @@ export interface JobBindingInput {
 	readonly mint: CapabilityMint
 	/** The mini-ORM of the bound `scoped(tables)` layer, behind a staged-kit job's `ctx.db`. */
 	readonly data: DataAccess | null
+	/** The contract's file collections, behind a staged-kit job's `ctx.files` and `tx.files`; `null` without any. */
+	readonly files?: FileCollections | null
 	/** The framework's own jobs this contract needs: the scan of its `scan: true` file collections. */
 	readonly frameworkJobs?: readonly FrameworkJob[]
 	/** IAM's membership operations, which a job that `issues` links asks; `null` when the adapter supplies none. */
@@ -269,6 +274,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		reporter: chosen ?? input.reporter,
 		mint: input.mint,
 		data: input.data,
+		files: input.files ?? null,
 		membership: input.membership,
 		capabilities: input.capabilities,
 		containers: input.containers,
@@ -647,7 +653,7 @@ function jobContext(
 		runId: frame.id,
 		attempt,
 		signal,
-		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, job.name, job.site, principal.id)),
+		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
@@ -705,6 +711,7 @@ function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, fram
 function kitJobContext(
 	frame: RequestFrame,
 	data: DataAccess,
+	files: FileCollections | null,
 	name: string,
 	site: SiteDeclaration,
 	principal: string,
@@ -714,6 +721,13 @@ function kitJobContext(
 	return {
 		db: siteData(reads),
 		sql: site.sql === null ? undeclaredSql(job, 'job') : jobSqlOutsideTransaction(job),
+		files: files === null ? noFileCollections(job) : files.site({
+			where: job,
+			frame,
+			check: boundTo(frame, () => false, 'ctx.files'),
+			session: async () => data.direct(),
+			readOnly: 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
+		}),
 		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
 			boundTo(frame, () => false)()
@@ -722,7 +736,10 @@ function kitJobContext(
 				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
 				try {
 					const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
-					return await work(Object.freeze({ db: siteData(writes), sql }))
+					const removing = files === null
+						? noFileCollections(job)
+						: files.site({ where: job, frame, check: boundTo(frame, () => !open, 'tx.files'), session: async () => session, readOnly: null })
+					return await work(Object.freeze({ db: siteData(writes), sql, files: removing }))
 				} finally {
 					open = false
 				}

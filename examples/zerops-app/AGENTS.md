@@ -1422,7 +1422,9 @@ import { members } from './src/members/endpoints'
 import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
+import { digest } from './src/tasks/digest'
 import { tasks } from './src/tasks/endpoints'
+import { report } from './src/tasks/report'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', {
@@ -1432,6 +1434,7 @@ export const contract = app.contract((c) => ({
 		reports,
 		members,
 		priorities,
+		report,
 	}),
 	files: {
 		attachments: c.files({
@@ -1444,6 +1447,7 @@ export const contract = app.contract((c) => ({
 			maxPerOwner: 20,
 		}),
 	},
+	jobs: { digest },
 	health: c.health('/healthz'),
 }))
 ```
@@ -1459,6 +1463,145 @@ The collection serves, for signed-in people only:
 
 A file reaches what its task reaches, now: a moved task moves its files. The list answers the task's files oldest
 first, each `{ id, name, type, size, status, createdAt }`, at most `limit` (1–100, default 50) after the id `after`.
+
+## From a handler or a job: `ctx.files`
+
+`ctx.files('<collection>')` reaches one collection of the contract from a handler, a job's `ctx` and its `tx`. Each
+call takes a `Ref` of the owner (a task here), for one of the collection's actions:
+
+| Call                              | Takes the owner's `Ref` for | Answers                                                                    |
+| --------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
+| `list(owner, { after?, limit? })` | `read` or `write`           | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
+| `open(owner, id, { maxBytes })`   | `read`                      | `{ id, name, type, size, bytes }` of one live file, read whole             |
+
+A Ref for another action, or of another dimension, is refused. `open` answers 404 for a file of another owner, a
+removed or a rejected one, 409 `quarantined` while the scan has not called it clean, and 413 for a file over
+`maxBytes`, before any byte is read. Pass the size you hold in memory, at most the collection's `maxBytes`. The name
+is checked when the call runs, not by the types: a name the contract does not declare is a 500.
+
+A mutation that writes the owner lists with its own capability, the collection's `write`:
+
+```ts src/tasks/report.ts
+import { ConflictError } from '@fabrika/app'
+import { app } from '../app-kit'
+import { Saved, Versioned } from '../schemas'
+
+export const report = app.group({ callers: ['human'] }, (r) => ({
+	close: r.mutation({
+		input: Versioned,
+		output: Saved,
+		access: { action: 'tasks.write', on: 'task', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const page = await ctx.files('attachments').list(ctx.target)
+			// A quarantined file is uploaded; the scan decides about it later.
+			if (!page.items.some((file) => file.status !== 'rejected')) {
+				throw new ConflictError('a task closes with its report attached')
+			}
+			return ctx.db.target.update({ status: 'done' }, {
+				expectVersion: input.expectVersion,
+			})
+		}),
+}))
+```
+
+A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to attach it to an e-mail of `deps`:
+
+```ts src/tasks/digest.ts
+import { app } from '../app-kit'
+import { mailer } from '../mail'
+
+/** The largest report one e-mail carries: the collection's maxBytes. */
+const REPORT_MAX_BYTES = 5242880
+
+export const digest = app.cron('0 6 * * *', {
+	actions: ['tasks.read'],
+	scope: 'app',
+})
+	.handle(async ({ ctx }) => {
+		const mail = mailer.get()
+		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
+		const done = await tasks.list({ where: [['status', '=', 'done']], limit: 50 })
+		for (const task of done.items) {
+			const owner = await ctx.ref('tasks.read', 'task', task.id)
+			const files = ctx.files('attachments')
+			const page = await files.list(owner)
+			const reports = []
+			for (const file of page.items.filter((item) => item.status === 'live')) {
+				reports.push(
+					await files.open(owner, file.id, { maxBytes: REPORT_MAX_BYTES }),
+				)
+			}
+			ctx.signal.throwIfAborted()
+			await mail.sendReports(task.title, reports, ctx.signal)
+		}
+	})
+```
+
+```ts src/mail.ts
+import { defineDeps } from '@fabrika/app/implement'
+
+export interface Report {
+	readonly name: string | null
+	readonly type: string
+	readonly bytes: Uint8Array
+}
+
+export interface Mailer {
+	/** Sends the reports of one task; throws when the provider refuses, and gives up once `signal` aborts. */
+	sendReports(
+		title: string,
+		reports: readonly Report[],
+		signal: AbortSignal,
+	): Promise<void>
+}
+
+const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
+	const value = env[name]
+	if (typeof value !== 'string' || value === '') {
+		throw new Error(`the application variable ${name} is not set`)
+	}
+	return value
+}
+
+export const mailer = defineDeps((env): Mailer => ({
+	async sendReports(title, reports, signal) {
+		const response = await fetch(variable(env, 'MAIL_API_URL'), {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				to: variable(env, 'REPORTS_TO'),
+				subject: `Reports of ${title}`,
+				attachments: reports.map((file) => ({
+					filename: file.name ?? 'report',
+					contentType: file.type,
+					content: Buffer.from(file.bytes).toString('base64'),
+				})),
+			}),
+			signal,
+		})
+		if (!response.ok) {
+			throw new Error(`the mail provider answered ${response.status}`)
+		}
+	},
+}))
+```
+
+```ts src/app.ts
+import { serve } from '@fabrika/app/implement'
+import { scoped } from '@fabrika/db'
+import { contract } from '../fabrika.contract'
+import { tables } from './db/tables'
+import { mailer } from './mail'
+
+export default serve(contract, { database: scoped(tables), deps: mailer })
+```
+
+- The owner is a table with a dimension scope; an application table owns no collection.
+- There is no limit on the bytes of one owner's files together: `maxPerOwner` × `maxBytes` bounds them.
 
 ## Malware scan
 

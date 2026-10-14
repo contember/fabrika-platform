@@ -16,6 +16,7 @@ import {
 } from '@fabrika/db/framework'
 import type { DataKind, UnscopedMode } from '@fabrika/db/tables'
 import type { SqlMode } from '../contract/context'
+import type { FileSite } from '../files/collections'
 import { CapabilityRefusedError, isActiveRequest, type RequestFrame } from './capability'
 import { ServerFault } from './faults'
 
@@ -226,6 +227,17 @@ export class Invocation {
 		})
 	}
 
+	/** Where `ctx.files` runs: this invocation's transaction, bound like every handle; a query's only reads. */
+	fileSite(where: string, kind: DataKind): Omit<FileSite, 'frame'> {
+		const transaction = this.#transaction
+		return {
+			where,
+			check: boundTo(this.#frame, () => transaction.ended, 'ctx.files'),
+			session: () => transaction.session(),
+			readOnly: kind === 'mutation' && !transaction.readOnly ? null : 'a query reads only; remove files in a mutation',
+		}
+	}
+
 	/** Commits; a request the caller abandoned meanwhile rolls back instead. */
 	async commit(signal: AbortSignal | null): Promise<void> {
 		if (signal?.aborted === true) {
@@ -319,6 +331,13 @@ export function undeclaredSql(site: string, kind: DataKind, member: 'ctx.sql' | 
 /** `ctx.sql` of a job that declares `sql`, outside `ctx.transaction`: its statements run only in the attempt's fence. */
 export function jobSqlOutsideTransaction(job: string): SqlTag {
 	return refusingSql('sql_outside_transaction', `${job} runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql`)
+}
+
+/** `ctx.files` of a contract that declares no file collection: every name is refused. */
+export function noFileCollections(where: string): (collection: string) => never {
+	return (collection) => {
+		throw new ServerFault('file_collection_unknown', `${where}: ctx.files('${String(collection)}') names a collection, and the contract declares none`)
+	}
 }
 
 /** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */

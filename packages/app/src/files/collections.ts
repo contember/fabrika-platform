@@ -5,17 +5,28 @@
 // so `@fabrika/db` scopes it by the whole chain the access check saw.
 
 import type { ContractArtifact, CredentialedEndpoint, EndpointRow, FileCollectionArtifact } from '@fabrika/auth-core'
-import type { CapabilityAuthority } from '@fabrika/db/capability'
-import { type FileCollectionTable, fileTableName, fileTablesOf, isScopedDatabase, type StoredFile } from '@fabrika/db/framework'
+import type { CapabilityAuthority, RefGrant } from '@fabrika/db/capability'
+import {
+	type FileCollectionTable,
+	fileTableName,
+	fileTablesOf,
+	isScopedDatabase,
+	QueryRefusedError,
+	type Session,
+	type StoredFile,
+} from '@fabrika/db/framework'
 import { type FileObjectStore, type StoredObject, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
 import { FILE_LIMITS } from '../contract/defaults'
 import { HttpError, jsonResponse, NotFoundError } from '../errors'
+import { type CapabilityMint, CapabilityRefusedError, type RequestFrame } from '../implement/capability'
 import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase, ImplementationDatabase } from '../implement/implement'
 import type { OperationsReporter } from '../jobs/report'
+import type { FileCollectionHandle, FileCollections as FilesOfSite, FileListing, FileListPage, OpenedFile, OpenOptions } from './handle'
 import { type FileScanner, runScanPass } from './scan'
+import { FileLinkListInput, FileListInput, FileListOutput } from './schemas'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
 
@@ -33,30 +44,25 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const ById = z.strictObject({ id: z.uuid() })
 
-/** `files.<name>.list`'s schemas; `FILE_LIST_INPUT` and `FILE_LIST_OUTPUT` of the contract describe the same. */
-export const FileListInput = z.strictObject({
-	owner: z.string().min(1),
-	after: z.uuid().optional(),
-	limit: z.number().int().min(1).max(FILE_LIMITS.listPageMax).optional(),
-})
-/** A link holder's `<mount>.files.<name>.list`: no owner, which is the link's object; `FILE_LINK_LIST_INPUT` describes it. */
-export const FileLinkListInput = FileListInput.omit({ owner: true })
-export const FileListOutput = z.strictObject({
-	items: z.array(z.strictObject({
-		id: z.uuid(),
-		name: z.string().min(1).nullable(),
-		type: z.string().min(1),
-		size: z.number().int().min(0),
-		status: z.enum(['live', 'quarantined', 'rejected']),
-		createdAt: z.iso.datetime(),
-	})).max(FILE_LIMITS.listPageMax),
-	next: z.uuid().nullable(),
-})
+/** Where `ctx.files` runs: the site's frame, the session its statements run in, and whether it may remove. */
+export interface FileSite {
+	/** `job 'erase'`, an endpoint id: named in a refusal. */
+	readonly where: string
+	readonly frame: RequestFrame
+	/** Throws once the site's work ended, or when called from other work. */
+	readonly check: () => void
+	/** The invocation's transaction, a job's fenced transaction, or a job's statement-at-a-time session. */
+	readonly session: () => Promise<Session>
+	/** `null` where `removeAll` runs (a mutation, a job's transaction); otherwise why it does not. */
+	readonly readOnly: string | null
+}
 
 interface Collection {
 	readonly name: string
 	readonly artifact: FileCollectionArtifact
 	readonly dimension: string
+	/** The owner table's dimension, which `file:<name>` lies in. */
+	readonly ownerDimension: string
 	readonly table: FileCollectionTable
 	/** The link mounts bound to the owner's dimension, for a `link: true` collection: each serves its link holders. */
 	readonly linkMounts: readonly string[]
@@ -151,6 +157,25 @@ function digesting(body: ReadableStream<Uint8Array>, timeoutMs: number): {
 	return { stream, digest: () => hasher.digest('hex'), timedOut: () => expired, stop: () => clearTimeout(timer) }
 }
 
+/** The whole body when it holds exactly `size` bytes; `null` as soon as it proves longer, or once it ends shorter. */
+async function readExactly(body: ReadableStream<Uint8Array>, size: number): Promise<Uint8Array | null> {
+	const bytes = new Uint8Array(size)
+	let length = 0
+	const reader = body.getReader()
+	try {
+		for (let next = await reader.read(); !next.done; next = await reader.read()) {
+			if (length + next.value.byteLength > size) {
+				return null
+			}
+			bytes.set(next.value, length)
+			length += next.value.byteLength
+		}
+	} finally {
+		reader.releaseLock()
+	}
+	return length === size ? bytes : null
+}
+
 function isNamed(error: unknown, name: string): boolean {
 	return error instanceof Error && error.name === name
 }
@@ -160,12 +185,124 @@ export class FileCollections {
 	readonly #byDimension: ReadonlyMap<string, Collection>
 	readonly #store: FileObjectStore
 	readonly #capabilities: CapabilityAuthority
+	readonly #mint: CapabilityMint
 
-	constructor(collections: readonly Collection[], store: FileObjectStore, capabilities: CapabilityAuthority) {
+	constructor(collections: readonly Collection[], store: FileObjectStore, capabilities: CapabilityAuthority, mint: CapabilityMint) {
 		this.#collections = collections
 		this.#byDimension = new Map(collections.map((collection) => [collection.dimension, collection]))
 		this.#store = store
 		this.#capabilities = capabilities
+		this.#mint = mint
+	}
+
+	/** `ctx.files` of one site: each collection's handle, by its name. */
+	site(site: FileSite): FilesOfSite<FileCollectionHandle> {
+		const handles = new Map(this.#collections.map((collection) => [collection.name, this.#handle(collection, site)]))
+		return (name) => {
+			site.check()
+			const handle = typeof name === 'string' ? handles.get(name) : undefined
+			if (handle === undefined) {
+				throw new ServerFault(
+					'file_collection_unknown',
+					`${site.where}: ctx.files('${String(name)}') names no collection of the contract (collections: ${[...handles.keys()].join(', ')})`,
+				)
+			}
+			return handle
+		}
+	}
+
+	#handle(collection: Collection, site: FileSite): FileCollectionHandle {
+		return Object.freeze({
+			list: async (owner: unknown, page: FileListPage = {}) => {
+				site.check()
+				this.#ownerGrant(collection, site, owner, ['read', 'write'])
+				return await this.#listOwned(collection, site, owner, page)
+			},
+			open: async (owner: unknown, id: unknown, options: OpenOptions) => {
+				site.check()
+				const grant = this.#ownerGrant(collection, site, owner, ['read'])
+				return await this.#open(collection, site, grant, id, options)
+			},
+			removeAll: async (owner: unknown) => {
+				site.check()
+				if (site.readOnly !== null) {
+					throw new QueryRefusedError('read_only', `${site.where}: files '${collection.name}' removeAll: ${site.readOnly}`)
+				}
+				this.#ownerGrant(collection, site, owner, ['delete'])
+				return await collection.table.removeOwned(owner, new Date(), await site.session())
+			},
+		})
+	}
+
+	/**
+	 * The grant of `owner`: a `Ref` of the collection's owner, of the work running now, for one of the collection's
+	 * `actions`. A write capability lists too, as the data layer's `list` admits it; only `read` opens a file.
+	 */
+	#ownerGrant(collection: Collection, site: FileSite, owner: unknown, actions: readonly ('read' | 'write' | 'delete')[]): RefGrant {
+		const grant = this.#capabilities.resolve(owner)
+		const needed = actions.map((action) => collection.artifact[action])
+		if (grant.kind !== 'ref' || grant.dimension !== collection.ownerDimension || !needed.includes(grant.action)) {
+			throw new CapabilityRefusedError(
+				'wrong_capability',
+				`${site.where}: files '${collection.name}' takes a Ref of ${collection.ownerDimension} for ${
+					needed.map((action) => `'${action}'`).join(' or ')
+				}, got one for '${grant.action}'`,
+			)
+		}
+		return grant
+	}
+
+	async #listOwned(collection: Collection, site: FileSite, owner: unknown, page: FileListPage): Promise<FileListing> {
+		const limit = page.limit ?? FILE_LIMITS.listPageDefault
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > FILE_LIMITS.listPageMax) {
+			throw new QueryRefusedError('list_page', `${site.where}: files '${collection.name}' lists 1 to ${FILE_LIMITS.listPageMax} files a page`)
+		}
+		if (page.after !== undefined && !UUID.test(page.after)) {
+			throw new QueryRefusedError('list_page', `${site.where}: files '${collection.name}' takes the id of a file as after`)
+		}
+		const listed = await collection.table.list(owner, { after: page.after ?? null, limit }, await site.session())
+		return Object.freeze({ items: Object.freeze([...listed.items]), next: listed.next })
+	}
+
+	/**
+	 * A file of the owner `grant` names, read whole: located now, it must lie beneath that owner where the `Ref` says,
+	 * and is then read under a file `Ref` of the same principal and action, as the download endpoint reads it.
+	 */
+	async #open(collection: Collection, site: FileSite, grant: RefGrant, id: unknown, options: OpenOptions): Promise<OpenedFile> {
+		const maxBytes = options.maxBytes
+		if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+			throw new QueryRefusedError('invalid_argument', `${site.where}: files '${collection.name}' open takes maxBytes, a positive whole number`)
+		}
+		if (typeof id !== 'string' || !UUID.test(id)) {
+			throw new NotFoundError()
+		}
+		const located = await collection.table.locate(id, await site.session())
+		const beneath = located !== null && located.get(grant.dimension) === grant.id
+			&& [...grant.chain].every(([dimension, value]) => located.get(dimension) === value)
+		if (located === null || !beneath) {
+			throw new NotFoundError()
+		}
+		const target = this.#mint.ref(site.frame, collection.dimension, grant.action, grant.principal, id, located)
+		const file = await collection.table.find(target, await site.session())
+		if (file.status === 'quarantined') {
+			throw new HttpError(409, 'quarantined', 'The file is being checked for malware; try again in a few minutes')
+		}
+		if (file.status === 'rejected') {
+			throw new NotFoundError()
+		}
+		if (file.size > maxBytes) {
+			throw new HttpError(413, 'too_large', `The file has ${file.size} bytes, more than the ${maxBytes} this site reads`)
+		}
+		const object = collection.artifact.scan === true ? await this.#scannedObject(collection, target, file) : await this.#store.read(file.objectKey)
+		if (object === null) {
+			throw new ServerFault('file_object_missing', `the object of a file in '${collection.name}' is missing from storage`)
+		}
+		const bytes = object.size === file.size ? await readExactly(object.body, file.size) : null
+		if (bytes === null) {
+			await object.body.cancel()
+			throw new ServerFault('file_object_mismatch', `the object of a file in '${collection.name}' has another size than its row records`)
+		}
+		return Object.freeze({ id: file.id, name: file.originalName, type: file.contentType, size: file.size, bytes })
 	}
 
 	/** The `file:<name>` dimensions; the dispatcher locates them like a table's. */
@@ -457,6 +594,7 @@ export function fileCollections(
 	database: ImplementationDatabase | null,
 	store: FileObjectStore | undefined,
 	capabilities: CapabilityAuthority,
+	mint: CapabilityMint,
 	problems: string[],
 ): FileCollections | null {
 	const entries = Object.entries(artifact.files)
@@ -490,13 +628,17 @@ export function fileCollections(
 				scan: collection.scan === true,
 			})
 			const ownerDimension = artifact.dimensions[dimension]?.in ?? null
+			if (ownerDimension === null) {
+				problems.push(`files '${name}' has no dimension ${dimension} inside its owner's in the compiled contract`)
+				continue
+			}
 			const linkMounts = Object.entries(artifact.mounts).flatMap(([mount, declared]) =>
 				declared.kind === 'link' && declared.dimension === ownerDimension && servesLink(collection.link, mount) ? [mount] : []
 			)
-			collections.push({ name, artifact: collection, dimension, table, linkMounts })
+			collections.push({ name, artifact: collection, dimension, ownerDimension, table, linkMounts })
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : `files '${name}' cannot be served`)
 		}
 	}
-	return store === undefined ? null : new FileCollections(collections, store, capabilities)
+	return store === undefined ? null : new FileCollections(collections, store, capabilities, mint)
 }

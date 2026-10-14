@@ -591,7 +591,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	unservable(artifact, options.assets, owned, containers, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
-	const files = fileCollections(artifact, app.database, options.files, issuer.authority, problems)
+	const files = fileCollections(artifact, app.database, options.files, issuer.authority, issuer.mint, problems)
 	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
@@ -713,6 +713,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		credentials: workloads,
 		mint: issuer.mint,
 		data: bound?.data ?? null,
+		files,
 		frameworkJobs: files?.scans === true
 			? [{
 				name: FILE_SCAN_JOB,
@@ -795,6 +796,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		mint: issuer.mint,
 		capabilities: issuer.authority,
 		data,
+		files,
 		failures: new FailureReports(reporterFor('fabrika.requests')),
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),

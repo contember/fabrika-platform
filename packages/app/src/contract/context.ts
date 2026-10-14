@@ -18,6 +18,7 @@ import type {
 	WithinTables,
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
+import type { FileCollectionHandle, FileCollectionReadHandle, FileCollections } from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
@@ -130,6 +131,15 @@ type SqlContext<S, Ix extends AnyDbIndex> = {
 	readonly sql: [S] extends [never] ? Unavailable<"ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site">
 		: SqlTag<Ix, S & SqlMode>
 }
+
+/** `ctx.files(<collection>)`: removal where the site writes (a mutation, a job's transaction), reading everywhere. */
+type FilesContext<Ix, K extends DataKind> = {
+	readonly files: Ix extends NoTablesIndex ? Unavailable<'this application declares no tables, so it has no file collections'>
+		: FileCollections<K extends 'mutation' ? FileCollectionHandle : FileCollectionReadHandle<RemovesIn<K>>>
+}
+
+type RemovesIn<K extends DataKind> = K extends 'job' ? 'a job removes files inside ctx.transaction((tx) => …), as tx.files'
+	: 'a query reads only; remove files in a mutation'
 
 type UnscopedData<Ix extends AnyDbIndex, U, K extends DataKind> = {
 	readonly unscoped: [U] extends [never] ? NoUnscoped : UnscopedTables<Ix, U, K>
@@ -335,6 +345,7 @@ export type EndpointContext<
 	& LinksContext<Acc, Of<D, 'issues'>>
 	& ConnectContext<K, Of<D, 'connect'>>
 	& SqlContext<Of<D, 'sql'>, K['index']>
+	& FilesContext<K['index'], Kind>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
 
 /** A link procedure acts on the one object its key is bound to. */
@@ -348,6 +359,7 @@ export type LinkContext<
 	& RequestContext<PrincipalOf<'link'>>
 	& { readonly target: Ref<LD, A> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
+	& FilesContext<K['index'], Kind>
 	& {
 		readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>>>
 	}
@@ -378,6 +390,7 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string>> =
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
+	& FilesContext<K['index'], 'mutation'>
 
 /**
  * `ctx.links` of a cron job that declares the link mount it issues (`issues: '<mount>'`): a link for an object the job
@@ -392,6 +405,7 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 	& JobContext<A, K['dimension']>
 	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
+	& FilesContext<K['index'], 'job'>
 	& JobLinksContext<K['dimension'], A, Of<D, 'issues'>>
 	& { transaction<R>(work: (tx: JobTransaction<K, A, D>) => Promise<R>): Promise<R> }
 

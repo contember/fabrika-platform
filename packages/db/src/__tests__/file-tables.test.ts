@@ -9,7 +9,7 @@ import { Database } from '../database'
 import { CapabilityError, LeaseLostError, NotFoundError, PolicyError, QueryRefusedError } from '../errors'
 import { fileScanSql, fileTableName, fileTableSql, legacyStatusCheckName } from '../file-table-sql'
 import type { FileCollectionTable, PendingFile } from '../file-tables'
-import { fileTablesOf, frameworkTablesOf, type JobLeases } from '../framework'
+import { type DataAccess, dataAccessOf, fileTablesOf, frameworkTablesOf, type JobLeases } from '../framework'
 import { FRAMEWORK_MIGRATIONS } from '../migrations'
 import { TestAuthority } from './fixtures/authority'
 import { RecordingDialect } from './fixtures/recording-dialect'
@@ -44,6 +44,7 @@ const HOUR = 60 * 60 * 1000
 let database: Database
 let files: FileCollectionTable
 let leases: JobLeases
+let access: DataAccess
 const SHA = 'ab'.repeat(32)
 const VERSION = '"v1"'
 /** A moment just after now: every file whose retry is not deferred is due. */
@@ -135,6 +136,7 @@ beforeAll(async () => {
 	const layer = connected(tables, { database, capabilities: alice }).database
 	files = fileTablesOf(layer).collection(SPEC)
 	leases = frameworkTablesOf(layer).jobs
+	access = dataAccessOf(layer)
 })
 
 afterAll(async () => {
@@ -270,6 +272,48 @@ describe.skipIf(!hasPostgres)('the rows of a file collection on Postgres', () =>
 		await files.begin(ownerRef('n8'), file)
 		await files.abandon(file.id)
 		expect(await statusOf(file.id)).toBeUndefined()
+	})
+
+	test("removeOwned marks every held file of the owner removed in the site's transaction, scoped by the owner's whole chain", async () => {
+		await addNote('n10')
+		await addNote('n11')
+		const first = await liveFile('n10')
+		const second = await quarantinedFile('n10')
+		const other = await liveFile('n11')
+		const owner = () => alice.ref('note', 'notes.delete', 'n10', { workspace: 'w1', organization: 'o1' })
+
+		const rolledBack = access.invocation(false)
+		expect(await files.removeOwned(owner(), new Date(), await rolledBack.session())).toBe(2)
+		await rolledBack.rollback()
+		expect((await files.list(alice.ref('note', 'notes.read', 'n10', { workspace: 'w1', organization: 'o1' }), { after: null, limit: 10 })).items)
+			.toHaveLength(2)
+
+		const invocation = access.invocation(false)
+		const session = await invocation.session()
+		expect(await files.removeOwned(owner(), new Date(), session)).toBe(2)
+		const listed = await files.list(
+			alice.ref('note', 'notes.read', 'n10', { workspace: 'w1', organization: 'o1' }),
+			{ after: null, limit: 10 },
+			session,
+		)
+		expect(listed.items).toEqual([])
+		await invocation.commit()
+		const ids = (await files.removable(100, new Date(Date.now() - HOUR))).map((file) => file.id)
+		expect(ids).toEqual(expect.arrayContaining([first, second]))
+		expect(ids).not.toContain(other)
+		expect(await statusOf(other)).toBe('live')
+	})
+
+	test('removeOwned needs a Ref of the owner for the delete action, and one from before the owner moved removes nothing', async () => {
+		await addNote('n12')
+		const id = await liveFile('n12')
+		const session = access.direct()
+		await expect(files.removeOwned(ownerRef('n12'), new Date(), session)).rejects.toBeInstanceOf(CapabilityError)
+		await expect(files.removeOwned(fileRef('notes.delete', id, 'n12'), new Date(), session)).rejects.toBeInstanceOf(CapabilityError)
+		const before = alice.ref('note', 'notes.delete', 'n12', { workspace: 'w1', organization: 'o1' })
+		await moveNote('n12', 'w2')
+		expect(await files.removeOwned(before, new Date(), session)).toBe(0)
+		expect(await statusOf(id)).toBe('live')
 	})
 
 	test('removable honours its limit', async () => {
@@ -411,7 +455,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		}
 	})
 
-	test("the list is an owner's held files, oldest first, in bounded keyset pages, scoped by the owner's whole chain", async () => {
+	test("the list is an owner's held files, oldest first, in bounded keyset pages, for the read or write action, scoped by the owner's whole chain", async () => {
 		await addNote('s7')
 		const live = await liveFile('s7')
 		const quarantined = await quarantinedFile('s7')
@@ -429,7 +473,9 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		const second = await files.list(reader, { after: first.next, limit: 2 })
 		expect(second.items.map((file) => [file.id, file.status])).toEqual([[rejected, 'rejected']])
 		expect(second.next).toBeNull()
-		await expect(files.list(ownerRef('s7'), { after: null, limit: 2 })).rejects.toBeInstanceOf(CapabilityError)
+		expect((await files.list(ownerRef('s7'), { after: null, limit: 2 })).items).toEqual(first.items)
+		await expect(files.list(alice.ref('note', 'notes.delete', 's7', { workspace: 'w1', organization: 'o1' }), { after: null, limit: 2 })).rejects
+			.toBeInstanceOf(CapabilityError)
 		await expect(files.list(reader, { after: null, limit: 0 })).rejects.toBeInstanceOf(QueryRefusedError)
 		await moveNote('s7', 'w2')
 		expect((await files.list(reader, { after: null, limit: 10 })).items).toEqual([])

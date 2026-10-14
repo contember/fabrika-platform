@@ -29,6 +29,7 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_action: "the job's declaration or its token does not carry the action",
 	undeclared_dimension: 'the job named a dimension the contract does not declare',
 	missing_id: 'the job named an object without an id',
+	wrong_capability: 'a file collection was handed a capability of another dimension or action than the operation needs',
 } as const
 
 export type CapabilityRefusal = keyof typeof CAPABILITY_REFUSALS

@@ -58,6 +58,8 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'41-unscoped-get-of-a-reference-table.ts': 'countries is a reference table, which has no key: read it with list',
 	'42-unscoped-get-of-an-inbox.ts': "registrations is a form's inbox, which has no key: read it with list",
 	'43-member-label-without-a-labels-directory.ts': "'member.label' is possibly 'null'.",
+	'44-remove-files-in-a-query.ts': 'a query reads only; remove files in a mutation',
+	'45-remove-files-outside-a-job-transaction.ts': 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
 }
 
 /**

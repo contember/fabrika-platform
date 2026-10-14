@@ -45,6 +45,7 @@ import {
 	UnauthorizedError,
 } from '../errors'
 import type { RequestExecutionContext } from '../fetch'
+import type { FileCollections } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
@@ -58,7 +59,7 @@ import { ServerFault } from './faults'
 import { ACCEPTED_BUCKET, clientBucket, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { endpointData, Invocation, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
+import { endpointData, Invocation, noFileCollections, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
 import {
 	applicationDirectory,
 	createScope,
@@ -199,6 +200,8 @@ export interface RuntimeParts {
 	readonly capabilities: CapabilityAuthority
 	/** The mini-ORM of the bound `scoped(tables)` layer; `boot` refuses a site without one. */
 	readonly data: DataAccess | null
+	/** The contract's file collections, behind a staged-kit site's `ctx.files`; `null` when it declares none. */
+	readonly files: FileCollections | null
 	/** Where a 5xx goes: the server log, and Operations when the application has a DSN. */
 	readonly failures: FailureReports
 	/** Kicks a contract job under its own key, in the background (`BoundJobs.kick`); it never rejects. */
@@ -447,6 +450,10 @@ export class ContractRuntime {
 						}),
 						...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
 						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context)),
+						// An export's consumer reaches its rows only, never the files of their owners.
+						...(site === undefined || invocation === null || served.readOnly === true
+							? {}
+							: { files: this.#files(served.row.id, frame, invocation, site.kind) }),
 					})
 					return await served.handler({ input: access.input, ctx })
 				})
@@ -475,6 +482,12 @@ export class ContractRuntime {
 			throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
 		}
 		return jsonResponse({ result: output.data }, 200)
+	}
+
+	/** `ctx.files` of a staged-kit site, in its invocation's transaction. */
+	#files(endpoint: string, frame: RequestFrame, invocation: Invocation, kind: DataKind): object {
+		const where = `'${endpoint}'`
+		return this.#parts.files === null ? noFileCollections(where) : this.#parts.files.site({ frame, ...invocation.fileSite(where, kind) })
 	}
 
 	#data(): DataAccess {

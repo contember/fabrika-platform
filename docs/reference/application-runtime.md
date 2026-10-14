@@ -600,6 +600,26 @@ the same pipeline:
   does (a key of another mount is 403, an object that moved 404), and a download resolves
   `:fileId` beneath that object, so another object's file is 404. Uploads keep the
   collection's limits.
+- **Server code reaches a collection through `ctx.files(<name>)`** (`src/files/handle.ts`): every staged-kit
+  endpoint and link procedure (not an export), a job's `ctx`, and its `ctx.transaction`'s `tx`. `list(owner, page?)`
+  answers the owner's held files as the list endpoint does (`createdAt` a `Date`); `open(owner, id, { maxBytes })`
+  reads one live file whole (`{ id, name, type, size, bytes }`), as the download reads it: a scanning collection's
+  only as the scanned version, a quarantined file 409 `quarantined`, a rejected one, another owner's or a removed one
+  404, one over `maxBytes` 413 `too_large` before any byte is read. `removeAll(owner)` marks every file of the owner
+  removed. Each takes a `Ref` of the owner's dimension for one of the collection's actions — `read` or `write` for
+  `list`, `read` for `open`, `delete` for `removeAll` — of the work running now, and refuses any other
+  (`CapabilityRefusedError` `wrong_capability`): a file reaches what its owner reaches, as through the endpoints. A
+  write capability lists because a handler that writes the owner checks what was uploaded, as a store's write reads
+  its row; only `read` reads the bytes. `open` locates the file
+  now, requires it beneath the owner where the `Ref` says, and reads it under a `file:<name>` `Ref` the runtime mints
+  for the same principal and action. The statements run in the site's session: the invocation's transaction (`READ
+  ONLY` for a query), a job's statement-at-a-time reads, or its fenced transaction. `removeAll` runs only where the
+  site writes, a mutation or `tx.files` (`QueryRefusedError` `read_only` elsewhere, and a type error). A name the
+  contract does not declare is a `ServerFault` `file_collection_unknown`: the name is not typed, because the groups
+  and jobs type themselves before the contract that declares the collections exists. A job mints the `Ref` with
+  `ctx.ref`. The owner is a table
+  with a dimension scope, never an application table, and there is no total of bytes per owner: `maxPerOwner` ×
+  `maxBytes` bounds what one owner holds.
 - **One table per collection**, `fabrika_files_<name>`, created by an application migration
   with `fileTableSql(name, { table, key, chain })` of `@fabrika/db`, where `chain` lists the
   owner's containment columns, nearest first; the owner table needs `UNIQUE (<key>, <chain

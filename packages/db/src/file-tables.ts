@@ -116,14 +116,19 @@ export interface FileCollectionTable {
 	countHeld(owner: unknown): Promise<number>
 	/** Marks a held file of `owner` removed. */
 	retract(owner: unknown, id: string, at: Date): Promise<void>
-	/** The held file `file` names, over its whole chain, in any held state; `NotFoundError` otherwise. */
-	find(file: unknown): Promise<StoredFile>
+	/**
+	 * The held file `file` names, over its whole chain, in any held state; `NotFoundError` otherwise. `using` is the
+	 * session of the site that reads it (a handler's invocation, a job's transaction); the request's own by default.
+	 */
+	find(file: unknown, using?: Session): Promise<StoredFile>
 	/** Marks the held file `file` names removed, in any held state. */
 	markRemoved(file: unknown, at: Date): Promise<void>
+	/** Marks every held file of the owner `owner` (a `Ref` for the delete action) removed, in `using`; answers how many. */
+	removeOwned(owner: unknown, at: Date, using: Session): Promise<number>
 	/** The containers of a held file, read from its row: its owner and the owner's chain. */
-	locate(id: string): Promise<ReadonlyMap<string, string> | null>
-	/** At most `limit` held files of the owner `owner` (a `Ref` for the read action) after the id `after`, oldest first. */
-	list(owner: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage>
+	locate(id: string, using?: Session): Promise<ReadonlyMap<string, string> | null>
+	/** At most `limit` held files of the owner `owner` (a `Ref` for the read or write action) after the id `after`, oldest first. */
+	list(owner: unknown, page: { readonly after: string | null; readonly limit: number }, using?: Session): Promise<FilePage>
 	/**
 	 * At most `limit` quarantined files that are neither removed nor orphaned and due at `now`, the longest waiting
 	 * first, so neither files that keep failing nor a busy collection hold back the rest.
@@ -268,12 +273,13 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 	const fileLinks: readonly Container[] = [{ dimension: spec.dimension, column: 'id' }, ...fileOwnerLinks]
 	const session = (): Session => sessionOf(runtime())
 
-	function grantOf(capability: unknown, dimension: string, action: string): RefGrant {
+	/** The grant of `capability`: a `Ref` of `dimension` for `action`, or for one of `action`'s alternatives. */
+	function grantOf(capability: unknown, dimension: string, action: string, ...alternatives: readonly string[]): RefGrant {
 		const grant = runtime().capabilities.resolve(capability)
-		if (grant.kind !== 'ref' || grant.dimension !== dimension || grant.action !== action) {
+		if (grant.kind !== 'ref' || grant.dimension !== dimension || (grant.action !== action && !alternatives.includes(grant.action))) {
 			throw new CapabilityError(
 				'wrong_capability',
-				`files '${spec.name}' needs a Ref of ${dimension} for ${action}, got ${describeGrant(grant)} for ${grant.action}`,
+				`files '${spec.name}' needs a Ref of ${dimension} for ${[action, ...alternatives].join(' or ')}, got ${describeGrant(grant)} for ${grant.action}`,
 			)
 		}
 		return grant
@@ -400,10 +406,10 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			await session().run(node, guard('UpdateQueryNode', table, scope))
 		},
 
-		async find(capability: unknown): Promise<StoredFile> {
+		async find(capability: unknown, using?: Session): Promise<StoredFile> {
 			const grant = grantOf(capability, spec.dimension, spec.actions.read)
 			const scope = linksPredicate(table, linkValues(table, fileLinks, grant))
-			const [row] = await session().run<Readonly<Record<string, unknown>>>(
+			const [row] = await (using ?? session()).run<Readonly<Record<string, unknown>>>(
 				selectNode(table, selections(table, spec.scan ? SCANNED_COLUMNS : STORED_COLUMNS), held(), scope, 1),
 				guard('SelectQueryNode', table, scope),
 			)
@@ -437,10 +443,24 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			}
 		},
 
-		async locate(id: string): Promise<ReadonlyMap<string, string> | null> {
+		async removeOwned(capability: unknown, at: Date, using: Session): Promise<number> {
+			const grant = grantOf(capability, owner.dimension, spec.actions.delete)
+			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
+			const node = updateNode(
+				table,
+				new Map([['deleted_at', at]]),
+				undefined,
+				scopedWhere(held(), scope),
+				acknowledgement(table, 'id', undefined),
+			)
+			const removed = await using.run(node, guard('UpdateQueryNode', table, scope))
+			return removed.length
+		},
+
+		async locate(id: string, using?: Session): Promise<ReadonlyMap<string, string> | null> {
 			const scope = equals(table, 'id', id)
 			const columns = fileOwnerLinks.map((link) => link.column)
-			const [row] = await session().run<Readonly<Record<string, unknown>>>(
+			const [row] = await (using ?? session()).run<Readonly<Record<string, unknown>>>(
 				selectNode(table, selections(table, columns), held(), scope, 1),
 				guard('SelectQueryNode', table, scope),
 			)
@@ -450,14 +470,15 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			return new Map(fileOwnerLinks.map((link) => [link.dimension, text(table, row, link.column)]))
 		},
 
-		async list(capability: unknown, page: { readonly after: string | null; readonly limit: number }): Promise<FilePage> {
-			const grant = grantOf(capability, owner.dimension, spec.actions.read)
+		async list(capability: unknown, page: { readonly after: string | null; readonly limit: number }, using?: Session): Promise<FilePage> {
+			// A write capability lists too: a handler that writes the owner checks what was uploaded, as a store's write reads its row.
+			const grant = grantOf(capability, owner.dimension, spec.actions.read, spec.actions.write)
 			if (!Number.isSafeInteger(page.limit) || page.limit < 1) {
 				throw new QueryRefusedError('list_page', `files '${spec.name}': a page holds at least one file`)
 			}
 			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
 			const conditions = page.after === null ? held() : allOf([held(), compare(table, 'id', '>', page.after)])
-			const rows = await session().run<Readonly<Record<string, unknown>>>(
+			const rows = await (using ?? session()).run<Readonly<Record<string, unknown>>>(
 				selectNode(table, selections(table, LISTED_COLUMNS), conditions, scope, page.limit + 1, ['id']),
 				guard('SelectQueryNode', table, scope),
 			)
