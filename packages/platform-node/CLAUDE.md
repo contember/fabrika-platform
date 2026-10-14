@@ -26,6 +26,14 @@ Read this before moving a service onto this driver.
 
 ## Invariants
 
+- **Every statement and every batch runs on a connection reserved from the pool** (`onReservedConnection` in
+  `sql-postgres.ts`), and a batch sends its own `BEGIN`/`COMMIT` there. Bun 1.3.14's pool sends an unreserved query
+  onto a connection that holds another caller's transaction, so under a burst of batches larger than the pool the
+  process hangs; its `begin()` on a reserved connection rejects a failed statement twice, once unhandled; and a
+  reservation's `release()` rejects once the pool has closed its connection. `sql-postgres.test.ts` pins the first two
+  (the plain query that must not wait, the atomic batch), control's `zerops-server-shutdown.test.ts` the third. Never
+  call the pool's `unsafe` or `begin` directly.
+
 - **The job queue's delivery model is VISIBILITY, not locking.** Claiming pushes `visible_at` forward
   and bumps `attempts`; `ack()` deletes the row; a crash lets the timeout lapse and the job is
   claimable again. That is the only reason a consumer dying mid-job does not strand it, so

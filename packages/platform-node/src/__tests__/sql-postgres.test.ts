@@ -9,7 +9,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { PostgresDatabase } from '../sql-postgres'
-import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
+import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
 	console.warn(`sql-postgres.test.ts ${skipReason}`)
@@ -250,6 +250,69 @@ describe.skipIf(!hasPostgres)('PostgresDatabase — batch()', () => {
 	test('an empty batch is a no-op', async () => {
 		expect(await db.batch([])).toEqual([])
 	})
+})
+
+/** `work`'s value, or a rejection naming `what` when it has not settled within `ms`. */
+async function within<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const late = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${what} did not finish within ${ms} ms`)), ms)
+	})
+	try {
+		return await Promise.race([work, late])
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
+describe.skipIf(!hasPostgres)('PostgresDatabase — more batches than pooled connections', () => {
+	const url = postgresUrl ?? ''
+
+	// Bun 1.3.14's pool, used directly, sends the short query onto the long batch's connection: it answers after the
+	// batch commits although the pool's other connection was free when it was sent.
+	test('a plain query never waits behind a transaction that is not its own', async () => {
+		const pool = PostgresDatabase.connect(url, { max: 2 })
+		const holder = PostgresDatabase.connect(url, { max: 1 })
+		const key = Math.floor(Math.random() * 1_000_000_000) + 1
+		const settled: string[] = []
+		let blocked: Promise<unknown> = Promise.resolve()
+		try {
+			await holder.prepare(`SELECT pg_advisory_lock(${key})`).run()
+			await Promise.all([pool.batch([pool.prepare('SELECT 1')]), pool.batch([pool.prepare('SELECT 1')])])
+			const long = pool.batch([pool.prepare('SELECT pg_sleep(0.4)')]).then(() => settled.push('long batch'))
+			const short = pool.prepare('SELECT pg_sleep(0.1)').run().then(() => settled.push('short query'))
+			blocked = pool.batch([pool.prepare(`SELECT pg_advisory_xact_lock(${key})`)])
+			await within(Promise.all([long, short]), 5_000, 'the long batch and the short query')
+			expect(settled).toEqual(['short query', 'long batch'])
+		} finally {
+			await holder.prepare(`SELECT pg_advisory_unlock(${key})`).run()
+			await blocked
+			await holder.close()
+			await pool.close()
+		}
+	}, 20_000)
+
+	test('a burst of contending batches mixed with plain queries finishes', async () => {
+		const pool = PostgresDatabase.connect(url, { max: 2 })
+		const table = `burst_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+		try {
+			await pool.prepare(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`).run()
+			await pool.prepare(`INSERT INTO ${table} (id, n) VALUES (1, 0)`).run()
+			const bump = () =>
+				pool.batch([
+					pool.prepare(`UPDATE ${table} SET n = n + 1 WHERE id = ? RETURNING n`).bind(1),
+					pool.prepare(`SELECT n FROM ${table} WHERE id = ?`).bind(1),
+				])
+			const read = () => pool.prepare(`SELECT n FROM ${table} WHERE id = ?`).bind(1).first()
+			for (let round = 0; round < 20; round++) {
+				await within(Promise.all([...Array.from({ length: 5 }, bump), ...Array.from({ length: 5 }, read)]), 5_000, `round ${round}`)
+			}
+			expect(await pool.prepare(`SELECT n FROM ${table} WHERE id = 1`).first()).toEqual({ n: 100 })
+		} finally {
+			await pool.prepare(`DROP TABLE IF EXISTS ${table}`).run()
+			await pool.close()
+		}
+	}, 30_000)
 })
 
 describe.skipIf(!hasPostgres)('PostgresDatabase.connect', () => {

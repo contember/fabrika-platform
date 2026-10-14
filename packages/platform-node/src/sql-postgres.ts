@@ -56,31 +56,35 @@ export class PostgresStatement implements SqlStatement {
 	}
 
 	async first<T = Record<string, unknown>>(): Promise<T | null> {
-		const rows = await this.rows<T>(this.sql)
+		const statement = this.bound()
+		const rows = await onReservedConnection(this.sql, (connection) => statement.rows<T>(connection))
 		return rows[0] ?? null
 	}
 
 	async all<T = Record<string, unknown>>(): Promise<SqlQueryResult<T>> {
-		return { results: await this.rows<T>(this.sql) }
+		const statement = this.bound()
+		return { results: await onReservedConnection(this.sql, (connection) => statement.rows<T>(connection)) }
 	}
 
 	async run(): Promise<SqlRunResult> {
-		const result: unknown = await this.execute<Record<string, unknown>>(this.sql)
+		const statement = this.bound()
+		const result: unknown = await onReservedConnection(this.sql, (connection) => statement.rows<Record<string, unknown>>(connection))
 		return { meta: { changes: changesOf(result) } }
 	}
 
-	/**
-	 * Run this statement on a specific handle — the pool, or the transaction-scoped handle `batch()`
-	 * opens. Internal to the package; the port only ever sees `first`/`all`/`run`.
-	 */
-	async rows<T>(handle: Bun.SQL): Promise<T[]> {
-		return this.execute<T>(handle)
-	}
-
-	private execute<T>(handle: Bun.SQL): Promise<T[]> {
+	/** This statement, once every placeholder has its value: a wrong count fails before any connection is taken. */
+	bound(): PostgresStatement {
 		if (this.values.length !== this.placeholders) {
 			throw new Error(`statement expects ${this.placeholders} bound value(s), got ${this.values.length}`)
 		}
+		return this
+	}
+
+	/**
+	 * Run this statement on a specific handle — a reserved connection of the pool, or the one `batch()` holds its
+	 * transaction on. Internal to the package; the port only ever sees `first`/`all`/`run`.
+	 */
+	rows<T>(handle: Bun.SQL): Promise<T[]> {
 		return handle.unsafe<T[]>(this.text, [...this.values])
 	}
 }
@@ -111,24 +115,54 @@ export class PostgresDatabase implements SqlDatabase {
 		return new PostgresStatement(this.sql, rewritten.text, rewritten.count, [])
 	}
 
-	/** Run every statement in ONE transaction, in order. A throw rolls the whole batch back. */
+	/**
+	 * Run every statement in ONE transaction, in order. A throw rolls the whole batch back. The transaction is sent by
+	 * hand on the reserved connection: Bun 1.3.14's `begin()` on a reserved connection rejects a failed statement twice,
+	 * once unhandled.
+	 */
 	async batch<T = Record<string, unknown>>(statements: SqlStatement[]): Promise<SqlQueryResult<T>[]> {
-		const run = async (tx: Bun.SQL): Promise<SqlQueryResult<T>[]> => {
-			const out: SqlQueryResult<T>[] = []
-			for (const statement of statements) {
-				if (!(statement instanceof PostgresStatement)) {
-					throw new Error('batch() accepts only statements created by this database')
-				}
-				out.push({ results: await statement.rows<T>(tx) })
+		const own = statements.map((statement) => {
+			if (!(statement instanceof PostgresStatement)) {
+				throw new Error('batch() accepts only statements created by this database')
 			}
-			return out
-		}
-		return this.sql.begin(run)
+			return statement.bound()
+		})
+		return onReservedConnection(this.sql, async (connection) => {
+			await connection.unsafe('BEGIN')
+			try {
+				const out: SqlQueryResult<T>[] = []
+				for (const statement of own) {
+					out.push({ results: await statement.rows<T>(connection) })
+				}
+				await connection.unsafe('COMMIT')
+				return out
+			} catch (error) {
+				// ROLLBACK fails only on a connection that is gone; the statement's own error is the one to report.
+				await connection.unsafe('ROLLBACK').catch(() => undefined)
+				throw error
+			}
+		})
 	}
 
 	/** Close the pool. Waits for in-flight queries unless a timeout is given. */
 	async close(options?: { timeout?: number }): Promise<void> {
 		await this.sql.close(options)
+	}
+}
+
+/**
+ * Runs `work` on a connection reserved from `pool` and releases it afterwards; every statement and every batch goes
+ * through here. Bun 1.3.14's pool sends an unreserved query onto a connection that holds another caller's
+ * transaction, where it waits for that transaction or runs inside it, and a burst of batches larger than the pool
+ * hangs. Once every use is reserved, the pool has no unreserved query to send.
+ */
+async function onReservedConnection<T>(pool: Bun.SQL, work: (connection: Bun.SQL) => Promise<T>): Promise<T> {
+	const connection = await pool.reserve()
+	try {
+		return await work(connection)
+	} finally {
+		// Typed `void`, `release()` answers a promise that rejects once the pool has closed the connection.
+		Promise.resolve(connection.release()).catch(() => undefined)
 	}
 }
 

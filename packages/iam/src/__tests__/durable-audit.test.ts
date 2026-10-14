@@ -7,7 +7,6 @@
 import type { Scope } from '@fabrika/auth-core'
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import type { SqlDatabase } from '@fabrika/platform'
-import { PostgresDatabase } from '@fabrika/platform-node'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
@@ -36,7 +35,7 @@ import {
 	type Person,
 } from './helpers/membership'
 import { oauthFixture, tokenBody } from './helpers/oauth'
-import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
+import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
 	console.warn(`durable-audit.test.ts ${skipReason}`)
@@ -744,19 +743,16 @@ describe('durable audit — SQLite', () => {
 })
 
 let fixture: PostgresFixture | null = null
-let pool: PostgresDatabase | null = null
 let postgres: Backend | null = null
 
 beforeAll(async () => {
-	if (!hasPostgres || postgresUrl === null) return
-	fixture = await createPostgres('iam_durable_audit')
-	// A pool of its own, as the service runs: the maintenance sweep issues its prunes concurrently.
-	pool = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 4 })
-	postgres = postgresBackend(pool)
+	if (!hasPostgres) return
+	// More than one connection, as the service runs: the maintenance sweep issues its prunes concurrently.
+	fixture = await createPostgres('iam_durable_audit', { max: 4 })
+	postgres = postgresBackend(fixture.db)
 })
 
 afterAll(async () => {
-	await pool?.close()
 	await fixture?.close()
 })
 

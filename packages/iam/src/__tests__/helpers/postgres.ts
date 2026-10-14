@@ -40,10 +40,10 @@ export interface PostgresFixture {
  * Stand up an isolated schema, apply the shipped Postgres migrations into it with the shipped runner,
  * and hand back a `PostgresDatabase` bound to it.
  *
- * `max: 1` mirrors how `node/migrate.ts` runs in production — the advisory lock it takes is
- * session-scoped, so the runner is only correct on a single-connection pool.
+ * The migrations run on a single-connection pool, as `node/migrate.ts` runs in production — the advisory lock it
+ * takes is session-scoped, so the runner is only correct on one. `max` sizes the pool handed back (default 1).
  */
-export async function createPostgres(namePrefix: string): Promise<PostgresFixture> {
+export async function createPostgres(namePrefix: string, options: { readonly max?: number } = {}): Promise<PostgresFixture> {
 	if (postgresUrl === null) {
 		throw new Error(`${URL_VAR} is not set`)
 	}
@@ -54,8 +54,13 @@ export async function createPostgres(namePrefix: string): Promise<PostgresFixtur
 	await admin.prepare(`CREATE SCHEMA ${schema}`).run()
 	await admin.close()
 
-	const db = PostgresDatabase.connect(url, { connection: { search_path: schema }, max: 1 })
-	await applyMigrations(db)
+	const migrator = PostgresDatabase.connect(url, { connection: { search_path: schema }, max: 1 })
+	try {
+		await applyMigrations(migrator)
+	} finally {
+		await migrator.close()
+	}
+	const db = PostgresDatabase.connect(url, { connection: { search_path: schema }, max: options.max ?? 1 })
 
 	return {
 		db,
