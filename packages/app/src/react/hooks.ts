@@ -2,7 +2,7 @@
 // `useInvalidate`. Each takes a client procedure (`api.deals.get`) as the typed name of the call; the answer comes back
 // through the procedure's own output schema, so its type is the contract's.
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { z } from 'zod/v4'
 import type { Schema } from '../contract/define'
 import { type FabrikaError, toFabrikaError } from './errors'
@@ -92,6 +92,8 @@ export interface InfiniteQueryState<Item> {
 	readonly loadingMore: boolean
 	loadMore(): Promise<void>
 	refetch(): Promise<void>
+	/** After a failed later page, asks for that page again; after a failed first load, loads again. */
+	retry(): Promise<void>
 }
 
 /**
@@ -115,7 +117,10 @@ export function useInfiniteQuery<I extends { readonly after?: string } | undefin
 	const loadMore = useCallback(() => entry?.loadMore() ?? Promise.resolve(), [entry])
 	const refetch = useCallback(() => entry?.load() ?? Promise.resolve(), [entry])
 	return useMemo((): InfiniteQueryState<Item> => {
-		if (snapshot === null) return { status: 'idle', items: [], error: null, hasMore: false, fetching: false, loadingMore: false, loadMore, refetch }
+		const retry = () => (snapshot !== null && snapshot.items.length > 0 && snapshot.next !== null ? loadMore() : refetch())
+		if (snapshot === null) {
+			return { status: 'idle', items: [], error: null, hasMore: false, fetching: false, loadingMore: false, loadMore, refetch, retry }
+		}
 		const read = readBack(procedure.output, { items: snapshot.items, next: snapshot.next })
 		return {
 			status: read.ok ? snapshot.status : 'error',
@@ -126,6 +131,7 @@ export function useInfiniteQuery<I extends { readonly after?: string } | undefin
 			loadingMore: snapshot.loadingMore,
 			loadMore,
 			refetch,
+			retry,
 		}
 	}, [snapshot, procedure, loadMore, refetch])
 }
@@ -144,7 +150,7 @@ export interface MutationState<I, T> {
 
 export interface MutationOptions<T> {
 	/**
-	 * What to refetch after a success: procedures and groups of the client. Without it the procedure's own group
+	 * What to refetch after a success or a `conflict`: procedures and groups of the client. Without it the procedure's own group
 	 * (`api.deals` for `api.deals.create`); `[]` refetches nothing.
 	 */
 	readonly invalidates?: readonly InvalidateTarget[]
@@ -153,26 +159,43 @@ export interface MutationOptions<T> {
 
 type RunState<T> = Pick<MutationState<unknown, T>, 'status' | 'data' | 'error'>
 
-/** The state machine of a call a person starts: pending, then its answer or its refusal, then what it invalidates. */
+/**
+ * The state machine of a call a person starts: pending, then its answer or its refusal, then what it invalidates. When
+ * calls overlap, only the latest one's outcome becomes the state, and `pending` holds while any of them runs.
+ */
 function useRun<I, T>(run: (input: I) => Promise<T>, after: () => Promise<void>, onSuccess?: (data: T) => void): MutationState<I, T> {
 	const [state, setState] = useState<RunState<T>>({ status: 'idle', data: undefined, error: null })
+	const [running, setRunning] = useState(0)
+	const latest = useRef(0)
 	const mutate = useCallback(async (input: I): Promise<MutationResult<T>> => {
+		const call = ++latest.current
+		setRunning((count) => count + 1)
 		setState({ status: 'pending', data: undefined, error: null })
-		let data: T
 		try {
-			data = await run(input)
-		} catch (refusal) {
-			const error = toFabrikaError(refusal)
-			setState({ status: 'error', data: undefined, error })
-			return { ok: false, error }
+			let data: T
+			try {
+				data = await run(input)
+			} catch (refusal) {
+				const error = toFabrikaError(refusal)
+				// A conflict means the rows changed under the page: refetch them, so a form reseeds from the current version.
+				if (error.kind === 'conflict') await after()
+				if (call === latest.current) setState({ status: 'error', data: undefined, error })
+				return { ok: false, error }
+			}
+			await after()
+			if (call === latest.current) setState({ status: 'success', data, error: null })
+			onSuccess?.(data)
+			return { ok: true, data }
+		} finally {
+			setRunning((count) => count - 1)
 		}
-		await after()
-		setState({ status: 'success', data, error: null })
-		onSuccess?.(data)
-		return { ok: true, data }
 	}, [run, after, onSuccess])
-	const reset = useCallback(() => setState({ status: 'idle', data: undefined, error: null }), [])
-	return { ...state, pending: state.status === 'pending', mutate, reset }
+	const reset = useCallback(() => {
+		latest.current++
+		setState({ status: 'idle', data: undefined, error: null })
+	}, [])
+	const status = running > 0 ? 'pending' : state.status
+	return { ...state, status, pending: running > 0, mutate, reset }
 }
 
 /**

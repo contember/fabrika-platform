@@ -16,7 +16,7 @@ import {
 	useQuery,
 } from '@fabrika/app/react'
 import { describe, expect, test } from 'bun:test'
-import { Component, type ReactNode, useState } from 'react'
+import { act, Component, type ReactNode, useState } from 'react'
 import { contract } from './fixture'
 
 type Answer = { readonly status?: number; readonly body: unknown }
@@ -222,6 +222,30 @@ describe('invalidation', () => {
 		await view.unmount()
 	})
 
+	test('a conflict refetches the group too, so a form reseeds from the current row; another refusal does not', async () => {
+		let answer: Answer = refused(409, { type: 'conflict', message: 'stale' })
+		const scriptedList = scripted((path) => (path === '/api/notes.rename' ? answer : ok({ items: [note('n1', 'Current', 2)], next: null })))
+		function Rename(): ReactNode {
+			useInfiniteQuery(names.notes.list, { workspaceId: 'w1' })
+			const rename = useMutation(names.notes.rename)
+			return <button type="button" onClick={() => void rename.mutate({ id: 'n1', title: 'Mine', expectVersion: 1 })}>rename</button>
+		}
+		const view = await mount(
+			<FabrikaProvider clients={[scriptedList.api]}>
+				<Rename />
+			</FabrikaProvider>,
+		)
+		await settle()
+		scriptedList.calls.length = 0
+		await press(view.container.querySelector('button'))
+		expect(scriptedList.calls).toEqual(['/api/notes.rename {"id":"n1","title":"Mine","expectVersion":1}', '/api/notes.list {"workspaceId":"w1"}'])
+		answer = refused(403, { type: 'forbidden', message: 'Forbidden' })
+		scriptedList.calls.length = 0
+		await press(view.container.querySelector('button'))
+		expect(scriptedList.calls).toEqual(['/api/notes.rename {"id":"n1","title":"Mine","expectVersion":1}'])
+		await view.unmount()
+	})
+
 	test('invalidates names what to refetch, and useInvalidate refetches on demand', async () => {
 		const { calls, api } = store()
 		function Both(): ReactNode {
@@ -321,6 +345,44 @@ describe('useInfiniteQuery', () => {
 		await view.unmount()
 	})
 
+	test('a failed later page is an error that keeps the loaded rows, and retry asks for that page again', async () => {
+		let failing = true
+		const { calls, api } = scripted((_path, input) =>
+			input['after'] === undefined
+				? ok({ items: [note('n1', 'One')], next: 'c2' })
+				: failing
+				? refused(500, { type: 'internal', message: 'Internal error' })
+				: ok({ items: [note('n2', 'Two')], next: null })
+		)
+		function Paged(): ReactNode {
+			const list = useInfiniteQuery(names.notes.list, { workspaceId: 'w1' })
+			return (
+				<div data-status={list.status}>
+					<ul>{list.items.map((item) => <li key={item.id}>{item.title}</li>)}</ul>
+					<button type="button" onClick={() => void list.loadMore()}>more</button>
+					<button type="button" onClick={() => void list.retry()}>retry</button>
+				</div>
+			)
+		}
+		const view = await mount(
+			<FabrikaProvider clients={[api]}>
+				<Paged />
+			</FabrikaProvider>,
+		)
+		await settle()
+		const [more, retry] = view.container.querySelectorAll('button')
+		await press(more)
+		expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('error')
+		expect([...view.container.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['One'])
+		failing = false
+		calls.length = 0
+		await press(retry)
+		expect(calls).toEqual(['/api/notes.list {"workspaceId":"w1","after":"c2"}'])
+		expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('success')
+		expect([...view.container.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['One', 'Two'])
+		await view.unmount()
+	})
+
 	test("pages: 'all' follows every cursor on the first load", async () => {
 		const { calls, api } = pages()
 		const view = await mount(
@@ -336,6 +398,38 @@ describe('useInfiniteQuery', () => {
 })
 
 describe('useAction', () => {
+	test('overlapping calls: pending holds while any runs, and an older answer never overwrites the newer one', async () => {
+		const { api } = scripted(() => ok(note('n1', 'x')))
+		const answers = new Map<string, (value: string) => void>()
+		function Overlap(): ReactNode {
+			const save = useAction((name: string) => new Promise<string>((resolve) => answers.set(name, resolve)))
+			return (
+				<div data-pending={String(save.pending)} data-data={save.data ?? ''}>
+					<button type="button" onClick={() => void save.mutate('first')}>first</button>
+					<button type="button" onClick={() => void save.mutate('second')}>second</button>
+				</div>
+			)
+		}
+		const view = await mount(
+			<FabrikaProvider clients={[api]}>
+				<Overlap />
+			</FabrikaProvider>,
+		)
+		const [first, second] = view.container.querySelectorAll('button')
+		await press(first)
+		await press(second)
+		const shown = () => view.container.firstElementChild
+		await act(async () => answers.get('second')?.('second'))
+		await settle()
+		expect(shown()?.getAttribute('data-pending')).toBe('true')
+		expect(shown()?.getAttribute('data-data')).toBe('second')
+		await act(async () => answers.get('first')?.('first'))
+		await settle()
+		expect(shown()?.getAttribute('data-pending')).toBe('false')
+		expect(shown()?.getAttribute('data-data')).toBe('second')
+		await view.unmount()
+	})
+
 	test('a call that is no procedure gets the same state and error union', async () => {
 		const { api } = scripted(() => ok(note('n1', 'x')))
 		const seen: string[] = []

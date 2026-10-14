@@ -173,7 +173,8 @@ export class PagesEntry extends Entry<PagesSnapshot> {
 			})
 		} catch (error) {
 			if (sequence !== this.sequence) return
-			this.publish({ ...this.snapshot, error: this.mapError(error), fetching: false, loadingMore: false })
+			// The loaded rows stay; the next `loadMore` asks for the same cursor again.
+			this.publish({ ...this.snapshot, status: 'error', error: this.mapError(error), fetching: false, loadingMore: false })
 		}
 	}
 }
