@@ -25,7 +25,9 @@ application. Effort: M; it needs a decision first.
 
 ## Approach / acceptance
 
-Decide one of these:
+**Decided: (a).** The owner chose delegated IAM administration; (b) stays a fallback recipe, not the road.
+
+The options were:
 
 - **(a) Delegated IAM administration per application.** IAM lets a holder of an application-admin role grant and
   revoke that application's global roles, in IAM's console, audited by IAM. The application builds nothing. The
