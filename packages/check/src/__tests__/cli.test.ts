@@ -108,7 +108,7 @@ describe('fabrika-check', () => {
 })
 
 describe('fabrika-check --packed', () => {
-	const VERSION = '0.3.3-local.abc1234'
+	const VERSION = '0.3.3-local.gabc1234'
 	const tarballOf = (name: string): string => `fabrika-${name}-${VERSION}.tgz`
 	const integrity = (bytes: string): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`
 	const NAMES = ['app', 'db']

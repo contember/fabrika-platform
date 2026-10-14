@@ -263,12 +263,13 @@ const LOCAL_BASE_PACKAGE = '@fabrika/app'
 
 /**
  * The version of a local pack: a prerelease of the last published version, named after the commit. npm never has it,
- * so nothing resolves it from the registry by accident.
+ * so nothing resolves it from the registry by accident. The `g` keeps an all-digit abbreviation such as `0123456`
+ * from being a numeric identifier, which SemVer refuses with a leading zero.
  */
 export const localVersion = (published: string, commit: string): string => {
 	if (!/^\d+\.\d+\.\d+$/.test(published)) throw new Error(`${LOCAL_BASE_PACKAGE}: the published version ${JSON.stringify(published)} is not a release`)
 	if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`the commit ${JSON.stringify(commit)} is not a git object name`)
-	return `${published}-local.${commit}`
+	return `${published}-local.g${commit}`
 }
 
 /** `pack --local`'s version and the published version it builds on, which the skill's example pins keep naming. */

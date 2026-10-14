@@ -191,19 +191,25 @@ describe('command line', () => {
 
 describe('a local pack', () => {
 	test('is a prerelease of the last published version, named after the commit', () => {
-		expect(localVersion('0.3.3', 'abc1234')).toBe('0.3.3-local.abc1234')
+		expect(localVersion('0.3.3', 'abc1234')).toBe('0.3.3-local.gabc1234')
 		expect(() => localVersion('0.3.3-next.1', 'abc1234')).toThrow('is not a release')
 		expect(() => localVersion('0.3.3', 'HEAD')).toThrow('is not a git object name')
 	})
 
+	test('is a version the release tag parser accepts, an all-digit commit with a leading zero included', async () => {
+		const version = localVersion('0.3.3', '0123456')
+		expect(version).toBe('0.3.3-local.g0123456')
+		expect((await parseOptions(['validate', `--tag=v${version}`])).version).toBe(version)
+	})
+
 	test('installs from vendor/: every package a direct dependency and an override', () => {
 		const packages = [
-			{ name: '@fabrika/app', filename: 'fabrika-app-0.3.3-local.abc1234.tgz', dependencies: [], integrity: 'sha512-AAAA' },
-			{ name: '@fabrika/db', filename: 'fabrika-db-0.3.3-local.abc1234.tgz', dependencies: ['@fabrika/app'], integrity: 'sha512-BBBB' },
+			{ name: '@fabrika/app', filename: 'fabrika-app-0.3.3-local.gabc1234.tgz', dependencies: [], integrity: 'sha512-AAAA' },
+			{ name: '@fabrika/db', filename: 'fabrika-db-0.3.3-local.gabc1234.tgz', dependencies: ['@fabrika/app'], integrity: 'sha512-BBBB' },
 		]
 		const tarballs = {
-			'@fabrika/app': 'file:vendor/fabrika-app-0.3.3-local.abc1234.tgz',
-			'@fabrika/db': 'file:vendor/fabrika-db-0.3.3-local.abc1234.tgz',
+			'@fabrika/app': 'file:vendor/fabrika-app-0.3.3-local.gabc1234.tgz',
+			'@fabrika/db': 'file:vendor/fabrika-db-0.3.3-local.gabc1234.tgz',
 		}
 		expect(localInstallBlock(packages)).toEqual({ dependencies: tarballs, overrides: tarballs })
 	})
@@ -213,8 +219,8 @@ describe('a local pack', () => {
 			{ path: 'SKILL.md', text: '---\nname: fabrika-app\nversion: 0.0.4\ndescription: rules\n---\n' },
 			{ path: 'references/app-setup.md', text: '\t\t"@fabrika/app": "^0.0.4",\n' },
 		]
-		expect(stagedAppSkill(files, '0.3.3-local.abc1234', '0.3.3')).toEqual([
-			{ path: 'SKILL.md', text: '---\nname: fabrika-app\nversion: 0.3.3-local.abc1234\ndescription: rules\n---\n' },
+		expect(stagedAppSkill(files, '0.3.3-local.gabc1234', '0.3.3')).toEqual([
+			{ path: 'SKILL.md', text: '---\nname: fabrika-app\nversion: 0.3.3-local.gabc1234\ndescription: rules\n---\n' },
 			{ path: 'references/app-setup.md', text: '\t\t"@fabrika/app": "^0.3.3",\n' },
 		])
 	})
@@ -245,7 +251,7 @@ describe.skipIf(!runPackWitness)('an application outside the repository on a loc
 			expect(packed.code).toBe(0)
 			const manifestPath = join(artifacts, 'release-manifest.json')
 			const manifest = parseReleaseManifest(await readFile(manifestPath, 'utf8'), manifestPath)
-			expect(manifest.version).toMatch(/^\d+\.\d+\.\d+-local\.[0-9a-f]+$/)
+			expect(manifest.version).toMatch(/^\d+\.\d+\.\d+-local\.g[0-9a-f]+$/)
 			const block = z.object({ dependencies: z.record(z.string()), overrides: z.record(z.string()) })
 				.parse(JSON.parse(await readFile(join(artifacts, LOCAL_INSTALL_FILE), 'utf8')))
 			expect(block).toEqual(localInstallBlock(manifest.packages))
