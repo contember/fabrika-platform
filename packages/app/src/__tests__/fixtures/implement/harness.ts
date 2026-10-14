@@ -13,6 +13,7 @@ import {
 	type WorkloadTokenSource,
 } from '@fabrika/app/implement'
 import {
+	type AccessTokenClaims,
 	buildAccessClaims,
 	compileEndpointTable,
 	contractDigest,
@@ -36,11 +37,19 @@ export const ISSUER = 'https://iam.test'
 export const APP_ID = 'notes@prod'
 export const ORIGIN = 'https://notes.test'
 
-const { publicKey, privateKey } = await generateKeyPair('ES256')
-const exported = await exportJWK(publicKey)
-const JWKS: Jwks = { keys: [{ kty: 'EC', crv: 'P-256', x: exported.x, y: exported.y, kid: 'k1', alg: 'ES256', use: 'sig' }] }
+// No top-level await: `bun test --isolate` runs a file's tests before a module it imports has finished awaiting.
+const signingKeys = generateKeyPair('ES256')
+const JWKS: Promise<Jwks> = signingKeys.then(async ({ publicKey }) => {
+	const exported = await exportJWK(publicKey)
+	return { keys: [{ kty: 'EC', crv: 'P-256', x: exported.x, y: exported.y, kid: 'k1', alg: 'ES256', use: 'sig' }] }
+})
 
-export const keySource: IamKeySource = { getJwks: () => Promise.resolve(JWKS) }
+/** `claims` signed with the harness's key, as IAM signs a token. */
+async function sign(claims: AccessTokenClaims): Promise<string> {
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign((await signingKeys).privateKey)
+}
+
+export const keySource: IamKeySource = { getJwks: () => JWKS }
 
 export const unreachableIam: IamKeySource = { getJwks: () => Promise.reject(new Error('IAM is down')) }
 
@@ -115,7 +124,7 @@ export function workloadTokensFor(
 				issuedAt: now - 10,
 				expiresAt: now + lifetimeSeconds,
 			})
-			const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+			const token = await sign(claims)
 			return { ok: true, token, expiresAt: claims.exp }
 		},
 	}
@@ -136,7 +145,7 @@ export function serveStandInIam(
 		async fetch(request) {
 			const url = new URL(request.url)
 			if (url.pathname === '/.well-known/jwks.json') {
-				return Response.json(JWKS)
+				return Response.json(await JWKS)
 			}
 			if (url.pathname === WORKLOAD_TOKEN_PATH && request.method === 'POST') {
 				const key = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
@@ -210,7 +219,7 @@ export async function token(kind: TokenKind, perms: PermissionEntry[], audience 
 		issuedAt: now - 10,
 		expiresAt: now + 300,
 	})
-	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+	return sign(claims)
 }
 
 /** A connector token: an `app` workload naming the consuming application, as IAM mints it from that consumer's key. */
@@ -227,7 +236,7 @@ export async function appToken(consumer: string, perms: PermissionEntry[], audie
 		issuedAt: now - 10,
 		expiresAt: now + 300,
 	})
-	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+	return sign(claims)
 }
 
 /** A share-link token: no principal type, bound to `mount` and `chain` (the object first), as IAM mints from a link key. */
@@ -243,7 +252,7 @@ export async function linkToken(perms: PermissionEntry[], link: LinkTokenClaims,
 		expiresAt: now + 300,
 		link,
 	})
-	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+	return sign(claims)
 }
 
 /** Boots `app` and puts it behind what the proxy adds: the endpoint header, unless the request already carries one. */
