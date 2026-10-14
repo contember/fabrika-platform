@@ -111,6 +111,11 @@ export interface AccessTokenClaims {
 	 * address as it was spelled, never a substitute for it.
 	 */
 	email?: string
+	/**
+	 * Present only on a principal token IAM minted from a signed-in session (`mintToken`). A token minted from a `px_`
+	 * key carries what the key's own grants narrow, so a check that resolves the person's permissions requires this.
+	 */
+	session?: true
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
 	oauth?: OAuthTokenClaims
 	/** Present only on a share-link token, which has no `ptype`: `sub` is then the link key's id. */
@@ -192,6 +197,8 @@ export interface AccessTokenParams {
 	label: string | null
 	/** A user principal's normalized mailbox; refused with any other `type`. */
 	email?: string
+	/** Minted from a signed-in session; refused on a token without `type` or of a workload. */
+	session?: true
 	permissions: PermissionEntry[]
 	issuedAt: number
 	expiresAt: number
@@ -271,6 +278,10 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 		}
 		claims.email = params.email
 	}
+	if (params.session !== undefined) {
+		if (params.type === undefined || isWorkloadKind(params.type)) throw new Error("Only a person's or a service's token is minted from a session")
+		claims.session = params.session
+	}
 	if (params.link !== undefined) {
 		if (params.type !== undefined) throw new Error('A share-link token has no principal type')
 		claims.link = { mount: params.link.mount, chain: params.link.chain.map((scope) => ({ type: scope.type, value: scope.value })) }
@@ -316,6 +327,10 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (email === undefined) {
 		return null
 	}
+	const session = prop(payload, 'session')
+	if (session !== undefined && (session !== true || ptype === null || isWorkloadKind(ptype) || oauth !== null)) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
@@ -325,6 +340,9 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	}
 	if (email !== null) {
 		claims.email = email
+	}
+	if (session === true) {
+		claims.session = true
 	}
 	if (oauth !== null) {
 		claims.oauth = oauth

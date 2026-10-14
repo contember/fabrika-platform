@@ -526,8 +526,11 @@ still refuses any `Authorization` header, as authorization.
   an installation administrator: only roles the application declares with no `member`, never a built-in or a custom
   policy, only a role whose every action that user holds globally there, and only to a person IAM already has (by
   address; inviting a person stays an IAM administrator's). Each change writes its `audit_events` row under the
-  application, in the change's own transaction. A `px_` key does not administer this way, because its own grants
-  narrow what it carries. A user holding `list` globally reads the directory (`listAppMembers`, `ctx.members.list()`
+  application, in the change's own transaction, and writes only under the authority its check read: the user still
+  enabled, the user's grant revision and the application's schema revision unchanged, so a reconcile or the removal of
+  any grant of the user between the check and the write makes it write nothing. Only a signed-in session administers
+  this way, never a `px_` key, presented directly or exchanged by the proxy for a console token (that token has no
+  `session` mark), because a key's own grants narrow what it carries. A user holding `list` globally reads the directory (`listAppMembers`, `ctx.members.list()`
   of an `app: true` endpoint of that action), paged by principal id, at most 100 a page: labels where the vocabulary
   declares `directory: 'labels'` or to `manage`, addresses and last sign-ins only to `manage`. This is authorization of
   IAM's own operations, never a second enforcement decision; the alternative, one organisation value per

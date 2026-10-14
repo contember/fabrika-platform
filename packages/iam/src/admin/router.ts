@@ -71,6 +71,8 @@ export interface ResolvedAdmin {
 	permissions: PermissionEntry[]
 	/** The app the admin's credential was verified for: a registered console gateway, or IAM itself for a `px_` key. */
 	audience: string
+	/** The credential is a signed-in session's token (`AccessTokenClaims.session`), not one a `px_` key minted. */
+	session: boolean
 }
 
 export type AdminResolution =
@@ -117,7 +119,10 @@ export async function resolveAdmin(
 			return { ok: false, status: 403, reason: 'disabled' }
 		}
 		const permissions = await resolvePermissionsAt(services, principal, IAM_APP)
-		return { ok: true, admin: { id: principal.id, type: principal.type, label: principal.label, permissions, audience: claims.aud } }
+		return {
+			ok: true,
+			admin: { id: principal.id, type: principal.type, label: principal.label, permissions, audience: claims.aud, session: claims.session === true },
+		}
 	}
 
 	const res = await resolveCaller(services, env, { app: IAM_APP, credential: creds.bearer, requestId: creds.requestId })
@@ -136,7 +141,14 @@ export async function resolveAdmin(
 	}
 	return {
 		ok: true,
-		admin: { id: res.caller.id, type: res.caller.type, label: res.caller.label, permissions: res.caller.permissions, audience: res.verifiedApp },
+		admin: {
+			id: res.caller.id,
+			type: res.caller.type,
+			label: res.caller.label,
+			permissions: res.caller.permissions,
+			audience: res.verifiedApp,
+			session: false,
+		},
 	}
 }
 

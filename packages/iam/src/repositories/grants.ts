@@ -51,6 +51,19 @@ export function eligibleGrantBinds(input: { principalId: string; app?: string | 
 	return [input.principalId, input.app ?? null, input.roleKey ?? null]
 }
 
+/**
+ * What authorized a delegated grant change (ADR-0022 rule 6), read BEFORE its check: the administrator's grant revision
+ * (`principals.grant_revision`) and the app's schema revision (`AppSchemaRepository.getSchemaRevision`). The change
+ * writes only while the administrator is enabled and both are unchanged, so the grants and declarations the check read
+ * are the ones in force at the write.
+ */
+export interface DelegatedAuthority {
+	readonly administratorId: string
+	readonly app: string
+	readonly grantRevision: number
+	readonly schemaRevision: number
+}
+
 export interface GrantRow {
 	id: string
 	principal_id: string
@@ -224,16 +237,95 @@ export class GrantRepository {
 		return created ?? null
 	}
 
+	/**
+	 * `createRoleGrantUnlessHeld` of a global role under a delegated `authority`: null when the principal already holds
+	 * it or the authority changed since its check (`delegatedAuthorityHolds` tells them apart). Throws
+	 * `ExternalGrantError` for a grant the principal may not hold.
+	 */
+	async createDelegatedRoleGrant(
+		input: { principalId: string; roleKey: string; grantedBy: string },
+		authority: DelegatedAuthority,
+		audit: (grantId: string) => AuditEventInput,
+	): Promise<GrantRow | null> {
+		await this.refuseWorkload(input.principalId)
+		const guard = this.delegatedGuard(authority, 0)
+		const id = uuidv7()
+		const grant = { ...input, app: authority.app }
+		const conflict = `ON CONFLICT (principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL DO NOTHING`
+		const change = this.writer.changed([this.grantChange(id, grant, conflict, guard)], audit(id))
+		const locks = [...this.administratorLock(authority), ...this.revisionLock(authority)]
+		const [created] = change.rows<GrantRow>(await this.db.batch([...locks, ...change.statements]), locks.length)
+		if (created === undefined && !(await this.isEligibleGrant(grant))) {
+			throw new ExternalGrantError()
+		}
+		return created ?? null
+	}
+
+	/**
+	 * Delete a grant under a delegated `authority`, after its principal's revision (`grantRemovalStatement`); false when
+	 * it is gone or the authority changed since its check. A removal of the administrator's own grant moves the revision
+	 * the guard reads, so the guard expects it one higher.
+	 */
+	async deleteDelegatedGrant(grant: Pick<GrantRow, 'id' | 'principal_id'>, authority: DelegatedAuthority, audit: AuditEventInput): Promise<boolean> {
+		const own = grant.principal_id === authority.administratorId
+		const guard = this.delegatedGuard(authority, own ? 1 : 0)
+		const removal = this.writer.changed(
+			[{ sql: `DELETE FROM grants WHERE id = ? AND ${guard.sql} RETURNING id`, binds: [grant.id, ...guard.binds] }],
+			audit,
+		)
+		const locks = [
+			...(own ? [] : this.administratorLock(authority)),
+			grantRemovalStatement(this.db, { principalId: grant.principal_id }),
+			...this.revisionLock(authority),
+		]
+		return removal.rows(await this.db.batch([...locks, ...removal.statements]), locks.length).length > 0
+	}
+
+	/** Whether `authority` still holds: the administrator enabled and both revisions the ones its check read. */
+	async delegatedAuthorityHolds(authority: DelegatedAuthority): Promise<boolean> {
+		const guard = this.delegatedGuard(authority, 0)
+		return (await this.db.prepare(`SELECT 1 AS holds WHERE ${guard.sql}`).bind(...guard.binds).first()) !== null
+	}
+
+	/**
+	 * On Postgres a delegated change takes the principal rows first, as every writer of a principal's rows starts: the
+	 * administrator's `FOR SHARE` (a disable or a grant removal waits, or the change reads the committed one), and a
+	 * removed grant's principal by its revision's increment, which takes the administrator's own row when the grant is
+	 * theirs. Then the app's revision row `FOR SHARE`: a reconcile's increment, its first statement, waits, or the change
+	 * reads the new revision. SQLite and D1 run one writer at a time and need no lock.
+	 */
+	private administratorLock(authority: DelegatedAuthority): SqlStatement[] {
+		return this.writer.dialect === 'postgres'
+			? [this.db.prepare('SELECT id FROM principals WHERE id = ? FOR SHARE').bind(authority.administratorId)]
+			: []
+	}
+
+	private revisionLock(authority: DelegatedAuthority): SqlStatement[] {
+		return this.writer.dialect === 'postgres'
+			? [this.db.prepare('SELECT revision FROM app_schema_revisions WHERE app = ? FOR SHARE').bind(authority.app)]
+			: []
+	}
+
+	private delegatedGuard(authority: DelegatedAuthority, ownRemoval: 0 | 1): { sql: string; binds: (string | number)[] } {
+		return {
+			sql: `EXISTS (SELECT 1 FROM principals WHERE id = ? AND disabled_at IS NULL AND grant_revision = ?)
+				AND COALESCE((SELECT revision FROM app_schema_revisions WHERE app = ?), 0) = ?`,
+			binds: [authority.administratorId, authority.grantRevision + ownRemoval, authority.app, authority.schemaRevision],
+		}
+	}
+
 	/** The INSERT of one grant with a caller-generated id, for a batch that also writes its principal and record. */
 	grantStatement(id: string, input: CreateGrantInput, onConflict: string = ''): SqlStatement {
 		const insert = this.grantChange(id, input, onConflict)
 		return this.db.prepare(insert.sql).bind(...insert.binds)
 	}
 
-	private grantChange(id: string, input: CreateGrantInput, onConflict: string): SqlChange {
+	private grantChange(id: string, input: CreateGrantInput, onConflict: string, guard?: { sql: string; binds: (string | number)[] }): SqlChange {
 		return {
 			sql: `INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${eligibleGrantSql(this.writer.dialect)} ${onConflict} RETURNING *`,
+				SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${eligibleGrantSql(this.writer.dialect)}${
+				guard === undefined ? '' : ` AND ${guard.sql}`
+			} ${onConflict} RETURNING *`,
 			binds: [
 				id,
 				input.principalId,
@@ -246,6 +338,7 @@ export class GrantRepository {
 				input.expiresAt ?? null,
 				unixNow(),
 				...eligibleGrantBinds(input),
+				...(guard?.binds ?? []),
 			],
 		}
 	}

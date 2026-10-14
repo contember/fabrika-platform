@@ -15,7 +15,16 @@ import type {
 } from '@fabrika/iam-contract'
 import type { IamAppContext } from '../app'
 import { contractGrantProblem } from '../contract-rules'
-import { type AppMembersRow, type AuditEventInput, auditLabelOf, ExternalGrantError, type PrincipalRow, principalStatus, type RoleRow } from '../db'
+import {
+	type AppMembersRow,
+	type AuditEventInput,
+	auditLabelOf,
+	type DelegatedAuthority,
+	ExternalGrantError,
+	type PrincipalRow,
+	principalStatus,
+	type RoleRow,
+} from '../db'
 import { appMemberPage } from '../membership'
 import { resolvePermissionsAt } from '../resolve'
 import { BUILTIN_ROLES } from '../roles'
@@ -31,21 +40,26 @@ interface PeopleAdministrator {
 	readonly requestId: string
 }
 
-/** An application the administrator holds `members.manage` of, globally, with its permissions there. */
+/**
+ * An application the administrator holds `members.manage` of, globally, with its permissions there, and the authority
+ * a change writes under: the administrator's grant revision and the app's schema revision, read before the check.
+ */
 interface AdministeredApp {
 	readonly app: string
 	readonly people: AppMembersRow
 	readonly permissions: PermissionEntry[]
+	readonly authority: DelegatedAuthority
 }
 
 /**
- * The person behind the request. Only a person administers an application's people, and only through the console: a
- * `px_` key is refused, because a key's own grants narrow what it carries and these checks resolve the person's.
+ * The person behind the request. Only a person administers an application's people, and only through a signed-in
+ * session: a `px_` key is refused, presented directly or exchanged by the proxy for a console token, because a key's own
+ * grants narrow what it carries and these checks resolve the person's.
  */
 async function administrator(ctx: IamAppContext): Promise<PeopleAdministrator> {
 	const admin = ctx.admin
 	if (admin === null) return fail(401, 'missing_token')
-	if (admin.type !== 'user' || admin.audience === IAM_APP) {
+	if (admin.type !== 'user' || admin.audience === IAM_APP || !admin.session) {
 		return fail(403, 'an application administrator is a person signed in to the console')
 	}
 	const principal = await ctx.services.repositories.principals.getPrincipalById(admin.id)
@@ -55,10 +69,19 @@ async function administrator(ctx: IamAppContext): Promise<PeopleAdministrator> {
 
 /** The application, when it declares its people and the administrator holds its `members.manage` globally there. */
 async function administeredApp(admin: PeopleAdministrator, app: string): Promise<AdministeredApp | null> {
+	const schemaRevision = await admin.services.repositories.appSchema.getSchemaRevision(app)
 	const people = await admin.services.repositories.appSchema.getAppMembers(app)
 	if (people === null) return null
 	const permissions = await resolvePermissionsAt(admin.services, admin.principal, app)
-	return permits(permissions, people.manage) ? { app, people, permissions } : null
+	const authority = { administratorId: admin.principal.id, app, grantRevision: admin.principal.grant_revision, schemaRevision }
+	return permits(permissions, people.manage) ? { app, people, permissions, authority } : null
+}
+
+/** A delegated change that wrote nothing because the authority its check read changed meanwhile. */
+async function refuseIfStale(admin: PeopleAdministrator, administered: AdministeredApp): Promise<void> {
+	if (!(await admin.services.repositories.grants.delegatedAuthorityHolds(administered.authority))) {
+		fail(409, 'your authority over the application changed meanwhile; try again')
+	}
 }
 
 /** One answer for an unknown application and one the caller does not administer, so neither is told apart. */
@@ -137,8 +160,9 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 	const contract = await contractGrantProblem(appSchema, administered.app, { roleKey: role.role_key, permissions: null, scopeType: null })
 	if (contract !== null) return fail(400, contract)
 	try {
-		const granted = await grants.createRoleGrantUnlessHeld(
-			{ principalId: target.id, app: administered.app, roleKey: role.role_key, grantedBy: admin.principal.id },
+		const granted = await grants.createDelegatedRoleGrant(
+			{ principalId: target.id, roleKey: role.role_key, grantedBy: admin.principal.id },
+			administered.authority,
 			(grantId) =>
 				peopleEvent(admin, administered.app, {
 					action: 'iam.grant.create',
@@ -146,6 +170,7 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 					metadata: { principalId: target.id, roleKey: role.role_key, scopeType: null, scopeValue: null, delegated: true },
 				}),
 		)
+		if (granted === null) await refuseIfStale(admin, administered)
 		return { principalId: target.id, role: role.role_key, granted: granted !== null }
 	} catch (cause) {
 		if (cause instanceof ExternalGrantError) return fail(409, cause.message)
@@ -162,13 +187,15 @@ export async function revokeAppRole(ctx: IamAppContext, input: RevokeAppRoleRequ
 		grant.app === administered.app && grant.role_key === role.role_key && grant.scope_type === null && grant.scope_value === null
 	)
 	if (held === undefined) return { revoked: false }
-	const revoked = await grants.deleteGrant(
-		held.id,
+	const revoked = await grants.deleteDelegatedGrant(
+		held,
+		administered.authority,
 		peopleEvent(admin, administered.app, {
 			action: 'iam.grant.revoke',
 			resourceId: held.id,
 			metadata: { principalId: input.principalId, roleKey: role.role_key, scopeType: null, scopeValue: null, delegated: true },
 		}),
 	)
+	if (!revoked) await refuseIfStale(admin, administered)
 	return { revoked }
 }

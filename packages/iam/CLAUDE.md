@@ -242,8 +242,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`principalLockStatements`): `promoteToInternal`, `upsertCredential` (enrollment and login rehash), `disableCredential`,
   `completeAction` and action-token issuance. They wait at one row and never hold each other's; a new such writer must
   start there too. So does every write that removes a grant: its first statement moves `principals.grant_revision`
-  on (`grantRemovalStatement`, `repositories/grants.ts`) — the admin `grants.revoke`, a membership revoke and every
-  repository delete. The one exception, an API key's revoke, disables the principal in the same statement.
+  on (`grantRemovalStatement`, `repositories/grants.ts`) — the admin `grants.revoke`, a membership revoke, a delegated
+  revoke and every repository delete. The one exception, an API key's revoke, disables the principal in the same statement.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and
@@ -279,12 +279,15 @@ fails if that stops being true — it is the guard, not documentation of one.
   `listAppMembers` needs `list` held globally and pages by principal id (`MAX_APP_MEMBERS_PAGE`); labels by
   `directory` or to `manage`, emails and last sign-ins only to `manage`. The `appPeople.*` procedures of `/admin/rpc`
   are the ONE exception to "every procedure requires `iam.admin`" (`admin-rpc-gates.test.ts` names them): a USER behind
-  the console's token (never a `px_` key, whose own grants narrow it) holding `manage` globally at the app, resolved
+  a session's console token (`AccessTokenClaims.session`, set only by `mintToken`; never a `px_` key, presented or
+  exchanged by the proxy, whose own grants narrow it) holding `manage` globally at the app, resolved
   live there, grants and revokes the app's declared global roles (no `member`, no built-in, no custom policy) whose
   every action it holds globally, to a person IAM already has — never an invitation, which would let an application's
   administrator create a principal the OIDC allowlist's known-principal bypass admits. An app it does not administer
   and an unknown app are one 404. Each change writes `iam.grant.create`/`iam.grant.revoke` under the APP, in its own
-  transaction, with `delegated: true` and no address.
+  transaction, with `delegated: true` and no address, and only under the `DelegatedAuthority` its check read (the
+  user's `grant_revision` and the app's schema revision, read first; principal rows first, then the revision row
+  `FOR SHARE` on Postgres); a stale one writes nothing and answers 409.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE

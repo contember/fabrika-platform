@@ -1,4 +1,4 @@
-import { buildAccessClaims, TOKEN_ALG } from '@fabrika/auth-core'
+import { buildAccessClaims, isWorkloadKind, TOKEN_ALG } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
@@ -163,6 +163,8 @@ export interface AdminTokenOptions {
 	issuer?: string
 	/** The token's audience. Defaults to the console gateway. */
 	app?: string
+	/** Minted from a signed-in session, as the console's token is. Defaults to true; false is a key's token. */
+	session?: boolean
 }
 
 export interface MakeServicesOptions {
@@ -253,6 +255,7 @@ export async function adminTokenFor(repositories: IamRepositories, principalId: 
 		subject: principal.id,
 		type: principal.type,
 		label: principal.label,
+		...(options.session === false || isWorkloadKind(principal.type) ? {} : { session: true }),
 		permissions: [],
 		issuedAt,
 		expiresAt: issuedAt + 300,

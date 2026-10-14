@@ -3,29 +3,16 @@
 // through IAM's administration API and audited by IAM, with no installation admin involved.
 
 import type { AppSchema } from '@fabrika/auth-core'
-import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
-import { createIamApp } from '../app'
+import { AuditWriter } from '../db'
 import { prop } from '../json'
 import { listAppMembers } from '../membership'
 import { resolvePermissionsAt } from '../resolve'
-import { adminTokenFor, createHarness, TEST_SIGNING_KEYS } from './helpers/harness'
-import { APP, CALLER_ENV, type MembershipFixture, membershipFixture, NOTES_SCHEMA, ORIGIN, type Person } from './helpers/membership'
-
-/** `NOTES_SCHEMA` with people of its own: `people.manage` administers them, `people.list` reads the directory. */
-const PEOPLE_SCHEMA: AppSchema = {
-	...NOTES_SCHEMA,
-	actions: [...NOTES_SCHEMA.actions, { action: 'people.manage' }, { action: 'people.list' }],
-	roles: {
-		...NOTES_SCHEMA.roles,
-		// The application's administrator: it manages its people and holds what `staff` grants.
-		administrator: { name: 'Administrator', permissions: ['people.manage', 'people.list', 'notes.read', 'notes.write', 'notes.share', 'notes.admin'] },
-		reader: { name: 'Reader', permissions: ['people.list'] },
-		publisher: NOTES_SCHEMA.roles['publisher'] ?? { name: 'Publisher', permissions: [] },
-		auditor: { name: 'Auditor', permissions: ['notes.read', 'notes.publish'] },
-	},
-	members: { manage: 'people.manage', list: 'people.list' },
-}
+import { hashToken } from '../secret'
+import { mintFromKey } from '../tokens'
+import { bearerRpc, consoleRpc, DelegatedBetweenCheckAndWrite, errorType, PEOPLE_SCHEMA, result, WIDENED_STAFF_SCHEMA } from './helpers/app-people'
+import { CONSOLE_APP, createHarness, TEST_SIGNING_ENV, TestSqlDatabase } from './helpers/harness'
+import { APP, CALLER_ENV, type MembershipFixture, membershipFixture, NOTES_SCHEMA, type Person } from './helpers/membership'
 
 let seq = 0
 
@@ -33,6 +20,16 @@ async function people(schema: AppSchema = PEOPLE_SCHEMA): Promise<MembershipFixt
 	const f = await membershipFixture(createHarness().repositories)
 	expect((await f.putSchema(schema)).status).toBe(200)
 	return f
+}
+
+/** `people()` whose delegated changes run `grants.between` after their check and before their write. */
+async function racing(): Promise<{ f: MembershipFixture; grants: DelegatedBetweenCheckAndWrite }> {
+	const h = createHarness()
+	const db = new TestSqlDatabase(h.sqlite)
+	const grants = new DelegatedBetweenCheckAndWrite(db, new AuditWriter(db, 'sqlite'))
+	const f = await membershipFixture({ ...h.repositories, grants })
+	expect((await f.putSchema(PEOPLE_SCHEMA)).status).toBe(200)
+	return { f, grants }
 }
 
 async function holding(f: MembershipFixture, name: string, roleKey: string): Promise<Person> {
@@ -45,39 +42,6 @@ async function directory(f: MembershipFixture, person: Person, page: { after?: s
 	seq += 1
 	return listAppMembers(f.services, CALLER_ENV, f.ctx, { app: APP, credential: await person.token(), requestId: `people-${seq}`, ...page })
 }
-
-/** Call `/admin/rpc` with the console token of `principalId`, as Control's gateway forwards it. */
-async function consoleRpc(f: MembershipFixture, principalId: string, method: string, input: unknown): Promise<{ status: number; body: unknown }> {
-	const bearer = await adminTokenFor(f.repositories, principalId, { issuer: ORIGIN })
-	const response = await createIamApp().fetch(
-		new Request(`${ORIGIN}/admin/rpc`, {
-			method: 'POST',
-			headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
-			body: JSON.stringify({ method, input }),
-		}),
-		{
-			DB: unusedDatabase,
-			REPOSITORIES: f.repositories,
-			HUMAN_EMAIL_DOMAINS: '[]',
-			HUMAN_EMAILS: '[]',
-			IAM_BOOTSTRAP_ADMINS: '[]',
-			ENVIRONMENT: 'stage',
-			ISSUER: ORIGIN,
-			FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
-			FABRIKA_IAM_PROVISIONING_KEY: '',
-			OIDC_ISSUER: 'https://idp.test',
-			OIDC_CLIENT_ID: 'client',
-			OIDC_CLIENT_SECRET: 'secret',
-			OIDC_SCOPES: '',
-			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
-		},
-		f.ctx,
-	)
-	return { status: response.status, body: await response.json() }
-}
-
-const result = (body: unknown): unknown => prop(body, 'result')
-const errorType = (body: unknown): unknown => prop(prop(body, 'error'), 'type')
 
 describe("the application's directory", () => {
 	test('lists every principal holding a role of the application, global or in a value, with its roles', async () => {
@@ -250,7 +214,7 @@ describe("the application's administrator grants and revokes its global roles in
 	test('a person without the application members.manage administers nothing, and gets the answer of an unknown application', async () => {
 		const f = await people()
 		const staff = await holding(f, 'staff', 'staff')
-		const target = await f.person('target')
+		await f.person('target')
 		expect(prop(result((await consoleRpc(f, staff.id, 'appPeople.apps', null)).body), 'items')).toEqual([])
 		for (const app of [APP, 'nowhere@prod']) {
 			const refused = await consoleRpc(f, staff.id, 'appPeople.grant', { app, role: 'staff', email: 'target@example.test' })
@@ -260,6 +224,82 @@ describe("the application's administrator grants and revokes its global roles in
 		const administrator = await holding(f, 'administrator', 'administrator')
 		const elsewhere = await consoleRpc(f, administrator.id, 'appPeople.list', { app: 'notes@stage' })
 		expect([elsewhere.status, errorType(elsewhere.body)]).toEqual([404, 'not_found'])
+	})
+
+	test('a user key the proxy exchanged for a console token administers nothing: only a signed-in session does', async () => {
+		const f = await people()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		const target = await f.person('target')
+		const key = 'px_console-bound-key'
+		await f.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			principalId: administrator.id,
+			app: CONSOLE_APP,
+			issuedBy: administrator.id,
+			grants: [{ action: 'iam.principals.read' }],
+		})
+		// What the proxy does with a `px_` bearer at the console: mint a token of the console's audience from the key.
+		const minted = await mintFromKey(f.services, TEST_SIGNING_ENV, { app: CONSOLE_APP, key, requestId: 'proxy-mint' })
+		if (!minted.result.ok) throw new Error(`no token: ${minted.result.reason}`)
+		const bearer = minted.result.token
+		for (
+			const [method, input] of [
+				['appPeople.apps', null],
+				['appPeople.list', { app: APP }],
+				['appPeople.grant', { app: APP, role: 'staff', email: 'target@example.test' }],
+				['appPeople.revoke', { app: APP, role: 'administrator', principalId: administrator.id }],
+			] as const
+		) {
+			const refused = await bearerRpc(f, bearer, method, input)
+			expect([method, refused.status, errorType(refused.body)]).toEqual([method, 403, 'forbidden'])
+		}
+		expect((await f.repositories.grants.listGrants(target.id)).length).toBe(0)
+		expect((await f.repositories.grants.listGrants(administrator.id)).map((grant) => grant.role_key)).toEqual(['administrator'])
+	})
+
+	test('a reconcile widening the role between the check and the write: the grant writes nothing and records nothing', async () => {
+		const { f, grants } = await racing()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		const target = await f.person('target')
+		grants.between = async () => expect((await f.putSchema(WIDENED_STAFF_SCHEMA)).status).toBe(200)
+		const refused = await consoleRpc(f, administrator.id, 'appPeople.grant', { app: APP, role: 'staff', email: 'target@example.test' })
+		expect([refused.status, errorType(refused.body)]).toEqual([409, 'conflict'])
+		expect(await f.repositories.grants.listGrants(target.id)).toEqual([])
+		expect(await f.repositories.audit.listAuditEvents({ action: 'iam.grant.create', limit: 10 })).toEqual([])
+	})
+
+	test("the administrator's role removed between the check and the write: neither a grant nor a revoke lands", async () => {
+		const { f, grants } = await racing()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		const [managing] = await f.repositories.grants.listGrants(administrator.id)
+		if (managing === undefined) throw new Error('fixture')
+		const supplement = await f.repositories.grants.createGrant({ principalId: administrator.id, app: APP, roleKey: 'support' })
+		const target = await f.person('target')
+		const staff = await holding(f, 'staff', 'staff')
+
+		// A removal of another grant of the administrator moves its revision as surely as one of the managing grant.
+		grants.between = () => f.repositories.grants.deleteGrant(supplement.id)
+		const granted = await consoleRpc(f, administrator.id, 'appPeople.grant', { app: APP, role: 'staff', email: 'target@example.test' })
+		expect([granted.status, errorType(granted.body)]).toEqual([409, 'conflict'])
+		expect(await f.repositories.grants.listGrants(target.id)).toEqual([])
+
+		grants.between = () => f.repositories.grants.deleteGrant(managing.id)
+		const revoked = await consoleRpc(f, administrator.id, 'appPeople.revoke', { app: APP, role: 'staff', principalId: staff.id })
+		expect([revoked.status, errorType(revoked.body)]).toEqual([409, 'conflict'])
+		expect((await f.repositories.grants.listGrants(staff.id)).map((grant) => grant.role_key)).toEqual(['staff'])
+		expect(await f.repositories.audit.listAuditEvents({ action: 'iam.grant.create', limit: 10 })).toEqual([])
+		expect(await f.repositories.audit.listAuditEvents({ action: 'iam.grant.revoke', limit: 10 })).toEqual([])
+	})
+
+	test('an administrator revokes its own role, which moves the revision the guard reads', async () => {
+		const f = await people()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		expect(await consoleRpc(f, administrator.id, 'appPeople.revoke', { app: APP, role: 'administrator', principalId: administrator.id })).toEqual({
+			status: 200,
+			body: { result: { revoked: true } },
+		})
+		expect(await f.repositories.grants.listGrants(administrator.id)).toEqual([])
+		expect(await f.repositories.audit.listAuditEvents({ action: 'iam.grant.revoke', limit: 10 })).toHaveLength(1)
 	})
 
 	test('a disabled administrator administers nothing', async () => {

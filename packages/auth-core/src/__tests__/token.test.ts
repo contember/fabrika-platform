@@ -276,3 +276,34 @@ describe('the mailbox of a user token', () => {
 		expect(() => buildAccessClaims({ ...userParams, email: 'Ann@Example.com' })).toThrow()
 	})
 })
+
+describe('the session mark of a principal token', () => {
+	const sessionParams = {
+		iss: ISS,
+		app: 'console',
+		subject: 'user-1',
+		type: 'user' as const,
+		label: 'ann@example.com',
+		permissions: perms,
+		issuedAt: 1,
+		expiresAt: 2,
+	}
+
+	test("a session's token round-trips the mark, and a token without one parses without it", () => {
+		const built = buildAccessClaims({ ...sessionParams, session: true })
+		expect(parseAccessClaims(JSON.parse(JSON.stringify(built)))?.session).toBe(true)
+		expect(parseAccessClaims(JSON.parse(JSON.stringify(buildAccessClaims(sessionParams))))?.session).toBeUndefined()
+	})
+
+	test('only a person or a service is signed in, and the mark is only true', () => {
+		expect(() => buildAccessClaims({ ...sessionParams, type: undefined, session: true })).toThrow()
+		expect(() => buildAccessClaims({ ...sessionParams, type: 'job', workload: 'digest', session: true })).toThrow()
+		const job = buildAccessClaims({ ...sessionParams, type: 'job', workload: 'digest' })
+		expect(parseAccessClaims({ ...job, session: true })).toBeNull()
+		const anonymous = buildAccessClaims({ ...sessionParams, type: undefined })
+		expect(parseAccessClaims({ ...anonymous, session: true })).toBeNull()
+		for (const session of [false, 'true', 1, null]) {
+			expect(parseAccessClaims({ ...buildAccessClaims(sessionParams), session })).toBeNull()
+		}
+	})
+})

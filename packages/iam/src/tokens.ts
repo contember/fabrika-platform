@@ -88,6 +88,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 			type: principal.type,
 			label: principal.label,
 			...mailboxClaim(principal),
+			session: true,
 			permissions,
 			issuedAt: now,
 			expiresAt,
