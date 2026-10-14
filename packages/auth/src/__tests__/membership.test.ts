@@ -1,4 +1,4 @@
-import type { IamMembershipRpc } from '@fabrika/auth-core'
+import type { IamMembershipRpc, MemberItem } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { buildAuthContext } from '../client'
 import { createIamMembership, IamMembership } from '../membership'
@@ -136,6 +136,27 @@ describe('HttpIamRpc — the membership methods', () => {
 			id: 'c',
 			expiresAt: 4,
 		})
+		const member: Omit<MemberItem, 'lastSignInAt'> = {
+			principalId: 'p',
+			label: null,
+			email: null,
+			roles: ['editor'],
+			disabled: false,
+			affiliation: 'internal',
+		}
+		expect(await http({ ok: true, members: [{ ...member, lastSignInAt: 5 }], invitations: [] }).rpc.listMembers({ ...base, scope })).toEqual({
+			ok: true,
+			members: [{ ...member, lastSignInAt: 5 }],
+			invitations: [],
+		})
+		// An IAM from before the field answers none: the last sign-in is unknown, never a refusal of the whole list.
+		expect(await http({ ok: true, members: [member], invitations: [] }).rpc.listMembers({ ...base, scope })).toEqual({
+			ok: true,
+			members: [{ ...member, lastSignInAt: null }],
+			invitations: [],
+		})
+		await expect(http({ ok: true, members: [{ ...member, lastSignInAt: 'yesterday' }], invitations: [] }).rpc.listMembers({ ...base, scope })).rejects
+			.toBeInstanceOf(IamTransportError)
 		await expect(http({ ok: true, members: 'everyone' }).rpc.listMembers({ ...base, scope })).rejects.toBeInstanceOf(IamTransportError)
 		await expect(http({ ok: true, scope: 'w1' }).rpc.createScope({ ...base, delegation: 'g', dimension: 'w' })).rejects.toBeInstanceOf(
 			IamTransportError,

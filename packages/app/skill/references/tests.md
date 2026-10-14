@@ -218,7 +218,9 @@ if (postgres !== null) {
   application root under `bun test`; pass `testKit(app, { root })` from elsewhere.
 - The kit stands in for IAM's membership operations. A member directory (`ctx.members.list()` and `get(id)`) answers
   from the kit's own callers: everyone `testCaller` gave a membership role in that scope, labels only where the
-  dimension declares `directory: 'labels'` (or to a `members.manage` holder). To list someone, make them a caller:
+  dimension declares `directory: 'labels'` (or to a `members.manage` holder). `kit.testCaller(grants, { lastSignInAt })`
+  is a person who signed in then; a `members.manage` holder's `list(ref)` answers it, and `null` for everyone else. To
+  list someone, make them a caller:
   `kit.testCaller([{ role: 'member', scope: { type: 'org', value: 'acme' } }])`. A `creates` endpoint, member
   management and share links answer under IAM's rules for the caller's grants, and a role they give or remove is live
   from the caller's next request, as in IAM: the creator of a value holds its creator role, a removed member is

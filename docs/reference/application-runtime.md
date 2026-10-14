@@ -637,7 +637,10 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   is not asked.
 - `ctx.members` (`assign`, `revoke`, `list`) exists only on an endpoint whose action is
   its dimension's `members.manage`, and takes that endpoint's own `Ref`. One request
-  carries one grant, so it makes one membership change.
+  carries one grant, so it makes one membership change. Its `list` answers each member's
+  `email` and `lastSignInAt`: IAM records a person's last sign-in to the application when
+  its proxy redeems the handoff code (`app_sign_ins`), and answers it only to a holder of
+  `members.manage`, as personal data like the address.
 - On every other endpoint `on` or `in` a dimension that declares members, or one below it,
   `ctx.members` is a read-only directory of the nearest such dimension, at the value the
   `Ref`'s chain holds: a deal endpoint reads its org's. The artifact records each endpoint's
@@ -1074,7 +1077,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   manages members or issues share links tests them without a transport of its own, and so does the policy isolation
   kit's probe. It answers a member directory (`ctx.members.list()` and `get`) from the kit's callers: each caller's
   membership roles in the scope, labels only to a `members.manage` holder or where the dimension declares
-  `directory: 'labels'`, and `not_allowed` to a caller without the dimension's `members.list` there (a list) or the
+  `directory: 'labels'`, `lastSignInAt` (`testCaller`'s option) only to a `members.manage` holder, and `not_allowed` to a caller without the dimension's `members.list` there (a list) or the
   endpoint's action on the chain (a lookup). It answers the writes under IAM's rules for the caller's grants: a
   single-use delegation grant per request, `members.manage` on the value itself, an assigning role (`assignableBy`)
   there or, an application-wide one, globally, every action of the role assigned, a link mount's `issuedBy` and grants

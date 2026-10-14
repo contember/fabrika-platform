@@ -245,7 +245,10 @@ export interface RevokeMemberInput extends MembershipCaller {
 
 export type RevokeMemberResult = { ok: true } | MembershipFailure
 
-/** The members of `scope`, with their labels. Needs the dimension's `members.list` there; emails and invitations only to `members.manage`. */
+/**
+ * The members of `scope`, with their labels. Needs the dimension's `members.list` there; emails, last sign-ins and
+ * invitations only to `members.manage`.
+ */
 export interface ListMembersInput extends MembershipCaller {
 	scope: Scope
 }
@@ -256,6 +259,11 @@ export interface MemberItem {
 	label: string | null
 	/** Null unless the caller holds the dimension's `members.manage` in the scope. */
 	email: string | null
+	/**
+	 * When the member last signed in to the application (unix seconds): null for one that never did, and unless the caller
+	 * holds the dimension's `members.manage` in the scope, since it is personal data like the address.
+	 */
+	lastSignInAt: number | null
 	roles: string[]
 	disabled: boolean
 	/** An `external` member is a person from outside the organization (ADR-0051). */

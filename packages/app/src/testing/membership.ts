@@ -228,6 +228,7 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, perm
 			principalId: member.id,
 			label: manager || dimension.directory === 'labels' ? member.label : null,
 			email: manager ? member.email : null,
+			lastSignInAt: manager ? member.lastSignInAt : null,
 			roles,
 			disabled: member.disabled,
 			affiliation: member.affiliation,

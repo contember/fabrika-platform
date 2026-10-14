@@ -517,7 +517,9 @@ containing it, that declares `members`: a task endpoint reads its org's. A dimen
   endpoint below it (an IAM answer without one is a 500). Elsewhere it is `string | null`: store it in a nullable column
   or output, never with `!` or a cast.
 - With the dimension's own `members.manage` action: `list(ref)`, `assign(ref, { email } | { principalId }, role)` and
-  `revoke(ref, …)`, one change per request.
+  `revoke(ref, …)`, one change per request. `list(ref)` adds each member's `email` and `lastSignInAt` (unix seconds of
+  its last sign-in to this application, `null` for one that never signed in) and the open `invitations`: show a person
+  as invited, active or disabled from these, never from a column of your own.
 - A partner company's people: a role with `external: true` whose `assignableBy` names an app-wide staff role.
   `assign(ref, { email }, 'partner', { label: company.name, message })` mails the invitation with the company's name
   (≤ 200 characters, one line) and a note (≤ 1000 characters); a new address chooses its password from the mail and

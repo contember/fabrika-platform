@@ -41,7 +41,7 @@ export interface InvitationRow {
 	message: string | null
 }
 
-/** One membership-role grant in a value, with the principal it belongs to. */
+/** One membership-role grant in a value, with the principal it belongs to and its last sign-in to the app. */
 export interface MemberGrantRow {
 	principal_id: string
 	role_key: string
@@ -49,6 +49,7 @@ export interface MemberGrantRow {
 	email: string | null
 	disabled_at: number | null
 	affiliation: PrincipalAffiliation
+	signed_in_at: number | null
 }
 
 /**
@@ -213,10 +214,11 @@ export class MembershipRepository {
 	/** Every active grant of a membership role of `scope.type` in `scope`, with its principal. */
 	async listMemberGrants(app: string, scope: Scope): Promise<MemberGrantRow[]> {
 		const { results } = await this.db
-			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at, p.affiliation
+			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at, p.affiliation, si.signed_in_at
 				FROM grants g
 				JOIN principals p ON p.id = g.principal_id
 				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+				LEFT JOIN app_sign_ins si ON si.app = g.app AND si.principal_id = g.principal_id
 				WHERE g.app = ? AND g.scope_type = ? AND g.scope_value = ? AND r.member_scope = ?
 					AND (g.expires_at IS NULL OR g.expires_at > ?)
 				ORDER BY g.principal_id, g.role_key`)
@@ -228,10 +230,11 @@ export class MembershipRepository {
 	/** Every active grant of a membership role of `scope.type` in `scope` held by `principalId`, with the principal. */
 	async listMemberGrantsOf(app: string, scope: Scope, principalId: string): Promise<MemberGrantRow[]> {
 		const { results } = await this.db
-			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at, p.affiliation
+			.prepare(`SELECT g.principal_id, g.role_key, p.label, p.email, p.disabled_at, p.affiliation, si.signed_in_at
 				FROM grants g
 				JOIN principals p ON p.id = g.principal_id
 				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+				LEFT JOIN app_sign_ins si ON si.app = g.app AND si.principal_id = g.principal_id
 				WHERE g.app = ? AND g.scope_type = ? AND g.scope_value = ? AND r.member_scope = ? AND g.principal_id = ?
 					AND (g.expires_at IS NULL OR g.expires_at > ?)
 				ORDER BY g.role_key`)

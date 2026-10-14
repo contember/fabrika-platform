@@ -157,7 +157,7 @@ describe.skipIf(postgres === null)("a deal endpoint's ctx.members in the test ki
 			const ann = { principalId: 'ann', label, disabled: false, affiliation: 'internal' } as const
 			return {
 				findMember: () => Promise.resolve({ ok: true, member: ann }),
-				listMembers: () => Promise.resolve({ ok: true, members: [{ ...ann, email: null, roles: ['viewer'] }], invitations: [] }),
+				listMembers: () => Promise.resolve({ ok: true, members: [{ ...ann, email: null, lastSignInAt: null, roles: ['viewer'] }], invitations: [] }),
 				requestDelegation: refused,
 				createScope: refused,
 				assignMember: refused,

@@ -123,6 +123,8 @@ const listMembersSuccessSchema = z.object({
 		principalId: z.string(),
 		label: z.string().nullable(),
 		email: z.string().nullable(),
+		// An IAM from before the field answers none: the member's last sign-in is then unknown.
+		lastSignInAt: z.number().finite().nullable().default(null),
 		roles: z.array(z.string()),
 		disabled: z.boolean(),
 		affiliation: affiliationSchema,

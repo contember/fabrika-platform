@@ -11,6 +11,7 @@ import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import { ExternalGrantError } from '../db'
+import { exchangeAuthCode, issueAuthCode } from '../handoff'
 import {
 	acceptInvitation,
 	assignMember,
@@ -22,6 +23,7 @@ import {
 	revokeLink,
 	revokeMember,
 } from '../membership'
+import { pkceChallenge } from '../oidc'
 import { unixNow } from '../repositories/sql'
 import { BUILTIN_ROLES } from '../roles'
 import { createIamRpc } from '../rpc'
@@ -619,6 +621,42 @@ describe('members.list', () => {
 			email: 'editor@example.test',
 		})
 		expect(asOwner.invitations.map((invitation) => invitation.email)).toEqual(['invitee@example.test'])
+	})
+
+	test("a member's last sign-in to the application is IAM's record of its handoff, answered to members.manage only", async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const editor = await f.person('editor')
+		await assign(f, owner, scope, 'editor', { principalId: editor.id })
+		const signIns = async (person: Person) => {
+			const listed = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(person)), scope })
+			if (!listed.ok) throw new Error('expected a list')
+			return Object.fromEntries(listed.members.map((member) => [member.principalId, member.lastSignInAt]))
+		}
+		expect(await signIns(owner)).toEqual({ [owner.id]: null, [editor.id]: null })
+
+		// The editor signs in to the application: its proxy redeems a handoff code of the editor's IAM session.
+		const verifier = 'browser-held-verifier-browser-held-verifier-1'
+		const parent = await f.repositories.sessions.createSession({
+			tokenHash: 'editor-iam-session',
+			principalId: editor.id,
+			authenticationMethod: 'password',
+			expiresAt: unixNow() + 3600,
+		})
+		const { code } = await issueAuthCode(f.services, {
+			app: APP,
+			parentSessionId: parent,
+			returnUrl: 'https://notes.test/',
+			challenge: await pkceChallenge(verifier),
+		})
+		const before = unixNow()
+		expect((await exchangeAuthCode(f.services, { app: APP, code, verifier, requestId: 'sign-in' })).result.ok).toBe(true)
+
+		const asOwner = await signIns(owner)
+		expect(asOwner[owner.id]).toBeNull()
+		expect(asOwner[editor.id]).toBeGreaterThanOrEqual(before)
+		expect(await signIns(editor)).toEqual({ [owner.id]: null, [editor.id]: null })
 	})
 
 	test("a dimension that declares directory: 'labels' shows labels to the list action, still no email or invitation", async () => {

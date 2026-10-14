@@ -264,8 +264,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   renewed in the same statement (backlog 82's 409 stays for
   the admin grant API). `listMembers` needs `members.list` there and shows ids and roles (an
   application's member directory); labels only to `members.manage`, or to `members.list` too where the dimension
-  declares `directory: 'labels'` (`app_scopes.members_directory`) — a user's label spells its address; emails and
-  open invitations only to `members.manage`. `findMember` answers ONE principal for an endpoint on, in or below the
+  declares `directory: 'labels'` (`app_scopes.members_directory`) — a user's label spells its address; emails, last
+  sign-ins and open invitations only to `members.manage`. A last sign-in is per application: the child session a
+  handoff redemption opens writes `app_sign_ins` in its batch (`createSession`), never pruned with `auth_log`. `findMember` answers ONE principal for an endpoint on, in or below the
   dimension, from nothing the application asserts: the action must be one of the dimension's `lookups` (reconciled
   from the approved contract's `directories`, `app_scopes.members_lookup`) and the caller must hold it on the scope
   itself; IAM knows no containment below a value, so a grant on a contained object never counts. The answer is the

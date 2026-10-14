@@ -20,6 +20,7 @@ function caller(id: string, affiliation: TestCaller['affiliation'], actions: rea
 		email: `${id}@notes.test`,
 		affiliation,
 		disabled: false,
+		lastSignInAt: null,
 		perms: actions.map((action) => ({ action, scope: W1, source: 'grant' })),
 		key: `px_${id}`,
 		cookie: null,
@@ -42,6 +43,32 @@ describe("the kit's member directory", () => {
 		const listed = await directory.listMembers({ app: 'notes', credential: 'px_owner', requestId: 'r1', scope: W1 })
 		if (!listed.ok) throw new Error(`no list: ${listed.reason}`)
 		expect(listed.members.map((member) => [member.principalId, member.affiliation])).toEqual([['owner', 'internal'], ['partner', 'external']])
+	})
+
+	test("answers a member's last sign-in to a holder of members.manage, and to nobody else", async () => {
+		const kit = testKit(notesApp(new Map()))
+		const signedIn = kit.testCaller([{ role: 'editor', scope: W1 }], { lastSignInAt: 1_800_000_000 })
+		const never = kit.testCaller([{ role: 'editor', scope: W1 }])
+		const owner = caller('owner', 'internal', ['notes.read', 'notes.admin'])
+		const reader = caller('reader', 'internal', ['notes.read'])
+		const members = [
+			{ caller: signedIn, memberships: [{ role: 'editor', scope: W1 }] },
+			{ caller: never, memberships: [{ role: 'editor', scope: W1 }] },
+			{ caller: owner, memberships: [] },
+			{ caller: reader, memberships: [] },
+		]
+		const directory = kitDirectory(notesArtifact, {
+			byCredential: (_app, credential) => members.find((member) => member.caller.key === credential)?.caller,
+			all: () => members,
+		})
+		const signIns = async (credential: string) => {
+			const listed = await directory.listMembers({ app: 'notes', credential, requestId: 'r1', scope: W1 })
+			if (!listed.ok) throw new Error(`no list: ${listed.reason}`)
+			return listed.members.map((member) => [member.principalId, member.lastSignInAt])
+		}
+		expect(await signIns('px_owner')).toEqual([[signedIn.id, 1_800_000_000], [never.id, null]])
+		expect(await signIns('px_reader')).toEqual([[signedIn.id, null], [never.id, null]])
+		expect(() => kit.testCaller([], { kind: 'machine', lastSignInAt: 1 })).toThrow('only a person signs in')
 	})
 
 	test('an external kit caller holds only roles the contract declares external', () => {

@@ -637,6 +637,7 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 				principalId: row.principal_id,
 				label: manager || dimension.members_directory === 'labels' ? row.label : null,
 				email: manager ? row.email : null,
+				lastSignInAt: manager ? row.signed_in_at : null,
 				roles: [row.role_key],
 				disabled: row.disabled_at !== null,
 				affiliation: row.affiliation,

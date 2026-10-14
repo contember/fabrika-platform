@@ -36,6 +36,11 @@ export interface TestCallerOptions {
 	 * IAM signs no token for its session or key, so its requests are refused as IAM refuses a disabled principal's.
 	 */
 	readonly disabled?: boolean
+	/**
+	 * When the person last signed in to the application (unix seconds), as IAM records it at the handoff; absent, never.
+	 * A member directory answers it to a holder of `members.manage` only. Only a human signs in.
+	 */
+	readonly lastSignInAt?: number
 	/** The consuming application's id, for an `app` caller. */
 	readonly app?: string
 	/**
@@ -57,6 +62,8 @@ interface TestCallerCredential {
 	readonly affiliation: PrincipalAffiliation
 	/** `true` for a principal an operator disabled; `false` for every other caller, a link holder included. */
 	readonly disabled: boolean
+	/** A human's last sign-in to the application (`TestCallerOptions.lastSignInAt`); `null` for one that never did and every other caller. */
+	readonly lastSignInAt: number | null
 	readonly perms: readonly PermissionEntry[]
 	/** The `px_` key a key caller presents as a bearer; `null` for a session. */
 	readonly key: string | null

@@ -37,7 +37,8 @@ export class SessionRepository {
 
 	/**
 	 * Create a session. Only the hash of the opaque cookie value is stored; returns the new id. A login passes its
-	 * `auth_log` row, written in the same batch: a session nobody logged is never opened.
+	 * `auth_log` row, written in the same batch: a session nobody logged is never opened. A child session is a sign-in to
+	 * its app, which the batch records as the principal's last one there (`app_sign_ins`).
 	 */
 	async createSession(input: {
 		tokenHash: string
@@ -74,7 +75,14 @@ export class SessionRepository {
 				input.app ?? null,
 				input.parentSessionId ?? null,
 			)
-		await this.db.batch(log === undefined ? [insert] : [insert, authLogStatement(this.db, log)])
+		const now = unixNow()
+		const signIn = input.app == null ? [] : [
+			this.db
+				.prepare(`INSERT INTO app_sign_ins (app, principal_id, signed_in_at) VALUES (?, ?, ?)
+					ON CONFLICT (app, principal_id) DO UPDATE SET signed_in_at = excluded.signed_in_at`)
+				.bind(input.app, input.principalId, now),
+		]
+		await this.db.batch([insert, ...signIn, ...(log === undefined ? [] : [authLogStatement(this.db, log)])])
 		return id
 	}
 

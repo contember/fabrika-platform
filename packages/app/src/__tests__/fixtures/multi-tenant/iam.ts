@@ -73,7 +73,7 @@ export class RecordingMembership implements IamMembershipRpc {
 		this.calls.push({ method: 'listMembers', input })
 		return this.#answer({
 			ok: true,
-			members: [{ principalId: 'user-1', label: null, email: null, roles: ['owner'], disabled: false, affiliation: 'internal' }],
+			members: [{ principalId: 'user-1', label: null, email: null, lastSignInAt: null, roles: ['owner'], disabled: false, affiliation: 'internal' }],
 			invitations: [],
 		})
 	}

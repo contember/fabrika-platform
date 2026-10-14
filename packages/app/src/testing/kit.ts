@@ -342,10 +342,14 @@ function bootTestKit<C extends AnyContract>(
 		if (disabled && kind === 'link') {
 			throw new Error('a link holder is no principal, so no operator disables it: disable a person, a script or a connector')
 		}
+		if (callerOptions.lastSignInAt !== undefined && kind !== 'human') {
+			throw new Error('only a person signs in: testCaller(grants, { lastSignInAt }) is a human')
+		}
 		const credentials = {
 			id: callerOptions.id ?? `${kind}-${issued}`,
 			affiliation,
 			disabled,
+			lastSignInAt: callerOptions.lastSignInAt ?? null,
 			perms: Object.freeze(resolveGrants<AnyContract>(app.contract, grants)),
 			key: via === 'key' ? `${API_KEY_PREFIX}test_${credential}` : null,
 			cookie: via === 'session' ? `${SESSION_COOKIE}=${credential}` : null,
