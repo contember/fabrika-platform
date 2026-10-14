@@ -25,9 +25,10 @@ export function browserConfigs(
 	operations: Pick<BrowserConfig, 'dsn' | 'release'>,
 	problems: string[],
 ): ReadonlyMap<string, BrowserConfig> {
+	// A value is served as the environment holds it; only a blank one counts as unset.
 	const valueOf = (name: string): string | null => {
 		const value: unknown = environment.application[name]
-		return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+		return typeof value === 'string' && value.trim() !== '' ? value : null
 	}
 	const siteKeys: Record<string, string> = {}
 	for (const [form, mount] of Object.entries(artifact.mounts)) {

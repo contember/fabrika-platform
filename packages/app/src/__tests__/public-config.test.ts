@@ -27,6 +27,7 @@ if (!hasPostgres) {
 
 const VALUES = {
 	SIGNUP_URL: 'https://signup.example.com/start',
+	GREETING_PREFIX: ' Hello ',
 	TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
 	TURNSTILE_SECRET: 'turnstile-secret-1',
 	MAIL_API_KEY: 'mail-key-1',
@@ -34,7 +35,7 @@ const VALUES = {
 
 /** A public site that lists one public variable, and a member SPA beside it that lists none. */
 const sites = defineContract(vocabulary, (c) => ({
-	site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['SIGNUP_URL'] }),
+	site: c.spa('/', { dir: 'dist/site', access: { public: true }, public: ['SIGNUP_URL', 'GREETING_PREFIX'] }),
 	hr: c.spa('/hr', { dir: 'dist/hr', access: { member: true } }),
 }))
 
@@ -98,7 +99,8 @@ describe('the public values of an SPA mount', () => {
 		const app = bootApp(sitesApp(), { environment: environment({ ...frameworkEnvFor(sitesApp()), ...VALUES }) })
 		const site = await send(app, '/__fabrika-config.json')
 		expect(site.status).toBe(200)
-		expect(site.body).toEqual({ dsn: null, release: null, public: { SIGNUP_URL: VALUES.SIGNUP_URL } })
+		// A value is served verbatim: the page and the server put the same string together.
+		expect(site.body).toEqual({ dsn: null, release: null, public: { SIGNUP_URL: VALUES.SIGNUP_URL, GREETING_PREFIX: ' Hello ' } })
 		const hr = await send(app, '/hr/__fabrika-config.json', { token: await token('user', [grant('applications.read')]) })
 		expect(hr.body).toEqual({ dsn: null, release: null })
 	})
