@@ -50,8 +50,8 @@ export interface OpenOptions {
 /** What every site reaches of one collection: its owner's files. */
 export interface FileCollectionReader {
 	/**
-	 * The owner's held files, oldest first; `owner` is a `Ref` of the collection's owner for its `read` or its `write`
-	 * action, so a mutation that writes the owner checks what was uploaded.
+	 * The owner's held files, oldest first; `owner` is a `Ref` of the collection's owner for its `read` action. A
+	 * handler that must see the uploads holds that action.
 	 */
 	list(owner: Ref<string, string>, page?: FileListPage): Promise<FileListing>
 	/**

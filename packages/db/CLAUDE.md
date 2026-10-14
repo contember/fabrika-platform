@@ -173,8 +173,9 @@ and the target `Ref`, so no handler can call it.
   chain (`links.ts`, shared with the stores). Never add one keyed by the id alone: a `Ref` minted before its owner
   moved would still reach the file. The pending insert and its completion lock the owner row `for share` on the
   owner `Ref`'s chain in their transaction. Only a removed, orphaned or stale pending row is ever purged, after its
-  object. `list` admits the owner's `Ref` for the read or the write action (a handler that writes the owner checks
-  what was uploaded); `removeOwned` takes one for the delete action. `find`, `locate`, `list` and `removeOwned` run in
+  object. `list` takes the owner's `Ref` for the read action, never the write one; `removeOwned` takes one for the
+  delete action and also marks the owner's pending uploads removed, so an upload begun before an erasure never
+  completes after it. `find`, `locate`, `list` and `removeOwned` run in
   the session their caller passes (`using`: `@fabrika/app`'s `ctx.files` passes the site's), so a removal commits or
   rolls back with the invocation.
 - **A file row is `pending`, `quarantined`, `live` or `rejected`** (`FILE_STATUSES`, the named check `<table>_status`).

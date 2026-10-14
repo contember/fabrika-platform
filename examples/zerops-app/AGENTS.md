@@ -1430,7 +1430,6 @@ import { reports } from './src/reports/endpoints'
 import { digest } from './src/tasks/digest'
 import { tasks } from './src/tasks/endpoints'
 import { erase } from './src/tasks/erase'
-import { report } from './src/tasks/report'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', {
@@ -1440,7 +1439,6 @@ export const contract = app.contract((c) => ({
 		reports,
 		members,
 		priorities,
-		report,
 	}),
 	files: {
 		attachments: c.files({
@@ -1514,7 +1512,7 @@ call takes a `Ref` of the owner (a task here), for one of the collection's actio
 
 | Call                              | Takes the owner's `Ref` for | Answers                                                                    |
 | --------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| `list(owner, { after?, limit? })` | `read` or `write`           | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
+| `list(owner, { after?, limit? })` | `read`                      | `{ items, next }`, the files the list endpoint answers; `createdAt` a Date |
 | `open(owner, id, { maxBytes })`   | `read`                      | `{ id, name, type, size, bytes }` of one live file, read whole             |
 | `removeAll(owner)`                | `delete`                    | how many files it marked removed                                           |
 
@@ -1523,31 +1521,9 @@ removed or a rejected one, 409 `quarantined` while the scan has not called it cl
 `maxBytes`, before any byte is read. Pass the size you hold in memory, at most the collection's `maxBytes`. The name
 is checked when the call runs, not by the types: a name the contract does not declare is a 500.
 
-A mutation that writes the owner lists with its own capability, the collection's `write`:
-
-```ts src/tasks/report.ts
-import { ConflictError } from '@fabrika/app'
-import { app } from '../app-kit'
-import { Saved, Versioned } from '../schemas'
-
-export const report = app.group({ callers: ['human'] }, (r) => ({
-	close: r.mutation({
-		input: Versioned,
-		output: Saved,
-		access: { action: 'tasks.write', on: 'task', from: 'id' },
-	})
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.files('attachments').list(ctx.target)
-			// A quarantined file is uploaded; the scan decides about it later.
-			if (!page.items.some((file) => file.status !== 'rejected')) {
-				throw new ConflictError('a task closes with its report attached')
-			}
-			return ctx.db.target.update({ status: 'done' }, {
-				expectVersion: input.expectVersion,
-			})
-		}),
-}))
-```
+Every call needs the collection's `read`, so a write capability alone sees no file. A mutation that requires a
+document is declared with an action that is the collection's `read` too, or the check runs where the caller holds
+`read`: never mint or widen a capability to list.
 
 A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to attach it to an e-mail of `deps`:
 

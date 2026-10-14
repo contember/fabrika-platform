@@ -123,11 +123,14 @@ export interface FileCollectionTable {
 	find(file: unknown, using?: Session): Promise<StoredFile>
 	/** Marks the held file `file` names removed, in any held state. */
 	markRemoved(file: unknown, at: Date): Promise<void>
-	/** Marks every held file of the owner `owner` (a `Ref` for the delete action) removed, in `using`; answers how many. */
+	/**
+	 * Marks every file of the owner `owner` (a `Ref` for the delete action) removed, in `using`, held files and pending
+	 * uploads alike: an upload begun before the removal then fails its completion and cleans up. Answers how many.
+	 */
 	removeOwned(owner: unknown, at: Date, using: Session): Promise<number>
 	/** The containers of a held file, read from its row: its owner and the owner's chain. */
 	locate(id: string, using?: Session): Promise<ReadonlyMap<string, string> | null>
-	/** At most `limit` held files of the owner `owner` (a `Ref` for the read or write action) after the id `after`, oldest first. */
+	/** At most `limit` held files of the owner `owner` (a `Ref` for the read action) after the id `after`, oldest first. */
 	list(owner: unknown, page: { readonly after: string | null; readonly limit: number }, using?: Session): Promise<FilePage>
 	/**
 	 * At most `limit` quarantined files that are neither removed nor orphaned and due at `now`, the longest waiting
@@ -273,13 +276,12 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 	const fileLinks: readonly Container[] = [{ dimension: spec.dimension, column: 'id' }, ...fileOwnerLinks]
 	const session = (): Session => sessionOf(runtime())
 
-	/** The grant of `capability`: a `Ref` of `dimension` for `action`, or for one of `action`'s alternatives. */
-	function grantOf(capability: unknown, dimension: string, action: string, ...alternatives: readonly string[]): RefGrant {
+	function grantOf(capability: unknown, dimension: string, action: string): RefGrant {
 		const grant = runtime().capabilities.resolve(capability)
-		if (grant.kind !== 'ref' || grant.dimension !== dimension || (grant.action !== action && !alternatives.includes(grant.action))) {
+		if (grant.kind !== 'ref' || grant.dimension !== dimension || grant.action !== action) {
 			throw new CapabilityError(
 				'wrong_capability',
-				`files '${spec.name}' needs a Ref of ${dimension} for ${[action, ...alternatives].join(' or ')}, got ${describeGrant(grant)} for ${grant.action}`,
+				`files '${spec.name}' needs a Ref of ${dimension} for ${action}, got ${describeGrant(grant)} for ${grant.action}`,
 			)
 		}
 		return grant
@@ -450,7 +452,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 				table,
 				new Map([['deleted_at', at]]),
 				undefined,
-				scopedWhere(held(), scope),
+				scopedWhere(held(anyOf([isHeld(), compare(table, 'status', '=', 'pending')])), scope),
 				acknowledgement(table, 'id', undefined),
 			)
 			const removed = await using.run(node, guard('UpdateQueryNode', table, scope))
@@ -471,8 +473,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 		},
 
 		async list(capability: unknown, page: { readonly after: string | null; readonly limit: number }, using?: Session): Promise<FilePage> {
-			// A write capability lists too: a handler that writes the owner checks what was uploaded, as a store's write reads its row.
-			const grant = grantOf(capability, owner.dimension, spec.actions.read, spec.actions.write)
+			const grant = grantOf(capability, owner.dimension, spec.actions.read)
 			if (!Number.isSafeInteger(page.limit) || page.limit < 1) {
 				throw new QueryRefusedError('list_page', `files '${spec.name}': a page holds at least one file`)
 			}

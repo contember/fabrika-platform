@@ -229,6 +229,7 @@ describe.skipIf(!hasPostgres)('the rows of a file collection on Postgres', () =>
 		const id = await liveFile('n5')
 		await expect(files.markRemoved(fileRef('notes.read', id, 'n5'), new Date())).rejects.toBeInstanceOf(CapabilityError)
 		await expect(files.find(ownerRef('n5'))).rejects.toBeInstanceOf(CapabilityError)
+		await expect(files.list(ownerRef('n5'), { after: null, limit: 10 })).rejects.toBeInstanceOf(CapabilityError)
 		await expect(files.begin(alice.ref('note', 'notes.read', 'n5', { workspace: 'w1', organization: 'o1' }), pending())).rejects.toBeInstanceOf(
 			CapabilityError,
 		)
@@ -302,6 +303,34 @@ describe.skipIf(!hasPostgres)('the rows of a file collection on Postgres', () =>
 		expect(ids).toEqual(expect.arrayContaining([first, second]))
 		expect(ids).not.toContain(other)
 		expect(await statusOf(other)).toBe('live')
+	})
+
+	test('removeOwned marks a pending upload removed too: its completion after the commit fails, after a rollback it lands', async () => {
+		await addNote('n13')
+		const remover = () => alice.ref('note', 'notes.delete', 'n13', { workspace: 'w1', organization: 'o1' })
+		const reader = () => alice.ref('note', 'notes.read', 'n13', { workspace: 'w1', organization: 'o1' })
+		const kept = pending()
+		await files.begin(ownerRef('n13'), kept)
+		const rolledBack = access.invocation(false)
+		expect(await files.removeOwned(remover(), new Date(), await rolledBack.session())).toBe(1)
+		await rolledBack.rollback()
+		await files.complete(ownerRef('n13'), kept.id, { size: 3, sha256: SHA }, 'live')
+		expect((await files.list(reader(), { after: null, limit: 10 })).items.map((file) => file.id)).toEqual([kept.id])
+
+		const racing = pending()
+		await files.begin(ownerRef('n13'), racing)
+		const erasure = access.invocation(false)
+		expect(await files.removeOwned(remover(), new Date(), await erasure.session())).toBe(2)
+		// The completion waits on the erasure's row lock, and finds the row removed once the erasure commits.
+		const completion = files.complete(ownerRef('n13'), racing.id, { size: 3, sha256: SHA }, 'live').then(() => 'completed', (error: unknown) => error)
+		const early = await Promise.race([completion, Bun.sleep(200).then(() => 'waiting')])
+		expect(early).toBe('waiting')
+		await erasure.commit()
+		expect(await completion).toBeInstanceOf(NotFoundError)
+		expect(await statusOf(racing.id)).toBe('pending')
+		await files.abandon(racing.id)
+		expect(await statusOf(racing.id)).toBeUndefined()
+		expect((await files.list(reader(), { after: null, limit: 10 })).items).toEqual([])
 	})
 
 	test('removeOwned needs a Ref of the owner for the delete action, and one from before the owner moved removes nothing', async () => {
@@ -455,7 +484,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		}
 	})
 
-	test("the list is an owner's held files, oldest first, in bounded keyset pages, for the read or write action, scoped by the owner's whole chain", async () => {
+	test("the list is an owner's held files, oldest first, in bounded keyset pages, for the read action only, scoped by the owner's whole chain", async () => {
 		await addNote('s7')
 		const live = await liveFile('s7')
 		const quarantined = await quarantinedFile('s7')
@@ -473,9 +502,7 @@ describe.skipIf(!hasPostgres)('the scan states of a file collection on Postgres'
 		const second = await files.list(reader, { after: first.next, limit: 2 })
 		expect(second.items.map((file) => [file.id, file.status])).toEqual([[rejected, 'rejected']])
 		expect(second.next).toBeNull()
-		expect((await files.list(ownerRef('s7'), { after: null, limit: 2 })).items).toEqual(first.items)
-		await expect(files.list(alice.ref('note', 'notes.delete', 's7', { workspace: 'w1', organization: 'o1' }), { after: null, limit: 2 })).rejects
-			.toBeInstanceOf(CapabilityError)
+		await expect(files.list(ownerRef('s7'), { after: null, limit: 2 })).rejects.toBeInstanceOf(CapabilityError)
 		await expect(files.list(reader, { after: null, limit: 0 })).rejects.toBeInstanceOf(QueryRefusedError)
 		await moveNote('s7', 'w2')
 		expect((await files.list(reader, { after: null, limit: 10 })).items).toEqual([])

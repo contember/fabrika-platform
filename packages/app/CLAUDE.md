@@ -732,7 +732,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   collection that admits a type `sniff.ts` cannot verify. The size bound is the object
   store's (`FileObjectStore.write`), enforced while the body streams.
 - **`ctx.files(<name>)` takes the owner's `Ref` for one of the collection's actions** (`FileCollections.site`):
-  `list` for `read` or `write`, `open` for `read`, `removeAll` for `delete`, each checked before any statement
+  `list` and `open` for `read`, `removeAll` for `delete`, each checked before any statement
   (`wrong_capability`). `open` locates the file, requires it beneath the owner where the `Ref` says, mints a
   `file:<name>` `Ref` for the same principal and action and reads through `find` and the download's version check;
   never read a file by its id alone. Its statements run in the site's session (`FileSite.session`), so `removeAll`

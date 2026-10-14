@@ -1,5 +1,6 @@
-// The notes' endpoints and jobs over `ctx.files`. A mutation that writes a note lists its documents with its own
-// `notes.write`, the collections' write action; a job opens a file with `notes.read`, their read action.
+// The notes' endpoints and jobs over `ctx.files`. `documents` is read with `notes.write`, so the mutation that
+// writes a note lists them with its own capability; `attachments` is read with `notes.read`, which a write
+// capability alone does not hold.
 
 import { ConflictError } from '@fabrika/app'
 import { z } from 'zod/v4'
@@ -28,7 +29,7 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => ({ files: (await ctx.files('attachments').list(ctx.target)).items.length })),
 	clear: r.mutation({ input: ById, output: Count, access: { action: 'notes.delete', on: 'note', from: 'id' } })
 		.handle(async ({ ctx }) => ({ files: await ctx.files('attachments').removeAll(ctx.target) })),
-	// notes.delete is neither a read nor a write action of documents: this query's capability does not list it.
+	// notes.delete is not the read action of documents: this query's capability does not list them.
 	peek: r.query({ input: ById, output: Count, access: { action: 'notes.delete', on: 'note', from: 'id' } })
 		.handle(async ({ ctx }) => ({ files: (await ctx.files('documents').list(ctx.target)).items.length })),
 }))
@@ -45,12 +46,12 @@ export const share = app.link('/s', {
 })
 
 /** Mails every note's live documents; a quarantined one waits for its scan. */
-export const mail = app.cron('0 6 * * *', { actions: ['notes.read'], scope: 'app' })
+export const mail = app.cron('0 6 * * *', { actions: ['notes.read', 'notes.write'], scope: 'app' })
 	.handle(async ({ ctx }) => {
 		const outbox = filesDeps.get()
 		const page = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ orderBy: [['id', 'asc']] })
 		for (const note of page.items) {
-			const owner = await ctx.ref('notes.read', 'note', note.id)
+			const owner = await ctx.ref('notes.write', 'note', note.id)
 			const documents = ctx.files('documents')
 			const live = (await documents.list(owner)).items.filter((file) => file.status === 'live')
 			if (live.length === 0) continue
@@ -79,13 +80,14 @@ export const peek = app.cron('0 7 * * *', { actions: ['notes.read', 'notes.write
 			const remover = await ctx.ref('notes.delete', 'note', note.id)
 			await documents.list(remover).catch(refused('list with notes.delete'))
 			for (const id of earlier) {
-				await documents.open(reader, id, { maxBytes: MAIL_MAX_BYTES }).catch(refused('open of another note'))
+				await documents.open(writer, id, { maxBytes: MAIL_MAX_BYTES }).catch(refused('open of another note'))
 			}
 			for (const file of (await documents.list(writer)).items) {
-				await documents.open(writer, file.id, { maxBytes: MAIL_MAX_BYTES }).catch(refused('open with notes.write'))
-				await documents.open(reader, file.id, { maxBytes: MAIL_MAX_BYTES }).catch(refused(`open ${file.status}`))
+				await documents.open(reader, file.id, { maxBytes: MAIL_MAX_BYTES }).catch(refused('open with notes.read'))
+				await documents.open(writer, file.id, { maxBytes: MAIL_MAX_BYTES }).catch(refused(`open ${file.status}`))
 				earlier.push(file.id)
 			}
+			await ctx.files('attachments').list(writer).catch(refused('list with the write action only'))
 			for (const file of (await ctx.files('attachments').list(reader)).items) {
 				await ctx.files('attachments').open(reader, file.id, { maxBytes: 1 }).catch(refused('open over maxBytes'))
 			}

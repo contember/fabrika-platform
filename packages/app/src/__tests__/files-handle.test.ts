@@ -139,10 +139,12 @@ describe.skipIf(!hasPostgres)('ctx.files of a job', () => {
 		const steps = world.refusals.map(({ step, error }) => [step, refusalOf(error)])
 		expect(steps).toEqual([
 			['list with notes.delete', 'CapabilityRefusedError wrong_capability'],
-			['open with notes.write', 'CapabilityRefusedError wrong_capability'],
+			['open with notes.read', 'CapabilityRefusedError wrong_capability'],
 			['open quarantined', 'HttpError 409 quarantined'],
+			['list with the write action only', 'CapabilityRefusedError wrong_capability'],
 			['list with notes.delete', 'CapabilityRefusedError wrong_capability'],
 			['open of another note', 'NotFoundError 404 not_found'],
+			['list with the write action only', 'CapabilityRefusedError wrong_capability'],
 			['open over maxBytes', 'HttpError 413 too_large'],
 			['an unknown collection', 'ServerFault file_collection_unknown'],
 		])
@@ -168,7 +170,7 @@ describe.skipIf(!hasPostgres)('ctx.files of an endpoint', () => {
 		expect(await client.notes.submit({ id: note, expectVersion: 1 })).toEqual({ id: note, version: 2 })
 	})
 
-	test('a query lists the files its capability reaches, and fails with a capability of neither the read nor the write action', async () => {
+	test('a query lists the files its capability reaches, and fails with a capability of another action than the read one', async () => {
 		const { kit, upload } = boot()
 		const note = await seedNote()
 		await upload('attachments', note)

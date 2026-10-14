@@ -10,7 +10,7 @@ export const contract = app.contract((c) => ({
 	files: {
 		documents: c.files({
 			owner: 'notes',
-			read: 'notes.read',
+			read: 'notes.write',
 			write: 'notes.write',
 			delete: 'notes.delete',
 			maxBytes: 4096,

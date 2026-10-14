@@ -223,7 +223,7 @@ export class FileCollections {
 		return Object.freeze({
 			list: async (owner: unknown, page: FileListPage = {}) => {
 				site.check()
-				this.#ownerGrant(collection, site, owner, ['read', 'write'])
+				this.#ownerGrant(collection, site, owner, ['read'])
 				return await this.#listOwned(collection, site, owner, page)
 			},
 			open: async (owner: unknown, id: unknown, options: OpenOptions) => {
@@ -244,7 +244,7 @@ export class FileCollections {
 
 	/**
 	 * The grant of `owner`: a `Ref` of the collection's owner, of the work running now, for one of the collection's
-	 * `actions`. A write capability lists too, as the data layer's `list` admits it; only `read` opens a file.
+	 * `actions`: `read` lists and opens, `delete` removes. A write capability alone reads no file's name or bytes.
 	 */
 	#ownerGrant(collection: Collection, site: FileSite, owner: unknown, actions: readonly ('read' | 'write' | 'delete')[]): RefGrant {
 		const grant = this.#capabilities.resolve(owner)

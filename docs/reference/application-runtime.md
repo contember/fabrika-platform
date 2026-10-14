@@ -617,11 +617,10 @@ the same pipeline:
   reads one live file whole (`{ id, name, type, size, bytes }`), as the download reads it: a scanning collection's
   only as the scanned version, a quarantined file 409 `quarantined`, a rejected one, another owner's or a removed one
   404, one over `maxBytes` 413 `too_large` before any byte is read. `removeAll(owner)` marks every file of the owner
-  removed. Each takes a `Ref` of the owner's dimension for one of the collection's actions — `read` or `write` for
-  `list`, `read` for `open`, `delete` for `removeAll` — of the work running now, and refuses any other
-  (`CapabilityRefusedError` `wrong_capability`): a file reaches what its owner reaches, as through the endpoints. A
-  write capability lists because a handler that writes the owner checks what was uploaded, as a store's write reads
-  its row; only `read` reads the bytes. `open` locates the file
+  removed. Each takes a `Ref` of the owner's dimension for one of the collection's actions — `read` for `list` and
+  `open`, `delete` for `removeAll` — of the work running now, and refuses any other (`CapabilityRefusedError`
+  `wrong_capability`): a file reaches what its owner reaches, as through the endpoints, and a write capability alone
+  reads no name or byte of it. A handler that must see the uploads holds the collection's `read`. `open` locates the file
   now, requires it beneath the owner where the `Ref` says, and reads it under a `file:<name>` `Ref` the runtime mints
   for the same principal and action. The statements run in the site's session: the invocation's transaction (`READ
   ONLY` for a query), a job's statement-at-a-time reads, or its fenced transaction. `removeAll` runs only where the
