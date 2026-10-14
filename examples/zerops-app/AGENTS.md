@@ -285,9 +285,6 @@ files, HR's review with its history.
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- An `on` endpoint that cancels an invitation or revokes a share link by its id fails its generated cases: their
-  stand-in IAM knows only the invitations and links a case made, and answers any other id 404, as IAM does. Ask the
-  human before you add one.
 - Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
@@ -1120,24 +1117,24 @@ architecture, and a refusal's allowed form is the one fix that passes. There is 
 
 The refusals agents meet most, and their fix:
 
-| Rule                  | Means                                                                                                               | Fix                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                            | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
-| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                   | the message names the field                                                            |
-| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                   | another name; a registry range such as `^0.0.4`                                        |
-| `generated-test-hash` | a generated test is missing, edited or stale                                                                        | `bunx fabrika db test-scaffold`, and commit what it writes                             |
-| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member field no directory endpoint | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
-| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                          | the handles, or `sql: 'read'` and `ctx.sql`                                            |
-| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                        | the handles, a file collection, a connector                                            |
-| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module           | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id  |
-| `env-read`            | `process.env`, `Bun.env`                                                                                            | `defineDeps(build)`, which receives the application's variables                        |
-| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                          | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
-| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                              | fix the type; `fromRow` parses a row into a schema's type                              |
-| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                     | log a short fixed message                                                              |
-| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                               | `bunx fabrika db new <slug>`                                                           |
-| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                 | import them only from `*.test.ts` or `__tests__/`                                      |
-| `spa-server-import`   | the SPA loads a server module                                                                                       | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
-| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                           | run the test                                                                           |
+| Rule                  | Means                                                                                                                                                            | Fix                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `literal`             | the shell (contract, vocabulary, tables, groups, schemas) holds a computed value or call                                                                         | literal objects, `z.*` calls and imported literal consts; move logic into `.handle(…)` |
+| `contract`            | the contract does not compile (a reserved role, an unknown action, a wrong field)                                                                                | the message names the field                                                            |
+| `package-replacement` | `package.json` names the app under `@fabrika/*`, or a dependency is `workspace:*`                                                                                | another name; a registry range such as `^0.0.4`                                        |
+| `generated-test-hash` | a generated test is missing, edited or stale                                                                                                                     | `bunx fabrika db test-scaffold`, and commit what it writes                             |
+| `endpoint-fixture`    | an endpoint's input cannot be sampled, a fixture or seed names no endpoint, or a member, invitation or link field no endpoint that reads, cancels or revokes one | a literal in `src/__tests__/endpoint-access.fixtures.ts` (`references/tests.md`)       |
+| `raw-sql`             | a driver's `sql` (imported from `bun`, Kysely, `postgres`)                                                                                                       | the handles, or `sql: 'read'` and `ctx.sql`                                            |
+| `forbidden-import`    | a driver, an S3 client, `jose`, `node:http`, `child_process`                                                                                                     | the handles, a file collection, a connector                                            |
+| `forbidden-global`    | `Bun.sql`, `Bun.serve`, `Bun.spawn`; `globalThis`, `window`, `self`, `global` or `Bun` in a server module                                                        | the handles; state lives in a table, not in a global; `crypto.randomUUID()` for an id  |
+| `env-read`            | `process.env`, `Bun.env`                                                                                                                                         | `defineDeps(build)`, which receives the application's variables                        |
+| `client-identity`     | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId`                                                                                       | the access form's `from`, `ctx.principal.id`, or `createdBy` in the policy             |
+| `type-assertion`      | `as T` (other than `as const`), `<T>x`                                                                                                                           | fix the type; `fromRow` parses a row into a schema's type                              |
+| `sensitive-log`       | a log of an error object, a request, headers or the environment                                                                                                  | log a short fixed message                                                              |
+| `migration-name`      | a migration not named `YYYYMMDDHHMMSS_slug.sql` (UTC)                                                                                                            | `bunx fabrika db new <slug>`                                                           |
+| `test-only-import`    | `@fabrika/app/testing` or `@fabrika/db/testing` outside a test file                                                                                              | import them only from `*.test.ts` or `__tests__/`                                      |
+| `spa-server-import`   | the SPA loads a server module                                                                                                                                    | the SPA imports `@fabrika/app/client`, the contract and `src/schemas.ts` only          |
+| `skipped-test`        | `.skip`, `.only`, `.todo`                                                                                                                                        | run the test                                                                           |
 
 The hints:
 
@@ -2908,7 +2905,8 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
   `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder.
 - Their kit stands in for IAM: it creates a scope, assigns or invites a member and issues a link under IAM's rules for
-  the caller's grants, and grants nobody anything. So the caller of an endpoint with the dimension's `members.manage`
+  the caller's grants, and grants nobody anything. A repeated invitation answers the open one, `resend` restarts its
+  7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
   holds it on the object itself, with one role the assigned role's `assignableBy` names and the assigned role's
   actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
   endpoint that `issues` also holds the actions its link grants.
@@ -2934,6 +2932,11 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 - `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
   `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
   it they send a sample, the handler answers 400, and the case fails.
+- `invitations['<endpoint id>']` and `links['<endpoint id>']` list the input fields that name an invitation an endpoint
+  cancels (`ctx.members.revoke(ctx.target, { invitationId })`) or a share link it revokes (`ctx.links.revoke(id)`):
+  `export const invitations = { 'api.members.cancel': ['invitationId'] }`. The generated cases send one their stand-in
+  IAM holds there: an invitation open in the object's value, a link of the endpoint's mount that the case's caller
+  issued. Without it they send a sample, IAM answers 404, and the case fails.
 - `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
   endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
   sets neither a column that places the row nor a text column.

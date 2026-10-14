@@ -65,6 +65,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [138](138-the-external-onboarding-flows-have-no-browser-run.md) — forgot-password and invitation acceptance were never run in a browser; the stack has no mail capture.
 - [139](139-an-application-cannot-author-the-html-of-iams-e-mails.md) — application e-mail templates are plain text; IAM builds the HTML.
-- [140](140-the-test-kit-stand-in-does-not-model-every-membership-answer.md) — the stand-in IAM lacks resend, the repeated invitation, `internal_mailbox` and cancel-by-id cases.
 - [141](141-an-acceptance-is-not-serialized-with-every-grant-of-its-inviter.md) — removing a supplementing grant of the inviter is not serialized with an acceptance.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

@@ -3,7 +3,7 @@
 // one file per application, from the contract: they run the application's own `serve(…)` and handlers. The checker
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
-import { GENERATED_MEMBER } from '@fabrika/app/contract'
+import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER } from '@fabrika/app/contract'
 import {
 	type ContractArtifact,
 	endpointDirectory,
@@ -192,14 +192,30 @@ const isLinkProcedure = (row: EndpointRow): boolean =>
 
 /**
  * The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither
- * exists. Each field its `members` names holds `GENERATED_MEMBER`, which the kit replaces with a real member.
+ * exists. Each field its `members`, `invitations` or `links` name holds `GENERATED_MEMBER`, `GENERATED_INVITATION` or
+ * `GENERATED_LINK`, which the kit replaces with a real member, an open invitation or a link it issued.
  */
 const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<string, Sample>> | undefined => {
 	const fixture = fixtures.inputs[row.id]
 	const input = fixture ?? (row.input === null ? {} : sample(row.input))
 	if (input === undefined || !isSampleObject(input)) return undefined
-	const members = fixtures.members[row.id] ?? []
-	return members.length === 0 ? input : { ...input, ...Object.fromEntries(members.map((field) => [field, GENERATED_MEMBER])) }
+	const generated = (fields: readonly string[] | undefined, marker: string) => (fields ?? []).map((field) => [field, marker])
+	return {
+		...input,
+		...Object.fromEntries([
+			...generated(fixtures.members[row.id], GENERATED_MEMBER),
+			...generated(fixtures.invitations[row.id], GENERATED_INVITATION),
+			...generated(fixtures.links[row.id], GENERATED_LINK),
+		]),
+	}
+}
+
+/** Whether the endpoint's handler gets `ctx.links`: on or in a dimension a link mount's `issuedBy` names its action for. */
+const issuesLinks = (artifact: ContractArtifact, row: EndpointRow): boolean => {
+	if (row.requirement?.kind !== 'action') return false
+	const { action, access } = row.requirement
+	return (access.form === 'on' || access.form === 'in')
+		&& Object.values(artifact.mounts).some((mount) => mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action)
 }
 
 /** Whether `shape` admits a principal id: a string, optional or nullable. */
@@ -460,6 +476,38 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 		for (const field of fields) {
 			if (input?.type !== 'object' || !admitsString(input.fields[field])) {
 				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a member`, 'a top-level string field of the input'))
+			}
+		}
+	}
+	const sortedById = (fields: Readonly<Record<string, readonly string[]>>) =>
+		Object.entries(fields).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+	const holders = [
+		{
+			fields: fixtures.invitations,
+			names: 'an invitation',
+			admits: (row: EndpointRow) => endpointMembers(artifact, row) === 'manage',
+			refusal: (id: string) => `${id} is no tested endpoint that manages a dimension's members, whose handler could cancel an invitation`,
+			allowed: "export const invitations = { '<endpoint id>': ['<input field>'] }, for an endpoint with its dimension's members.manage",
+		},
+		{
+			fields: fixtures.links,
+			names: 'a share link',
+			admits: (row: EndpointRow) => issuesLinks(artifact, row),
+			refusal: (id: string) => `${id} is no tested endpoint that issues a share link, whose handler could revoke one`,
+			allowed: "export const links = { '<endpoint id>': ['<input field>'] }, for an endpoint whose action a link mount's issuedBy names",
+		},
+	]
+	for (const holder of holders) {
+		for (const [id, fields] of sortedById(holder.fields)) {
+			const row = tested.find((candidate) => candidate.id === id && !isLinkProcedure(candidate) && holder.admits(candidate))
+			if (row === undefined) {
+				findings.push(at(holder.refusal(id), holder.allowed))
+				continue
+			}
+			for (const field of fields) {
+				if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
+					findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name ${holder.names}`, 'a top-level string field of the input'))
+				}
 			}
 		}
 	}

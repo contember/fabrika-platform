@@ -47,7 +47,15 @@ import {
 	type TestGrant,
 	type TestScope,
 } from './caller'
-import { credentialCallers, kitDirectory, kitMembership, type MintedToken, type TestMembership, writesThroughIam } from './membership'
+import {
+	credentialCallers,
+	kitDirectory,
+	type KitMembership,
+	kitMembership,
+	type MintedToken,
+	type TestMembership,
+	writesThroughIam,
+} from './membership'
 import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
@@ -148,18 +156,31 @@ function stripClientAsserted(headers: Headers): void {
 
 /** Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`. */
 export function testKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
-	return bootTestKit(app, options, 'refused')
+	return bootTestKit(app, options, 'refused').kit
+}
+
+/** The kit of the generated tests, and its stand-in IAM, which seeds the invitations and links a case names. */
+export interface StandInIamKit<C extends AnyContract> {
+	readonly kit: TestKit<C>
+	readonly standIn: KitMembership
 }
 
 /**
- * The kit of the generated tests: without `options.membership`, its stand-in IAM also answers scope creation, member
- * management and share links under IAM's rules for the caller's grants, and grants the kit's callers nothing.
+ * The kit of the generated tests: its stand-in IAM also answers scope creation, member management and share links
+ * under IAM's rules for the caller's grants, and grants the kit's callers nothing.
  */
-export function standInIamKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
+export function standInIamKit<C extends AnyContract>(
+	app: ContractImplementation<C>,
+	options: Omit<TestKitOptions, 'membership'> = {},
+): StandInIamKit<C> {
 	return bootTestKit(app, options, 'stand-in')
 }
 
-function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions, writes: 'refused' | 'stand-in'): TestKit<C> {
+function bootTestKit<C extends AnyContract>(
+	app: ContractImplementation<C>,
+	options: TestKitOptions,
+	writes: 'refused' | 'stand-in',
+): StandInIamKit<C> {
 	refuseInProduction('@fabrika/app/testing')
 	const name = app.contract.vocabulary.app
 	const appId = `${name}@${TEST_ENVIRONMENT}`
@@ -229,8 +250,9 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 	const directoryCallers = credentialCallers(appId, byKey, byToken, () => [...memberships].map(([caller, held]) => ({ caller, memberships: held })))
 	// A member directory reads the kit's own callers; a contract that writes through IAM needs `options.membership`,
 	// unless the kit stands in for IAM's writes too, and then it also issues the proxy's delegation grants.
-	const standIn = options.membership === undefined && writes === 'stand-in' ? kitMembership(artifact, directoryCallers).rpc : undefined
-	const membership = options.membership ?? standIn ?? (writesThroughIam(artifact) ? undefined : kitDirectory(artifact, directoryCallers))
+	const standIn = kitMembership(artifact, directoryCallers)
+	const writer = options.membership ?? (writes === 'stand-in' ? standIn.rpc : undefined)
+	const membership = writer ?? (writesThroughIam(artifact) ? undefined : kitDirectory(artifact, directoryCallers))
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -367,7 +389,7 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		getJwks: () => jwks,
 	}
 
-	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: options.membership ?? standIn ?? null })
+	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: writer ?? null })
 
 	// What requests leave running: a job a form's `then` kicked, or a failure's report.
 	const background = new Set<Promise<void>>()
@@ -431,5 +453,5 @@ function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, opti
 		return application.jobs.run(name, runOptions)
 	}
 
-	return Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob })
+	return { kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob }), standIn }
 }

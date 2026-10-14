@@ -1140,6 +1140,14 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   caller holding a membership role of the directory's dimension at the value the case's object lies in. A case of an
   endpoint whose action is the directory's `members.list` holds the action on the directory's value, where IAM checks a
   list. A field of an endpoint with no directory, or that is no string field, is an `endpoint-fixture` finding.
+- **Invitations and links.** A handler that cancels an invitation or revokes a share link by its id gets a 404 from IAM
+  for a sampled id, so the author names the field: `export const invitations = { '<endpoint id>': ['<field>'] }` (an
+  endpoint with its dimension's `members.manage`) or `export const links = { … }` (an endpoint that issues a link
+  mount). The scaffold writes `GENERATED_INVITATION` or `GENERATED_LINK` there, and the kit replaces it, per case, with
+  an invitation its stand-in IAM holds open in the target's value, or a link of the endpoint's mount bound to the
+  target's chain and issued by the case's caller. The stand-in answers a repeated invitation with the open one, a
+  resend with a new 7 days, and an organization's mailbox for an external role with `internal_mailbox` when its
+  `OrganizationMailboxes` name one (none in the generated cases).
 - **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
   `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
   which captures Bun's own functions before any application module loads, and a case that

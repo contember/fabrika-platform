@@ -23,7 +23,7 @@ import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { z } from 'zod/v4'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
-import { GENERATED_MEMBER } from '../contract/defaults'
+import { GENERATED_INVITATION, GENERATED_LINK, GENERATED_MEMBER } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
 import { FILE_SCAN_JOB, type FileScanner, type ScanVerdict } from '../files/scan'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -102,8 +102,8 @@ interface ActionEndpoint {
 	readonly directory: EndpointDirectory | null
 	/** Its dimension when its action is the dimension's `members.manage`, which IAM checks on the value itself; else `null`. */
 	readonly manages: string | null
-	/** The actions of the link mounts it issues, which IAM requires of the issuer beside `issuedBy`. */
-	readonly linkGrants: readonly string[]
+	/** The link mounts it issues for its `Ref`: their names, and the actions they grant, which IAM requires of the issuer. */
+	readonly links: readonly { readonly mount: string; readonly grants: readonly string[] }[]
 }
 
 /** Every dimension value a target lies in, its own first: where a member directory of its scope is found. */
@@ -248,7 +248,7 @@ export const managerGrants = (
  */
 export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract>, tables: Tables<DB, P>, postgres: TestDatabase): EndpointAccessKit {
 	// The objects of the files the cases seed live in memory; their rows are the application's own tables.
-	const kit = standInIamKit(app, {
+	const { kit, standIn } = standInIamKit(app, {
 		database: postgres.database,
 		files: new MemoryFileObjects(),
 		scanner: cleanScanner,
@@ -281,17 +281,17 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			input: row.input,
 			directory: endpointDirectory(kit.artifact, row),
 			manages: endpointMembers(kit.artifact, row) === 'manage' && 'dimension' in requirement.access ? requirement.access.dimension : null,
-			linkGrants: linkGrantsOf(row.id, requirement.action, requirement.access),
+			links: linksOf(row.id, requirement.action, requirement.access),
 		}
 	}
 
-	/** The grants of the link mounts an endpoint's `Ref` issues for: its dimension's whose `issuedBy` is its action. */
-	const linkGrantsOf = (id: string, action: string, access: AccessForm): string[] => {
+	/** The link mounts an endpoint's `Ref` issues for: its dimension's whose `issuedBy` is its action. */
+	const linksOf = (id: string, action: string, access: AccessForm): ActionEndpoint['links'] => {
 		if (access.form !== 'on' && access.form !== 'in') return []
 		const issues = kit.artifact.declared?.[id]?.issues
 		return Object.entries(kit.artifact.mounts).flatMap(([name, mount]) =>
 			mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action && (issues === undefined || issues === name)
-				? mount.grants
+				? [{ mount: name, grants: mount.grants }]
 				: []
 		)
 	}
@@ -340,8 +340,17 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		throw new Error(`${row.id} admits neither a human nor a machine caller`)
 	}
 
-	const ask = (row: ActionEndpoint, grants: readonly Grant[], body: unknown): Promise<{ readonly status: number; readonly text: string }> =>
-		askAs(row, callerFor(row, grants).fetch, body)
+	/** A case's request by a new caller holding `grants`, its generated fields filled for `chain` and that caller. */
+	const ask = async (
+		row: ActionEndpoint,
+		grants: readonly Grant[],
+		input: Readonly<Record<string, unknown>>,
+		chain: Chain,
+	): Promise<{ readonly status: number; readonly text: string; readonly marks: readonly string[] }> => {
+		const asker = callerFor(row, grants)
+		const asked = withGenerated(row, input, chain, asker.caller)
+		return { ...(await askAs(row, asker.fetch, asked.input)), marks: asked.marks }
+	}
 
 	const askAs = async (row: ActionEndpoint, fetch: RpcFetch, body: unknown): Promise<{ readonly status: number; readonly text: string }> => {
 		if (row.method !== 'POST') {
@@ -516,6 +525,50 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 	}
 
 	/**
+	 * `input` with every field that holds `GENERATED_INVITATION` set to an invitation the stand-in IAM holds open in the
+	 * managed value of `chain`, to a membership role the input names (else the dimension's first): what a cancel cancels.
+	 */
+	const withInvitation = (row: ActionEndpoint, input: Readonly<Record<string, unknown>>, chain: Chain): Addressed => {
+		const fields = Object.keys(input).filter((field) => input[field] === GENERATED_INVITATION)
+		if (fields.length === 0) return { input, marks: [] }
+		const dimension = row.manages
+		if (dimension === null) {
+			throw new Error(`${row.id} manages no members, so no input field of it names an invitation (${fields.join(', ')})`)
+		}
+		const value = chain.find((link) => link.type === dimension)?.value
+		const roles = Object.keys(kit.artifact.roles).sort().filter((name) => kit.artifact.roles[name]?.member?.scope === dimension)
+		const role = roles.find((name) => Object.values(input).includes(name)) ?? roles[0]
+		if (value === undefined || role === undefined) {
+			throw new Error(`${row.id}: the kit locates no ${dimension} with a membership role to hold an invitation in`)
+		}
+		const id = standIn.seedInvitation({ type: dimension, value }, role, `invited-${randomHex()}@example.test`)
+		return { input: { ...input, ...Object.fromEntries(fields.map((field) => [field, id])) }, marks: [id] }
+	}
+
+	/**
+	 * `input` with every field that holds `GENERATED_LINK` set to a share link of the endpoint's mount, bound to `chain`
+	 * and issued by `issuer`, the case's caller: what a revoke revokes.
+	 */
+	const withLink = (row: ActionEndpoint, input: Readonly<Record<string, unknown>>, chain: Chain, issuer: TestCaller): Addressed => {
+		const fields = Object.keys(input).filter((field) => input[field] === GENERATED_LINK)
+		if (fields.length === 0) return { input, marks: [] }
+		const [link] = row.links
+		if (link === undefined || chain.length === 0) {
+			throw new Error(`${row.id} issues no share link of its object, so no input field of it names one (${fields.join(', ')})`)
+		}
+		const id = standIn.seedLink(issuer.id, link.mount, chain)
+		return { input: { ...input, ...Object.fromEntries(fields.map((field) => [field, id])) }, marks: [id] }
+	}
+
+	/** `input` with every generated field filled: a member, an invitation and a link of `chain`, for the case's `caller`. */
+	const withGenerated = (row: ActionEndpoint, input: Readonly<Record<string, unknown>>, chain: Chain, caller: TestCaller): Addressed => {
+		const member = withMember(row, input, chain)
+		const invitation = withInvitation(row, member.input, chain)
+		const link = withLink(row, invitation.input, chain, caller)
+		return { input: link.input, marks: [...member.marks, ...invitation.marks, ...link.marks] }
+	}
+
+	/**
 	 * The grants a case's caller holds: its side's, or, on an endpoint that reads a member directory, the action on the
 	 * directory's value, where IAM checks a lookup and a list: a caller who may read it, still only in its own scope. On
 	 * an endpoint that manages members it is the action on the target's own value with the least IAM requires there to
@@ -534,15 +587,8 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			held = [{ action: row.action, scope: { type: directory.dimension, value: listed } }]
 		}
 		const scopes = held.flatMap((grant) => ('action' in grant ? [grant.scope] : []))
-		return [...held, ...row.linkGrants.flatMap((action) => scopes.map((scope) => ({ action, scope })))]
+		return [...held, ...row.links.flatMap((link) => link.grants.flatMap((action) => scopes.map((scope) => ({ action, scope }))))]
 	}
-
-	const addressed = (
-		row: ActionEndpoint,
-		input: Readonly<Record<string, unknown>>,
-		from: string | null,
-		side: { readonly target: string; readonly chain: Chain },
-	): Addressed => withMember(row, withTarget(input, from, side.target), side.chain)
 
 	/** The outcome of the own scope's answers: answered unless one is a failure or an authorization refusal. */
 	const leakOutcome = (answers: readonly { readonly status: number; readonly text: string }[], values: readonly string[]): LeakOutcome => {
@@ -581,8 +627,8 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				throw new Error(`${endpoint} has the access form ${access.form}; only on and in name an object or a scope value`)
 			}
 			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
-			const asked = withMember(row, withTarget(input, access.from, scopes.other.target), scopes.own.chain)
-			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked.input)
+			const asked = withTarget(input, access.from, scopes.other.target)
+			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), asked, scopes.own.chain)
 			return { status }
 		},
 		async leaked(endpoint, input, seed = {}) {
@@ -594,13 +640,12 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 					targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
 				const marks: string[] = []
 				for (const side of scopes.other) {
-					const asked = addressed(row, input, access.from, side)
-					marks.push(...asked.marks)
-					await ask(row, grants(scopes.other), asked.input)
+					const answer = await ask(row, grants(scopes.other), withTarget(input, access.from, side.target), side.chain)
+					marks.push(...answer.marks)
 				}
 				const answers = []
 				for (const side of scopes.own) {
-					answers.push(await ask(row, grants(scopes.own), addressed(row, input, access.from, side).input))
+					answers.push(await ask(row, grants(scopes.own), withTarget(input, access.from, side.target), side.chain))
 				}
 				return leakOutcome(answers, [...scopes.values, ...marks])
 			}
@@ -611,9 +656,18 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
 				: await listScopesOf(action, access.dimension)
 			const from = access.form === 'on' ? access.from : null
-			const other = addressed(row, input, from, scopes.other)
-			await ask(row, holding(row, input, scopes.other.grants, scopes.other.chain), other.input)
-			const answer = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), addressed(row, input, from, scopes.own).input)
+			const other = await ask(
+				row,
+				holding(row, input, scopes.other.grants, scopes.other.chain),
+				withTarget(input, from, scopes.other.target),
+				scopes.other.chain,
+			)
+			const answer = await ask(
+				row,
+				holding(row, input, scopes.own.grants, scopes.own.chain),
+				withTarget(input, from, scopes.own.target),
+				scopes.own.chain,
+			)
 			return leakOutcome([answer], [...scopes.other.values, ...other.marks])
 		},
 		async own(endpoint, input, seed = {}) {
@@ -627,7 +681,12 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 				return { status }
 			}
 			const scopes = await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed)
-			const { status } = await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), addressed(row, input, access.from, scopes.own).input)
+			const { status } = await ask(
+				row,
+				holding(row, input, scopes.own.grants, scopes.own.chain),
+				withTarget(input, access.from, scopes.own.target),
+				scopes.own.chain,
+			)
 			return { status }
 		},
 		async file(name, operation, caller) {
@@ -652,7 +711,7 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		async scoped(endpoint, input) {
 			const row = globalEndpointOf(endpoint)
 			const dimension = row.access.form === 'creates' ? row.access.dimension : scopeTypeOf(kit.artifact.dimensions)
-			const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input)
+			const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input, [])
 			return { status }
 		},
 		async global(endpoint, input) {

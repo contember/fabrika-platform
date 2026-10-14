@@ -87,6 +87,8 @@ describe('the endpoint access cases of a kit application', () => {
 			inputs: {},
 			seeds: { 'api.notes.restore': { trashed: true } },
 			members: {},
+			invitations: {},
+			links: {},
 		})
 		expect(() => read('export const seeds = {}\nexport const seeds = {}\n')).toThrow()
 		expect(() => read('export const setup = {}\n')).toThrow()
@@ -138,5 +140,39 @@ describe('the members of the fixtures: input fields that name a member the handl
 		expect(() => read("export const members = { 'api.deals.assign': 'newOwner' }\n")).toThrow()
 		expect(() => read("export const members = { 'api.deals.assign': [] }\n")).toThrow()
 		expect(() => read('export const members = {}\nexport const members = {}\n')).toThrow()
+	})
+})
+
+describe('the invitations and links of the fixtures: input fields that name what a handler cancels or revokes by id', () => {
+	const ISOLATION_ROOT = join(import.meta.dir, '..', '..', '..', 'cli', 'src', '__tests__', 'fixtures', 'isolation-app')
+	const withFixtures = (text: string) => new Map([...tree(ISOLATION_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+
+	test("each case sends the kit's invitation or link in the field", async () => {
+		const text = await endpointTest(tree(ISOLATION_ROOT))
+		expect(text).toContain("expect(await kit.own('api.workspaces.cancel', { id: 'x', invitationId: 'fabrika:invitation' })).toEqual({ status: 200 })")
+		expect(text).toContain("expect(await kit.own('api.notes.unshare', { id: 'x', linkId: 'fabrika:link' })).toEqual({ status: 200 })")
+		expect(missingEndpointFixtures(scaffoldInputs(tree(ISOLATION_ROOT)))).toEqual([])
+	})
+
+	test('an invitation field of an endpoint that manages no members, a link field of one that issues none, or no string field is a finding', () => {
+		expect(findings("export const invitations = { 'api.notes.rename': ['title'] }\n")).toEqual([
+			"api.notes.rename is no tested endpoint that manages a dimension's members, whose handler could cancel an invitation",
+		])
+		expect(findings("export const links = { 'api.workspaces.cancel': ['invitationId'] }\n")).toEqual([
+			'api.workspaces.cancel is no tested endpoint that issues a share link, whose handler could revoke one',
+		])
+		expect(findings("export const invitations = { 'api.workspaces.cancel': ['missing'] }\nexport const links = { 'api.notes.unshare': ['missing'] }\n"))
+			.toEqual([
+				'api.workspaces.cancel: missing is no string field of its input, so it cannot name an invitation',
+				'api.notes.unshare: missing is no string field of its input, so it cannot name a share link',
+			])
+	})
+
+	test('the invitations and links are lists of field names, each declared once', () => {
+		const read = (text: string) => scaffoldInputs(withFixtures(text)).fixtures
+		expect(read("export const links = { 'api.notes.unshare': ['linkId'] }\n").links).toEqual({ 'api.notes.unshare': ['linkId'] })
+		expect(() => read("export const invitations = { 'api.workspaces.cancel': 'invitationId' }\n")).toThrow()
+		expect(() => read('export const links = {}\nexport const links = {}\n')).toThrow()
 	})
 })

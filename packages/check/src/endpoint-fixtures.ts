@@ -1,10 +1,12 @@
 // `src/__tests__/endpoint-access.fixtures.ts`: what an application's author gives the endpoint access tests. `fixtures`
 // are the inputs the scaffold cannot sample (a `regex`); `seeds` are the state of the row an endpoint addresses, which
 // its precondition needs (`deals.reopen` reopens only a won deal: `{ stage: 'won' }`); `members` are the input fields
-// that name a member the handler looks up (`deals.assign`'s `ownerId`), which the kit fills with a real member. Read
-// from source, never executed, within the reader's budget: `export const fixtures = { '<endpoint id>': { … } }`,
-// `export const seeds = { '<endpoint id>': { <column>: <value> } }` and
-// `export const members = { '<endpoint id>': ['<field>'] }`, plain literals only. Browser-safe.
+// that name a member the handler looks up (`deals.assign`'s `ownerId`), which the kit fills with a real member;
+// `invitations` and `links` the fields that name an invitation the handler cancels or a share link it revokes, which the
+// kit fills with one it holds. Read from source, never executed, within the reader's budget:
+// `export const fixtures = { '<endpoint id>': { … } }`, `export const seeds = { '<endpoint id>': { <column>: <value> } }`
+// and `export const members = { '<endpoint id>': ['<field>'] }` (`invitations`, `links` alike), plain literals only.
+// Browser-safe.
 
 import { type AstNode, child, children, identifierName, nodeDepth, parseModule, positionOf, staticKey, staticString } from './ast'
 import type { Finding } from './finding'
@@ -15,9 +17,16 @@ import type { Sample } from './scaffold-sample'
 export const FIXTURES_EXPORT = 'fixtures'
 export const SEEDS_EXPORT = 'seeds'
 export const MEMBERS_EXPORT = 'members'
+export const INVITATIONS_EXPORT = 'invitations'
+export const LINKS_EXPORT = 'links'
+
+/** The exports that list, by endpoint id, the input fields the kit fills with something it holds. */
+const FIELD_EXPORTS = [MEMBERS_EXPORT, INVITATIONS_EXPORT, LINKS_EXPORT] as const
+type FieldExport = (typeof FIELD_EXPORTS)[number]
+const isFieldExport = (name: string | undefined): name is FieldExport => FIELD_EXPORTS.some((field) => field === name)
 
 const ALLOWED =
-	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } } and export const members = { 'api.deals.assign': ['ownerId'] }: string keys, and strings, numbers, booleans, null, arrays and objects"
+	"export const fixtures = { 'api.notes.get': { id: '…' } }, export const seeds = { 'api.deals.reopen': { stage: 'won' } }, export const members = { 'api.deals.assign': ['ownerId'] }, export const invitations = { 'api.members.cancel': ['invitationId'] } and export const links = { 'api.notes.unshare': ['linkId'] }: string keys, and strings, numbers, booleans, null, arrays and objects"
 
 type ById = Readonly<Record<string, Readonly<Record<string, Sample>>>>
 
@@ -28,9 +37,13 @@ export interface EndpointFixtures {
 	readonly seeds: ById
 	/** The input fields that name a member of the endpoint's member directory, by endpoint id. */
 	readonly members: Readonly<Record<string, readonly string[]>>
+	/** The input fields that name an invitation the endpoint cancels, by endpoint id. */
+	readonly invitations: Readonly<Record<string, readonly string[]>>
+	/** The input fields that name a share link the endpoint revokes, by endpoint id. */
+	readonly links: Readonly<Record<string, readonly string[]>>
 }
 
-export const NO_FIXTURES: EndpointFixtures = { inputs: {}, seeds: {}, members: {} }
+export const NO_FIXTURES: EndpointFixtures = { inputs: {}, seeds: {}, members: {}, invitations: {}, links: {} }
 
 const finding = (at: AstNode | undefined, message: string): Finding => {
 	const { line, column } = at === undefined ? { line: 1, column: 1 } : positionOf(at)
@@ -107,9 +120,10 @@ function byId(
 	return { ok: true, value: entries }
 }
 
-/** `export const members = { '<endpoint id>': ['<field>', …] }`, read into field lists. */
+/** `export const <members, invitations or links> = { '<endpoint id>': ['<field>', …] }`, read into field lists. */
 function fieldsById(
 	declarator: AstNode,
+	name: FieldExport,
 ): { readonly ok: true; readonly value: Readonly<Record<string, readonly string[]>> } | {
 	readonly ok: false
 	readonly findings: readonly Finding[]
@@ -118,12 +132,12 @@ function fieldsById(
 	const value = literal(init)
 	if (!value.ok) return { ok: false, findings: [finding(value.at, 'not a plain literal')] }
 	if (!isSampleObject(value.value)) {
-		return { ok: false, findings: [finding(init, `the ${MEMBERS_EXPORT} are an object keyed by endpoint id`)] }
+		return { ok: false, findings: [finding(init, `the ${name} are an object keyed by endpoint id`)] }
 	}
 	const entries: Record<string, readonly string[]> = {}
 	for (const [id, fields] of Object.entries(value.value)) {
 		if (!Array.isArray(fields) || fields.length === 0 || !fields.every((field) => typeof field === 'string')) {
-			return { ok: false, findings: [finding(init, `the ${MEMBERS_EXPORT} of ${id} is not a list of input field names`)] }
+			return { ok: false, findings: [finding(init, `the ${name} of ${id} is not a list of input field names`)] }
 		}
 		entries[id] = fields.filter((field) => typeof field === 'string')
 	}
@@ -146,7 +160,7 @@ export function readEndpointFixtures(
 		return { ok: false, findings: [finding(undefined, `the fixtures nest deeper than ${CONTRACT_LIMITS.astDepth}`)] }
 	}
 	const read = new Map<string, ById>()
-	let members: Readonly<Record<string, readonly string[]>> | undefined
+	const fields = new Map<FieldExport, Readonly<Record<string, readonly string[]>>>()
 	for (const statement of children(program, 'body')) {
 		const declaration = statement === null ? undefined : child(statement, 'declaration')
 		const declarators = declaration?.type === 'VariableDeclaration' && declaration['kind'] === 'const' ? children(declaration, 'declarations') : []
@@ -154,28 +168,37 @@ export function readEndpointFixtures(
 		const name = declarator === null || declarator === undefined ? undefined : identifierName(child(declarator, 'id'))
 		if (
 			statement?.type !== 'ExportNamedDeclaration' || declarator === null || declarator === undefined
-			|| (name !== FIXTURES_EXPORT && name !== SEEDS_EXPORT && name !== MEMBERS_EXPORT) || read.has(name)
-			|| (name === MEMBERS_EXPORT && members !== undefined)
+			|| (name !== FIXTURES_EXPORT && name !== SEEDS_EXPORT && !isFieldExport(name)) || read.has(name)
+			|| (isFieldExport(name) && fields.has(name))
 		) {
 			return {
 				ok: false,
 				findings: [
 					finding(
 						statement ?? undefined,
-						`the file holds export const ${FIXTURES_EXPORT} = { … }, export const ${SEEDS_EXPORT} = { … } and export const ${MEMBERS_EXPORT} = { … }, each at most once`,
+						`the file holds export const ${FIXTURES_EXPORT}, ${SEEDS_EXPORT}, ${MEMBERS_EXPORT}, ${INVITATIONS_EXPORT} and ${LINKS_EXPORT} = { … }, each at most once`,
 					),
 				],
 			}
 		}
-		if (name === MEMBERS_EXPORT) {
-			const fields = fieldsById(declarator)
-			if (!fields.ok) return fields
-			members = fields.value
+		if (isFieldExport(name)) {
+			const listed = fieldsById(declarator, name)
+			if (!listed.ok) return listed
+			fields.set(name, listed.value)
 			continue
 		}
 		const value = byId(declarator, name)
 		if (!value.ok) return value
 		read.set(name, value.value)
 	}
-	return { ok: true, fixtures: { inputs: read.get(FIXTURES_EXPORT) ?? {}, seeds: read.get(SEEDS_EXPORT) ?? {}, members: members ?? {} } }
+	return {
+		ok: true,
+		fixtures: {
+			inputs: read.get(FIXTURES_EXPORT) ?? {},
+			seeds: read.get(SEEDS_EXPORT) ?? {},
+			members: fields.get(MEMBERS_EXPORT) ?? {},
+			invitations: fields.get(INVITATIONS_EXPORT) ?? {},
+			links: fields.get(LINKS_EXPORT) ?? {},
+		},
+	}
 }

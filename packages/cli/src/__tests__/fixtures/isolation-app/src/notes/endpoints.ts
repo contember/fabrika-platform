@@ -1,7 +1,25 @@
 // The handlers reach rows only through `ctx.db`, bound to the capability each access form minted.
 
 import { app } from '../app-kit'
-import { ById, ByNote, Comments, Count, Done, Invite, Invited, Named, NamedList, NewNote, Note, Notes, Rename, Share, Shared } from '../schemas'
+import {
+	ById,
+	ByNote,
+	CancelInvitation,
+	Comments,
+	Count,
+	Done,
+	Invite,
+	Invited,
+	Named,
+	NamedList,
+	NewNote,
+	Note,
+	Notes,
+	Rename,
+	Share,
+	Shared,
+	Unshare,
+} from '../schemas'
 
 export const organizations = app.group({ callers: ['human'] }, (r) => ({
 	get: r.query({ input: ById, output: Named, access: { action: 'organizations.read', on: 'organization', from: 'id' } })
@@ -22,6 +40,11 @@ export const workspaces = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ input, ctx }) => {
 			const invited = await ctx.members.assign(ctx.target, { email: input.email }, input.role)
 			return { invitationId: 'invited' in invited ? invited.invited.invitationId : invited.assigned.principalId }
+		}),
+	cancel: r.mutation({ input: CancelInvitation, output: Done, access: { action: 'workspaces.admin', on: 'workspace', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			await ctx.members.revoke(ctx.target, { invitationId: input.invitationId })
+			return { id: ctx.target.value }
 		}),
 }))
 
@@ -47,6 +70,11 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ input, ctx }) => {
 			const link = await ctx.links.issue(ctx.target, { mount: 'shared', days: input.days })
 			return { id: link.id, url: link.url }
+		}),
+	unshare: r.mutation({ input: Unshare, output: Done, access: { action: 'notes.share', on: 'note', from: 'id' }, issues: 'shared' })
+		.handle(async ({ input, ctx }) => {
+			await ctx.links.revoke(input.linkId)
+			return { id: ctx.target.value }
 		}),
 }))
 

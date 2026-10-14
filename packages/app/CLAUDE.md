@@ -80,7 +80,8 @@ src/
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
     membership.ts     the stand-in IAM transports: member directories from the kit's callers; kitDirectory refuses
-                      writes, kitMembership (the endpoint access kit's) checks them as IAM does and records them
+                      writes, kitMembership (the endpoint access kit's) checks them as IAM does, records them, and seeds
+                      the invitations and links a generated case cancels or revokes
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes

@@ -11,7 +11,8 @@ longer writes. Commit them; never edit, format or import them (`generated-test-h
   caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
   `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder.
 - Their kit stands in for IAM: it creates a scope, assigns or invites a member and issues a link under IAM's rules for
-  the caller's grants, and grants nobody anything. So the caller of an endpoint with the dimension's `members.manage`
+  the caller's grants, and grants nobody anything. A repeated invitation answers the open one, `resend` restarts its
+  7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
   holds it on the object itself, with one role the assigned role's `assignableBy` names and the assigned role's
   actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
   endpoint that `issues` also holds the actions its link grants.
@@ -37,6 +38,11 @@ export const members = { 'api.tasks.assign': ['assignee'] }
 - `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
   `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
   it they send a sample, the handler answers 400, and the case fails.
+- `invitations['<endpoint id>']` and `links['<endpoint id>']` list the input fields that name an invitation an endpoint
+  cancels (`ctx.members.revoke(ctx.target, { invitationId })`) or a share link it revokes (`ctx.links.revoke(id)`):
+  `export const invitations = { 'api.members.cancel': ['invitationId'] }`. The generated cases send one their stand-in
+  IAM holds there: an invitation open in the object's value, a link of the endpoint's mount that the case's caller
+  issued. Without it they send a sample, IAM answers 404, and the case fails.
 - `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
   endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
   sets neither a column that places the row nor a text column.

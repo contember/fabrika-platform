@@ -113,6 +113,18 @@ export const BROWSER_CONFIG_FILE = '__fabrika-config.json'
  */
 export const GENERATED_MEMBER = 'fabrika:member'
 
+/**
+ * The value a generated endpoint access case sends in an input field that names an invitation the handler cancels
+ * (`invitations` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with one open in the target's value.
+ */
+export const GENERATED_INVITATION = 'fabrika:invitation'
+
+/**
+ * The value a generated endpoint access case sends in an input field that names a share link the handler revokes
+ * (`links` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with one the case's caller issued.
+ */
+export const GENERATED_LINK = 'fabrika:link'
+
 export const JSON_ADMISSION: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
 
 /** `/api` + `notes.list` → `/api/notes.list`; a root prefix does not double the `/`. */

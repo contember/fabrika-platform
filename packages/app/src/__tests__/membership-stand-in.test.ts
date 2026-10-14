@@ -517,3 +517,102 @@ describe('an application-wide role in assignableBy assigns as IAM counts it: hel
 		])
 	})
 })
+
+describe('the stand-in answers an invitation as IAM does: the open one again, a resend, a cancel by id', () => {
+	const invite = async (membership: ReturnType<typeof standIn>, email = 'ann@example.test', resend?: boolean) => {
+		const grant = await delegation(membership, owner, 'api.members.invite')
+		const invited = await membership.rpc.assignMember({
+			...as(owner),
+			delegation: grant,
+			scope: ACME,
+			role: 'editor',
+			member: { email },
+			...(resend === undefined ? {} : { invitation: { resend } }),
+		})
+		if (!invited.ok || !('invited' in invited)) throw new Error('no invitation')
+		return invited.invited
+	}
+	const cancel = async (membership: ReturnType<typeof standIn>, invitationId: string) =>
+		membership.rpc.revokeMember({
+			...as(owner),
+			delegation: await delegation(membership, owner, 'api.members.remove'),
+			scope: ACME,
+			member: { invitationId },
+		})
+
+	afterEach(() => setSystemTime())
+
+	test('a repeat answers the same open invitation; a resend keeps its id and restarts its 7 days', async () => {
+		const membership = standIn()
+		setSystemTime(new Date('2026-10-14T10:00:00Z'))
+		const first = await invite(membership)
+		expect(await invite(membership, 'Ann@Example.test')).toEqual(first)
+		setSystemTime(new Date('2026-10-15T10:00:00Z'))
+		const resent = await invite(membership, 'ann@example.test', true)
+		expect(resent).toEqual({ ...first, expiresAt: first.expiresAt + 24 * 60 * 60 })
+		expect(await invite(membership)).toEqual(resent)
+	})
+
+	test('a cancelled or expired invitation is no longer open: the next one has a new id; a repeated cancel answers the same', async () => {
+		const membership = standIn()
+		const first = await invite(membership)
+		expect(await cancel(membership, first.invitationId)).toEqual({ ok: true })
+		expect(await cancel(membership, first.invitationId)).toEqual({ ok: true })
+		const second = await invite(membership)
+		expect(second.invitationId).not.toBe(first.invitationId)
+		setSystemTime(new Date((second.expiresAt + 1) * 1000))
+		expect((await invite(membership)).invitationId).not.toBe(second.invitationId)
+	})
+
+	test('a seeded invitation and link are cancelled and revoked by id; another scope or a stranger is still refused', async () => {
+		const membership = standIn()
+		const seeded = membership.seedInvitation(ACME, 'editor', 'bo@example.test')
+		expect(await invite(membership, 'bo@example.test')).toMatchObject({ invitationId: seeded })
+		expect(await cancel(membership, membership.seedInvitation(OTHER, 'editor', 'bo@example.test'))).toEqual({ ok: false, reason: 'not_found' })
+		expect(await cancel(membership, seeded)).toEqual({ ok: true })
+		const link = membership.seedLink(sharer.id, 'shared', [NOTE, ACME])
+		expect(await membership.rpc.revokeLink({ ...as(editor), id: link })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await membership.rpc.revokeLink({ ...as(sharer), id: link })).toEqual({ ok: true })
+		expect(await membership.rpc.revokeLink({ ...as(sharer), id: 'link-unknown' })).toEqual({ ok: false, reason: 'not_found' })
+	})
+})
+
+describe("the stand-in refuses an organization's mailbox for an external role (internal_mailbox), as IAM does", () => {
+	const partnered = compileContract(
+		defineContract({
+			app: 'notes',
+			dimensions: { workspace: { members: { manage: 'members.manage', list: 'notes.read' } } },
+			actions: { 'notes.read': 'Read', 'members.manage': 'Manage members' },
+			roles: {
+				owner: { grants: ['notes.read', 'members.manage'], member: { scope: 'workspace', assignableBy: ['owner'] } },
+				partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true },
+			},
+		}, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				invite: c.mutation({
+					input: z.strictObject({ workspaceId: z.string(), email: z.string() }),
+					output: z.strictObject({ ok: z.boolean() }),
+					access: { action: 'members.manage', in: 'workspace', from: 'workspaceId' },
+				}),
+			}),
+		})),
+		{},
+	)
+	const admin = person('admin', [entry('notes.read', ACME), entry('members.manage', ACME)])
+	const membership = kitMembership(partnered, callersOf([{ caller: admin, memberships: [{ role: 'owner', scope: ACME }] }]), {
+		emails: ['Boss@Partner.example'],
+		domains: ['acme.example'],
+	}).rpc
+	const invite = async (role: string, email: string) => {
+		const granted = await membership.requestDelegation({ ...as(admin), endpoint: 'api.invite' })
+		const grant = granted.ok ? granted.grant : granted.reason
+		return membership.assignMember({ ...as(admin), delegation: grant, scope: ACME, role, member: { email } })
+	}
+
+	test('a named address or domain is refused for the external role and invited to an internal one', async () => {
+		expect(await invite('partner', 'ann@ACME.example')).toEqual({ ok: false, reason: 'internal_mailbox' })
+		expect(await invite('partner', 'boss@partner.example')).toEqual({ ok: false, reason: 'internal_mailbox' })
+		expect(await invite('partner', 'eve@partner.example')).toMatchObject({ ok: true, invited: { role: 'partner' } })
+		expect(await invite('owner', 'ann@acme.example')).toMatchObject({ ok: true, invited: { role: 'owner' } })
+	})
+})

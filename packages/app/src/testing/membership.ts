@@ -2,8 +2,9 @@
 // `get()`) from the kit's own callers, as IAM answers it from its grants. `kitDirectory`, the default of `testKit`,
 // refuses every write by name. `kitMembership`, which the endpoint access kit boots with, also answers the writes
 // under IAM's rules for the caller's grants: the delegation grant, `members.manage`, `assignableBy`, the role's
-// actions, a link mount's `issuedBy`, the last creator and IAM's input bounds. It records each write it allowed and
-// grants the kit's callers nothing.
+// actions, a link mount's `issuedBy`, the last creator and IAM's input bounds; and its answers to an invitation: the
+// open one again, a resend's new lifetime, an organization's mailbox refused for an external role. It records each write
+// it allowed and grants the kit's callers nothing.
 
 import {
 	API_KEY_PREFIX,
@@ -34,6 +35,7 @@ import {
 	type MembershipFailure,
 	membershipScopeProblem,
 	type MemberTarget,
+	normalizeEmailIdentity,
 	permits,
 	type RequestDelegationInput,
 	type RequestDelegationResult,
@@ -81,6 +83,39 @@ export interface KitMembership {
 	readonly rpc: IamMembershipRpc
 	/** Every write it allowed, in order. */
 	readonly asked: readonly AskedWrite[]
+	/** An open invitation of `role` in `scope` to `email`, as an earlier request opened it; answers its id. */
+	seedInvitation(scope: Scope, role: string, email: string): string
+	/** A share link of `mount` bound to `chain`, as `issuer` issued it in an earlier request; answers its id. */
+	seedLink(issuer: string, mount: string, chain: readonly Scope[]): string
+}
+
+/**
+ * The addresses the organization names, as IAM's configuration does (its human e-mails, its e-mail domains): IAM never
+ * invites one to an external role (`internal_mailbox`).
+ */
+export interface OrganizationMailboxes {
+	readonly emails: readonly string[]
+	readonly domains: readonly string[]
+}
+
+const NO_ORGANIZATION: OrganizationMailboxes = { emails: [], domains: [] }
+
+/** An invitation the stand-in opened, open until it is cancelled or its lifetime ends. */
+interface KitInvitation {
+	readonly id: string
+	readonly scope: Scope
+	readonly role: string
+	readonly email: string
+	readonly expiresAt: number
+	readonly cancelled: boolean
+}
+
+/** A share link the stand-in issued; a revoked one is still found, so a repeated revoke answers the same. */
+interface KitLink {
+	readonly id: string
+	readonly issuer: string
+	readonly mount: string
+	readonly chain: readonly Scope[]
 }
 
 /** A token the kit's IAM signed, for the caller it was minted for, until its `exp`. */
@@ -289,11 +324,35 @@ interface DelegationGrant {
 	readonly expiresAt: number
 }
 
-/** The directory of the kit's callers, and every write checked against the caller's grants as IAM checks it. */
-export function kitMembership(artifact: ContractArtifact, callers: DirectoryCallers): KitMembership {
+/**
+ * The directory of the kit's callers, and every write checked against the caller's grants as IAM checks it.
+ * `organization` names the mailboxes IAM's configuration would; by default none.
+ */
+export function kitMembership(artifact: ContractArtifact, callers: DirectoryCallers, organization = NO_ORGANIZATION): KitMembership {
 	const asked: AskedWrite[] = []
 	const grants = new Map<string, DelegationGrant>()
 	const changes = membershipChanges(artifact, callers)
+	const invitations = new Map<string, KitInvitation>()
+	const links = new Map<string, KitLink>()
+
+	const organizationMailbox = (email: string): boolean => {
+		const domain = email.slice(email.lastIndexOf('@') + 1)
+		return organization.emails.some((named) => normalizeEmailIdentity(named) === email)
+			|| organization.domains.some((named) => named.toLowerCase() === domain)
+	}
+
+	/** The open invitation of `role` in `scope` to `email`; as IAM, an expired one is closed first and never answered. */
+	const openInvitation = (scope: Scope, role: string, email: string): KitInvitation | undefined =>
+		[...invitations.values()].find((invitation) =>
+			!invitation.cancelled && invitation.expiresAt > now() && sameScope(invitation.scope, scope) && invitation.role === role
+			&& invitation.email === email
+		)
+
+	const openNew = (scope: Scope, role: string, email: string): KitInvitation => {
+		const invitation = { id: `invitation-${randomId()}`, scope, role, email, expiresAt: now() + INVITATION_TTL_SECONDS, cancelled: false }
+		invitations.set(invitation.id, invitation)
+		return invitation
+	}
 
 	/** Spends the request's grant before its binding is compared, as IAM does, so each attempt is single use. */
 	const spend = (caller: TestCaller, input: { delegation: string; requestId: string }, purpose: EndpointDelegation, dimension: string) => {
@@ -399,16 +458,31 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (email === null) return invalid('the member email is not an address')
 		const wording = invitationOptionsProblem(input.invitation ?? {})
 		if (wording !== null) return invalid(wording)
-		const invitationId = `invitation-${randomId()}`
-		asked.push({ operation: 'assignMember', principalId: caller.id, scope: input.scope, role: input.role, member: { email }, invitationId })
-		return { ok: true, invited: { invitationId, role: input.role, expiresAt: now() + INVITATION_TTL_SECONDS } }
+		if (artifact.roles[input.role]?.external === true && organizationMailbox(email)) return { ok: false, reason: 'internal_mailbox' }
+		// As IAM: a repeat answers the open invitation and sends nothing; a resend gives it a new link and 7 days.
+		const open = openInvitation(input.scope, input.role, email)
+		const invitation = open === undefined
+			? openNew(input.scope, input.role, email)
+			: input.invitation?.resend === true
+			? { ...open, expiresAt: now() + INVITATION_TTL_SECONDS }
+			: open
+		invitations.set(invitation.id, invitation)
+		asked.push({
+			operation: 'assignMember',
+			principalId: caller.id,
+			scope: input.scope,
+			role: input.role,
+			member: { email },
+			invitationId: invitation.id,
+		})
+		return { ok: true, invited: { invitationId: invitation.id, role: invitation.role, expiresAt: invitation.expiresAt } }
 	}
 
-	/** An invitation this stand-in opened: IAM knows no other, so any other id is `not_found`. */
-	const invitationOf = (id: string, scope: Scope) =>
-		asked.find((write) =>
-			write.operation === 'assignMember' && write.invitationId === id && write.scope.type === scope.type && write.scope.value === scope.value
-		)
+	/** An invitation this stand-in opened in `scope`, cancelled ones included: IAM knows no other, so any other id is `not_found`. */
+	const invitationOf = (id: string, scope: Scope): KitInvitation | undefined => {
+		const invitation = invitations.get(id)
+		return invitation !== undefined && sameScope(invitation.scope, scope) ? invitation : undefined
+	}
 
 	const revokeMember = (input: RevokeMemberInput): RevokeMemberResult => {
 		const caller = memberCaller(callers, input, true)
@@ -419,24 +493,25 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (scopeProblem !== null) return invalid(scopeProblem)
 		const manage = manageProblem(caller, input.scope)
 		if (manage !== null) return manage
-		let roles: string[]
 		if ('invitationId' in input.member) {
 			const invitation = invitationOf(input.member.invitationId, input.scope)
-			if (invitation?.operation !== 'assignMember') return NOT_FOUND
-			roles = [invitation.role]
-		} else {
-			const only = input.member.role ?? null
-			if (only !== null && artifact.roles[only]?.member?.scope !== input.scope.type) {
-				return invalid(`role '${only}' is not a membership role of scope '${input.scope.type}'`)
-			}
-			roles = changes.rolesOf(input.member.principalId, input.scope).filter((role) => only === null || role === only)
+			if (invitation === undefined) return NOT_FOUND
+			const problem = roleProblem(caller, input.scope, invitation.role)
+			if (problem !== null) return problem
+			asked.push({ operation: 'revokeMember', principalId: caller.id, scope: input.scope, member: input.member })
+			invitations.set(invitation.id, { ...invitation, cancelled: true })
+			return { ok: true }
 		}
+		const only = input.member.role ?? null
+		if (only !== null && artifact.roles[only]?.member?.scope !== input.scope.type) {
+			return invalid(`role '${only}' is not a membership role of scope '${input.scope.type}'`)
+		}
+		const roles = changes.rolesOf(input.member.principalId, input.scope).filter((role) => only === null || role === only)
 		for (const role of roles) {
 			const problem = roleProblem(caller, input.scope, role)
 			if (problem !== null) return problem
 		}
 		asked.push({ operation: 'revokeMember', principalId: caller.id, scope: input.scope, member: input.member })
-		if ('invitationId' in input.member) return { ok: true }
 		// As IAM: every other role goes, and the creator role only while another principal still holds it there.
 		const target = input.member.principalId
 		const creator = dimensionOf(artifact, input.scope.type)?.creator ?? null
@@ -474,6 +549,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const heldOnChain = (action: string): boolean => input.chain.some((scope) => permits([...caller.perms], action, scope))
 		if (!heldOnChain(mount.issuedBy) || !mount.grants.every(heldOnChain)) return NOT_ALLOWED
 		const id = `link-${randomId()}`
+		links.set(id, { id, issuer: caller.id, mount: input.mount, chain: input.chain })
 		asked.push({ operation: 'issueLink', principalId: caller.id, id, mount: input.mount, chain: input.chain })
 		return { ok: true, key: `${API_KEY_PREFIX}link_${randomId()}`, id, expiresAt: now() + input.days * DAY_SECONDS }
 	}
@@ -482,13 +558,13 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const revokeLink = (input: RevokeLinkInput): RevokeLinkResult => {
 		const caller = memberCaller(callers, input, false)
 		if (isFailure(caller)) return caller
-		const link = asked.find((write) => write.operation === 'issueLink' && write.id === input.id)
-		if (link?.operation !== 'issueLink') return NOT_FOUND
+		const link = links.get(input.id)
+		if (link === undefined) return NOT_FOUND
 		const manager = link.chain.some((scope) => {
 			const members = dimensionOf(artifact, scope.type)?.members
 			return members !== null && members !== undefined && permits([...caller.perms], members.manage, scope)
 		})
-		if (link.principalId !== caller.id && !manager) return NOT_ALLOWED
+		if (link.issuer !== caller.id && !manager) return NOT_ALLOWED
 		asked.push({ operation: 'revokeLink', principalId: caller.id, id: input.id })
 		return { ok: true }
 	}
@@ -503,5 +579,15 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		issueLink: (input) => Promise.resolve(issueLink(input)),
 		revokeLink: (input) => Promise.resolve(revokeLink(input)),
 	}
-	return Object.freeze({ rpc, asked })
+	const seedInvitation = (scope: Scope, role: string, email: string): string => {
+		const address = invitedAddress(email)
+		if (address === null) throw new Error(`a seeded invitation goes to an address, not '${email}'`)
+		return (openInvitation(scope, role, address) ?? openNew(scope, role, address)).id
+	}
+	const seedLink = (issuer: string, mount: string, chain: readonly Scope[]): string => {
+		const id = `link-${randomId()}`
+		links.set(id, { id, issuer, mount, chain })
+		return id
+	}
+	return Object.freeze({ rpc, asked, seedInvitation, seedLink })
 }
