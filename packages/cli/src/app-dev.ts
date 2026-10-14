@@ -226,7 +226,10 @@ const printHandlerError = (where: string, error: unknown): void => {
 	console.error(`fabrika app dev: ${where} threw\n${Bun.inspect(error)}`)
 }
 
-/** The server over the kit of `app`, on `postgres` when it has a data layer; its `stop` also drops the schema. */
+/**
+ * The server over the kit of `app`, on `postgres` when it has a data layer; its `stop` also drops the schema. The dev
+ * outbox captures the process's `fetch` from before the seed runs until `stop`, or until a failed start.
+ */
 async function serveThroughKit(
 	app: ContractImplementation<AnyContract>,
 	options: AppDevOptions,
