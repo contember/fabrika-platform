@@ -408,6 +408,11 @@ describe("the kit's own IAM: an invitation accepted, a member removed, each live
 				output: z.strictObject({ invitationId: z.string() }),
 				access: { action: 'members.manage', in: 'workspace', from: 'workspaceId' },
 			}),
+			inviteOwner: c.mutation({
+				input: z.strictObject({ workspaceId: z.string(), email: z.email() }),
+				output: z.strictObject({ invitationId: z.string() }),
+				access: { action: 'members.manage', in: 'workspace', from: 'workspaceId' },
+			}),
 			remove: c.mutation({
 				input: z.strictObject({ workspaceId: z.string(), principalId: z.string() }),
 				output: z.strictObject({ ok: z.boolean() }),
@@ -428,6 +433,10 @@ describe("the kit's own IAM: an invitation accepted, a member removed, each live
 				start: ({ ctx }) => ({ workspace: ctx.created.value }),
 				invite: async ({ input, ctx }) => {
 					const result = await ctx.members.assign(ctx.target, { email: input.email }, 'guest')
+					return { invitationId: 'invited' in result ? result.invited.invitationId : result.assigned.principalId }
+				},
+				inviteOwner: async ({ input, ctx }) => {
+					const result = await ctx.members.assign(ctx.target, { email: input.email }, 'owner')
 					return { invitationId: 'invited' in result ? result.invited.invitationId : result.assigned.principalId }
 				},
 				remove: async ({ input, ctx }) => {
@@ -476,6 +485,30 @@ describe("the kit's own IAM: an invitation accepted, a member removed, each live
 		expect((await apiOf(bob).members({ workspaceId: 'w1' })).items.map((item) => item.principalId)).toContain(bob.id)
 		expect(await statusOf(apiOf(bob).invite({ workspaceId: 'w1', email: 'eve@example.test' }))).toBe(403)
 		expect(() => kit.acceptInvitation('invitation-unknown')).toThrow('no open invitation invitation-unknown')
+	})
+
+	test('an external person accepts no internal-only role; the invitation stays open for the addressee', async () => {
+		const kitOf = testKit(app)
+		const owner = kitOf.testCaller([{ role: 'owner', scope: w1 }])
+		const partner = kitOf.testCaller([{ role: 'guest', scope: kitOf.scope('workspace', 'w2') }], { affiliation: 'external' })
+		const { invitationId } = await createClient(people, 'api', { fetch: kitOf.browser(owner) }).invite({ workspaceId: 'w1', email: 'p@example.test' })
+		const internal = kitOf.testCaller([{ role: 'owner', scope: w1 }])
+		const invited = await createClient(people, 'api', { fetch: kitOf.browser(internal) }).inviteOwner({ workspaceId: 'w1', email: 'o@example.test' })
+		expect(() => kitOf.acceptInvitation(invited.invitationId, partner)).toThrow('not_eligible')
+		expect(await statusOf(createClient(people, 'api', { fetch: kitOf.browser(partner) }).members({ workspaceId: 'w1' }))).toBe(403)
+		expect(kitOf.acceptInvitation(invitationId, partner)).toBe(partner)
+		expect(kitOf.acceptInvitation(invited.invitationId)).toMatchObject({ affiliation: 'internal', label: 'o@example.test' })
+	})
+
+	test('an invitation whose inviter lost its owner role is not accepted, as IAM checks the inviter again', async () => {
+		const kitOf = testKit(app)
+		const first = kitOf.testCaller([{ role: 'owner', scope: w1 }])
+		const second = kitOf.testCaller([{ role: 'owner', scope: w1 }])
+		const { invitationId } = await createClient(people, 'api', { fetch: kitOf.browser(first) }).invite({ workspaceId: 'w1', email: 'ann@example.test' })
+		expect(await createClient(people, 'api', { fetch: kitOf.browser(second) }).remove({ workspaceId: 'w1', principalId: first.id })).toEqual({
+			ok: true,
+		})
+		expect(() => kitOf.acceptInvitation(invitationId)).toThrow("not_allowed: the inviter can no longer give 'guest' in that workspace")
 	})
 
 	test('a kit given its own membership transport holds no invitation to accept', () => {

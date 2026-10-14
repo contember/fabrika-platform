@@ -127,7 +127,9 @@ export interface TestKit<C extends AnyContract> {
 	/**
 	 * The addressee of an invitation the kit's IAM holds open accepts it, as IAM's onboarding does: `person` holds the
 	 * invited role in its scope from now on, or, without one, a new person labelled by the invited address does. Answers
-	 * that person. Throws for an invitation that is not open, and in a kit given its own `membership`.
+	 * that person. Throws, leaving the invitation open, as IAM refuses: an external `person` and a role not declared
+	 * external (`not_eligible`), an inviter that can no longer give the role (`not_allowed`). Throws for an invitation
+	 * that is not open, and in a kit given its own `membership`.
 	 */
 	acceptInvitation(invitationId: string, person?: LabelledTestCaller): LabelledTestCaller
 	/**
@@ -490,7 +492,7 @@ function bootTestKit<C extends AnyContract>(
 		if (person !== undefined && (person.kind !== 'human' || !memberships.has(person))) {
 			throw new Error('an invitation is accepted by a person of this kit: kit.testCaller(grants)')
 		}
-		const accepted = standIn.accept(invitationId, person?.id)
+		const accepted = standIn.accept(invitationId, person)
 		if (person !== undefined) return person
 		const external = app.contract.vocabulary.roles[accepted.role]?.external === true
 		const invitee = issue([{ role: accepted.role, scope: accepted.scope }], {

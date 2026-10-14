@@ -94,9 +94,11 @@ export interface KitMembership {
 	permsOf(caller: TestCaller): readonly PermissionEntry[]
 	/**
 	 * Closes the open invitation `invitationId` as accepted, as IAM's onboarding does, and answers what it gives. With
-	 * `principalId`, that principal holds the role from now on; without one the kit makes the new person who holds it.
+	 * `recipient`, that person holds the role from now on; without one the kit makes the new person who holds it. As IAM,
+	 * it refuses an external recipient of a role not declared external (`not_eligible`) and an invitation whose inviter
+	 * could no longer give the role (`not_allowed`), and then leaves the invitation open.
 	 */
-	accept(invitationId: string, principalId?: string): AcceptedInvitation
+	accept(invitationId: string, recipient?: TestCaller): AcceptedInvitation
 	/** An open invitation of `role` in `scope` to `email`, as an earlier request opened it; answers its id. */
 	seedInvitation(scope: Scope, role: string, email: string): string
 	/** A share link of `mount` bound to `chain`, as `issuer` issued it in an earlier request; answers its id. */
@@ -122,6 +124,8 @@ interface KitInvitation {
 	readonly email: string
 	readonly expiresAt: number
 	readonly closed: 'cancelled' | 'accepted' | null
+	/** The principal that opened it, whose authority IAM checks again at acceptance; `null` for a seeded one. */
+	readonly inviter: string | null
 }
 
 /** A share link the stand-in issued; a revoked one is still found, so a repeated revoke answers the same. */
@@ -378,8 +382,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			&& invitation.email === email
 		)
 
-	const openNew = (scope: Scope, role: string, email: string): KitInvitation => {
-		const invitation = { id: `invitation-${randomId()}`, scope, role, email, expiresAt: now() + INVITATION_TTL_SECONDS, closed: null }
+	const openNew = (scope: Scope, role: string, email: string, inviter: string | null): KitInvitation => {
+		const invitation = { id: `invitation-${randomId()}`, scope, role, email, expiresAt: now() + INVITATION_TTL_SECONDS, closed: null, inviter }
 		invitations.set(invitation.id, invitation)
 		return invitation
 	}
@@ -493,7 +497,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		// As IAM: a repeat answers the open invitation and sends nothing; a resend gives it a new link and 7 days.
 		const open = openInvitation(input.scope, input.role, email)
 		const invitation = open === undefined
-			? openNew(input.scope, input.role, email)
+			? openNew(input.scope, input.role, email, caller.id)
 			: input.invitation?.resend === true
 			? { ...open, expiresAt: now() + INVITATION_TTL_SECONDS }
 			: open
@@ -614,20 +618,35 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const seedInvitation = (scope: Scope, role: string, email: string): string => {
 		const address = invitedAddress(email)
 		if (address === null) throw new Error(`a seeded invitation goes to an address, not '${email}'`)
-		return (openInvitation(scope, role, address) ?? openNew(scope, role, address)).id
+		return (openInvitation(scope, role, address) ?? openNew(scope, role, address, null)).id
 	}
 	const seedLink = (issuer: string, mount: string, chain: readonly Scope[]): string => {
 		const id = `link-${randomId()}`
 		links.set(id, { id, issuer, mount, chain })
 		return id
 	}
-	const accept = (invitationId: string, principalId?: string): AcceptedInvitation => {
+	const accept = (invitationId: string, recipient?: TestCaller): AcceptedInvitation => {
 		const invitation = invitations.get(invitationId)
 		if (invitation === undefined || invitation.closed !== null || invitation.expiresAt <= now()) {
 			throw new Error(`no open invitation ${invitationId}: the kit's IAM opened none by that id, or it was cancelled, accepted or expired`)
 		}
+		if (recipient !== undefined && externalProblem(recipient, invitation.role) !== null) {
+			throw new Error(`not_eligible: an external person accepts only a role the contract declares external, and '${invitation.role}' is not one`)
+		}
+		// As IAM: the inviter's authority now, its live roles and permissions, not what it held when it invited.
+		const inviter = invitation.inviter === null ? undefined : callers.all().find(({ caller }) => caller.id === invitation.inviter)?.caller
+		const authority = inviter === undefined || inviter.disabled
+			? NOT_ALLOWED
+			: (manageProblem(inviter, invitation.scope) ?? roleProblem(inviter, invitation.scope, invitation.role))
+		if (authority !== null) {
+			throw new Error(
+				invitation.inviter === null
+					? `not_allowed: ${invitationId} is a seeded invitation, which has no inviter to accept it under`
+					: `not_allowed: the inviter can no longer give '${invitation.role}' in that ${invitation.scope.type}`,
+			)
+		}
 		invitations.set(invitation.id, { ...invitation, closed: 'accepted' })
-		if (principalId !== undefined) changes.assign(principalId, invitation.role, invitation.scope)
+		if (recipient !== undefined) changes.assign(recipient.id, invitation.role, invitation.scope)
 		return { scope: invitation.scope, role: invitation.role, email: invitation.email }
 	}
 	return Object.freeze({ rpc, asked, permsOf, accept, seedInvitation, seedLink })
