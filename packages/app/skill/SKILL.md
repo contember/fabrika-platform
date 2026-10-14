@@ -29,7 +29,7 @@ below. When it does not reach far enough, declare the step off it. A declared st
 | `src/<slice>/queries.ts`   | data access that the slice's handlers share, over a handle they pass in                  |
 | `fabrika.contract.ts`      | `app.contract((c) => ({ api: c.rpc('/api', { … }), … }))`: mounts the groups             |
 | `src/app.ts`               | `export default serve(contract, { database: scoped(tables) })` and nothing else          |
-| `web/`                     | the SPA: `createClient(contract, 'api')` of `@fabrika/app/client`, never a server module |
+| `web/`                     | the SPA: React over `@fabrika/app/react` and `@fabrika/ui`, never a server module        |
 
 ## The paved road
 
@@ -209,6 +209,15 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   form; `ctx.principal.id` is the caller, and `ctx.principal.email` its address. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
   anyone outside the org, and its label comes from that answer, never from the input.
 
+## The SPA
+
+The SPA is React: `FabrikaProvider` over `createClient(contract, 'api')`, `useQuery`, `useInfiniteQuery` and
+`useMutation` of `@fabrika/app/react` for every call (typed by the contract, one `FabrikaError` union for every
+refusal), and the screens built from `@fabrika/ui` (`AppShell`, `PageHeader`, `DataTable`, `Form` and `Field`,
+`Dialog`, …) with its router and theme. Never write DOM helpers, a router, a cache or a component kit of your own.
+`useCaller()` and `<Can>` show or hide a control by what the token grants; they are information for the page, never
+the access check. `references/spa.md` shows the stack.
+
 ## Off the road: declare it
 
 | What the handler needs         | Declare on the endpoint         | It gets                                            |
@@ -292,7 +301,8 @@ sent. Write the seed and use it as `references/dev.md` says; it never replaces a
 ## References
 
 Read the one you need before you write that part. Together they are one application to copy from: `app-setup.md`
-(`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA), `table-and-migration.md`, `endpoint.md`
+(`package.json`, `tsconfig.json`, the contract, `fabrika.config.ts`, the SPA's build), `spa.md` (the hooks, forms and
+their errors, the caller, the components, routing, theming, screen tests), `table-and-migration.md`, `endpoint.md`
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC

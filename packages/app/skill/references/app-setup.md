@@ -23,15 +23,21 @@ the SPA is added with it.
 		"@fabrika/db": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",
 		"@fabrika/proxy-core": "^0.0.4",
+		"@fabrika/ui": "^0.0.4",
 		"@sentry/browser": "10.69.0",
 		"kysely": "0.29.6",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@fabrika/check": "^0.0.4",
 		"@fabrika/cli": "^0.0.4",
 		"@fabrika/platform": "^0.0.4",
+		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "latest",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
 		"typescript": "^5.9.3"
 	}
 }
@@ -47,6 +53,8 @@ the SPA is added with it.
   `public: { <VARIABLE>: <value> }`: each form challenge's `siteKey`, and the variables the SPA mount lists in
   `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
+  `react`, `react-dom` and `@fabrika/ui` (with `@types/react`, `@types/react-dom` and `@happy-dom/global-registrator`
+  for the screen tests) are the SPA's: add them with it.
 - After you create a new workspace in a monorepo, run `bun install` at the repository root. Until then every
   `@fabrika/*` import fails and tsc reports a cascade of implicit `any`s that are not your bugs.
 - To try unreleased packages outside the fabrika-platform repository, run `bun scripts/release.ts pack --local
@@ -63,6 +71,7 @@ the SPA is added with it.
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"jsx": "react-jsx",
 		"strict": true,
 		"noUncheckedIndexedAccess": true,
 		"noImplicitOverride": true,
@@ -213,47 +222,104 @@ application is not ready until every generated test passes. It writes every `FAB
 
 ## The SPA (added when the application has one)
 
-```ts web/main.ts
-import { createClient, RpcError } from '@fabrika/app/client'
-import { contract } from '../fabrika.contract'
-
-const api = createClient(contract, 'api')
-
-export const showMine = async (list: HTMLElement): Promise<void> => {
-	try {
-		const page = await api.tasks.mine({})
-		list.replaceChildren(
-			...page.items.map((task) =>
-				Object.assign(document.createElement('li'), { textContent: task.title })
-			),
-		)
-	} catch (error) {
-		list.textContent = error instanceof RpcError
-			? `Failed: ${error.type}`
-			: 'Failed'
-	}
-}
-```
+The SPA is React, built from the screens and hooks of the framework: `@fabrika/app/react` runs the typed client's
+calls, and `@fabrika/ui` holds the components. Build a screen from the kit; never write a DOM helper, a router or a
+component set of your own. `references/spa.md` shows every component, the forms, the routes and the tests.
 
 ```html web/index.html
 <!doctype html>
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
 		<title>Tasks</title>
-		<script type="module" src="./start.ts"></script>
+		<script type="module" src="./start.tsx"></script>
 	</head>
 	<body>
-		<ul id="mine"></ul>
+		<div id="root"></div>
 	</body>
 </html>
 ```
 
-```ts web/start.ts
-import { showMine } from './main'
+```ts web/api.ts
+import { createClient } from '@fabrika/app/client'
+import { contract } from '../fabrika.contract'
 
-const list = document.getElementById('mine')
-if (list !== null) void showMine(list)
+export const api = createClient(contract, 'api', { bounceOnAuth: true })
+```
+
+```tsx web/mine.tsx
+import { useInfiniteQuery } from '@fabrika/app/react'
+import { type Column, DataTable, PageHeader, StatusPill } from '@fabrika/ui'
+import { api } from './api'
+
+type Task = {
+	readonly id: string
+	readonly title: string
+	readonly status: string
+}
+
+const columns: readonly Column<Task>[] = [
+	{ key: 'title', header: 'Task', grow: true, cell: (task) => task.title },
+	{
+		key: 'status',
+		header: 'Status',
+		cell: (task) => <StatusPill>{task.status}</StatusPill>,
+	},
+]
+
+export function MyTasks() {
+	const mine = useInfiniteQuery(api.tasks.mine, {})
+	return (
+		<>
+			<PageHeader title="My tasks" lead="Open tasks assigned to you." />
+			<DataTable
+				caption="My tasks"
+				columns={columns}
+				rows={mine.items}
+				rowKey={(task) => task.id}
+				status={mine.status === 'error'
+					? 'error'
+					: mine.status === 'success'
+					? 'ready'
+					: 'loading'}
+				error={mine.error?.message}
+				onRetry={() => void mine.refetch()}
+				loadMore={{
+					hasMore: mine.hasMore,
+					loading: mine.loadingMore,
+					onLoadMore: () => void mine.loadMore(),
+				}}
+			/>
+		</>
+	)
+}
+```
+
+```tsx web/start.tsx
+import '@fabrika/ui/styles.css'
+import { FabrikaProvider } from '@fabrika/app/react'
+import { AppShell } from '@fabrika/ui'
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import { api } from './api'
+import { MyTasks } from './mine'
+
+const root = document.getElementById('root')
+if (root !== null) {
+	createRoot(root).render(
+		<StrictMode>
+			<FabrikaProvider clients={[api]}>
+				<AppShell
+					brand="Tasks"
+					nav={[{ label: 'My tasks', href: '/', active: true }]}
+				>
+					<MyTasks />
+				</AppShell>
+			</FabrikaProvider>
+		</StrictMode>,
+	)
+}
 ```
 
 ```ts build-web.ts
@@ -264,6 +330,8 @@ const built = await Bun.build({
 	entrypoints: [join(import.meta.dir, 'web', 'index.html')],
 	outdir: join(import.meta.dir, 'dist', 'web'),
 	target: 'browser',
+	publicPath: '/',
+	define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 	plugins: [shellSlicePlugin({ root: import.meta.dir })],
 })
 if (!built.success) {
@@ -272,27 +340,20 @@ if (!built.success) {
 }
 ```
 
-- The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts`, `src/shared/` and its own modules;
-  never a slice, `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
-- Set text with `textContent`, never `innerHTML`. Same-origin calls carry the session cookie.
+- The SPA imports `@fabrika/app/client`, `@fabrika/app/react`, `@fabrika/ui`, React, `fabrika.contract.ts`,
+  `src/schemas.ts`, `src/shared/` and its own modules; never a slice, `src/db/` or a Bun or Node module. The plugin loads the
+  contract without its handlers. A row type the screen declares (`Task` above) is checked against the answer where
+  the rows are passed in.
+- `publicPath: '/'` is the SPA's prefix: the mount answers `index.html` for every path under it, so the page loads its
+  assets from there and a deep link renders. Keep `outdir` inside the application: Bun resolves nothing for such a
+  build outside it. `define` gives React's production build.
+- Set text through JSX, never `dangerouslySetInnerHTML` or `innerHTML`. Same-origin calls carry the session cookie.
 - **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
-  `{ label, email, actions: { app, scopes } }`, read by `parsePageCaller` (`@fabrika/app/client`). `app` lists the
-  actions held as a global grant, `scopes` each value with its own (`{ type, value, actions }`); a pattern grant is
-  listed as the contract's actions it covers. It comes from the token and asks IAM nothing. Use it to greet the person
-  and to show or hide a control, never as the check: every endpoint decides again, so a hidden button is no
-  protection. A public SPA answers it 401, because its pages arrive without a token, signed in or not.
-
-```ts web/caller.ts
-import { parsePageCaller } from '@fabrika/app/client'
-
-/** Who the page's person is, and whether they hold `action` app-wide. */
-export const signedIn = async (action: string) => {
-	const response = await fetch('/__fabrika-me.json')
-	if (!response.ok) return null
-	const caller = parsePageCaller(await response.json())
-	return { email: caller.email, holds: caller.actions.app.includes(action) }
-}
-```
+  `{ label, email, actions: { app, scopes } }`. `useCaller()` (`@fabrika/app/react`) answers `{ label, email,
+  can(action, scope?) }` from it, and `<Can action="tasks.write">` shows its children only when the token grants the
+  action. It comes from the token and asks IAM nothing. Use it to greet the person and to show or hide a control,
+  never as the check: every endpoint decides again, so a hidden button is no protection. A public SPA answers it 401,
+  because its pages arrive without a token, signed in or not.
 
 ## Ignored files
 

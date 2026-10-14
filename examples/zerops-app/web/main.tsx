@@ -1,25 +1,46 @@
-// The SPA: the notes the signed-in person may read, through the typed client of the `/api` mount, with its errors
-// reported to Operations. It imports the contract and the shared schemas only; the SPA build loads the contract
-// without its handlers.
+// The SPA: the notes the signed-in person may read, through the typed client of the `/api` mount and its React hooks,
+// with its errors reported to Operations. It imports the contract and the shared schemas only; the SPA build loads the
+// contract without its handlers.
 
+import '@fabrika/ui/styles.css'
 import { createClient } from '@fabrika/app/client'
+import { FabrikaProvider, useQuery } from '@fabrika/app/react'
+import { ErrorState, LoadingState, PageHeader } from '@fabrika/ui'
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
 import { contract } from '../fabrika.contract'
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_NOTE } from '../src/schemas'
 import { startErrorReporting } from './operations'
 
 const api = createClient(contract, 'api', { bounceOnAuth: true })
 
-const show = async (): Promise<void> => {
-	const list = document.getElementById('notes')
-	const limits = document.getElementById('limits')
-	if (list === null || limits === null) return
-	for (const note of (await api.notes.list()).items) {
-		const item = document.createElement('li')
-		item.textContent = note.trashed ? `${note.title} (in the trash)` : note.title
-		list.append(item)
-	}
-	limits.textContent = `Up to ${MAX_ATTACHMENTS_PER_NOTE} attachments of at most ${MAX_ATTACHMENT_BYTES / 1048576} MiB per note.`
+function Notes() {
+	const notes = useQuery(api.notes.list)
+	return (
+		<main className="fui-app notes">
+			<PageHeader title="Notes" />
+			{notes.status === 'error'
+				? <ErrorState text={notes.error.message} onRetry={() => void notes.refetch()} />
+				: notes.status === 'success'
+				? (
+					<ul id="notes">
+						{notes.data.items.map((note) => <li key={note.id}>{note.trashed ? `${note.title} (in the trash)` : note.title}</li>)}
+					</ul>
+				)
+				: <LoadingState />}
+			<p id="limits">Up to {MAX_ATTACHMENTS_PER_NOTE} attachments of at most {MAX_ATTACHMENT_BYTES / 1048576} MiB per note.</p>
+		</main>
+	)
 }
 
 await startErrorReporting()
-await show()
+const root = document.getElementById('root')
+if (root !== null) {
+	createRoot(root).render(
+		<StrictMode>
+			<FabrikaProvider clients={[api]}>
+				<Notes />
+			</FabrikaProvider>
+		</StrictMode>,
+	)
+}

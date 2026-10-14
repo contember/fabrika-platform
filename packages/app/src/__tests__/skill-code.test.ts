@@ -1,5 +1,5 @@
-// Every code block of the agent skill is code an agent copies, so each one must work as written. A `ts`, `sql` or `json`
-// block names its file after the language (```ts src/tasks/endpoints.ts). The blocks of the base files are one
+// Every code block of the agent skill is code an agent copies, so each one must work as written. A `ts`, `tsx`, `sql` or
+// `json` block names its file after the language (```ts src/tasks/endpoints.ts). The blocks of the base files are one
 // application, compiled with the skill's own tsconfig against the workspace's packages; each other reference file is
 // compiled over it, its blocks replacing the base's file of the same path, except a standalone one, which is an
 // application of its own over the base's shared files. Each application's migrations are classified as the runner
@@ -51,7 +51,8 @@ function blocksOf(file: string, text: string): Block[] {
 const skill = readAppAgentSkill()
 const sources = [{ path: 'SKILL.md', text: skill.text }, ...skill.references]
 const blocks = sources.flatMap((source) => blocksOf(source.path, source.text))
-const checked = blocks.filter((block) => block.language === 'ts' || block.language === 'sql' || block.language === 'json')
+const CHECKED_LANGUAGES: readonly string[] = ['ts', 'tsx', 'sql', 'json']
+const checked = blocks.filter((block) => CHECKED_LANGUAGES.includes(block.language))
 
 /** What `introspectCatalog` answers, as `catalog.json` holds it. */
 const Catalog = z.strictObject({
@@ -159,7 +160,7 @@ function compile(app: SkillApp, files: ReadonlyMap<string, string>): string[] {
 		const code = virtual.get(path)
 		return code === undefined ? getSourceFile(path, language, onError, create) : ts.createSourceFile(path, code, language)
 	}
-	const roots = [...virtual.keys()].filter((path) => path.endsWith('.ts'))
+	const roots = [...virtual.keys()].filter((path) => path.endsWith('.ts') || path.endsWith('.tsx'))
 	const program = ts.createProgram(roots, { ...options, noEmit: true }, host)
 	return ts.getPreEmitDiagnostics(program).flatMap((diagnostic) => {
 		const file = diagnostic.file?.fileName ?? ''
@@ -172,7 +173,7 @@ function compile(app: SkillApp, files: ReadonlyMap<string, string>): string[] {
 }
 
 describe('the code blocks of the agent skill', () => {
-	test('every ts, sql and json block names the file it is', () => {
+	test('every ts, tsx, sql and json block names the file it is', () => {
 		expect(checked.filter((block) => block.path === null).map((block) => `${block.file}: ${block.code.split('\n')[0]}`)).toEqual([])
 	})
 

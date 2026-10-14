@@ -9,6 +9,10 @@ export const buildWeb = (outdir: string, options: { readonly metafile?: boolean;
 		entrypoints: [join(import.meta.dir, 'web', 'index.html')],
 		outdir,
 		target: 'browser',
+		// The mount answers `index.html` for every path under `/`, so the page loads its assets from the root.
+		publicPath: '/',
+		// React's production build: without it the bundle carries React's development checks.
+		define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 		minify: options.minify ?? true,
 		metafile: options.metafile ?? false,
 		plugins: [shellSlicePlugin({ root: import.meta.dir })],
