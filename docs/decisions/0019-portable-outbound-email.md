@@ -25,6 +25,14 @@ Email availability is an explicit optional service capability. A missing sender 
 
 **Invariant:** Provider credentials, provider response bodies, and email bodies never appear in delivery errors or logs.
 
+An application may word IAM's e-mails (`mail` in its contract): a subject, a plain text and optionally an HTML body per
+message and language, with placeholders from a closed set. The HTML body is a closed subset that `mailHtmlTokens`
+(`@fabrika/auth-core`) admits: text structure only, no attribute but a link's `href`, and a link only to
+`{{actionUrl}}`, `{{appUrl}}` or a `mailto:` address. The build, the checker and IAM's reconcile refuse anything else,
+and IAM renders the body from its tokens, never from its source, with every value escaped. `{{appUrl}}` is the
+application's first registered return origin, built when IAM sends the message; a template that names it while no
+origin is registered is sent in IAM's own wording.
+
 ## Consequences
 
 - IAM, Operations, and future services can share one provider adapter without sharing domain templates or lifecycle state.
@@ -39,6 +47,17 @@ Email availability is an explicit optional service capability. A missing sender 
 ### Put `EmailSender` in `@fabrika/platform`
 
 Rejected because a working sender performs external I/O, while the platform package's established boundary forbids I/O of its own. A type-only port there would split one small capability across packages without removing the provider integration.
+
+### Check an application's links against its registered origins at the reconcile
+
+Rejected because a deploy reconciles the schema before it registers the return origins, so the check would refuse the
+first deploy of every application whose e-mail links to itself. `{{appUrl}}`, filled at send time from the registered
+origin, links to the application without the application naming an origin at all.
+
+### Check an application's links at send time
+
+Rejected because a message that fails the check could then only be dropped or sent in other words, at the moment a
+person waits for it, while the reconcile can refuse every other problem before the deploy completes.
 
 ### Keep separate IAM and Operations senders
 

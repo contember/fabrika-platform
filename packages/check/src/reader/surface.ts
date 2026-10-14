@@ -64,7 +64,8 @@ class Refused {
 	}
 }
 
-const MAIL_ALLOWED = "a one-line subject and a text with {{actionUrl}}, naming only the message's placeholders"
+const MAIL_ALLOWED =
+	"a one-line subject, a text with {{actionUrl}} and an optional HTML body of the e-mail subset, naming only the message's placeholders"
 
 const MOUNT_BUILDERS = ['rpc', 'link', 'spa', 'health', 'form', 'webhook'] as const
 const MOUNT_ALLOWED = `one of c.${MOUNT_BUILDERS.join(', c.')}(…)`
@@ -228,10 +229,15 @@ class SurfaceReader {
 			const declared: { [L in Locale]?: MailTemplate } = {}
 			for (const [locale, entry] of strictFields(byLocale, `mail.${kind}`, [], LOCALES)) {
 				if (!isLocale(locale)) continue
-				const fields = strictFields(entry, `mail.${kind}.${locale}`, ['subject', 'text'], [])
-				const template = { subject: text(fields.get('subject'), entry, 'subject'), text: text(fields.get('text'), entry, 'text') }
+				const fields = strictFields(entry, `mail.${kind}.${locale}`, ['subject', 'text'], ['html'])
+				const html = fields.get('html')
+				const template = {
+					subject: text(fields.get('subject'), entry, 'subject'),
+					text: text(fields.get('text'), entry, 'text'),
+					...(html === undefined ? {} : { html: text(html, entry, 'html') }),
+				}
 				for (const problem of mailTemplateProblems(kind, template)) {
-					const at = problem.startsWith('the subject') ? fields.get('subject') : fields.get('text')
+					const at = problem.startsWith('the subject') ? fields.get('subject') : problem.startsWith('the HTML') ? html : fields.get('text')
 					this.#problems.add(at?.at ?? entry.at, `mail.${kind}.${locale}: ${problem}`, MAIL_ALLOWED)
 					this.#complete = false
 				}

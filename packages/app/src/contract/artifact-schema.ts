@@ -305,7 +305,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 })
 
 function mailLocales(kind: MessageKind) {
-	const template = z.strictObject({ subject: z.string(), text: z.string() }).superRefine((value, context) => {
+	const template = z.strictObject({ subject: z.string(), text: z.string(), html: z.string().optional() }).superRefine((value, context) => {
 		for (const message of mailTemplateProblems(kind, value)) context.addIssue({ code: 'custom', message })
 	})
 	return z.partialRecord(z.enum(LOCALES), template)

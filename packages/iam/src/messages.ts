@@ -1,6 +1,14 @@
-import { fillMailTemplate, type MailPlaceholder, type MailTemplate, mailTemplateProblems, type MessageKind } from '@fabrika/auth-core'
+import {
+	fillMailTemplate,
+	type MailHtmlToken,
+	mailHtmlTokens,
+	type MailPlaceholder,
+	type MailTemplate,
+	mailTemplateProblems,
+	type MessageKind,
+} from '@fabrika/auth-core'
 import { type EmailMessage, MAX_EMAIL_SUBJECT_LENGTH } from '@fabrika/email'
-import type { AppPresentation } from './app-presentation'
+import { type AppPresentation, landingUrl } from './app-presentation'
 import { catalogFor, type MessageValues, type RenderedMessage } from './catalog'
 import { escapeHtml } from './html'
 import type { Services } from './services'
@@ -9,7 +17,7 @@ type Placeholders<K extends MessageKind> = { readonly [P in MailPlaceholder<K>]:
 
 /** The values an application's template of each message names, beside those every message names. */
 const PLACEHOLDER_VALUES: {
-	readonly [K in MessageKind]: (values: MessageValues[K]) => Omit<Placeholders<K>, 'displayName' | 'expiry'>
+	readonly [K in MessageKind]: (values: MessageValues[K]) => Omit<Placeholders<K>, 'displayName' | 'expiry' | 'appUrl'>
 } = {
 	invitation: ({ recipient, inviterLabel, companyLabel, message, actionUrl }) => ({ recipient, inviterLabel, companyLabel, message, actionUrl }),
 	enrollment: ({ recipient, actionUrl }) => ({ recipient, actionUrl }),
@@ -18,7 +26,8 @@ const PLACEHOLDER_VALUES: {
 
 /**
  * The template IAM renders a presentation's `kind` e-mail with: the application's own wording in the presentation's
- * language when it declares one, else the catalog's. A stored template the rule no longer admits is the catalog's.
+ * language when it declares one, else the catalog's. A stored template the rule no longer admits is the catalog's, and
+ * so is one that names `{{appUrl}}` while the application has no registered return origin to build it from.
  */
 export async function messageTemplateFor<K extends MessageKind>(
 	services: Services,
@@ -31,23 +40,44 @@ export async function messageTemplateFor<K extends MessageKind>(
 	if (app === null || row === null) {
 		return catalog.messages[kind]
 	}
-	const template: MailTemplate = { subject: row.subject, text: row.body }
-	if (mailTemplateProblems(kind, template).length > 0) {
+	const template: MailTemplate = { subject: row.subject, text: row.body, ...(row.html === null ? {} : { html: row.html }) }
+	const html = template.html === undefined ? null : mailHtmlTokens(template.html)
+	const appUrl = landingUrl(presentation)
+	const namesAppUrl = [template.subject, template.text, template.html ?? ''].some((part) => part.includes('{{appUrl}}'))
+	if (mailTemplateProblems(kind, template).length > 0 || (namesAppUrl && appUrl === null)) {
 		return catalog.messages[kind]
 	}
+	const tokens = html !== null && html.ok ? html.tokens : null
 	return (values) => {
 		const placeholders: Readonly<Record<string, string>> = {
 			...PLACEHOLDER_VALUES[kind](values),
 			displayName: presentation.displayName ?? app,
 			expiry: catalog.applicationMail.expiry(values.expiresAt),
+			appUrl: appUrl ?? '',
 		}
-		return applicationMessage(template, placeholders, values.actionUrl, catalog.applicationMail.button[kind])
+		const message = applicationMessage(template, placeholders, values.actionUrl, catalog.applicationMail.button[kind])
+		return tokens === null ? message : { ...message, html: renderHtml(tokens, placeholders) }
 	}
 }
 
 /**
+ * An application's HTML body, rendered from its tokens and never from its source: each element as the subset writes
+ * it, the literal text as the application wrote it (`mailHtmlTokens` admitted no `<` and no bare `&` in it), every value
+ * escaped, and each link's `href` the escaped URL it names.
+ */
+function renderHtml(tokens: readonly MailHtmlToken[], placeholders: Readonly<Record<string, string>>): string {
+	return tokens.map((token) => {
+		if (token.kind === 'close') return `</${token.name}>`
+		if (token.kind === 'open') {
+			return token.href === null ? `<${token.name}>` : `<${token.name} href="${escapeHtml(fillMailTemplate(token.href, placeholders))}">`
+		}
+		return token.text.replaceAll(/\{\{([^{}]*)\}\}/g, (_, name: string) => escapeHtml(placeholders[name] ?? ''))
+	}).join('')
+}
+
+/**
  * An application's wording filled in: the text as written, the subject on one line, and IAM's own HTML part — the
- * escaped text as paragraphs and IAM's button to the action URL. The application authors no HTML.
+ * escaped text as paragraphs and IAM's button to the action URL. An application's own HTML body replaces that part.
  */
 function applicationMessage(
 	template: MailTemplate,

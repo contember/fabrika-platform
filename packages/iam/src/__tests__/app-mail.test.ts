@@ -1,10 +1,12 @@
 // An application's wording of IAM's e-mails (`mail` in its contract): IAM fills the subject and the text, builds the HTML
-// part itself, and falls back to its catalog where the application declares nothing for the message's language.
+// part itself or renders the application's HTML body of the closed subset, and falls back to its catalog where the
+// application declares nothing for the message's language.
 
 import type { MailTemplates } from '@fabrika/auth-core'
 import { type EmailMessage, MAX_EMAIL_SUBJECT_LENGTH, validateEmailMessage } from '@fabrika/email'
 import { describe, expect, test } from 'bun:test'
 import { handleAuth } from '../auth/routes'
+import { catalogFor } from '../catalog'
 import { messageTemplateFor } from '../messages'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
 import { createHarness, seedUser } from './helpers/harness'
@@ -156,6 +158,70 @@ describe("an application's e-mail template", () => {
 		expect(linked.status).toBe(400)
 		expect(await linked.text()).toContain('mail.reset.cs: the subject names {{actionUrl}}: the one-time link belongs in the text, never in a header')
 		expect((await f.putSchema({ ...NOTES_SCHEMA, mail: CS_RESET })).status).toBe(200)
+	})
+
+	test("an application's HTML invitation is rendered from its tokens, every value escaped and the links IAM's", async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, environment: 'stage', authentication: { oidc: false, password: true } })
+		await services.repositories.appSchema.reconcileAppSchema({
+			app: PORTAL,
+			scopes: [],
+			actions: [],
+			roles: [],
+			presentation: { locale: 'en', displayName: '<b>Q&A</b>' },
+			mail: [{
+				kind: 'invitation',
+				locale: 'en',
+				subject: 'Join {{displayName}}',
+				text: '{{actionUrl}}',
+				html: '<h1>{{displayName}}</h1><p><strong>{{inviterLabel}}</strong> &amp; {{companyLabel}}<br>{{message}}</p>'
+					+ '<p><a href="{{actionUrl}}">Accept</a> · <a href="{{appUrl}}">Portal</a> · <a href="mailto:help@portal.test">Help</a></p>',
+			}],
+		})
+		const render = await messageTemplateFor(
+			services,
+			{ app: PORTAL, locale: 'en', displayName: '<b>Q&A</b>', landing: 'https://portal.test' },
+			'invitation',
+		)
+		const rendered = render({
+			appName: '<b>Q&A</b>',
+			role: 'Partner',
+			scope: 'company',
+			recipient: 'partner@example.test',
+			inviterLabel: 'Eve<script>',
+			companyLabel: '<i>"ACME"</i>',
+			message: '"><img src=x onerror=alert(1)>',
+			actionUrl: 'https://iam.test/auth/invitations/accept?app=portal%40prod&x=1#token=t',
+			expiresAt: 0,
+		})
+		expect(rendered.text).toBe('https://iam.test/auth/invitations/accept?app=portal%40prod&x=1#token=t')
+		expect(rendered.html).toBe(
+			'<h1>&lt;b&gt;Q&amp;A&lt;/b&gt;</h1><p><strong>Eve&lt;script&gt;</strong> &amp; &lt;i&gt;&quot;ACME&quot;&lt;/i&gt;<br>'
+				+ '&quot;&gt;&lt;img src=x onerror=alert(1)&gt;</p>'
+				+ '<p><a href="https://iam.test/auth/invitations/accept?app=portal%40prod&amp;x=1#token=t">Accept</a> · '
+				+ '<a href="https://portal.test/">Portal</a> · <a href="mailto:help@portal.test">Help</a></p>',
+		)
+
+		// Without a registered return origin there is no {{appUrl}} to build: the mail is IAM's own wording.
+		const unlanded = await messageTemplateFor(services, { app: PORTAL, locale: 'en', displayName: null, landing: null }, 'invitation')
+		expect(unlanded).toBe(catalogFor('en').messages.invitation)
+	})
+
+	test('the reconcile refuses an HTML body outside the subset, naming the problem', async () => {
+		const f = await membershipFixture(createHarness().repositories)
+		const template = (html: string) => ({ ...NOTES_SCHEMA, mail: { reset: { en: { subject: 'Reset', text: '{{actionUrl}}', html } } } })
+		for (
+			const [html, problem] of [
+				['<a href="{{actionUrl}}">Reset</a><script>alert(1)</script>', 'the HTML has <script>, which an e-mail body may not use'],
+				['<a href="{{actionUrl}}" onclick="steal()">Reset</a>', 'the HTML gives <a> the attribute onclick'],
+				['<a href="javascript:alert(1)">Reset</a>', 'the HTML links somewhere else'],
+				['<p>Reset at {{actionUrl}}</p>', 'the HTML has no <a href="{{actionUrl}}">'],
+			]
+		) {
+			const refused = await f.putSchema(template(html ?? ''))
+			expect([refused.status, await refused.json()]).toEqual([400, { error: expect.stringContaining(`mail.reset.en: ${problem}`) }])
+		}
+		expect((await f.putSchema(template('<p><a href="{{actionUrl}}">Reset</a></p>'))).status).toBe(200)
 	})
 
 	test("a subject that values expand past the sender's limit is cut to it, and the mail is still deliverable", async () => {

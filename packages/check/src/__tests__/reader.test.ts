@@ -124,7 +124,7 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		const mail = (text: string) =>
 			edited("app: 'notes',", `app: 'notes',\n\tmail: { reset: { cs: {\n\t\tsubject: 'Heslo pro {{displayName}}',\n\t\ttext: '${text}',\n\t} } },`)
 		expect(refusal(application(mail('Nové heslo: {{link}}')))).toEqual([
-			'fabrika.contract.ts:9:9 contract mail.reset.cs: the text names {{link}}, which the reset message does not fill (allowed: {{displayName}}, {{recipient}}, {{actionUrl}}, {{expiry}})',
+			'fabrika.contract.ts:9:9 contract mail.reset.cs: the text names {{link}}, which the reset message does not fill (allowed: {{displayName}}, {{recipient}}, {{actionUrl}}, {{appUrl}}, {{expiry}})',
 			'fabrika.contract.ts:9:9 contract mail.reset.cs: the text has no {{actionUrl}}: IAM puts the one-time link there',
 		])
 		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\tmail: { welcome: {} },")))).toEqual([
@@ -132,6 +132,22 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		])
 		const artifact = readContractSource(application(mail('Nové heslo: {{actionUrl}}')))
 		expect(artifact.mail).toEqual({ reset: { cs: { subject: 'Heslo pro {{displayName}}', text: 'Nové heslo: {{actionUrl}}' } } })
+	})
+
+	test('an HTML body of an e-mail is refused at its string for anything outside the subset, and read when it is inside', () => {
+		const mail = (html: string) =>
+			edited(
+				"app: 'notes',",
+				`app: 'notes',\n\tmail: { reset: { cs: {\n\t\tsubject: 'Heslo pro {{displayName}}',\n\t\ttext: 'Nové heslo: {{actionUrl}}',\n\t\thtml: '${html}',\n\t} } },`,
+			)
+		expect(refusal(application(mail('<p><a href="{{actionUrl}}">Nové heslo</a></p><img src="https://track.test/p.png">')))).toEqual([
+			'fabrika.contract.ts:10:9 contract mail.reset.cs: the HTML has <img>, which an e-mail body may not use (allowed: <a>, <b>, <blockquote>, <br>, <div>, <em>, <h1>, <h2>, <h3>, <hr>, <i>, <li>, <ol>, <p>, <span>, <strong>, <u>, <ul>)',
+		])
+		expect(refusal(application(mail('<p><a href="https://evil.test">Nové heslo</a></p>')))).toEqual([
+			'fabrika.contract.ts:10:9 contract mail.reset.cs: the HTML links somewhere else: a link goes only to {{actionUrl}}, {{appUrl}} or a mailto: address',
+		])
+		const html = '<p><a href="{{actionUrl}}">Nové heslo</a> · <a href="{{appUrl}}">Portál</a></p>'
+		expect(readContractSource(application(mail(html))).mail?.reset?.cs?.html).toBe(html)
 	})
 
 	test('callers outside the RPC callers, an empty caller list, and an access that mixes two forms', () => {
@@ -309,7 +325,7 @@ describe('the checker reports what the reader refuses', () => {
 			severity: 'refusal',
 			rule: 'contract',
 			message: 'mail.invitation.en: the text has no {{actionUrl}}: IAM puts the one-time link there',
-			allowed: "a one-line subject and a text with {{actionUrl}}, naming only the message's placeholders",
+			allowed: "a one-line subject, a text with {{actionUrl}} and an optional HTML body of the e-mail subset, naming only the message's placeholders",
 		}])
 	})
 

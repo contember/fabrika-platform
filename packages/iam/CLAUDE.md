@@ -437,15 +437,20 @@ fails if that stops being true — it is the guard, not documentation of one.
   `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. A refused browser-facing request answers
   `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
   refusal; a failure before any application is known, and logout, speak the default.
-- **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, AND IAM PUTS IN THE LINK AND WRITES THE HTML** (`app_mail_templates`,
-  `src/messages.ts`). The contract's `mail` is a subject and a text per message and language, with placeholders from the
-  closed set `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`); `mailTemplateProblems` refuses another one, a text without
-  `{{actionUrl}}`, a subject that names `{{actionUrl}}` (the token never goes into a header), is not one line or has no
-  words besides placeholders, at the build, in the checker and at IAM's reconcile, and
-  `messageTemplateFor` checks a stored row again and falls back to the catalog for one it refuses. IAM builds the action
-  URL; the text carries every value as is, the subject with control characters collapsed and cut to the sender's `MAX_EMAIL_SUBJECT_LENGTH`, and the HTML part is IAM's:
-  the escaped text as paragraphs and the catalog's button. Never let an application author HTML here, and never log a
-  template's body. A message or a language without a row is the catalog's.
+- **AN APPLICATION'S E-MAIL TEMPLATE IS PLAIN TEXT, OR HTML OF A CLOSED SUBSET IAM RENDERS FROM TOKENS; IAM PUTS IN THE
+  LINK** (`app_mail_templates`, `src/messages.ts`). The contract's `mail` is a subject, a text and optionally an `html`
+  per message and language, with placeholders from the closed set `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`);
+  `mailTemplateProblems` refuses another one, a text without `{{actionUrl}}`, a subject that names `{{actionUrl}}` (the
+  token never goes into a header), is not one line or has no words besides placeholders, and an `html` that
+  `mailHtmlTokens` refuses or that has no `<a href="{{actionUrl}}">`, at the build, in the checker and at IAM's
+  reconcile, and `messageTemplateFor` checks a stored row again and falls back to the catalog for one it refuses, and
+  for one that names `{{appUrl}}` while the app has no registered return origin (`landingUrl`). IAM builds the action
+  URL; the text carries every value as is, the subject with control characters collapsed and cut to the sender's
+  `MAX_EMAIL_SUBJECT_LENGTH`. Without `html` the HTML part is IAM's: the escaped text as paragraphs and the catalog's
+  button. With it, `renderHtml` writes each token, never the source: the subset's elements, the literal text (no `<`,
+  no bare `&`), every value escaped and each `href` the escaped URL it names. Never render an application's HTML by
+  string substitution over its source, and never log a template's body. A message or a language without a row is the
+  catalog's.
 - **A PASSWORD ACTION AND AN INVITATION THAT KEEP AN APPLICATION END IN IT.** A forgot-password request carries the
   sign-in's app; the issued action stores it, its link names it, and the completed action's 302 goes to the app's
   first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the

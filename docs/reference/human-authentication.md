@@ -144,6 +144,14 @@ escaped text as paragraphs and its own button to the link. The checker refuses
 an unknown placeholder or a text without the link, and so does the reconcile. A
 message or a language without a template gets IAM's catalog wording.
 
+A template may carry its own `html` body instead of IAM's, in a closed subset
+(`mailHtmlTokens` in `@fabrika/auth-core`): text structure only, no attribute but
+a link's `href`, and a link only to `{{actionUrl}}`, `{{appUrl}}` or a `mailto:`
+address. IAM renders it from its tokens, never from its source, with every value
+escaped. `{{appUrl}}` is built at send time from the application's first
+registered return origin; a template that names it while no origin is registered
+is sent in IAM's wording ([ADR-0019](../decisions/0019-portable-outbound-email.md)).
+
 ## Membership invitations
 
 An application invites an address to a membership role through IAM's

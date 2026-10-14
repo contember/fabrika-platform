@@ -349,7 +349,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 				welcome: { en: { subject: 'Hi', text: '{{actionUrl}}' } },
 			},
 		})).toEqual([
-			'mail.invitation.cs: the subject names {{inviter}}, which the invitation message does not fill (allowed: {{displayName}}, {{recipient}}, {{inviterLabel}}, {{companyLabel}}, {{message}}, {{actionUrl}}, {{expiry}})',
+			'mail.invitation.cs: the subject names {{inviter}}, which the invitation message does not fill (allowed: {{displayName}}, {{recipient}}, {{inviterLabel}}, {{companyLabel}}, {{message}}, {{actionUrl}}, {{appUrl}}, {{expiry}})',
 			'mail.reset.en: the subject is not one line: it contains a line break or a control character',
 			'mail.reset.en: the text has no {{actionUrl}}: IAM puts the one-time link there',
 			'mail.enrollment.cs: the subject has no words of its own: a value may be empty',
@@ -358,6 +358,15 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		])
 		const reset = { subject: 'Nové heslo do {{displayName}}', text: 'Odkaz: {{actionUrl}} (platí do {{expiry}})' }
 		expect(buildArtifact({ ...base, mail: { reset: { cs: reset } } }, notesArtifact.tables).mail).toEqual({ reset: { cs: reset } })
+	})
+
+	test('an HTML body of an e-mail outside the closed subset, and one inside it carried to the artifact', () => {
+		const reset = (html: string) => ({ reset: { en: { subject: 'Reset', text: '{{actionUrl}}', html } } })
+		expect(build({ ...base, mail: reset('<a href="{{actionUrl}}">Reset</a><iframe src="https://evil.test"></iframe>') })).toEqual([
+			'mail.reset.en: the HTML has <iframe>, which an e-mail body may not use (allowed: <a>, <b>, <blockquote>, <br>, <div>, <em>, <h1>, <h2>, <h3>, <hr>, <i>, <li>, <ol>, <p>, <span>, <strong>, <u>, <ul>)',
+		])
+		const html = '<p><a href="{{actionUrl}}">Reset</a></p>'
+		expect(buildArtifact({ ...base, mail: reset(html) }, notesArtifact.tables).mail?.reset?.en?.html).toBe(html)
 	})
 
 	test('members of the application name actions of the catalog, and its directory needs them', () => {

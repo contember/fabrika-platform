@@ -76,6 +76,8 @@ export interface AppMailTemplateRow {
 	locale: string
 	subject: string
 	body: string
+	/** The HTML body in the subset of `mailHtmlTokens`, or NULL for none: IAM builds the HTML part from the text. */
+	html: string | null
 }
 
 /** The application's own people (the `app_members` table): the actions that manage and list them. */
@@ -332,7 +334,7 @@ export class AppSchemaRepository {
 		/** How IAM names the app; a field left out is "not declared", and both left out remove the row. */
 		presentation?: { locale: string | null; displayName: string | null }
 		/** The app's e-mail templates; every row of the app is replaced, and none left out removes them all. */
-		mail?: { kind: string; locale: string; subject: string; text: string }[]
+		mail?: { kind: string; locale: string; subject: string; text: string; html?: string }[]
 		/** The actions that manage and list the app's own people; absent or null removes the row. */
 		members?: { manage: string; list: string; directory: 'labels' | null } | null
 	}, audit?: AuditEventInput): Promise<void> {
@@ -360,8 +362,8 @@ export class AppSchemaRepository {
 		for (const template of input.mail ?? []) {
 			statements.push(
 				this.db
-					.prepare('INSERT INTO app_mail_templates (app, kind, locale, subject, body) VALUES (?, ?, ?, ?, ?)')
-					.bind(app, template.kind, template.locale, template.subject, template.text),
+					.prepare('INSERT INTO app_mail_templates (app, kind, locale, subject, body, html) VALUES (?, ?, ?, ?, ?, ?)')
+					.bind(app, template.kind, template.locale, template.subject, template.text, template.html ?? null),
 			)
 		}
 		const presentation = input.presentation

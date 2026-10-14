@@ -56,11 +56,18 @@ export const vocabulary = defineVocabulary({
 - `mail` beside them words IAM's e-mails in the application's own way: per message (`invitation`, `enrollment`,
   `reset`) and language, a one-line `subject` and a plain `text` with `{{name}}` placeholders, for example
   `mail: { reset: { cs: { subject: 'Nové heslo do {{displayName}}', text: 'Heslo si nastavíte zde:\n{{actionUrl}}' } } }`.
-  The text must hold `{{actionUrl}}`, the one-time link IAM builds, and the subject must not; IAM writes the HTML part
-  itself. Every message fills
-  `{{displayName}}`, `{{recipient}}`, `{{actionUrl}}` and `{{expiry}}`; an invitation also `{{inviterLabel}}`,
+  The text must hold `{{actionUrl}}`, the one-time link IAM builds, and the subject must not. Without `html` IAM writes
+  the HTML part itself. Every message fills
+  `{{displayName}}`, `{{recipient}}`, `{{actionUrl}}`, `{{appUrl}}` and `{{expiry}}`; an invitation also `{{inviterLabel}}`,
   `{{companyLabel}}` and `{{message}}`. Another placeholder is refused. A message or language without a template is IAM's
   own wording.
+- An `html` beside `subject` and `text` is the message's own HTML body, in a closed subset: `<p>`, `<br>`, `<strong>`,
+  `<b>`, `<em>`, `<i>`, `<u>`, `<span>`, `<div>`, `<h1>`–`<h3>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<hr>` and
+  `<a>`, lower case and balanced, with no attribute but a link's double-quoted `href`, which is exactly
+  `{{actionUrl}}`, `{{appUrl}}` or a `mailto:` address. It holds at least one `<a href="{{actionUrl}}">`. No style,
+  image, script, form, frame, comment or other origin: the checker and IAM's reconcile refuse each, and IAM escapes every
+  value it fills in. `{{appUrl}}` is the application's first registered return origin; until one is registered, a
+  template that names it is sent in IAM's own wording.
 - `creator: '<role>'` on a top-level dimension lets an endpoint with `creates: '<dimension>'` make a new value and
   grant the caller that role there.
 

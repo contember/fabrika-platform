@@ -212,7 +212,7 @@ const appSchemaShape = z.object({
 
 /** One message's templates by language, each refused with the same rule the contract build applies. */
 function mailLocales(kind: MessageKind) {
-	const template = z.object({ subject: z.string(), text: z.string() }).strict()
+	const template = z.object({ subject: z.string(), text: z.string(), html: z.string().optional() }).strict()
 	return z.record(z.enum(LOCALES), template).superRefine((templates, ctx) => {
 		for (const [locale, value] of Object.entries(templates)) {
 			for (const problem of mailTemplateProblems(kind, value)) {

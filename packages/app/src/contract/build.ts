@@ -354,7 +354,7 @@ class ArtifactBuilder {
 					continue
 				}
 				for (const problem of mailTemplateProblems(kind, template)) this.#problem(where, problem)
-				declared[locale] = { subject: template.subject, text: template.text }
+				declared[locale] = { subject: template.subject, text: template.text, ...(template.html === undefined ? {} : { html: template.html }) }
 			}
 			if (Object.keys(declared).length > 0) templates[kind] = declared
 		}
