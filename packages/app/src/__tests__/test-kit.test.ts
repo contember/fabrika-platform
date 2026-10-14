@@ -6,7 +6,10 @@ import { createClient, RpcError } from '@fabrika/app/client'
 import { defineContract } from '@fabrika/app/contract'
 import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'
 import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
 import { notesApp } from './fixtures/implement/app'
@@ -314,6 +317,39 @@ describe('the token size bound', () => {
 		const refused = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: { type: 'workspace', value: 'w'.repeat(tooLarge) } }]))('/')
 		expect(refused.status).toBe(403)
 		expect(await refused.text()).toBe('forbidden')
+	})
+})
+
+describe("the kit serves an SPA's built directory as the deploy does", () => {
+	const root = mkdtempSync(join(tmpdir(), 'fabrika-kit-spa-'))
+	afterAll(() => rmSync(root, { recursive: true, force: true }))
+	mkdirSync(join(root, 'dist', 'app', 'assets'), { recursive: true })
+	writeFileSync(join(root, 'dist', 'app', 'index.html'), '<!doctype html><title>Notes</title><script src="/assets/app.js"></script>')
+	writeFileSync(join(root, 'dist', 'app', 'assets', 'app.js'), 'console.log("notes")')
+
+	test('a member gets the built index.html, a built file by its path, and the index for a route of the SPA', async () => {
+		const kit = testKit(notesApp(seed()), { root })
+		const member = kit.browser(kit.testCaller([{ action: 'notes.read', scope: W1 }]))
+		const page = await member('/')
+		expect(page.status).toBe(200)
+		expect(await page.text()).toBe('<!doctype html><title>Notes</title><script src="/assets/app.js"></script>')
+		expect(await (await member('/assets/app.js')).text()).toBe('console.log("notes")')
+		expect(await (await member('/notes/n-1/edit')).text()).toContain('<title>Notes</title>')
+	})
+
+	test('the proxy still decides first: a caller with no permission gets no built page', async () => {
+		const kit = testKit(notesApp(seed()), { root })
+		const stranger = kit.browser(kit.testCaller([]))
+		const refused = await stranger('/')
+		expect(refused.status).toBe(403)
+		expect(await refused.text()).not.toContain('<title>Notes</title>')
+	})
+
+	test('an SPA that is not built is an empty page', async () => {
+		const kit = testKit(notesApp(seed()), { root: join(root, 'elsewhere') })
+		const page = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: W1 }]))('/')
+		expect(page.status).toBe(200)
+		expect(await page.text()).toBe('<!doctype html><title></title>')
 	})
 })
 

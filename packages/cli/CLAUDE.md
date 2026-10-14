@@ -130,6 +130,11 @@ arguments and reports.
   `fabrika.contract.ts` sits next to the config: the Bun entrypoint on Zerops, then
   the provider's build; the Worker entrypoint on Cloudflare, and nothing else. An
   application without a contract builds as before.
+- `app dev` (`src/app-dev.ts`) resolves no provider: it loads `src/app.ts` with `@fabrika/app/bun`'s
+  `implementationAt` and serves it through `@fabrika/app/testing`'s `testKit`, on a throwaway schema of
+  `FABRIKA_TEST_POSTGRES_URL` (`@fabrika/db/testing`), with a caller picker at `/__fabrika/dev`. It refuses any host
+  but loopback and prints nothing of the environment. It is the kit and nothing else: never add a proxy rule, an
+  IAM or a second enforcement decision here.
 
 ## Provider selection
 

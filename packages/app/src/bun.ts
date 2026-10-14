@@ -6,23 +6,22 @@
 // entrypoint.
 
 import { HttpIamMembership } from '@fabrika/auth'
-import { rawRequestTarget } from '@fabrika/auth-core'
 import type { Database, PostgresOptions } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
 import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { applicationRuntimeUrl, S3BlobStore } from '@fabrika/platform-node'
-import { join, resolve, sep } from 'node:path'
+import { diskAssets } from './disk-assets.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { clamscanScanner } from './files/clamscan.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
-import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
 import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
 import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
 import { makeProcessUndumpable } from './undumpable.js'
 
+export { diskAssets } from './disk-assets.js'
 export { clamscanArguments, type ClamscanOptions, clamscanScanner } from './files/clamscan.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
@@ -99,25 +98,6 @@ export function issuerJwks(issuer: unknown): IamKeySource {
 				throw new Error('the issuer published no usable key set')
 			}
 			return jwks
-		},
-	}
-}
-
-/** Serves each SPA mount from its build directory under `root`; a path that names no file gets the SPA's `index.html`. */
-export function diskAssets(root: string): SpaAssets {
-	return {
-		async serve(mount, request) {
-			const dir = resolve(root, mount.dir)
-			const pathname = rawRequestTarget(request.url).pathname
-			const relative = mount.prefix === '/' ? pathname.slice(1) : pathname.slice(mount.prefix.length + 1)
-			// The path is canonical, so every segment decodes and none is `.` or `..`.
-			const file = join(dir, ...relative.split('/').filter((segment) => segment !== '').map((segment) => decodeURIComponent(segment)))
-			const candidate = file.startsWith(`${dir}${sep}`) ? Bun.file(file) : null
-			const served = candidate !== null && (await candidate.exists()) ? candidate : Bun.file(join(dir, 'index.html'))
-			if (!(await served.exists())) {
-				return new Response('Not found', { status: 404 })
-			}
-			return new Response(served)
 		},
 	}
 }

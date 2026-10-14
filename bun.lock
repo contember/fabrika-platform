@@ -219,6 +219,7 @@
         "@fabrika/check": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/db": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",

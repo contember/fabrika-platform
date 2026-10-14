@@ -28,9 +28,12 @@ import { refuseInProduction } from '@fabrika/db/production'
 import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract, DimensionOf } from '../contract/define'
+import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
 import { boot, type ContractApp } from '../implement/boot'
@@ -64,7 +67,13 @@ type MintRefusal = { readonly ok: false; readonly reason: 'disabled' | 'token_to
 export interface TestKitOptions {
 	/** The application's own variables, as `deps` receives them. */
 	readonly env?: ApplicationEnvironment
-	/** Serves the SPA mounts. Defaults to an empty HTML document for every path. */
+	/**
+	 * The application root an SPA mount's `dir` is relative to; the working directory when omitted. A mount whose built
+	 * directory exists there is served from it as the deploy serves it: a file by its path, every other path by the
+	 * directory's `index.html`. A mount not built is an empty HTML document.
+	 */
+	readonly root?: string
+	/** Serves the SPA mounts in place of their built directories under `root`. */
 	readonly assets?: SpaAssets
 	/** The connection a `scoped(tables)` database is bound to, as the runtime adapter supplies it to `boot`. */
 	readonly database?: Database
@@ -133,8 +142,13 @@ export interface TestKit<C extends AnyContract> {
 /** The names of the contract's cron jobs. */
 export type JobName<C> = C extends { readonly surface: { readonly jobs: infer J } } ? keyof J & string : never
 
-const defaultAssets: SpaAssets = {
-	serve: () => Promise.resolve(new Response('<!doctype html><title></title>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })),
+/** Each SPA mount from its built directory under `root` when one exists, as the deploy serves it; an empty page otherwise. */
+function builtAssets(root: string): SpaAssets {
+	const disk = diskAssets(root)
+	const empty = () => new Response('<!doctype html><title></title>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+	return {
+		serve: (mount, request) => (existsSync(resolve(root, mount.dir)) ? disk.serve(mount, request) : Promise.resolve(empty())),
+	}
 }
 
 function toRequest(origin: string, input: RequestInfo | URL, init: RequestInit | undefined): Request {
@@ -267,7 +281,7 @@ function bootTestKit<C extends AnyContract>(
 			application: options.env ?? {},
 		},
 		iam: { getJwks: () => jwks },
-		assets: options.assets ?? defaultAssets,
+		assets: options.assets ?? builtAssets(options.root ?? process.cwd()),
 		database: options.database,
 		files: options.files,
 		...(options.scanner === undefined ? {} : { scanner: options.scanner }),

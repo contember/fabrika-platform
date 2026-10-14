@@ -73,7 +73,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [149](149-a-job-drains-its-inbox-and-outbox-without-per-record-attempts.md) — The intake recipe drains unbounded, stops on one bad record, and sends no idempotency key.
 - [150](150-the-csp-has-no-style-or-font-origin.md) — The contract's `csp` cannot extend `style-src` or `font-src`.
 - [151](151-the-spa-and-the-server-cannot-share-a-pure-function.md) — No module both the SPA and a slice may import for shared pure code.
-- [152](152-the-test-kit-serves-no-spa-build.md) — The kit answers every SPA with an empty document; no local run of an application.
 - [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
 - [156](156-a-member-directory-has-no-sign-in-time-and-no-list-across-values.md) — No last sign-in, and one directory call per value.

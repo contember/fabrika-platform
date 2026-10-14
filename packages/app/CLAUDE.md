@@ -31,7 +31,7 @@ bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own t
 bun test src/__tests__/membership-stand-in.test.ts  # the kit's IAM stand-in: delegations, creates, members, links, live roles
 bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside form inboxes, a challenge and a scan (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
-bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
+bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot, a built SPA, the stand-in IAM
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
@@ -63,6 +63,7 @@ src/
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
+  disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
   service/            @fabrika/app/service — the installation services' own tables and dispatcher
     define.ts         defineServiceContract: an endpoint table with the installation forms
     serve.ts          serveService: the dispatcher over planEndpoint

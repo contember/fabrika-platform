@@ -3285,6 +3285,10 @@ if (postgres !== null) {
   label, email and actions in the kit as in production (`kit.browser(caller)('/__fabrika-me.json')`).
 - `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
   path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
+- An SPA mount is served from its built `dir` (`dist/web`) when the build exists, as the deploy serves it:
+  `kit.browser(owner)('/')` answers the built `index.html`, a file by its path, and every other path of the mount the
+  `index.html` again. Without a build it is an empty page. The directory is relative to the working directory, the
+  application root under `bun test`; pass `testKit(app, { root })` from elsewhere.
 - The kit stands in for IAM's membership operations. A member directory (`ctx.members.list()` and `get(id)`) answers
   from the kit's own callers: everyone `testCaller` gave a membership role in that scope, labels only where the
   dimension declares `directory: 'labels'` (or to a `members.manage` holder). To list someone, make them a caller:
@@ -3361,6 +3365,15 @@ if (postgres !== null) {
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
   process. Import the test kits from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.
+
+## Clicking through the screens
+
+`bunx fabrika app dev` serves the application on `http://127.0.0.1:3000/` through the same kit: the proxy decision,
+the stand-in IAM, a throwaway schema of `FABRIKA_TEST_POSTGRES_URL`, and each SPA from its build (run
+`bun run build:web` first). Open `/__fabrika/dev` and pick who the browser is: a role, and for a membership role the
+scope value it is held in (`member` in `acme`). The choice stays in a cookie; pick again to switch. The data is gone
+when the command stops. It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port),
+and runs no cron job: test those with `kit.runJob`. Use it to look at the screens, never in place of a test.
 
 ---
 

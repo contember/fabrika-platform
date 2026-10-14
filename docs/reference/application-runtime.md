@@ -1014,6 +1014,17 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
   (`{ status: 'succeeded', attempts }`). It first waits for the runs a form's `then` kicked through `kit.fetch`.
+- An SPA mount whose built directory exists under `options.root` (the working directory when omitted) is served from
+  it as the Bun deploy serves it (`diskAssets`): a file by its path, every other path of the mount by its
+  `index.html`; a mount not built is an empty HTML document, and `options.assets` replaces both.
+- `fabrika app dev` (`packages/cli/src/app-dev.ts`) serves the application through this kit on a loopback port, to
+  click through its screens: a throwaway schema of `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and
+  dropped on exit, the stand-in IAM, the SPAs from their built directories, file objects in memory, and the
+  application's variables from the environment without the `FABRIKA_*` names. `/__fabrika/dev` picks the caller, a
+  role of the vocabulary held app-wide or, a membership role, in one scope value; a cookie keeps the choice, which
+  never reaches the application, and the kit's own session never leaves the process. A sign-in the proxy answers (a
+  redirect to the kit's IAM, a 401's `loginUrl`) points to the picker. It listens on `127.0.0.1`, `::1` or
+  `localhost` only, and prints its address and nothing of the environment. Cron jobs do not run there.
 - `kit.fetch` takes a request as it reaches the proxy; `kit.browser(caller?)` adds
   what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
   request's credentials are `omit`, the caller's session cookie. Both refuse a host

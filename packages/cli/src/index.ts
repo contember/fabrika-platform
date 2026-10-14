@@ -19,6 +19,7 @@ Usage:
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
   fabrika app build --provider=cloudflare [--config=<path>]
+  fabrika app dev [--port=<n>] [--host=<loopback address>]
   fabrika app register [--provider=zerops] --env=<env> --app=<id> --repo=<url> [--config=<path>]
                        [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                        [--namespace=<id>] [--installation-id=<n|none>] [--url=<origin>] [--json]
@@ -34,6 +35,9 @@ An explicit --provider is required only when no app config is available.
 
 \`app build\` first writes fabrika/entry.generated.ts for a contract application (one with fabrika.contract.ts next
 to its config); on Cloudflare that is all it does.
+
+\`app dev\` serves a contract application through its test kit on a loopback port, to click through its screens.
+Run \`fabrika app dev --help\` for its surface.
 
 \`app register\` compiles the manifest in memory, exactly as \`app build\` would, and sends the request
 \`control register --manifest=<path>\` sends for it. It writes no file, CREATES only, and reads the
@@ -195,6 +199,11 @@ const writeContractEntry = async (argv: readonly string[], runtime: EntryRuntime
 }
 
 const runApp = async (parsed: ParsedCommand): Promise<void> => {
+	if (parsed.command === 'dev') {
+		const { runAppDevCli } = await import('./app-dev.js')
+		await runAppDevCli(parsed.rest)
+		return
+	}
 	if (parsed.command === 'register') {
 		await runAppRegister(parsed)
 		return
@@ -251,6 +260,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	if (parsed.help && parsed.area === 'namespace') {
 		const { NAMESPACE_USAGE } = await import('./namespace.js')
 		console.info(NAMESPACE_USAGE)
+		return
+	}
+	if (parsed.help && parsed.area === 'app' && parsed.command === 'dev') {
+		const { APP_DEV_USAGE } = await import('./app-dev.js')
+		console.info(APP_DEV_USAGE)
 		return
 	}
 	if (parsed.help && parsed.area === 'db') {
