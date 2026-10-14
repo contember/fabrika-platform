@@ -20,6 +20,7 @@ import {
 	isSiteHandler,
 	jobHandles,
 	jobSql,
+	jobSqlOutsideTransaction,
 	siteData,
 	type SiteDeclaration,
 	undeclaredSql,
@@ -680,8 +681,10 @@ function kitJobContext(
 	principal: string,
 ): Readonly<Record<string, unknown>> {
 	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false)
+	const job = `job '${name}'`
 	return {
 		db: siteData(reads),
+		sql: site.sql === null ? undeclaredSql(job, 'job') : jobSqlOutsideTransaction(job),
 		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
 			boundTo(frame, () => false)()
@@ -689,7 +692,7 @@ function kitJobContext(
 				let open = true
 				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
 				try {
-					const sql = site.sql === null ? undeclaredSql(`job '${name}'`, 'job') : jobSql(frame, data, site.sql, session, () => !open)
+					const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
 					return await work(Object.freeze({ db: siteData(writes), sql }))
 				} finally {
 					open = false

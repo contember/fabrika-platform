@@ -49,8 +49,8 @@ function field(value: unknown, name: string): unknown {
 
 type SqlCall = (text: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>
 
-/** The declared tag, the member of a site without `sql`, which only refuses, or none. */
-type SqlMember = 'declared' | 'refusing' | 'absent'
+/** The declared tag, none, or a member that only refuses: its reason and message. */
+type SqlMember = 'declared' | 'absent' | `${string}: ${string}`
 
 function sqlMember(ctx: unknown): SqlMember {
 	const sql = field(ctx, 'sql')
@@ -60,8 +60,8 @@ function sqlMember(ctx: unknown): SqlMember {
 	try {
 		Reflect.apply(sql, ctx, [Title])
 	} catch (error) {
-		if (error instanceof QueryRefusedError && error.reason === 'undeclared_reach') {
-			return 'refusing'
+		if (error instanceof QueryRefusedError) {
+			return `${error.reason}: ${error.message}`
 		}
 		throw error
 	}
@@ -247,12 +247,15 @@ afterAll(async () => {
 })
 
 describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
-	test('a site without sql has a ctx.sql that only refuses', async () => {
+	test('a site without sql has a ctx.sql that only refuses, naming the declaration', async () => {
 		const { app, hooks } = start()
 		const id = await seedDeal()
 		expect(resultOf(await send(app, '/api/deals.margin', { token: await writer(), body: { id } }))).toEqual({ margin: null, columns: [] })
 		expect(resultOf(await send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toEqual({ ok: true })
-		expect(hooks.sql).toEqual({ margin: 'refusing', replay: 'refusing' })
+		expect(hooks.sql).toEqual({
+			margin: "undeclared_reach: api.deals.margin does not declare sql, so it has no ctx.sql; add sql: 'read' (or 'write' to write) to it",
+			replay: "undeclared_reach: api.deals.replay does not declare sql, so it has no ctx.sql; add sql: 'read' to it",
+		})
 	})
 
 	test('ctx.sql takes its mode from the approved contract: a handler that alone declares sql does not boot', () => {
@@ -321,11 +324,14 @@ describe.skipIf(!hasPostgres)('a job runs tx.sql in its fenced transaction', () 
 	}
 	const reporter = { report: () => Promise.resolve() }
 
-	test('ctx has no sql outside ctx.transaction; tx.sql writes and commits with the attempt', async () => {
+	test('ctx.sql outside ctx.transaction refuses and names tx.sql; tx.sql writes and commits with the attempt', async () => {
 		const { app, hooks } = start()
 		const lead = await seedDeal('lead')
 		expect(await app.jobs.run('close', { clock, reporter })).toEqual({ status: 'succeeded', attempts: 1 })
-		expect(hooks.sql).toEqual({ job: 'absent', 'job transaction': 'declared' })
+		expect(hooks.sql).toEqual({
+			job: "sql_outside_transaction: job 'close' runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql",
+			'job transaction': 'declared',
+		})
 		expect((await deal(lead))?.['stage']).toBe('lost')
 	})
 })

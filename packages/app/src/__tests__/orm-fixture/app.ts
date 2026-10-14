@@ -22,8 +22,11 @@ export interface OrmHooks {
 	whileKept: () => Promise<void>
 	/** The handles a handler kept past its invocation. */
 	kept: { target?: unknown; jobData?: unknown; jobRef?: unknown; refusal?: string }
-	/** What the job does with the lead deals it lists; `'undeclared sql'` calls `tx.sql.scope` first, which it does not declare. */
-	job: 'in its transaction' | 'outside its transaction' | 'undeclared sql'
+	/**
+	 * What the job does with the lead deals it lists. It declares no sql: `'undeclared sql'` calls `tx.sql.scope` first,
+	 * and `'undeclared sql outside its transaction'` calls `ctx.sql` before anything else.
+	 */
+	job: 'in its transaction' | 'outside its transaction' | 'undeclared sql' | 'undeclared sql outside its transaction'
 	/** Each delivery's company name, as the webhook handler saw it. */
 	readonly deliveries: string[]
 	failNextDelivery: boolean
@@ -143,6 +146,9 @@ export function ormApp(hooks: OrmHooks): ContractImplementation<typeof contract>
 		}, undefined),
 		jobs: {
 			close: siteHandler(async ({ ctx }) => {
+				if (hooks.job === 'undeclared sql outside its transaction') {
+					await kept(hooks, () => call(ctx, 'sql', z.object({ n: z.number() })))
+				}
 				const within = await call(ctx, 'within', 'crm.read', 'company')
 				const page = await call(await call(ctx, 'db.over', within), 'deals.list', { where: [['stage', '=', 'lead']] })
 				const leads = field(page, 'items')

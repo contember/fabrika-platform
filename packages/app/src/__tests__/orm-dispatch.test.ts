@@ -323,18 +323,20 @@ describe.skipIf(!hasPostgres)('a job writes only in its fenced transaction', () 
 		expect((await deal(lead))?.['stage']).toBe('lost')
 	})
 
-	test('tx.sql of a job that does not declare sql refuses by name, and the attempt writes nothing', async () => {
-		const { app, hooks } = start()
-		hooks.job = 'undeclared sql'
+	test('ctx.sql and tx.sql of a job that does not declare sql refuse by name, and the attempt writes nothing', async () => {
 		const lead = await seedDeal('lead')
-		const log = spyOn(console, 'error').mockImplementation(() => {})
-		try {
-			expect(await app.jobs.run('close', { clock, reporter })).toEqual({ status: 'failed', attempts: 1, code: 'handler_failed' })
-		} finally {
-			log.mockRestore()
+		for (const [job, member] of [['undeclared sql', 'tx.sql'], ['undeclared sql outside its transaction', 'ctx.sql']] as const) {
+			const { app, hooks } = start()
+			hooks.job = job
+			const log = spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				expect(await app.jobs.run('close', { clock, reporter })).toEqual({ status: 'failed', attempts: 1, code: 'handler_failed' })
+			} finally {
+				log.mockRestore()
+			}
+			expect(hooks.kept.refusal).toBe(`job 'close' does not declare sql, so it has no ${member}; add sql: 'read' (or 'write' to write) to it`)
+			expect((await deal(lead))?.['stage']).toBe('lead')
 		}
-		expect(hooks.kept.refusal).toBe("job 'close' does not declare sql, so it has no tx.sql; add sql: 'read' (or 'write' to write) to it")
-		expect((await deal(lead))?.['stage']).toBe('lead')
 	})
 
 	test("a job's captured handles are refused once its attempt ended", async () => {

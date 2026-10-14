@@ -29,6 +29,7 @@ export const QUERY_REFUSALS = {
 	sql_read_only: "sql: 'read' runs queries only; declare sql: 'write' on a mutation, a job or a webhook",
 	sql_name: 'ctx.sql names a framework, catalog or foreign-schema object, or writes a name in U& form',
 	sql_function: 'ctx.sql calls a function that is not a reviewed built-in',
+	sql_outside_transaction: 'a job runs ctx.sql only inside ctx.transaction((tx) => …), as tx.sql',
 	sql_scope: 'ctx.sql.scope(…) stands alone, joined by AND, in a WHERE or JOIN … ON clause of its own invocation',
 	file_scan: "a scan operation on a file collection without scan: true, or a scan verdict outside the scan job's lease",
 } as const

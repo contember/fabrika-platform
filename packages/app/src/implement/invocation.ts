@@ -9,6 +9,7 @@ import {
 	type DataHandles,
 	type DataSite,
 	type InvocationTransaction,
+	type QueryRefusal,
 	QueryRefusedError,
 	type Session,
 	type SqlTag,
@@ -296,16 +297,25 @@ export function jobHandles(
 }
 
 /**
- * `ctx.sql` (a job's `tx.sql`) of a site that does not declare `sql`. The types already refuse it; at run time it exists
- * only to refuse by name, so an untyped call reports the declaration it needs rather than a `TypeError`.
+ * A `ctx.sql` (`tx.sql`) that may not run here. The types already refuse it; at run time it exists only to refuse by
+ * name, so an untyped call reports what to change rather than a `TypeError`.
  */
-export function undeclaredSql(site: string, kind: DataKind): SqlTag {
-	const member = kind === 'job' ? 'tx.sql' : 'ctx.sql'
-	const declaration = kind === 'query' ? "sql: 'read'" : "sql: 'read' (or 'write' to write)"
+function refusingSql(reason: QueryRefusal, message: string): SqlTag {
 	const refuse = (): never => {
-		throw new QueryRefusedError('undeclared_reach', `${site} does not declare sql, so it has no ${member}; add ${declaration} to it`)
+		throw new QueryRefusedError(reason, message)
 	}
 	return Object.freeze(Object.assign(() => refuse(), { scope: () => refuse() }))
+}
+
+/** `ctx.sql` (or `member`, a job's `tx.sql`) of a site that does not declare `sql`. */
+export function undeclaredSql(site: string, kind: DataKind, member: 'ctx.sql' | 'tx.sql' = 'ctx.sql'): SqlTag {
+	const declaration = kind === 'query' ? "sql: 'read'" : "sql: 'read' (or 'write' to write)"
+	return refusingSql('undeclared_reach', `${site} does not declare sql, so it has no ${member}; add ${declaration} to it`)
+}
+
+/** `ctx.sql` of a job that declares `sql`, outside `ctx.transaction`: its statements run only in the attempt's fence. */
+export function jobSqlOutsideTransaction(job: string): SqlTag {
+	return refusingSql('sql_outside_transaction', `${job} runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql`)
 }
 
 /** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */

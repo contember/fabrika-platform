@@ -430,7 +430,7 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
 
 - **`` ctx.sql(Row)`…` ``** runs only on a site that declares `sql` (a job: `tx.sql`, inside `ctx.transaction`). On any
   other site the types make it an `Unavailable`, and at run time the call is refused (`undeclared_reach`, naming the
-  declaration) before anything is sent.
+  declaration) before anything is sent; so is a job's `ctx.sql` outside `ctx.transaction` (`sql_outside_transaction`).
   `ctx.sql` has no scope predicate of its own: `${ctx.sql.scope(capability, table, alias?)}` interpolates the
   capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
   a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty, an `app`

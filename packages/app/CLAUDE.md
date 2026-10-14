@@ -597,7 +597,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   handler, or called from another request or another `boot`, is a `CapabilityRefusedError`. `ctx.sql` runs only on
   a site that declares `sql`: `Invocation.sql(mode)` (a job's `tx.sql`: `jobSql`) asks `@fabrika/db`'s `DataAccess.sql`
   for the tag over the same session as the site's handles, bound by `boundTo` too. On a site without `sql`, `ctx.sql`
-  (`tx.sql`) is `undeclaredSql`, which only refuses with `undeclared_reach` and names the declaration, so an untyped
+  (`tx.sql`) is `undeclaredSql`, which only refuses with `undeclared_reach` and names the declaration, and a declaring
+  job's `ctx.sql` outside `ctx.transaction` is `jobSqlOutsideTransaction` (`sql_outside_transaction`), so an untyped
   call is no `TypeError`.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
   before any application module loads.** The runtime adapter calls
