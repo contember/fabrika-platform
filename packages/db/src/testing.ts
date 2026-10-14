@@ -496,18 +496,22 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		depth = 0,
 	): Promise<{ readonly row: ReadonlyMap<string, SampleValue>; readonly stored: Readonly<Record<string, unknown>> }> {
 		const model = modelOf(models, table)
+		const columns = await columnsOf(table)
+		// A column with a database default keeps it unless the fixture assigned it, a foreign key's included.
+		const defaulted = new Set(columns.filter((column) => column.generated !== 'no').map((column) => column.column_name))
 		const keyed = new Map<string, SampleValue>()
 		for (const key of model?.foreignKeys ?? []) {
-			const open = key.columns.filter((column) => !assigned.has(column))
+			const open = key.columns.filter((column) => !assigned.has(column) && !defaulted.has(column))
 			if (open.length === 0) continue
 			for (const [name, value] of await referencedKey(models, table, key, open, depth)) keyed.set(name, value)
 		}
 		const row = new Map<string, SampleValue>()
-		for (const column of await columnsOf(table)) {
+		for (const column of columns) {
 			const name = column.column_name
-			const value = assigned.get(name) ?? keyed.get(name)
-			if (value !== undefined) {
-				row.set(name, value)
+			// An assigned `null` is the fixture's value too, never a gap to fill.
+			const given = assigned.has(name) ? assigned : keyed.has(name) ? keyed : undefined
+			if (given !== undefined) {
+				row.set(name, given.get(name) ?? null)
 				continue
 			}
 			if (column.generated !== 'no') continue

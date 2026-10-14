@@ -225,22 +225,15 @@ const admitsString = (shape: SchemaShape | undefined): boolean =>
 	shape?.type === 'string' || ((shape?.type === 'optional' || shape?.type === 'nullable') && admitsString(shape.inner))
 
 /**
- * Whether a row of `table` lies in an object of `dimension`: a dimension table contained in it, or a child table whose
- * parent's dimension is it or lies in it.
+ * Whether a row of `table` lies directly in an object of `dimension`, the only rows the kit seeds there: a dimension
+ * table whose container is `dimension`, or a child table of the table that owns it. A row further down needs a
+ * container between, which the kit does not seed.
  */
-const liesIn = (artifact: ContractArtifact, policies: Policies, table: string, dimension: string): boolean => {
+const liesDirectlyIn = (policies: Policies, table: string, dimension: string): boolean => {
 	const scope = policies[table]?.scope
+	if (scope?.mode === 'dimension') return scope.container?.dimension === dimension
 	const parent = scope?.mode === 'child' ? policies[scope.parent]?.scope : undefined
-	let current = scope?.mode === 'dimension'
-		? (scope.container?.dimension ?? null)
-		: parent?.mode === 'dimension'
-		? parent.dimension
-		: null
-	for (let depth = 0; current !== null && depth <= Object.keys(artifact.dimensions).length; depth++) {
-		if (current === dimension) return true
-		current = artifact.dimensions[current]?.in ?? null
-	}
-	return false
+	return parent?.mode === 'dimension' && parent.dimension === dimension
 }
 
 /** The read action of the table that owns `dimension`, or `undefined` when no table owns it. */
@@ -548,11 +541,11 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 		for (const [field, table] of Object.entries(fields).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
 			if (row.input?.type !== 'object' || !admitsString(row.input.fields[field])) {
 				findings.push(at(`${id}: ${field} is no string field of its input, so it cannot name a row`, 'a top-level string field of the input'))
-			} else if (!liesIn(artifact, policies, table, access.dimension)) {
+			} else if (!liesDirectlyIn(policies, table, access.dimension)) {
 				findings.push(
 					at(
-						`${id}: ${table} is no dimension or child table that lies in a ${access.dimension}, so the kit seeds none in the endpoint's object`,
-						`a child table of the table that owns ${access.dimension}, or a table contained in ${access.dimension}`,
+						`${id}: ${table} is no dimension or child table that lies directly in a ${access.dimension}, so the kit seeds none in the endpoint's object (it seeds no container between)`,
+						`a child table of the table that owns ${access.dimension}, or a dimension table whose container is ${access.dimension}`,
 					),
 				)
 			}

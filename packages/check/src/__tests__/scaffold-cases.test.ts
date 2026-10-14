@@ -196,8 +196,13 @@ describe('the rows of the fixtures: input fields that name a row lying in the en
 
 	test('a row of a table outside the object, a field that is no string, and an endpoint not on an owned object are findings', () => {
 		expect(findings("export const rows = { 'api.notes.editComment': { commentId: 'workspaces', body: 'note_comments' } }\n")).toEqual([
-			"api.notes.editComment: workspaces is no dimension or child table that lies in a note, so the kit seeds none in the endpoint's object",
+			"api.notes.editComment: workspaces is no dimension or child table that lies directly in a note, so the kit seeds none in the endpoint's object (it seeds no container between)",
 		])
+		// A comment lies in a workspace through its note, a container the kit does not seed.
+		expect(findings("export const rows = { 'api.workspaces.remove': { principalId: 'note_comments' } }\n")).toEqual([
+			"api.workspaces.remove: note_comments is no dimension or child table that lies directly in a workspace, so the kit seeds none in the endpoint's object (it seeds no container between)",
+		])
+		expect(findings("export const rows = { 'api.workspaces.remove': { principalId: 'notes' } }\n")).toEqual([])
 		expect(findings("export const rows = { 'api.notes.editComment': { missing: 'note_comments' } }\n")).toEqual([
 			'api.notes.editComment: missing is no string field of its input, so it cannot name a row',
 		])

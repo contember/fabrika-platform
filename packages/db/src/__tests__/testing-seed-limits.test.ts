@@ -20,7 +20,7 @@ if (!hasPostgres) {
 
 const migration = `
 create table codes (code text primary key, label text not null);
-insert into codes (code, label) values ('cz', 'Czechia');
+insert into codes (code, label) values ('cz', 'Czechia'), ('sk', 'Slovakia');
 create table colors (id uuid primary key default gen_random_uuid(), name text not null);
 create table teams (
 	id text primary key,
@@ -29,7 +29,10 @@ create table teams (
 	mood text check (length(mood) > 40),
 	code text not null references codes (code),
 	backup_code text references codes (code),
-	color_id uuid not null references colors (id)
+	color_id uuid not null references colors (id),
+	status text check (status in ('open', 'closed')),
+	region text default 'sk' references codes (code),
+	origin text not null default 'sk' references codes (code)
 );
 create table team_tasks (
 	id text primary key,
@@ -43,7 +46,18 @@ create table links (id text primary key, team_id text not null references teams 
 interface DB {
 	codes: { code: string; label: string }
 	colors: { id: string; name: string }
-	teams: { id: string; name: string; size: string; mood: string | null; code: string; backup_code: string | null; color_id: string }
+	teams: {
+		id: string
+		name: string
+		size: string
+		mood: string | null
+		code: string
+		backup_code: string | null
+		color_id: string
+		status: string | null
+		region: string | null
+		origin: string
+	}
 	team_tasks: { id: string; team_id: string; title: string }
 	badges: { id: string; code: string }
 	links: { id: string; team_id: string }
@@ -53,8 +67,10 @@ const columns: TypedColumnList<DB> = {
 	codes: { columns: ['code', 'label'], foreignKeys: [] },
 	colors: { columns: ['id', 'name'], foreignKeys: [] },
 	teams: {
-		columns: ['id', 'name', 'size', 'mood', 'code', 'backup_code', 'color_id'],
+		columns: ['id', 'name', 'size', 'mood', 'code', 'backup_code', 'color_id', 'status', 'region', 'origin'],
 		foreignKeys: [
+			{ columns: ['region'], table: 'codes', references: ['code'] },
+			{ columns: ['origin'], table: 'codes', references: ['code'] },
 			{ columns: ['code'], table: 'codes', references: ['code'] },
 			{ columns: ['backup_code'], table: 'codes', references: ['code'] },
 			{ columns: ['color_id'], table: 'colors', references: ['id'] },
@@ -118,6 +134,18 @@ describe.skipIf(!hasPostgres)('the isolation fixture over constrained columns', 
 		expect(seeded).toMatchObject({ code: 'cz', backup_code: null, color_id: expect.any(String) })
 		expect(worlds.own.markers).not.toContain(seeded['code'])
 		expect(worlds.own.markers).not.toContain(seeded['color_id'])
+	})
+
+	test('a foreign key with a database default keeps it, nullable or required', async () => {
+		const worlds = await postgres.seedWorlds(tables, 'teams')
+		expect(await row('teams', worlds.own.key)).toMatchObject({ region: 'sk', origin: 'sk' })
+	})
+
+	test('an explicit null of a seed stays null, though a CHECK names the column', async () => {
+		const worlds = await postgres.seedWorlds(tables, 'teams', { status: null })
+		expect(await row('teams', worlds.own.key)).toMatchObject({ status: null })
+		const unseeded = await postgres.seedWorlds(tables, 'teams', { status: 'closed' })
+		expect(await row('teams', unseeded.own.key)).toMatchObject({ status: 'closed' })
 	})
 
 	test("a CHECK's IN list gives its first value, and a nullable column another CHECK names stays null", async () => {
