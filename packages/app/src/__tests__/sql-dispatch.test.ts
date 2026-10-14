@@ -1,4 +1,5 @@
-// `ctx.sql` through `boot`'s pipeline on a REAL Postgres: it exists only on a site that declares `sql`, runs in the
+// `ctx.sql` through `boot`'s pipeline on a REAL Postgres: it runs only on a site that declares `sql` (elsewhere it only
+// refuses), runs in the
 // invocation's transaction, and is bound to its invocation like every `ctx.db` handle. Skips cleanly when
 // FABRIKA_TEST_POSTGRES_URL is unset:
 //
@@ -9,7 +10,7 @@
 
 import { defineApp } from '@fabrika/app/contract'
 import type { ContractApp, ContractImplementation, JobClock } from '@fabrika/app/implement'
-import { applicationSchema, Database, scoped } from '@fabrika/db'
+import { applicationSchema, Database, QueryRefusedError, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
@@ -38,8 +39,8 @@ interface Hooks {
 	renameThrows: boolean
 	whileKept: () => Promise<void>
 	kept: SqlCall | undefined
-	/** Whether each site's `ctx` (and a job's `tx`) had `sql`, by site name. */
-	readonly hasSql: Record<string, boolean>
+	/** What each site's `ctx` (and a job's `tx`) held as `sql`, by site name. */
+	readonly sql: Record<string, SqlMember>
 }
 
 function field(value: unknown, name: string): unknown {
@@ -47,6 +48,25 @@ function field(value: unknown, name: string): unknown {
 }
 
 type SqlCall = (text: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>
+
+/** The declared tag, the member of a site without `sql`, which only refuses, or none. */
+type SqlMember = 'declared' | 'refusing' | 'absent'
+
+function sqlMember(ctx: unknown): SqlMember {
+	const sql = field(ctx, 'sql')
+	if (typeof sql !== 'function') {
+		return 'absent'
+	}
+	try {
+		Reflect.apply(sql, ctx, [Title])
+	} catch (error) {
+		if (error instanceof QueryRefusedError && error.reason === 'undeclared_reach') {
+			return 'refusing'
+		}
+		throw error
+	}
+	return 'declared'
+}
 
 /** `ctx.sql(row)`, called as a handler whose types were defeated would call it. */
 function sqlOf(ctx: unknown, row: z.core.$ZodType): SqlCall {
@@ -99,7 +119,7 @@ const contract = kit.contract((c) => ({
 
 function sqlApp(hooks: Hooks): ContractImplementation<typeof contract> {
 	const noted = (name: string, ctx: unknown) => {
-		hooks.hasSql[name] = field(ctx, 'sql') !== undefined
+		hooks.sql[name] = sqlMember(ctx)
 	}
 	const tree = {
 		api: {
@@ -155,7 +175,7 @@ function sqlApp(hooks: Hooks): ContractImplementation<typeof contract> {
 }
 
 function hooksOf(): Hooks {
-	return { renameThrows: false, whileKept: () => Promise.resolve(), kept: undefined, hasSql: {} }
+	return { renameThrows: false, whileKept: () => Promise.resolve(), kept: undefined, sql: {} }
 }
 
 function start(hooks: Hooks = hooksOf()): { app: ContractApp; hooks: Hooks } {
@@ -227,12 +247,12 @@ afterAll(async () => {
 })
 
 describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
-	test('a site without sql has no ctx.sql', async () => {
+	test('a site without sql has a ctx.sql that only refuses', async () => {
 		const { app, hooks } = start()
 		const id = await seedDeal()
 		expect(resultOf(await send(app, '/api/deals.margin', { token: await writer(), body: { id } }))).toEqual({ margin: null, columns: [] })
 		expect(resultOf(await send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toEqual({ ok: true })
-		expect(hooks.hasSql).toEqual({ margin: false, replay: false })
+		expect(hooks.sql).toEqual({ margin: 'refusing', replay: 'refusing' })
 	})
 
 	test('ctx.sql takes its mode from the approved contract: a handler that alone declares sql does not boot', () => {
@@ -305,7 +325,7 @@ describe.skipIf(!hasPostgres)('a job runs tx.sql in its fenced transaction', () 
 		const { app, hooks } = start()
 		const lead = await seedDeal('lead')
 		expect(await app.jobs.run('close', { clock, reporter })).toEqual({ status: 'succeeded', attempts: 1 })
-		expect(hooks.hasSql).toEqual({ job: false, 'job transaction': true })
+		expect(hooks.sql).toEqual({ job: 'absent', 'job transaction': 'declared' })
 		expect((await deal(lead))?.['stage']).toBe('lost')
 	})
 })
