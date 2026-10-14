@@ -211,6 +211,9 @@ export type DownloadInput<I> = [I] extends [InputSchema] ? [input: z.input<I>] :
  * name. Answers the file, also where there is no page to save it from (a script, a test). A refusal is an `RpcError`.
  */
 export function download<I>(procedure: AttachmentProcedure<I>, ...input: DownloadInput<I>): Promise<File> {
+	if (!downloads.has(procedure)) {
+		return Promise.reject(new Error(`'${procedure.id}' is not an attachment procedure of a client`))
+	}
 	return downloadFile(procedure, input[0])
 }
 
