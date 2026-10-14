@@ -335,8 +335,10 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
   `ctx.db.unscoped`, `ctx.connect` and `ctx.links`; a query and an export declare only `'read'`. The connectors are the
   kit's `imports`.
-- **`DbHandle<typeof app, form, dimension, action, kind>` and `ReferenceHandle<typeof app>`** (`context.ts`) are the
-  types of `ctx.db`'s handles, for a `queries.ts` function that takes one; `orm-handles.ts` pins them to the context.
+- **`DbHandle<typeof app, form, dimension, action, kind>`, `ReferenceHandle<typeof app>` and `SqlHandle<typeof app, mode>`**
+  (`context.ts`) are the types of `ctx.db`'s handles and of `ctx.sql`, for a `queries.ts` function that takes one;
+  `orm-handles.ts` pins them to the context. A bare `SqlTag` defaults to `AnyDbIndex`, under which a
+  literal capability's `scope` finds no table; `SqlHandle` binds the app's index.
 - **The runtime builds plain declarations, and `defineApp`'s signature is its only typed face.** `RuntimeApp` (in
   `kit.ts`) builds the same `ProcedureDeclaration`, `CronDeclaration`, `WebhookMountDeclaration`, link and export
   declarations `defineContract` builds, with `declared` (`declaredOf`: only the fields the options carry) and

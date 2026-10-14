@@ -1093,7 +1093,9 @@ A function of the slice's `queries.ts` takes the handle as a parameter typed wit
 It decides no authorization: the capability already bounds the handle.
 
 ```ts src/reports/queries.ts
-import type { DbHandle } from '@fabrika/app/contract'
+import type { DbHandle, SqlHandle } from '@fabrika/app/contract'
+import type { Ref } from '@fabrika/app/implement'
+import { z } from 'zod/v4'
 import type { app } from '../app-kit'
 
 export const statusCounts = async (
@@ -1104,10 +1106,34 @@ export const statusCounts = async (
 		Number(rows.find((row) => row.status === status)?.count ?? 0)
 	return { open: count('open'), doing: count('doing'), done: count('done') }
 }
+
+export const WorkloadRow = z.strictObject({
+	assignee: z.nullable(z.string()),
+	open: z.int(),
+	overdue: z.int(),
+})
+
+export const workloadRows = (
+	sql: SqlHandle<typeof app, 'read'>,
+	org: Ref<'org', 'tasks.read'>,
+	status: string | null,
+) =>
+	sql(WorkloadRow)`
+		select t.assignee,
+			count(*) filter (where t.status <> 'done')::int as open,
+			count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
+		from tasks t
+		where ${sql.scope(org, 'tasks', 't')}
+			and (${status}::text is null or t.status::text = ${status})
+		group by t.assignee
+		order by t.assignee`
 ```
 
 `DbHandle<typeof app, 'on' | 'in', '<dimension>', '<action>', 'mutation'>` is `ctx.db.target` of that form;
-`DbHandle<typeof app, 'over', …>` is `ctx.db.within`.
+`DbHandle<typeof app, 'over', …>` is `ctx.db.within`. `SqlHandle<typeof app, 'read'>` is `ctx.sql` (a `'write'` site's
+`ctx.sql` is one too; `SqlHandle<typeof app, 'write'>` for a helper that writes), and the capability is the endpoint's
+`ctx.target` (`Ref<'<dimension>', '<action>'>`) or `ctx.within` (`Within<…>`), both types of `@fabrika/app/implement`.
+`sql.scope(capability, '<table>')` is checked against the app's tables as it is in the handler.
 
 ## Raw SQL: `sql: 'read'`
 
@@ -1119,18 +1145,13 @@ import { attachment } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { TaskStatus } from '../schemas'
-import { statusCounts } from './queries'
+import { statusCounts, WorkloadRow, workloadRows } from './queries'
 
 const Workload = z.strictObject({
 	orgId: z.string().min(1).max(100),
 	status: TaskStatus.optional(),
 })
 const ByProject = z.strictObject({ projectId: z.uuid() })
-const WorkloadRow = z.strictObject({
-	assignee: z.nullable(z.string()),
-	open: z.int(),
-	overdue: z.int(),
-})
 const WorkloadReport = z.strictObject({ rows: z.array(WorkloadRow) })
 const Counts = z.strictObject({ open: z.int(), doing: z.int(), done: z.int() })
 const TaskExportRow = z.strictObject({
@@ -1153,19 +1174,9 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 		access: { action: 'tasks.read', in: 'org', from: 'orgId' },
 		sql: 'read',
 	})
-		.handle(async ({ input, ctx }) => {
-			const status = input.status ?? null
-			const rows = await ctx.sql(WorkloadRow)`
-				select t.assignee,
-					count(*) filter (where t.status <> 'done')::int as open,
-					count(*) filter (where t.status <> 'done' and t.due_on < current_date)::int as overdue
-				from tasks t
-				where ${ctx.sql.scope(ctx.target, 'tasks', 't')}
-					and (${status}::text is null or t.status::text = ${status})
-				group by t.assignee
-				order by t.assignee`
-			return { rows }
-		}),
+		.handle(async ({ input, ctx }) => ({
+			rows: await workloadRows(ctx.sql, ctx.target, input.status ?? null),
+		})),
 	counts: r.query({
 		output: Counts,
 		access: { action: 'tasks.read', over: 'project' },

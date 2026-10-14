@@ -116,7 +116,8 @@ export const canReopen = (stage: string): boolean =>
 
 A query function types its handle parameter with the kit's `DbHandle` (`@fabrika/app/contract`): the same handle
 the handler's `ctx.db` holds for that access form, dimension, action and kind. `DbHandle<typeof app, 'over', D, A>`
-is `ctx.db.within`, and `ReferenceHandle<typeof app>` is `ctx.db.reference`:
+is `ctx.db.within`, `ReferenceHandle<typeof app>` is `ctx.db.reference`, and `SqlHandle<typeof app, 'read' | 'write'>` is
+`ctx.sql`, whose `scope(capability, table)` checks the table against the app's own tables:
 
 ```ts
 // src/deals/queries.ts
@@ -236,7 +237,7 @@ An import is judged by the file or package Bun loads for it:
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.
 - **A query function** (`queries.ts`) takes the handle as a parameter (`ctx.db.target`, `ctx.db.within.<table>`,
-  `ctx.sql`), typed by `DbHandle` or by the methods it calls, and returns plain values. It decides no authorization: the capability
+  `ctx.sql`), typed by `DbHandle`, `SqlHandle` or by the methods it calls, and returns plain values. It decides no authorization: the capability
   already bounds the handle. It is called from its own slice's handlers.
 - **A job** is a `c.cron` procedure with its `.handle(…)` in the `endpoints.ts` of the slice whose data it works on;
   the contract's `jobs` section names it. An attempt retries, so its writes are idempotent.

@@ -435,3 +435,10 @@ export type AppHandle<A, Act extends string, K extends DataKind = 'query'> = App
 
 /** The type of `ctx.db.reference`, for a query function that takes it. */
 export type ReferenceHandle<A> = ReferenceTables<IndexOf<A>>
+
+/**
+ * The type of `ctx.sql`, for a function of `src/<slice>/queries.ts` that takes it: `SqlHandle<typeof app, 'read'>`.
+ * A `'write'` site's `ctx.sql` is assignable to it, and `sql.scope(capability, table)` checks the table against the
+ * app's own tables.
+ */
+export type SqlHandle<A, M extends SqlMode> = SqlTag<IndexOf<A>, M>
