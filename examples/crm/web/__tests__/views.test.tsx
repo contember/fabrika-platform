@@ -121,8 +121,12 @@ if (postgres !== null) {
 			if (form === null) throw new Error('no edit form')
 			fill(form, 'title', 'Mine wins')
 			await press(button('Save'))
-			await until(() => form.querySelector('[role="alert"]') !== null, 'the conflict')
-			expect(form.querySelector('[role="alert"]')?.textContent).toContain('Someone changed it meanwhile')
+			// The conflict refetches the deal, and the form reseeds from its current version.
+			const reseeded = () => document.querySelector('form[aria-label="Edit deal"]')
+			await until(() => reseeded()?.querySelector('[role="alert"]') !== null && reseeded() !== form, 'the conflict')
+			expect(reseeded()?.querySelector('[role="alert"]')?.textContent).toContain('Someone changed it meanwhile')
+			const title = reseeded()?.querySelector('[name="title"]')
+			expect(title instanceof HTMLInputElement ? title.value : null).toBe('Printers, third floor')
 			expect((await managerApi.deals.get({ id: seeded.id })).title).toBe('Printers, third floor')
 		})
 
