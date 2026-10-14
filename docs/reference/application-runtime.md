@@ -763,6 +763,9 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   `@fabrika/app/client` reads. A link procedure admits only a key of its own mount and
   re-reads where the object lies on every request: a key whose chain differs, because
   the note moved, is 404.
+- An SPA mount below the root also has a row for its bare prefix, `GET <prefix>` (id `<mount>.prefix`), under the
+  mount's own access: the application answers it with a 308 to `<prefix>/`, the query kept. Without it `/admin` would
+  be the root SPA's path (`/*`) and open another mount's page.
 - `c.spa(prefix, { dir, access: { public: true } })` serves the SPA at `GET <prefix>/*`
   to anyone: the row is the anonymous kind `public-spa`, so the proxy reads no credential,
   forwards no token and never bounces to login. The page reaches only the anonymous endpoints

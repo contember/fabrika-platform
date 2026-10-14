@@ -38,7 +38,7 @@ import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { exportBase, FORM_CHALLENGE_FIELD, FORM_LIMITS } from '../contract/defaults'
+import { exportBase, FORM_CHALLENGE_FIELD, FORM_LIMITS, spaPrefixRowId } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
@@ -644,6 +644,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir, config })
 			} else if (config !== undefined && row?.kind === 'public-spa') {
 				endpoints.set(name, { kind: 'public-spa', row, prefix: mount.prefix, dir: mount.dir, config })
+			}
+			const bare = rows.get(spaPrefixRowId(name))
+			if (bare !== undefined) {
+				endpoints.set(bare.id, { kind: 'spa-prefix', row: bare, prefix: mount.prefix })
 			}
 		} else if (mount.kind === 'rpc' || mount.kind === 'link') {
 			if (mount.kind === 'link') {

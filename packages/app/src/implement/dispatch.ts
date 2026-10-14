@@ -124,6 +124,8 @@ export type ServedEndpoint =
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
 	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string; readonly config: BrowserConfig }
+	/** An SPA mount's bare prefix (`/admin`): the proxy admitted it under the mount's access; it redirects to `/admin/`. */
+	| { readonly kind: 'spa-prefix'; readonly row: EndpointRow; readonly prefix: string }
 	/** An SPA anyone opens: anonymous, served without a token. */
 	| { readonly kind: 'public-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string; readonly config: BrowserConfig }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
@@ -290,6 +292,8 @@ export class ContractRuntime {
 				}
 				case 'public-spa':
 					return await this.#spaFile(served, request, null)
+				case 'spa-prefix':
+					return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
 				case 'link-spa':
 					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
 						return bootstrapResponse()

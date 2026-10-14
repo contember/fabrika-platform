@@ -83,6 +83,7 @@ import {
 	joinPath,
 	JSON_ADMISSION,
 	LINK_API_SEGMENT,
+	spaPrefixRowId,
 	WEBHOOK_ACCOUNT_PATTERN,
 	WEBHOOK_BINDING_PARAMETER,
 	WEBHOOK_SCOPE_FIELD,
@@ -499,23 +500,18 @@ class ArtifactBuilder {
 					this.#prefix(where, mount.prefix)
 				}
 				this.#nonEmpty(`${where} dir`, mount.dir)
-				const path = joinPath(mount.prefix, '*')
 				const requirement = this.#spaRequirement(where, mount.access)
-				if (requirement === 'public') {
-					this.#anonymous(name, 'public-spa', 'GET', path, null, null)
-				} else if (requirement !== null) {
-					this.#row({
-						id: name,
-						source: { kind: 'mount', name },
-						kind: 'spa',
-						method: 'GET',
-						path,
-						callers: ['human'],
-						requirement,
-						admission: null,
-						input: null,
-						output: null,
-					})
+				// The bare prefix (`/admin`) is the mount's too, under its access: it redirects to `/admin/`.
+				const rows = mount.prefix === '/'
+					? [{ id: name, path: joinPath(mount.prefix, '*') }]
+					: [{ id: name, path: joinPath(mount.prefix, '*') }, { id: spaPrefixRowId(name), path: mount.prefix }]
+				for (const { id, path } of rows) {
+					const source = { kind: 'mount' as const, name }
+					if (requirement === 'public') {
+						this.#row({ id, source, kind: 'public-spa', method: 'GET', path, callers: [], requirement: null, admission: null, input: null, output: null })
+					} else if (requirement !== null) {
+						this.#row({ id, source, kind: 'spa', method: 'GET', path, callers: ['human'], requirement, admission: null, input: null, output: null })
+					}
 				}
 				const publicVariables = this.#spaPublic(where, mount.public)
 				return { kind: 'spa', prefix: mount.prefix, dir: mount.dir, ...(publicVariables.length === 0 ? {} : { public: publicVariables }) }

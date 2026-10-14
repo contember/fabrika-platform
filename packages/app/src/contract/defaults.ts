@@ -111,6 +111,11 @@ export const BROWSER_CONFIG_FILE = '__fabrika-config.json'
 /** What every `c.spa` mount serves under its prefix to the person its access admitted: label, mailbox and actions. */
 export const PAGE_CALLER_FILE = '__fabrika-me.json'
 
+/** The row of an SPA mount's bare prefix (`GET /admin`), which redirects to the mount (`/admin/`). */
+export function spaPrefixRowId(mount: string): string {
+	return `${mount}.prefix`
+}
+
 /**
  * The value a generated endpoint access case sends in an input field that names a member the handler looks up
  * (`members` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with a real member of the directory.

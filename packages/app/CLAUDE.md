@@ -268,7 +268,9 @@ src/
   policy (`TablePolicyArtifact`); `@fabrika/db/tables`' `tablePolicies` converts
   the one into the other, so both paths share `@fabrika/db`'s one policy parse.
 - Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; an SPA serves
-  `GET <prefix>/*`, anonymous (kind `public-spa`, no token) with `access: { public: true }`,
+  `GET <prefix>/*`, and below the root also `GET <prefix>` (row `<mount>.prefix`, `spaPrefixRowId`) under the same
+  access, which answers 308 to `<prefix>/` so the bare prefix never falls through to the root SPA; both are anonymous
+  (kind `public-spa`, no token) with `access: { public: true }`,
   which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release, public }` (the
   browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset; `public`, present only when non-empty, the values of
   every form challenge's `siteKey` and of the mount's own `public` list, `browserConfigs` in `browser-config.ts`, each one

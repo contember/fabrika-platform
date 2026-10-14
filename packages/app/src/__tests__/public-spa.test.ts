@@ -146,3 +146,27 @@ describe('the production proxy and the dispatcher serve a public SPA anonymously
 		expect(call.status).toBe(401)
 	})
 })
+
+describe("an SPA mount's bare prefix", () => {
+	test('is a row of the mount under its own access, GET <prefix>, beside GET <prefix>/*; the root mount has none', () => {
+		const artifact = compileContract(contract, {})
+		const web = artifact.endpoints.find((row) => row.id === 'web')
+		expect(web?.path).toBe('/app/*')
+		expect(artifact.endpoints.find((row) => row.id === 'web.prefix')).toEqual(web === undefined ? undefined : { ...web, id: 'web.prefix', path: '/app' })
+		expect(artifact.endpoints.filter((row) => row.source.kind === 'mount' && row.source.name === 'site').map((row) => row.path)).toEqual(['/*'])
+		expect(parseContractArtifact(JSON.parse(JSON.stringify(artifact)))).toEqual(artifact)
+	})
+
+	test('redirects to <prefix>/ with its query, for a signed-in member; it never falls through to the root SPA', async () => {
+		const kit = testKit(app, { assets: { serve: (mount) => Promise.resolve(new Response(mount.dir)) } })
+		const member = kit.testCaller([{ role: 'reviewer', scope: { type: 'workspace', value: 'w1' } }])
+		const bare = await kit.browser(member)('/app?tab=open')
+		expect(bare.status).toBe(308)
+		expect(bare.headers.get('Location')).toBe('/app/?tab=open')
+		const anonymous = await kit.fetch('/app')
+		expect(anonymous.status).toBe(302)
+		expect(anonymous.headers.get('Location')).toStartWith('https://iam.test/auth/login?')
+		expect(await (await kit.browser(member)('/app/')).text()).toBe('dist/app')
+	})
+})
+
