@@ -139,10 +139,12 @@
         "zod": "^3.25.76",
       },
       "peerDependencies": {
+        "@happy-dom/global-registrator": "^20.11.2",
         "react": "^19.0.0",
         "zod": "^3.25.76",
       },
       "optionalPeers": [
+        "@happy-dom/global-registrator",
         "react",
       ],
     },

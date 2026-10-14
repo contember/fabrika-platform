@@ -10,6 +10,7 @@ import {
 	type MutationResult,
 	skip,
 	useAction,
+	useDownload,
 	useInfiniteQuery,
 	useInvalidate,
 	useMutation,
@@ -17,6 +18,7 @@ import {
 } from '@fabrika/app/react'
 import { describe, expect, test } from 'bun:test'
 import { act, Component, type ReactNode, useState } from 'react'
+import { z } from 'zod/v4'
 import { contract } from './fixture'
 
 type Answer = { readonly status?: number; readonly body: unknown }
@@ -95,6 +97,50 @@ describe('useQuery', () => {
 		expect(calls).toEqual(['/api/notes.get {"id":"n1"}'])
 		expect(view.container.textContent).toBe('success')
 		await view.unmount()
+	})
+
+	test("keepPrevious shows the previous input's answer while the next one loads: an offset list grows without blanking", async () => {
+		const answers: { readonly limit: number; resolve(): void }[] = []
+		const fetch: RpcFetch = (_url, init) => {
+			const input = z.object({ limit: z.int() }).parse(JSON.parse(typeof init?.body === 'string' ? init.body : '{}'))
+			return new Promise((resolve) => {
+				const items = Array.from({ length: input.limit }, (_, index) => note(`n${index}`, `Note ${index}`))
+				answers.push({ limit: input.limit, resolve: () => resolve(Response.json({ result: { items, total: 5 } })) })
+			})
+		}
+		const api = createClient(contract, 'api', { fetch })
+		function Queue({ keepPrevious }: { readonly keepPrevious: boolean }): ReactNode {
+			const [limit, setLimit] = useState(2)
+			const queue = useQuery(names.notes.window, { workspaceId: 'w1', limit, offset: 0 }, { keepPrevious })
+			const shown = queue.data === undefined ? 'none' : `${queue.data.items.length} of ${queue.data.total}`
+			return (
+				<button type="button" data-status={queue.status} data-fetching={String(queue.fetching)} onClick={() => setLimit(4)}>
+					{shown}
+				</button>
+			)
+		}
+		for (const keepPrevious of [true, false]) {
+			answers.length = 0
+			const view = await mount(
+				<FabrikaProvider clients={[api]}>
+					<Queue keepPrevious={keepPrevious} />
+				</FabrikaProvider>,
+			)
+			await settle()
+			await act(async () => answers[0]?.resolve())
+			await settle()
+			const button = view.container.querySelector('button')
+			expect(button?.textContent).toBe('2 of 5')
+			await press(button)
+			expect(answers.map((answer) => answer.limit)).toEqual([2, 4])
+			expect({ text: button?.textContent, status: button?.getAttribute('data-status'), fetching: button?.getAttribute('data-fetching') }).toEqual(
+				keepPrevious ? { text: '2 of 5', status: 'success', fetching: 'true' } : { text: 'none', status: 'loading', fetching: 'true' },
+			)
+			await act(async () => answers[1]?.resolve())
+			await settle()
+			expect({ text: button?.textContent, fetching: button?.getAttribute('data-fetching') }).toEqual({ text: '4 of 5', fetching: 'false' })
+			await view.unmount()
+		}
 	})
 })
 
@@ -470,6 +516,44 @@ class Boundary extends Component<{ readonly children: ReactNode }, { readonly me
 		return this.state.message ?? this.props.children
 	}
 }
+
+describe('useDownload', () => {
+	test("downloads an attachment through the provider's client, never the module's, and answers the file", async () => {
+		const calls: string[] = []
+		const fetch: RpcFetch = (url, init) => {
+			calls.push(`${new URL(String(url), 'http://app.test').pathname} ${typeof init?.body === 'string' ? init.body : ''}`)
+			return Promise.resolve(new Response('title\r\nFirst\r\n', { headers: { 'Content-Type': 'text/csv; charset=utf-8' } }))
+		}
+		const api = createClient(contract, 'api', { fetch })
+		const files: File[] = []
+		function Export(): ReactNode {
+			const exported = useDownload(names.notes.export)
+			return (
+				<button
+					type="button"
+					data-status={exported.status}
+					onClick={() =>
+						void exported.mutate({ workspaceId: 'w1' }).then((outcome) => {
+							if (outcome.ok) files.push(outcome.data)
+						})}
+				>
+					Export
+				</button>
+			)
+		}
+		const view = await mount(
+			<FabrikaProvider clients={[api]}>
+				<Export />
+			</FabrikaProvider>,
+		)
+		await press(view.container.querySelector('button'))
+		expect(calls).toEqual(['/api/notes.export {"workspaceId":"w1"}'])
+		expect(view.container.querySelector('button')?.getAttribute('data-status')).toBe('success')
+		expect(files.map((file) => file.name)).toEqual(['notes.csv'])
+		expect(await files[0]?.text()).toBe('title\r\nFirst\r\n')
+		await view.unmount()
+	})
+})
 
 describe('the provider', () => {
 	const quietly = async (node: ReactNode) => {

@@ -47,6 +47,11 @@
 			"types": "./src/react/index.ts",
 			"default": "./src/react/index.ts"
 		},
+		"./react/testing": {
+			"bun": "./src/react/testing.ts",
+			"types": "./src/react/testing.ts",
+			"default": "./src/react/testing.ts"
+		},
 		"./implement": {
 			"bun": "./src/implement/index.ts",
 			"types": "./src/implement/index.ts",
@@ -98,6 +103,7 @@
 		"jose": "^5.9.0"
 	},
 	"peerDependencies": {
+		"@happy-dom/global-registrator": "^20.11.2",
 		"react": "^19.0.0",
 		"zod": "^3.25.76"
 	},
@@ -116,6 +122,9 @@
 		"zod": "^3.25.76"
 	},
 	"peerDependenciesMeta": {
+		"@happy-dom/global-registrator": {
+			"optional": true
+		},
 		"react": {
 			"optional": true
 		}

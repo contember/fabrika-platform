@@ -5,7 +5,7 @@
 import { createContext, type ReactNode, useContext, useState } from 'react'
 import { z } from 'zod/v4'
 import { type PageCaller, parsePageCaller } from '../client/caller'
-import { type ClientNode, clientNodeOf } from '../client/contract'
+import { attachmentAt, type ClientNode, clientNodeOf, downloadFile } from '../client/contract'
 import { RpcError, type RpcFetch } from '../client/transport'
 import { joinPath, PAGE_CALLER_FILE } from '../contract/defaults'
 import { type FabrikaError, toFabrikaError } from './errors'
@@ -59,6 +59,8 @@ export interface Fabrika {
 	readonly caller: CallerSource
 	/** The call of `procedure` on the provider's client of its mount. */
 	target(procedure: unknown, hook: string): ResolvedProcedure
+	/** The download of attachment `procedure` on the provider's client of its mount. */
+	attachment(procedure: unknown, hook: string): (input: unknown) => Promise<File>
 }
 
 export interface ResolvedProcedure extends StoreTarget {
@@ -108,15 +110,27 @@ function fabrika(clients: readonly object[], spa: string, fetch: RpcFetch): Fabr
 		if (byMount.has(node.mount)) throw new Error(`FabrikaProvider holds two clients of mount '${node.mount}'`)
 		byMount.set(node.mount, client)
 	}
+	const clientOf = (mount: string, hook: string): object => {
+		const client = byMount.get(mount)
+		if (client === undefined) throw new Error(`${hook}: the FabrikaProvider holds no client of mount '${mount}'`)
+		return client
+	}
 	return {
 		store: new QueryStore(toFabrikaError),
 		caller: new CallerSource(joinPath(spa, PAGE_CALLER_FILE), fetch),
+		attachment(procedure, hook) {
+			const at = attachmentAt(procedure)
+			if (at === null) throw new Error(`${hook} takes an attachment procedure of a client createClient made`)
+			const own = procedureAt(clientOf(at.mount, hook), at.path)
+			if (attachmentAt(own) === null || typeof own !== 'object' || own === null) {
+				throw new Error(`${hook}: '${at.mount}.${at.path}' is not an attachment procedure of the provider's client`)
+			}
+			return (input) => downloadFile(own, input)
+		},
 		target(procedure, hook) {
 			const node = clientNodeOf(procedure)
 			if (node?.procedure == null) throw new Error(`${hook} takes a procedure of a client createClient made`)
-			const client = byMount.get(node.mount)
-			if (client === undefined) throw new Error(`${hook}: the FabrikaProvider holds no client of mount '${node.mount}'`)
-			const call = procedureAt(client, node.path)
+			const call = procedureAt(clientOf(node.mount, hook), node.path)
 			if (typeof call !== 'function') throw new Error(`${hook}: '${idOf(node)}' is not a procedure of the provider's client`)
 			return {
 				id: idOf(node),

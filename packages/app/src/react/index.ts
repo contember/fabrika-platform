@@ -3,14 +3,17 @@
 export { type Caller, callerOf, type CallerScope, Can, type CanProps, useCaller } from './caller'
 export { type FabrikaError, type FabrikaErrorKind, fieldError, toFabrikaError } from './errors'
 export {
+	type DownloadArgument,
 	type InfiniteQueryOptions,
 	type InfiniteQueryState,
 	type MutationOptions,
 	type MutationResult,
 	type MutationState,
+	type QueryOptions,
 	type QueryState,
 	skip,
 	useAction,
+	useDownload,
 	useInfiniteQuery,
 	useInvalidate,
 	useMutation,

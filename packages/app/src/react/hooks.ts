@@ -1,9 +1,10 @@
-// The data hooks over the typed client: `useQuery`, `useInfiniteQuery`, `useMutation`, `useAction` and
+// The data hooks over the typed client: `useQuery`, `useInfiniteQuery`, `useMutation`, `useAction`, `useDownload` and
 // `useInvalidate`. Each takes a client procedure (`api.deals.get`) as the typed name of the call; the answer comes back
 // through the procedure's own output schema, so its type is the contract's.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { z } from 'zod/v4'
+import type { AttachmentProcedure, DownloadInput } from '../client/contract'
 import type { Schema } from '../contract/define'
 import { type FabrikaError, toFabrikaError } from './errors'
 import { parentOf, prefixOf, useFabrika } from './provider'
@@ -42,6 +43,14 @@ function useLoad(entry: QueryEntry | PagesEntry | null): void {
 	}, [entry])
 }
 
+export interface QueryOptions {
+	/**
+	 * While a new input's answer loads, keep the previous input's answer as `success` data, with `fetching` true: an
+	 * offset list (`{ items, total }`) whose `limit` or `offset` changes keeps its rows on screen.
+	 */
+	readonly keepPrevious?: boolean
+}
+
 /**
  * The answer of a query, cached by procedure and input: every view of one call shares one request, and a mutation
  * that invalidates it refetches it. Pass `skip` as the input to wait for a value the input needs.
@@ -50,8 +59,16 @@ export function useQuery<O extends Schema>(
 	procedure: TypedProcedure<Record<never, never> | undefined, O>,
 	input?: typeof skip,
 ): QueryState<z.output<O>>
-export function useQuery<I, O extends Schema>(procedure: TypedProcedure<I, O>, input: I | typeof skip): QueryState<z.output<O>>
-export function useQuery<I, O extends Schema>(procedure: TypedProcedure<I, O>, input?: I | typeof skip): QueryState<z.output<O>> {
+export function useQuery<I, O extends Schema>(
+	procedure: TypedProcedure<I, O>,
+	input: I | typeof skip,
+	options?: QueryOptions,
+): QueryState<z.output<O>>
+export function useQuery<I, O extends Schema>(
+	procedure: TypedProcedure<I, O>,
+	input?: I | typeof skip,
+	options: QueryOptions = {},
+): QueryState<z.output<O>> {
 	const fabrika = useFabrika('useQuery')
 	const target = useMemo(() => fabrika.target(procedure, 'useQuery'), [fabrika, procedure])
 	if (target.node.procedure?.type === 'mutation') throw new Error(`useQuery: '${target.id}' is a mutation; use useMutation`)
@@ -63,7 +80,7 @@ export function useQuery<I, O extends Schema>(procedure: TypedProcedure<I, O>, i
 	const snapshot = useSyncExternalStore((listener) => source.subscribe(listener), () => source.snapshot, () => source.snapshot)
 	useLoad(entry)
 	const refetch = useCallback(() => entry?.load() ?? Promise.resolve(), [entry])
-	return useMemo((): QueryState<z.output<O>> => {
+	const state = useMemo((): QueryState<z.output<O>> => {
 		if (snapshot === null) return IDLE
 		const fetching = snapshot.fetching
 		if (snapshot.status === 'loading') return { status: 'loading', data: undefined, error: null, fetching, refetch }
@@ -75,6 +92,15 @@ export function useQuery<I, O extends Schema>(procedure: TypedProcedure<I, O>, i
 			? { status: 'loading', data: undefined, error: null, fetching, refetch }
 			: { status: 'success', data, error: null, fetching, refetch }
 	}, [snapshot, procedure, refetch])
+	const previous = useRef<z.output<O> | undefined>(undefined)
+	useEffect(() => {
+		if (state.status === 'success') previous.current = state.data
+	}, [state])
+	const kept = previous.current
+	if (options.keepPrevious === true && state.status === 'loading' && kept !== undefined) {
+		return { status: 'success', data: kept, error: null, fetching: true, refetch }
+	}
+	return state
 }
 
 export interface InfiniteQueryOptions {
@@ -135,6 +161,22 @@ export function useInfiniteQuery<I extends { readonly after?: string } | undefin
 		}
 	}, [snapshot, procedure, loadMore, refetch])
 }
+
+/** What `useDownload`'s `mutate` takes: the attachment procedure's input, or none. */
+export type DownloadArgument<I> = DownloadInput<I>[0]
+
+/**
+ * The download of an attachment procedure (`api.reports.export`) through the provider's client of its mount, so a test
+ * that hands the provider a client over the kit downloads over the kit. `mutate(input)` saves the file in a browser and
+ * answers it as `data`; a refusal is the state's `error`, as for `useMutation`. It refetches nothing.
+ */
+export function useDownload<I>(procedure: AttachmentProcedure<I>): MutationState<DownloadArgument<I>, File> {
+	const fabrika = useFabrika('useDownload')
+	const run = useMemo(() => fabrika.attachment(procedure, 'useDownload'), [fabrika, procedure])
+	return useRun(run, NOTHING_AFTER)
+}
+
+const NOTHING_AFTER = (): Promise<void> => Promise.resolve()
 
 export type MutationResult<T> = { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: FabrikaError }
 

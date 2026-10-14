@@ -86,7 +86,10 @@ src/
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope or a file
   react/              @fabrika/app/react — browser-safe; React is an optional peer dependency (ADR-0052)
     provider.tsx      FabrikaProvider: the clients by mount, the cache, the caller document; a procedure's input checked first
-    hooks.ts          useQuery, useInfiniteQuery, useMutation, useAction, useInvalidate, skip
+    hooks.ts          useQuery (keepPrevious: an offset list), useInfiniteQuery, useMutation, useAction, useDownload,
+                      useInvalidate, skip
+    testing.ts        @fabrika/app/react/testing: installDom (happy-dom over Bun's web platform, no navigation),
+                      type, controlByLabel, waitForText; happy-dom's registrator is an optional peer dependency
     store.ts          the cache without React: entries by procedure and input, pages, sequence numbers, invalidation
     errors.ts         FabrikaError: the union every refusal maps to; fieldError
     caller.tsx        useCaller and <Can> over the caller document

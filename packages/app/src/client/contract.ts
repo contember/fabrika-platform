@@ -175,18 +175,32 @@ export interface AttachmentProcedure<I> {
 	readonly [attachmentInput]?: I
 }
 
-/** The request each attachment procedure sends, kept beside it so the value itself carries no key. */
-const downloads = new WeakMap<object, { readonly url: string; readonly options: ClientOptions; readonly bounce: BounceConfig | null }>()
+/** The request each attachment procedure sends and where it lies, kept beside it so the value itself carries no key. */
+interface DownloadRequest {
+	readonly url: string
+	readonly filename: string
+	readonly options: ClientOptions
+	readonly bounce: BounceConfig | null
+	readonly at: { readonly mount: string; readonly path: string }
+}
+
+const downloads = new WeakMap<object, DownloadRequest>()
 
 function attachmentProcedure(
 	target: CallTarget,
+	at: TreeAt,
 	filename: string,
 	options: ClientOptions,
 	bounce: BounceConfig | null,
 ): AttachmentProcedure<unknown> {
 	const procedure = Object.freeze({ id: target.id, filename })
-	downloads.set(procedure, { url: target.url, options, bounce })
+	downloads.set(procedure, { url: target.url, filename, options, bounce, at: { mount: at.mount, path: at.path } })
 	return procedure
+}
+
+/** The mount and path of an attachment procedure of a client, or `null` for any other value. */
+export function attachmentAt(value: unknown): { readonly mount: string; readonly path: string } | null {
+	return typeof value === 'object' && value !== null ? (downloads.get(value)?.at ?? null) : null
 }
 
 /** The input `download` takes: the procedure's, or none. */
@@ -196,13 +210,18 @@ export type DownloadInput<I> = [I] extends [InputSchema] ? [input: z.input<I>] :
  * Calls an attachment procedure and saves its file: in a browser the page offers it as a download under the declared
  * name. Answers the file, also where there is no page to save it from (a script, a test). A refusal is an `RpcError`.
  */
-export async function download<I>(procedure: AttachmentProcedure<I>, ...input: DownloadInput<I>): Promise<File> {
+export function download<I>(procedure: AttachmentProcedure<I>, ...input: DownloadInput<I>): Promise<File> {
+	return downloadFile(procedure, input[0])
+}
+
+/** `download` of any attachment procedure of a client, its input unchecked: the provider's `useDownload` runs it. */
+export async function downloadFile(procedure: object, input: unknown): Promise<File> {
 	const request = downloads.get(procedure)
 	if (request === undefined) {
-		throw new Error(`'${procedure.id}' is not an attachment procedure of a client`)
+		throw new Error('download takes an attachment procedure of a client createClient made')
 	}
-	const { body } = await exchangeFile(request.options.fetch ?? fetch, request.url, requestOf(request.options, input[0]), request.bounce)
-	const file = new File([body], procedure.filename, { type: body.type })
+	const { body } = await exchangeFile(request.options.fetch ?? fetch, request.url, requestOf(request.options, input), request.bounce)
+	const file = new File([body], request.filename, { type: body.type })
 	saveFile(file)
 	return file
 }
@@ -283,7 +302,7 @@ export function createClient<const C extends AnyContract, const M extends Client
 	}
 	const procedures = clientTree(node.procedures, { mount, origin, base, path: '' }, (target, at) => {
 		const mark = attachmentOf(target.output)
-		return mark === null ? caller(target, at, options, bounce) : attachmentProcedure(target, mark.declaration.filename, options, bounce)
+		return mark === null ? caller(target, at, options, bounce) : attachmentProcedure(target, at, mark.declaration.filename, options, bounce)
 	})
 	const transport: FileTransport = { origin, fetch: options.fetch ?? fetch, key: options.key, bounce }
 	const collections = Object.entries(surface.files ?? {}).flatMap(([name, collection]): (readonly [string, FileClient | LinkFileClient])[] => {

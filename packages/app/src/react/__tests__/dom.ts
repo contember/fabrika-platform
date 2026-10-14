@@ -1,16 +1,13 @@
-// The DOM of the hook tests: happy-dom's globals for this file's process, with Bun's own fetch kept (the clients'
-// transport and the test kit run on it). Import it first. `bun test --isolate` gives each file its own globals.
+// The DOM of the hook tests: `installDom`'s happy-dom globals for this file's process, with Bun's own web platform
+// kept (the clients' transport and the test kit run on it). Import it first. `bun test --isolate` gives each file its own globals.
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { afterAll } from 'bun:test'
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { installDom } from '../testing'
 
-const runtime = { fetch: globalThis.fetch, Request: globalThis.Request, Response: globalThis.Response, Headers: globalThis.Headers }
-GlobalRegistrator.register({ url: 'http://app.test/' })
-Object.assign(globalThis, runtime)
-Reflect.set(globalThis, 'IS_REACT_ACT_ENVIRONMENT', true)
-afterAll(() => GlobalRegistrator.unregister())
+const dom = installDom()
+afterAll(() => dom.uninstall())
 
 export interface Mounted {
 	readonly container: HTMLElement

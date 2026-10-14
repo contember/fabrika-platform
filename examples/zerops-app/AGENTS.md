@@ -3541,11 +3541,12 @@ write a DOM element builder, a router, a cache or a component set of your own: w
 from the kit's components and the theme's tokens in the application's own stylesheet. `app-setup.md` shows the
 dependencies, `tsconfig.json` (`"jsx": "react-jsx"`) and `build-web.ts`.
 
-| Module                | Holds                                                                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@fabrika/app/client` | `createClient(contract, 'api')`: one function per procedure, its answer parsed by the output schema                                        |
-| `@fabrika/app/react`  | `FabrikaProvider`, `useQuery`, `useInfiniteQuery`, `useMutation`, `useAction`, `useInvalidate`, `skip`, `useCaller`, `Can`, `FabrikaError` |
-| `@fabrika/ui`         | the components below, `createRouter`, and `@fabrika/ui/styles.css`                                                                         |
+| Module                       | Holds                                                                                                                                                     |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@fabrika/app/client`        | `createClient(contract, 'api')`: one function per procedure, its answer parsed by the output schema                                                       |
+| `@fabrika/app/react`         | `FabrikaProvider`, `useQuery`, `useInfiniteQuery`, `useMutation`, `useAction`, `useDownload`, `useInvalidate`, `skip`, `useCaller`, `Can`, `FabrikaError` |
+| `@fabrika/app/react/testing` | `installDom`, `type`, `controlByLabel`, `waitForText`: a screen test's DOM and typing                                                                     |
+| `@fabrika/ui`                | the components below, `createRouter`, and `@fabrika/ui/styles.css`                                                                                        |
 
 ## The provider and the routes
 
@@ -3783,6 +3784,12 @@ export function MyTasks() {
 - `useInfiniteQuery(procedure, input)` is for a list that answers `{ items, next }` and takes `after`: `items` are the
   loaded pages, `hasMore` and `loadMore()` the next page. `{ pages: 'all' }` reads every page at once, for a picker's
   options; use it for small lists only.
+- An offset list that answers `{ items, total }` and takes `limit` and `offset` is `useQuery` with `{ keepPrevious:
+  true }`: while the answer of a new `limit` or `offset` loads, `data` stays the previous answer (`status: 'success'`,
+  `fetching: true`), so the table keeps its rows. "Load more (n of N)" grows `limit` in the page's state:
+  `useQuery(api.tasks.queue, { orgId, limit, offset: 0 }, { keepPrevious: true })` with `loadMore={{ hasMore:
+  data.items.length < data.total, loading: queue.fetching, onLoadMore: () => setLimit(limit + 50) }}`; a pager sets
+  `offset` instead. A filter change resets `limit` or `offset`.
 
 ## Writing: useMutation, forms and their errors
 
@@ -3885,6 +3892,9 @@ export function EditTask(
 - A call that is no procedure — a file collection's `api.files.<name>.upload(owner, file)`, `list`, `download` —
   runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
   `invalidates` names.
+- An attachment procedure (`output: attachment(…)`) downloads through `useDownload(api.reports.exportProject)`:
+  `mutate(input)` saves the file and answers it, with the same state and error union. It runs on the provider's client,
+  so a screen test downloads over the kit; never call `download(api.…)` of the module's client from a screen.
 
 ## Who is signed in: useCaller and Can
 
@@ -4192,30 +4202,21 @@ body {
 
 A screen test renders the page in happy-dom (`@happy-dom/global-registrator`, a devDependency) over the application
 itself, behind the test kit's proxy decision: the provider gets a client whose `fetch` is the kit's browser for a
-test caller.
+test caller. `installDom` of `@fabrika/app/react/testing` sets the DOM up.
 
 ```ts web/__tests__/dom.ts
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { installDom } from '@fabrika/app/react/testing'
 import { afterAll } from 'bun:test'
 
-const runtime = {
-	fetch: globalThis.fetch,
-	Request: globalThis.Request,
-	Response: globalThis.Response,
-	Headers: globalThis.Headers,
-}
-GlobalRegistrator.register({ url: 'http://tasks.test/' })
-Object.assign(globalThis, runtime)
-afterAll(async () => {
-	await new Promise((resolve) => setTimeout(resolve, 50))
-	await GlobalRegistrator.unregister()
-})
+const dom = installDom({ url: 'http://tasks.test/' })
+afterAll(() => dom.uninstall())
 ```
 
 ```tsx web/__tests__/mine.test.tsx
 import './dom'
 import { createClient } from '@fabrika/app/client'
 import { FabrikaProvider } from '@fabrika/app/react'
+import { waitForText } from '@fabrika/app/react/testing'
 import { testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { ToastProvider } from '@fabrika/ui'
@@ -4253,14 +4254,7 @@ if (postgres !== null) {
 				</ToastProvider>
 			</FabrikaProvider>,
 		)
-		for (
-			let tries = 0;
-			tries < 200
-			&& !document.body.textContent?.includes('Nothing assigned to you.');
-			tries++
-		) {
-			await new Promise((resolve) => setTimeout(resolve, 10))
-		}
+		await waitForText('Nothing assigned to you.')
 		expect(document.body.textContent).toContain('Nothing assigned to you.')
 		expect(document.querySelector('[role="toolbar"]')).toBeNull()
 		root.unmount()
@@ -4268,9 +4262,13 @@ if (postgres !== null) {
 }
 ```
 
-- `web/__tests__/dom.ts` comes first: imports run in order, and React reads `window` when it loads. Bun's `fetch` is
-  kept, because the clients and the kit run on it. Run the tests with `bun test --isolate`, which gives each file its
-  own globals.
+- `web/__tests__/dom.ts` comes first: imports run in order, and React reads `window` when it loads. `installDom` keeps
+  Bun's `fetch`, `AbortController`, `URL`, `Blob`, `File` and `FormData`, because the clients, the kit, a form's
+  challenge and a download run on them, and turns navigation off, so a download's link click leaves the page for the
+  next test. Run the tests with `bun test --isolate`, which gives each file its own globals.
+- `await type('Title', 'report')` types into the control whose label (or `aria-label`) is `Title` as React reads a
+  person typing; a select takes the option's value. `controlByLabel(label)` answers the control, and
+  `waitForText(text)` waits until the page shows it.
 - Wait for what the page shows, as a person does; assert on text, roles and ARIA, never on layout (happy-dom lays out
   nothing). A refused twin is a caller without the role: the button is gone, and the endpoint still answers 403.
 - Pure mapping (a label, a tone, a field's value) is a function of `web/` with a plain test.
