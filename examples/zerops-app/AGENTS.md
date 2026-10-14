@@ -377,6 +377,12 @@ the SPA is added with it.
   `dependencies` of `install.json`, add its `overrides`, and run `bun install`. Then run the checker as
   `fabrika-check --packed <dir>/release-manifest.json`: without the flag it refuses the tarballs. A deployed
   application never takes this form; the platform build installs from the registry.
+- The local pack is the one way to run a platform checkout's packages in an application. Never `bun link` a
+  `@fabrika/*` package: a linked package resolves its dependencies and peers from the checkout, so the application
+  runs a second React (every hook fails), a second zod and a second kysely. Installed from `vendor/`, the packages
+  resolve `react`, `zod` and `kysely` from the application's own `node_modules`. The pack's version names the
+  checkout's commit: after a change in the platform, commit it, pack again, and replace the block with the new
+  `install.json`.
 
 ```json tsconfig.json
 {
