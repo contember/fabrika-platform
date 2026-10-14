@@ -284,7 +284,7 @@ export function MyTasks() {
 					? 'ready'
 					: 'loading'}
 				error={mine.error?.message}
-				onRetry={() => void mine.refetch()}
+				onRetry={() => void mine.retry()}
 				loadMore={{
 					hasMore: mine.hasMore,
 					loading: mine.loadingMore,

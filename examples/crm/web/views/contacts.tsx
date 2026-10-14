@@ -106,7 +106,12 @@ function EditContact({ contact, open, onClose }: { readonly contact: Contact; re
 	}
 	return (
 		<Dialog open={open} title="Edit contact" onClose={close}>
-			<Form onSubmit={(form) => void submit(form)} error={edit.error === null ? null : describe(edit.error)} aria-label="Edit contact">
+			<Form
+				key={contact.version}
+				onSubmit={(form) => void submit(form)}
+				error={edit.error === null ? null : describe(edit.error)}
+				aria-label="Edit contact"
+			>
 				<Field label="Name" name="name" required>
 					<Input name="name" defaultValue={contact.name} />
 				</Field>

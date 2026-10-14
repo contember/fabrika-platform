@@ -53,7 +53,7 @@ function EditDeal({ deal, open, onClose }: { readonly deal: Deal; readonly open:
 	}
 	return (
 		<Dialog open={open} title="Edit deal" onClose={close}>
-			<Form onSubmit={(form) => void submit(form)} error={edit.error === null ? null : describe(edit.error)} aria-label="Edit deal">
+			<Form key={deal.version} onSubmit={(form) => void submit(form)} error={edit.error === null ? null : describe(edit.error)} aria-label="Edit deal">
 				<Field label="Title" name="title" required>
 					<Input name="title" defaultValue={deal.title} />
 				</Field>
@@ -88,7 +88,7 @@ function StageControl({ deal }: { readonly deal: Deal }) {
 		if (stage !== null) report(await move.mutate({ id: deal.id, stage, expectVersion: deal.version }), `Moved to ${stageLabel(stage)}`)
 	}
 	return (
-		<Form onSubmit={(form) => void submit(form)} aria-label="Move deal">
+		<Form key={deal.version} onSubmit={(form) => void submit(form)} aria-label="Move deal">
 			<div className="crm-inline-form">
 				<Field label="Move to" name="stage">
 					<Select
@@ -113,7 +113,7 @@ function OwnerControl({ deal, members }: { readonly deal: Deal; readonly members
 		}
 	}
 	return (
-		<Form onSubmit={(form) => void submit(form)} aria-label="Assign owner">
+		<Form key={deal.version} onSubmit={(form) => void submit(form)} aria-label="Assign owner">
 			<div className="crm-inline-form">
 				<Field label="New owner" name="owner">
 					<Select name="owner" defaultValue={deal.owner} options={memberOptions(members)} />

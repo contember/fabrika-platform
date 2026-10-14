@@ -58,7 +58,7 @@ export function tableState(list: InfiniteQueryState<unknown>): {
 	return {
 		status: list.status === 'success' ? 'ready' : list.status === 'error' ? 'error' : 'loading',
 		...(list.error === null ? {} : { error: describe(list.error).message }),
-		onRetry: () => void list.refetch(),
+		onRetry: () => void list.retry(),
 		loadMore: { hasMore: list.hasMore, loading: list.loadingMore, onLoadMore: () => void list.loadMore() },
 	}
 }
