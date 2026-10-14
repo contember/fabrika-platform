@@ -1,10 +1,10 @@
 ---
-id: 159
+id: 160
 title: A link client lists other mounts' collections, and an XLSX loses carriage returns
 blocked-by: []
 ---
 
-# 159 — A link client lists other mounts' collections, and an XLSX loses carriage returns
+# 160 — A link client lists other mounts' collections, and an XLSX loses carriage returns
 
 **Summary.** Two review findings on the file client and the XLSX writer of backlog 143/144/111, both P2. Effort: S.
 
