@@ -332,8 +332,9 @@ and the target `Ref`, so no handler can call it.
   does not update it: such a column is not in `update`, its action is not the table's update action, and no stamped
   column takes one (the parse refuses each). The action counts as one the table names, so its `Ref` reads its own row.
   It is in the artifact (`columns.<c>.write`), so the static reader reads it and a new one widens the approval diff.
-- **An update sets a non-empty subset of the columns its action updates** (`updateValues`); one that sets none (`{}`,
-  or only `undefined` values) is refused before anything is sent, rather than bumping the version alone.
+- **An update sets any subset of the columns its action updates, and never bumps the version alone.** One that sets
+  none (`{}`, or only `undefined` values) is no UPDATE: `updateRow` selects its acknowledgement under the same scope,
+  conditions and `expectVersion`, so it answers the row's current `{ id, version }`, 404 or 409 and writes nothing.
 - **An invocation's transaction ends once, and never commits after a refused statement.** `InvocationTransaction`
   opens on its first statement (setting `idle_in_transaction_session_timeout`), and a statement the database refused
   marks it failed: Postgres answers a COMMIT of an aborted transaction with a silent ROLLBACK, so `commit()` rolls back

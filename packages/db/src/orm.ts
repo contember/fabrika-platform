@@ -43,7 +43,6 @@ import {
 	selfLinks,
 	type TableContext,
 	updateRow,
-	updateValues,
 	updatingApp,
 	updatingRef,
 	versionArgument,
@@ -310,7 +309,7 @@ function targetRow(
 	const update = form === 'on'
 		? writing(site, 'update', async (values: unknown, ...options: unknown[]) => {
 			const grant = updatingRef(context, capability, dimension)
-			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model)
+			const changes = readValues(values, updatableBy(context.model, grant.action), 'update', context.model)
 			return updateRow(context, run, { scope: targetPredicate(context, grant) }, changes, versionArgument(context, options))
 		})
 		: refused(site, 'row_address', onOnly('update'))
@@ -346,7 +345,7 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its parent Ref and its ${key}`)
 			}
 			const grant = updatingRef(context, capability, parent)
-			const changes = updateValues(values, updatableBy(context.model, grant.action), context.model)
+			const changes = readValues(values, updatableBy(context.model, grant.action), 'update', context.model)
 			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
 			return updateRow(context, run, { scope }, changes, versionArgument(context, options))
 		}),
@@ -472,7 +471,7 @@ function applicationRows(context: TableContext, site: DataSite, run: Runner, cap
 		insert: writing(site, 'insert', async (values: unknown) => insertIntoApplication(context, run, capability, values)),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			const grant = updatingApp(context, capability)
-			const changes = updateValues(values, updatableBy(model, grant.action), model)
+			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
 			return updateRow(context, run, { scope: appKeyPredicate(model, id) }, changes, versionArgument(context, options))
 		}),
 		remove: writing(site, 'remove', async (id: unknown, ...options: unknown[]) => {
@@ -562,7 +561,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		}),
 		insert: write('insert', async (values: unknown) => insertUnscoped(context, run, site.principal, values)),
 		update: write('update', async (id: unknown, values: unknown, ...options: unknown[]) => {
-			const changes = updateValues(values, model.update, model)
+			const changes = readValues(values, model.update, 'update', model)
 			return updateRow(context, run, { scope: everything(), conditions: byKey(id) }, changes, versionArgument(context, options))
 		}),
 		remove: write('remove', async (id: unknown, ...options: unknown[]) => {

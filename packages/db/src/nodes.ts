@@ -282,6 +282,18 @@ export function existsNode(table: string, key: string, scope: OperationNode, con
 	return Object.freeze(node)
 }
 
+/** `select key as id, version as version from table where (conditions) and scope limit 1`: an update that sets nothing. */
+export function acknowledgementNode(table: string, key: string, version: string | undefined, where: WhereNode): SelectQueryNode {
+	const node: SelectQueryNode = {
+		kind: 'SelectQueryNode',
+		from: FromNode.create([TableNode.create(table)]),
+		selections: acknowledgement(table, key, version).selections,
+		where,
+		limit: LimitNode.create(ValueNode.create(1)),
+	}
+	return Object.freeze(node)
+}
+
 /** `select columns from table where scope limit 1`: the containment columns of one object, for the framework's locator. */
 export function locateNode(table: string, columns: readonly string[], scope: OperationNode): SelectQueryNode {
 	const node: SelectQueryNode = {

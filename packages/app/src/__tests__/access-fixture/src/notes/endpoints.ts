@@ -1,10 +1,10 @@
-// The cases of the endpoint access kit: a write that reads its own target, a precondition (`restore` only a trashed
+// The cases of the endpoint access kit: a write that reads its own target, a patch whose only field is optional, a precondition (`restore` only a trashed
 // note), a report in an organization through `ctx.sql`, ones that forget their scope (also only in the state a seed would
 // skip, or only in an outer dimension's values), and a link holder's read.
 
 import { ConflictError } from '@fabrika/app'
 import { app } from '../app-kit'
-import { ById, InOrganization, InWorkspace, Note, Notes, OrganizationId, Organizations, Saved, Title, Titles, Versioned } from '../schemas'
+import { ById, InOrganization, InWorkspace, Note, Notes, OrganizationId, Organizations, Retitle, Saved, Title, Titles, Versioned } from '../schemas'
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
 	get: r.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })
@@ -18,6 +18,8 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		})),
 	trash: r.mutation({ input: Versioned, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
 		.handle(async ({ input, ctx }) => ctx.db.target.update({ trashed: true }, { expectVersion: input.expectVersion })),
+	retitle: r.mutation({ input: Retitle, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
+		.handle(async ({ input, ctx }) => ctx.db.target.update({ title: input.title }, { expectVersion: input.expectVersion })),
 	restore: r.mutation({ input: Versioned, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
 		.handle(async ({ input, ctx }) => {
 			if (!(await ctx.db.target.getForUpdate()).trashed) throw new ConflictError('only a trashed note is restored')

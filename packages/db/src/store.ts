@@ -49,6 +49,7 @@ import { fencedTransaction, jobLeases } from './job-leases'
 import { linksPredicate, linkValues } from './links'
 import {
 	acknowledgement,
+	acknowledgementNode,
 	type AggregateColumns,
 	aggregateNode,
 	allOf,
@@ -600,21 +601,6 @@ function temporalText(model: TableModel, column: string, value: string): string 
 	return inSet(model.timestamps, column) ? timestampInput(value, `${model.name}.${column}`) : value
 }
 
-/**
- * An update's values: any subset of the columns `allowed` names, and at least one of them set. An update that sets
- * no column would only bump the version.
- */
-export function updateValues(values: unknown, allowed: NameSet, model: TableModel): Map<string, Primitive | null> {
-	const changes = readValues(values, allowed, 'update', model)
-	if (changes.size === 0) {
-		throw new QueryRefusedError(
-			'invalid_argument',
-			`update sets no column of ${model.name}; set at least one (update columns: ${namesOf(allowed).join(', ') || 'none'})`,
-		)
-	}
-	return changes
-}
-
 function stampInsert(
 	context: TableContext,
 	grant: { readonly principal: string },
@@ -792,7 +778,10 @@ async function missingOrChanged(
 	throw new NotFoundError(`${table} not found`)
 }
 
-/** Zero changed rows → one follow-up read in the same transaction → 404 when the object is gone, else 409. */
+/**
+ * Zero changed rows → one follow-up read in the same transaction → 404 when the object is gone, else 409. An update
+ * that sets no column writes nothing, not even the version: it reads the acknowledgement under the same conditions.
+ */
 export async function updateRow<O>(
 	context: TableContext,
 	run: Runner,
@@ -801,13 +790,17 @@ export async function updateRow<O>(
 	expectedVersion: OperationNode | undefined,
 	destination?: RefGrant,
 ): Promise<O> {
-	const table = context.model.name
-	const node = updateNode(table, changes, context.model.version, scopedWhere(conditionsWith(target, expectedVersion), target.scope), answer(context))
+	const { name: table, version } = context.model
+	const where = scopedWhere(conditionsWith(target, expectedVersion), target.scope)
+	const unchanged = changes.size === 0
+	const node = unchanged
+		? acknowledgementNode(table, keyOf(context.model), version, where)
+		: updateNode(table, changes, version, where, answer(context))
 	return run.write(async (transaction) => {
 		if (destination !== undefined) {
 			await lockDestination(transaction, context, destination)
 		}
-		const [row] = await transaction.run<O>(node, guard(context, 'UpdateQueryNode', target.scope))
+		const [row] = await transaction.run<O>(node, guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
 			checkVersion(context, row)
 			return row
@@ -1024,7 +1017,7 @@ export class DimensionTable<DB, P, T extends string> {
 	): Promise<Acknowledgement<P, T>> {
 		const context = this.#context
 		const scope = objectPredicate(context, ref, 'update')
-		const changes = updateValues(values, context.model.update, context.model)
+		const changes = readValues(values, context.model.update, 'update', context.model)
 		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
@@ -1107,7 +1100,7 @@ export class ChildTable<DB, P, T extends string> {
 	): Promise<Acknowledgement<P, T>> {
 		const context = this.#context
 		const scope = childObjectPredicate(context, parent, key, 'update')
-		const changes = updateValues(values, context.model.update, context.model)
+		const changes = readValues(values, context.model.update, 'update', context.model)
 		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 

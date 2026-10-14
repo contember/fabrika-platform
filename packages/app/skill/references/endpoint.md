@@ -27,9 +27,10 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
-  `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
-  `z.nullable(…)` (`EditTask.dueOn`). An update that sets no column is a 500, and the generated cases send no optional
-  field and `null` for a nullable one (`references/tests.md`).
+  `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). On an edit, a field the caller must send is required (`EditTask.title`), one the caller may
+  clear is `z.nullable(…)` (`EditTask.dueOn`), and a patch that sends only what changed takes `.optional()` fields: an
+  update that sets no column writes nothing and answers the row's current `{ id, version }`. The generated cases send
+  no optional field and `null` for a nullable one (`references/tests.md`).
 - A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
   `api.members.orgs()`.
 

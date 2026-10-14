@@ -38,6 +38,8 @@ describe('the endpoint access cases of a kit application', () => {
 		const text = await endpointTest(tree())
 		expect(text).toContain(`expect(await kit.own('api.notes.trash', ${VERSIONED})).toEqual({ status: 200 })`)
 		expect(text).toContain("test('api.notes.trash: a caller with only notes.write reaches its own note'")
+		// The sample omits an optional field, so the patch sets nothing and answers its acknowledgement.
+		expect(text).toContain(`expect(await kit.own('api.notes.retitle', ${VERSIONED})).toEqual({ status: 200 })`)
 		expect(text).toContain("expect(await kit.own('shared.note', {})).toEqual({ status: 200 })")
 		expect(text).not.toContain("kit.own('api.notes.get'")
 		expect(text).toContain(

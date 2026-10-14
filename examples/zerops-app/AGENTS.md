@@ -589,9 +589,10 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   its own schemas in its `endpoints.ts` (`Task`, `NewTask` in `SKILL.md`), and may declare other consts there too.
 - `z.iso.datetime()` takes UTC (`…Z`) only; `z.iso.date()` is `YYYY-MM-DD`.
 - Optional or nullable: on a create, a field the caller may leave out is `.optional()`, never a required
-  `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). An edit endpoint takes every field it sets as required, and one the caller may clear is
-  `z.nullable(…)` (`EditTask.dueOn`). An update that sets no column is a 500, and the generated cases send no optional
-  field and `null` for a nullable one (`references/tests.md`).
+  `z.nullable(…)`, and the handler writes `?? null` (`NewTask.dueOn`). On an edit, a field the caller must send is required (`EditTask.title`), one the caller may
+  clear is `z.nullable(…)` (`EditTask.dueOn`), and a patch that sends only what changed takes `.optional()` fields: an
+  update that sets no column writes nothing and answers the row's current `{ id, version }`. The generated cases send
+  no optional field and `null` for a nullable one (`references/tests.md`).
 - A query that needs no input declares none: `r.query({ output, access })`, and the SPA calls it with no argument,
   `api.members.orgs()`.
 
@@ -1175,15 +1176,15 @@ procedure's output, a form's `{ received: true }`, a file list's `{ items, next 
 `{ error: { type, message } }`. The typed client unwraps it; a plain `fetch` (a form, a test) reads `result`. A health
 check (`{ status: 'ok' }`) and the SPA's browser configuration answer without one.
 
-| Answer | Comes from                                                                                                                                                                                                                                                              |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                                                                                                  |
-| 401    | no valid credential. In a test, the caller is missing                                                                                                                                                                                                                   |
-| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself; a path no endpoint declares                                                 |
-| 404    | `on`: the object does not exist or is not the caller's, also when a concurrent delete removed it first; `NotFoundError`                                                                                                                                                 |
-| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                                                                                                    |
-| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, a call of `ctx.sql` the endpoint does not declare (`undeclared_reach`), an update that sets no column, a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
-| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                                                                                           |
+| Answer | Comes from                                                                                                                                                                                                                               |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | the input does not match its schema; `BadRequestError`                                                                                                                                                                                   |
+| 401    | no valid credential. In a test, the caller is missing                                                                                                                                                                                    |
+| 403    | the caller lacks the action, or for `in` the scope: a missing grant, never a bug to code around; `ctx.members.list()` below the org for a caller without the list action on the org itself; a path no endpoint declares                  |
+| 404    | `on`: the object does not exist or is not the caller's, also when a concurrent delete removed it first; `NotFoundError`                                                                                                                  |
+| 409    | a stale `expectVersion`; `ConflictError`; a lost `getForUpdate` race                                                                                                                                                                     |
+| 500    | a throw without a numeric `httpStatus` below 500, a `type` and a `message`, a refused statement, a call of `ctx.sql` the endpoint does not declare (`undeclared_reach`), a `ctx.sql` row the schema refuses (`count(*)` without `::int`) |
+| 503    | IAM cannot be asked, or the member directory has no transport                                                                                                                                                                            |
 
 An undeclared path is 403 at the proxy, also for a signed-in caller who holds every action: the proxy serves only the
 contract's endpoints, picks the most specific one, and never falls through to a broader one. A test that asks for a

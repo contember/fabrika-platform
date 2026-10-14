@@ -578,15 +578,19 @@ describe('writes take declared columns and plain values only', () => {
 		refused(await layer.attempt(() => call(layer.raw.notes, 'insert', target, ['title'])), QueryRefusedError, 'takes an object')
 	})
 
-	test('a versioned table needs expectVersion; an empty update is refused', async () => {
+	test('a versioned table needs expectVersion; an update that sets nothing reads its acknowledgement and writes nothing', async () => {
 		const layer = recordingLayer()
 		refused(
 			await layer.attempt(() => call(layer.raw.notes, 'update', layer.noteRef('notes.write'), { title: 'x' })),
 			QueryRefusedError,
 			'expectVersion',
 		)
-		const rename = layer.workspaceRef('workspaces.admin')
-		refused(await layer.attempt(() => call(layer.raw.workspaces, 'update', rename, {})), QueryRefusedError, 'update sets no column of workspaces')
+		const unchanged = await layer.attempt(() => layer.stores.notes.update(layer.noteRef('notes.write'), { title: undefined }, 3))
+		expect(unchanged.error).toBeInstanceOf(NotFoundError)
+		expect(unchanged.statements.map((statement) => statement.sql)).toEqual([
+			'select "notes"."id" as "id", "notes"."version" as "version" from "notes" where ("notes"."version" = $1) and "notes"."id" = $2 and "notes"."workspace_id" = $3 and "notes"."organization_id" = $4 limit $5',
+			'select "notes"."id" from "notes" where "notes"."id" = $1 and "notes"."workspace_id" = $2 and "notes"."organization_id" = $3 limit $4',
+		])
 	})
 
 	test('a child update takes a non-empty key', async () => {

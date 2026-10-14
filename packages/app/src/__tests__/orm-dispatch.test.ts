@@ -152,6 +152,21 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		expect(await deal(id)).toEqual({ title: 'kept', stage: 'won', version: 2 })
 	})
 
+	test('an update that sets no column answers the current acknowledgement and writes nothing, not even the version', async () => {
+		const { app, hooks } = start()
+		const id = await seedDeal()
+		hooks.rename = 'set nothing'
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const sent = await send(app, '/api/deals.rename', { token: await writer(), body: { id, title: 'ignored', expectVersion: 1 } })
+			expect(resultOf(sent)).toEqual({ id, version: 1 })
+			expect(log.mock.calls).toEqual([])
+		} finally {
+			log.mockRestore()
+		}
+		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
+	})
+
 	test('an audited export commits its write only with its file: over maxBytes it answers no body and writes nothing', async () => {
 		const { app } = start()
 		const id = await seedDeal('won')

@@ -182,7 +182,7 @@ describe.skipIf(!hasPostgres)('a column write action', () => {
 	})
 })
 
-describe.skipIf(!hasPostgres)('an update takes any non-empty subset of the columns its action writes', () => {
+describe.skipIf(!hasPostgres)('an update takes any subset of the columns its action writes', () => {
 	test('one column changes, the others keep their values', async () => {
 		const id = await seedTask({ title: 'keep', dueOn: '2026-10-20' })
 		expect(await mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', { status: 'doing' }, { expectVersion: 1 })))
@@ -191,13 +191,17 @@ describe.skipIf(!hasPostgres)('an update takes any non-empty subset of the colum
 		expect(stored).toMatchObject({ status: 'doing', title: 'keep', version: 2 })
 	})
 
-	test('an update that sets no column is refused and writes nothing, not even the version', async () => {
+	test('an update that sets no column answers the current acknowledgement and writes nothing, not even the version', async () => {
 		const id = await seedTask()
 		for (const values of [{}, { title: undefined }]) {
-			await expect(mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', values, { expectVersion: 1 })))
-				.rejects.toThrow('update sets no column of tasks; set at least one (update columns: title, status, due_on, closed_at, overdue)')
+			expect(await mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', values, { expectVersion: 1 })))
+				.toEqual({ id, version: 1 })
 		}
 		expect((await row('tasks', id))?.['version']).toBe(1)
+		await expect(mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'update', {}, { expectVersion: 2 })))
+			.rejects.toThrow('tasks was changed by someone else')
+		await expect(mutate((handles) => call(handles.target(task('tasks.write', Bun.randomUUIDv7()), 'on'), 'update', {}, { expectVersion: 1 })))
+			.rejects.toThrow('tasks not found')
 	})
 })
 

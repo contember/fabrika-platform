@@ -387,7 +387,8 @@ names the same fix at runtime.
   insert action is the export's. A reference table stays read-only and migration-managed.
 - **Writes answer `{ id, version }`** (`{ id }` for a table without a version), never row data. A versioned table's
   `update` and `remove` take `{ expectVersion }`: a row that changed since is 409, a missing one 404. `update` takes any
-  non-empty subset of the columns its action updates; one that sets no column is refused.
+  subset of the columns its action updates; one that sets none writes nothing, not even the version, and answers the
+  row's current `{ id, version }`, with the same 404 and 409.
 - **A column write action** (`columns: { assignee: { write: 'tasks.assign' } }` in `src/db/tables.ts`) lets a capability
   of that action update exactly those columns through `ctx.db.target.update` (or a child table's `update`); the
   table's update action keeps the rest and does not update them. The action reads its own target like any action the

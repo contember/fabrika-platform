@@ -138,6 +138,12 @@ describe.skipIf(accessPostgres === null)('the endpoint access kit over a kit app
 		expect(await kit.denied('api.notes.trash', VERSIONED)).toEqual({ status: 404 })
 	})
 
+	test('an edit whose only field is optional answers its generated case, which sends none, without a fixture', async () => {
+		const kit = accessKit()
+		expect(await kit.own('api.notes.retitle', VERSIONED)).toEqual({ status: 200 })
+		expect(await kit.denied('api.notes.retitle', VERSIONED)).toEqual({ status: 404 })
+	})
+
 	test('a precondition the seed does not meet is an answer that leaks nothing; the seed meets it', async () => {
 		const kit = accessKit()
 		expect(await kit.leaked('api.notes.restore', VERSIONED)).toEqual({ answered: true, leaked: [] })

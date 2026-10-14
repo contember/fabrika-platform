@@ -13,8 +13,11 @@ import { contract } from './fabrika.contract'
 export interface OrmHooks {
 	/** Runs while `deals.reopen` holds its row's lock. */
 	afterLock: () => Promise<void>
-	/** What `deals.rename` does after its write, or `'undeclared sql'`: calls `ctx.sql` first, which it does not declare. */
-	rename: 'answer' | 'throw' | 'refused output' | 'undeclared sql'
+	/**
+	 * What `deals.rename` does after its write, or before it: `'undeclared sql'` calls `ctx.sql`, which it does not
+	 * declare, and `'set nothing'` updates with `{}`.
+	 */
+	rename: 'answer' | 'throw' | 'refused output' | 'undeclared sql' | 'set nothing'
 	/** Runs while `deals.keep` and the job keep their handles live. */
 	whileKept: () => Promise<void>
 	/** The handles a handler kept past its invocation. */
@@ -100,7 +103,8 @@ export function ormApp(hooks: OrmHooks): ContractImplementation<typeof contract>
 					if (hooks.rename === 'undeclared sql') {
 						await kept(hooks, () => call(ctx, 'sql', z.object({ n: z.number() })))
 					}
-					const saved = await call(ctx, 'db.target.update', { title: field(input, 'title') }, { expectVersion: field(input, 'expectVersion') })
+					const values = hooks.rename === 'set nothing' ? {} : { title: field(input, 'title') }
+					const saved = await call(ctx, 'db.target.update', values, { expectVersion: field(input, 'expectVersion') })
 					if (hooks.rename === 'throw') {
 						throw new Error('the handler failed after its write')
 					}
