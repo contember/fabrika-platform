@@ -32,6 +32,7 @@ bun test src/__tests__/membership-stand-in.test.ts  # the kit's IAM stand-in: de
 bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside form inboxes, a challenge and a scan (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot, a built SPA, the stand-in IAM
+bun test src/__tests__/test-kit-links.test.ts   # a share link the app issued opens as its holder until revoked; devKit (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
@@ -87,7 +88,9 @@ src/
     caller.ts         test callers and their grants
     membership.ts     kitMembership, every kit's stand-in IAM transport: member directories from the kit's callers,
                       the writes checked as IAM checks them, live in the directory and the next token; it records them,
-                      accepts an invitation, and seeds the invitations and links a generated case cancels or revokes
+                      accepts an invitation, seeds the invitations and links a generated case cancels or revokes, and
+                      resolves the key of a link it issued; it lists the invitations it sent (the dev mail view)
+    dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes

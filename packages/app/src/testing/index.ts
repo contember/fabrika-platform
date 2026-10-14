@@ -17,5 +17,7 @@ export type {
 	TestLink,
 	TestScope,
 } from './caller'
+export { type DevKit, devKit, type DevLink, type DevPersona, type DevScopeValue, type DevSeed, type DevSeedResult } from './dev'
 export { type JobName, TEST_ENVIRONMENT, TEST_ISSUER, type TestConnection, type TestKit, testKit, type TestKitOptions } from './kit'
+export type { SentInvitation, TestMembership } from './membership'
 export { statusOf } from './status'

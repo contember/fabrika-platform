@@ -107,6 +107,29 @@ export interface KitMembership {
 	seedInvitation(scope: Scope, role: string, email: string): string
 	/** A share link of `mount` bound to `chain`, as `issuer` issued it in an earlier request; answers its id. */
 	seedLink(issuer: string, mount: string, chain: readonly Scope[]): string
+	/** The link a key it issued is bound to, as IAM resolves a link key; `undefined` for any other key and a revoked link. */
+	linkOfKey(key: string): IssuedLinkKey | undefined
+	/** The roles `caller` holds now: the test's grants, with the ones this stand-in assigned or revoked. */
+	membershipsOf(caller: TestCaller): readonly TestMembership[]
+	/** Every invitation it opened, the seeded ones included, in the order they were first opened. */
+	invitations(): readonly SentInvitation[]
+}
+
+/** A share link the stand-in issued, as its key resolves. */
+export interface IssuedLinkKey {
+	readonly id: string
+	readonly mount: string
+	readonly chain: readonly Scope[]
+}
+
+/** The invitation e-mail IAM would have sent: to whom, for which role in which scope, and where it stands now. */
+export interface SentInvitation {
+	readonly id: string
+	readonly email: string
+	readonly role: string
+	readonly scope: Scope
+	readonly expiresAt: number
+	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired'
 }
 
 /**
@@ -138,6 +161,9 @@ interface KitLink {
 	readonly issuer: string
 	readonly mount: string
 	readonly chain: readonly Scope[]
+	/** The key it answered the issuer; `null` for a seeded link, which no one holds. */
+	readonly key: string | null
+	readonly revoked: boolean
 }
 
 /** A token the kit's IAM signed, for the caller it was minted for, until its `exp`. */
@@ -627,9 +653,10 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const heldOnChain = (action: string): boolean => input.chain.some((scope) => permits(perms, action, scope))
 		if (!heldOnChain(mount.issuedBy) || !mount.grants.every(heldOnChain)) return NOT_ALLOWED
 		const id = `link-${randomId()}`
-		links.set(id, { id, issuer: caller.id, mount: input.mount, chain: input.chain })
+		const key = `${API_KEY_PREFIX}link_${randomId()}`
+		links.set(id, { id, issuer: caller.id, mount: input.mount, chain: input.chain, key, revoked: false })
 		asked.push({ operation: 'issueLink', principalId: caller.id, id, mount: input.mount, chain: input.chain })
-		return { ok: true, key: `${API_KEY_PREFIX}link_${randomId()}`, id, expiresAt: now() + input.days * DAY_SECONDS }
+		return { ok: true, key, id, expiresAt: now() + input.days * DAY_SECONDS }
 	}
 
 	/** A link this stand-in issued, by its issuer or a holder of `members.manage` on a value of its chain. */
@@ -643,6 +670,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			return members !== null && members !== undefined && permits([...permsOf(caller)], members.manage, scope)
 		})
 		if (link.issuer !== caller.id && !manager) return NOT_ALLOWED
+		links.set(link.id, { ...link, revoked: true })
 		asked.push({ operation: 'revokeLink', principalId: caller.id, id: input.id })
 		return { ok: true }
 	}
@@ -665,9 +693,22 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	}
 	const seedLink = (issuer: string, mount: string, chain: readonly Scope[]): string => {
 		const id = `link-${randomId()}`
-		links.set(id, { id, issuer, mount, chain })
+		links.set(id, { id, issuer, mount, chain, key: null, revoked: false })
 		return id
 	}
+	const linkOfKey = (key: string): IssuedLinkKey | undefined => {
+		const link = [...links.values()].find((candidate) => candidate.key === key)
+		return link === undefined || link.revoked ? undefined : { id: link.id, mount: link.mount, chain: link.chain }
+	}
+	const invitationsSent = (): readonly SentInvitation[] =>
+		[...invitations.values()].map(({ id, email, role, scope, expiresAt, closed }) => ({
+			id,
+			email,
+			role,
+			scope,
+			expiresAt,
+			status: closed ?? (expiresAt > now() ? 'open' : 'expired'),
+		}))
 	const accept = (invitationId: string, recipient?: TestCaller): AcceptedInvitation => {
 		const invitation = invitations.get(invitationId)
 		if (invitation === undefined || invitation.closed !== null || invitation.expiresAt <= now()) {
@@ -692,5 +733,15 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (recipient !== undefined) changes.assign(recipient.id, invitation.role, invitation.scope)
 		return { scope: invitation.scope, role: invitation.role, email: invitation.email }
 	}
-	return Object.freeze({ rpc, asked, permsOf, accept, seedInvitation, seedLink })
+	return Object.freeze({
+		rpc,
+		asked,
+		permsOf,
+		accept,
+		seedInvitation,
+		seedLink,
+		linkOfKey,
+		membershipsOf: (caller: TestCaller) => changes.heldBy(caller.id, membershipsOf(callers, caller.id)),
+		invitations: invitationsSent,
+	})
 }

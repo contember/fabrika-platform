@@ -17,6 +17,7 @@ import {
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
 	normalizeEmailIdentity,
+	type PermissionEntry,
 	PROXY_TOKEN_HEADER,
 	SESSION_COOKIE,
 	TOKEN_ALG,
@@ -195,10 +196,15 @@ export function standInIamKit<C extends AnyContract>(
 	return { kit, standIn }
 }
 
-function bootTestKit<C extends AnyContract>(
-	app: ContractImplementation<C>,
-	options: TestKitOptions,
-): { readonly kit: TestKit<C>; readonly standIn: KitMembership | null } {
+/** A booted kit, and its stand-in IAM unless it was given a membership transport. */
+export interface BootedTestKit<C extends AnyContract> {
+	readonly kit: TestKit<C>
+	readonly standIn: KitMembership | null
+	/** The caller `value` is when `testCaller` or `acceptInvitation` of this kit made it; `undefined` for any other value. */
+	callerOf(value: unknown): TestCaller | undefined
+}
+
+export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions): BootedTestKit<C> {
 	refuseInProduction('@fabrika/app/testing')
 	const name = app.contract.vocabulary.app
 	const appId = `${name}@${TEST_ENVIRONMENT}`
@@ -405,6 +411,33 @@ function bootTestKit<C extends AnyContract>(
 		return { ok: true, token, expiresAt: claims.exp }
 	}
 
+	/**
+	 * The holder of a key the stand-in IAM issued through `ctx.links`, as IAM resolves a link key: the mount's grants on
+	 * the link's object, bound to its chain; nothing once the link is revoked.
+	 */
+	function linkHolderOf(key: string): LinkTestCaller | undefined {
+		const link = standIn?.linkOfKey(key)
+		const mount = link === undefined ? undefined : artifact.mounts[link.mount]
+		const object = link?.chain[0]
+		if (link === undefined || mount?.kind !== 'link' || object === undefined) return undefined
+		const chain = Object.freeze(link.chain.map((scope) => Object.freeze({ type: scope.type, value: scope.value })))
+		return Object.freeze({
+			id: link.id,
+			affiliation: 'internal',
+			disabled: false,
+			perms: Object.freeze(
+				mount.grants.map((action): PermissionEntry => ({ action, scope: { type: object.type, value: object.value }, source: 'grant' })),
+			),
+			key,
+			cookie: null,
+			kind: 'link',
+			app: null,
+			label: null,
+			email: null,
+			link: Object.freeze({ mount: link.mount, chain }),
+		})
+	}
+
 	const iam: IamGateway = {
 		async mintToken({ app: audience, session }) {
 			const caller = session === null || audience !== appId ? undefined : bySession.get(session)
@@ -414,7 +447,7 @@ function bootTestKit<C extends AnyContract>(
 			return mint(caller)
 		},
 		async mintFromKey({ app: audience, key }) {
-			const caller = audience === appId ? byKey.get(key) : undefined
+			const caller = audience === appId ? (byKey.get(key) ?? linkHolderOf(key)) : undefined
 			if (caller === undefined) {
 				return { ok: false, reason: 'invalid_key' }
 			}
@@ -512,5 +545,6 @@ function bootTestKit<C extends AnyContract>(
 	return {
 		kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob, acceptInvitation }),
 		standIn,
+		callerOf: (value) => [...memberships.keys()].find((caller) => caller === value),
 	}
 }
