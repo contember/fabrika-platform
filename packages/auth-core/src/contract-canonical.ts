@@ -40,6 +40,8 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 			frameAncestors: sortedSources(artifact.csp.frameAncestors),
 			...(artifact.csp.scriptSrc === undefined ? {} : { scriptSrc: sortedSources(artifact.csp.scriptSrc) }),
 			...(artifact.csp.frameSrc === undefined ? {} : { frameSrc: sortedSources(artifact.csp.frameSrc) }),
+			...(artifact.csp.styleSrc === undefined ? {} : { styleSrc: sortedSources(artifact.csp.styleSrc) }),
+			...(artifact.csp.fontSrc === undefined ? {} : { fontSrc: sortedSources(artifact.csp.fontSrc) }),
 		},
 		tables: mapValues(artifact.tables, canonicalTable),
 		endpoints: artifact.endpoints.map(canonicalizeEndpoint).sort((a, b) => compare(a.id, b.id)),

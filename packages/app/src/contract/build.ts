@@ -108,7 +108,7 @@ const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'used
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 const DECLARED_ALLOWED = "sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>'"
-const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc']
+const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
 /** Turnstile's `action`: the form's name, which the verification expects back. */
@@ -1317,12 +1317,16 @@ class ArtifactBuilder {
 		this.#keys('csp', declaration, CSP_FIELDS)
 		const scriptSrc = this.#cspSources('csp scriptSrc', this.#withChallengeOrigins('scriptSrc', declaration.scriptSrc ?? []))
 		const frameSrc = this.#cspSources('csp frameSrc', this.#withChallengeOrigins('frameSrc', declaration.frameSrc ?? []))
+		const styleSrc = this.#cspSources('csp styleSrc', declaration.styleSrc ?? [])
+		const fontSrc = this.#cspSources('csp fontSrc', declaration.fontSrc ?? [])
 		return {
 			connectSrc: this.#cspSources('csp connectSrc', declaration.connectSrc ?? []),
 			imgSrc: this.#cspSources('csp imgSrc', declaration.imgSrc ?? []),
 			frameAncestors: this.#cspSources('csp frameAncestors', declaration.frameAncestors ?? []),
 			...(scriptSrc.length === 0 ? {} : { scriptSrc }),
 			...(frameSrc.length === 0 ? {} : { frameSrc }),
+			...(styleSrc.length === 0 ? {} : { styleSrc }),
+			...(fontSrc.length === 0 ? {} : { fontSrc }),
 		}
 	}
 

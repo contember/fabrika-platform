@@ -1,5 +1,5 @@
-// Script and frame origins and a form's admission in the conservative access diff (ADR-0050 §3): a new origin in
-// either directive widens and a removed one narrows, like the three directives before them; a stored snapshot from
+// Script, frame, style and font origins and a form's admission in the conservative access diff (ADR-0050 §3): a new
+// origin in any directive widens and a removed one narrows, like the three directives before them; a stored snapshot from
 // before they existed still compares; any change to a form's admission is shown and widens.
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
@@ -84,6 +84,35 @@ describe('script and frame origins in the approval diff', () => {
 		expect(classifyAccess(older, stored).outcome).toBe('unchanged')
 		expect(classifyAccess(older, snapshot(withCsp(`{ frameSrc: [${WIDGET}] }`))).changes).toEqual([
 			{ widens: true, line: 'CSP `frameSrc` allows `https://widgets.example.com`' },
+		])
+	})
+})
+
+describe('style and font origins in the approval diff', () => {
+	const FONTS_CSS = "{ origin: 'https://fonts.googleapis.com', purpose: 'the typeface stylesheet' }"
+	const FONTS = "{ origin: 'https://fonts.gstatic.com', purpose: 'the typeface files' }"
+
+	test('a new style origin and a new font origin each widen, and the policy carries them', () => {
+		const after = snapshot(withCsp(`{ styleSrc: [${FONTS_CSS}], fontSrc: [${FONTS}] }`))
+		const classification = classifyAccess(snapshot(), after)
+		expect(classification.outcome).toBe('widening')
+		expect(classification.changes).toEqual([
+			{ widens: true, line: 'CSP `styleSrc` allows `https://fonts.googleapis.com`' },
+			{ widens: true, line: 'CSP `fontSrc` allows `https://fonts.gstatic.com`' },
+		])
+		const contract = after.contract
+		if (contract === null) throw new Error('the candidate has a contract')
+		const policy = headerPolicy(cspOrigins(contract.csp), null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(policy).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;")
+		expect(policy).toContain("font-src 'self' data: https://fonts.gstatic.com;")
+	})
+
+	test('a removed one narrows', () => {
+		const classification = classifyAccess(snapshot(withCsp(`{ styleSrc: [${FONTS_CSS}], fontSrc: [${FONTS}] }`)), snapshot())
+		expect(classification.outcome).toBe('removal')
+		expect(classification.changes).toEqual([
+			{ widens: false, line: 'CSP `styleSrc` no longer allows `https://fonts.googleapis.com`' },
+			{ widens: false, line: 'CSP `fontSrc` no longer allows `https://fonts.gstatic.com`' },
 		])
 	})
 })

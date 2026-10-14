@@ -44,7 +44,7 @@ const PERMISSIONS_POLICY = PERMISSIONS_POLICY_FEATURES.map((feature) => `${featu
 
 export type HeaderPolicy = readonly (readonly [name: string, value: string])[]
 
-/** The named origins a contract adds to five CSP directives: exact `https://` origins, never patterns. */
+/** The named origins a contract adds to seven CSP directives: exact `https://` origins, never patterns. */
 export interface CspOrigins {
 	readonly connectSrc: readonly string[]
 	readonly imgSrc: readonly string[]
@@ -52,6 +52,8 @@ export interface CspOrigins {
 	readonly scriptSrc: readonly string[]
 	/** `frame-src 'self' <origins>` is emitted only when it names an origin; without it frames fall back to `default-src 'self'`. */
 	readonly frameSrc: readonly string[]
+	readonly styleSrc: readonly string[]
+	readonly fontSrc: readonly string[]
 }
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
@@ -72,7 +74,15 @@ export function isPolicyOrigin(value: string, protocols: readonly string[] = ['h
 /** The most named origins one directive may carry: the contract build and the manifest parser refuse more. */
 export const MAX_CSP_ORIGINS = 16
 
-export const NO_CSP_ORIGINS: CspOrigins = Object.freeze({ connectSrc: [], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [] })
+export const NO_CSP_ORIGINS: CspOrigins = Object.freeze({
+	connectSrc: [],
+	imgSrc: [],
+	frameAncestors: [],
+	scriptSrc: [],
+	frameSrc: [],
+	styleSrc: [],
+	fontSrc: [],
+})
 
 export function cspOrigins(csp: CspExtensions): CspOrigins {
 	return {
@@ -81,6 +91,8 @@ export function cspOrigins(csp: CspExtensions): CspOrigins {
 		frameAncestors: csp.frameAncestors.map((source) => source.origin),
 		scriptSrc: (csp.scriptSrc ?? []).map((source) => source.origin),
 		frameSrc: (csp.frameSrc ?? []).map((source) => source.origin),
+		styleSrc: (csp.styleSrc ?? []).map((source) => source.origin),
+		fontSrc: (csp.fontSrc ?? []).map((source) => source.origin),
 	}
 }
 
@@ -94,9 +106,9 @@ export function headerPolicy(origins: CspOrigins, operationsOrigin: string | nul
 	const directives = [
 		"default-src 'self'",
 		`script-src ${["'self'", ...origins.scriptSrc].join(' ')}`,
-		"style-src 'self' 'unsafe-inline'",
+		`style-src ${["'self'", "'unsafe-inline'", ...origins.styleSrc].join(' ')}`,
 		`img-src ${["'self'", 'data:', 'blob:', ...origins.imgSrc].join(' ')}`,
-		"font-src 'self' data:",
+		`font-src ${["'self'", 'data:', ...origins.fontSrc].join(' ')}`,
 		`connect-src ${connect.join(' ')}`,
 		"form-action 'self'",
 		"object-src 'none'",

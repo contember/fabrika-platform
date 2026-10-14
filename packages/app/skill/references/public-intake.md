@@ -331,8 +331,8 @@ export const contract = app.contract((c) => ({
   anyone can inflate the counts (the rate limits bound only how fast), and nothing drains the inbox but a job you
   write. Ask the human first; usually the application should not count clicks.
 - **Other origins** the pages load (an image host, an API the browser calls) go in the contract's `csp` section:
-  `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc` and
-  `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
+  `csp: { scriptSrc: [{ origin: 'https://…', purpose: '…' }] }`, beside `connectSrc`, `imgSrc`, `frameSrc`,
+  `styleSrc`, `fontSrc` and `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
 - **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): its
   download answers 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
 - **The kick.** `then: 'intake'` makes each accepted submission start a run of the job within seconds, once its row

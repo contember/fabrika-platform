@@ -1032,7 +1032,7 @@ function formChallenge(value: LiteralValue | undefined): { provider: 'turnstile'
 }
 
 function cspDeclaration(value: LiteralValue): CspDeclaration {
-	const fields = strictFields(value, 'csp', [], ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc'])
+	const fields = strictFields(value, 'csp', [], ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc'])
 	const sources = (key: string): CspSource[] | undefined => {
 		const list = fields.get(key)
 		if (list === undefined) {
@@ -1052,5 +1052,7 @@ function cspDeclaration(value: LiteralValue): CspDeclaration {
 		frameAncestors: sources('frameAncestors'),
 		scriptSrc: sources('scriptSrc'),
 		frameSrc: sources('frameSrc'),
+		styleSrc: sources('styleSrc'),
+		fontSrc: sources('fontSrc'),
 	}
 }

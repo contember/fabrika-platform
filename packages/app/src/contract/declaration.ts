@@ -289,6 +289,8 @@ export interface CspDeclaration {
 	readonly frameAncestors?: readonly CspSource[]
 	readonly scriptSrc?: readonly CspSource[]
 	readonly frameSrc?: readonly CspSource[]
+	readonly styleSrc?: readonly CspSource[]
+	readonly fontSrc?: readonly CspSource[]
 }
 
 export function isProcedure<S, Access>(

@@ -270,6 +270,8 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		frameAncestors: z.array(cspSource),
 		scriptSrc: z.array(cspSource).nonempty().optional(),
 		frameSrc: z.array(cspSource).nonempty().optional(),
+		styleSrc: z.array(cspSource).nonempty().optional(),
+		fontSrc: z.array(cspSource).nonempty().optional(),
 	}),
 	tables: record(tablePolicy),
 	endpoints: z.array(endpointRow).superRefine((rows, context) => {

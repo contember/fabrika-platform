@@ -1,8 +1,9 @@
-// What a form's admission and the script and frame origins compile to, and what `compileContract` refuses in them.
+// What a form's admission and the script, frame, style and font origins compile to, and what `compileContract` refuses in them.
 
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { compileContract, ContractError, defineContract } from '../contract'
+import { applicationPolicy } from '../implement/headers'
 import { contract } from './fixtures/intake/fabrika.contract'
 import { tables } from './fixtures/intake/src/db/tables'
 import { vocabulary } from './fixtures/intake/src/vocabulary'
@@ -101,6 +102,39 @@ describe('compileContract refuses', () => {
 				`mount 'apply': challenge secret "${secret}" is not the name of an application variable (allowed: 'TURNSTILE_SECRET'; never the secret itself, never FABRIKA_*)`,
 			])
 		}
+	})
+
+	test('a style origin and a font origin compile into the artifact and the policy, and are absent when undeclared', () => {
+		const stylesheet = { origin: 'https://fonts.googleapis.com', purpose: 'the typeface stylesheet' }
+		const fonts = { origin: 'https://fonts.gstatic.com', purpose: 'the typeface files' }
+		const declared = defineContract(vocabulary, (c) => ({
+			apply: c.form('/apply', { input: z.strictObject({ name: z.string(), email: z.email() }), appendTo: 'applications' }),
+			contact: c.form('/contact', { input: z.strictObject({ email: z.email(), body: z.string() }), appendTo: 'messages' }),
+			csp: { styleSrc: [stylesheet], fontSrc: [fonts] },
+		}))
+		const artifact = compileContract(declared, tables)
+		expect(artifact.csp).toEqual({ connectSrc: [], imgSrc: [], frameAncestors: [], styleSrc: [stylesheet], fontSrc: [fonts] })
+		const policy = applicationPolicy(artifact.csp, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(policy).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;")
+		expect(policy).toContain("font-src 'self' data: https://fonts.gstatic.com;")
+		const plain = applicationPolicy({ connectSrc: [], imgSrc: [], frameAncestors: [] }, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(plain).toContain("style-src 'self' 'unsafe-inline';")
+		expect(plain).toContain("font-src 'self' data:;")
+	})
+
+	test('a style or font origin that is not https, or a wildcard', () => {
+		const wrong = defineContract(vocabulary, (c) => ({
+			apply: c.form('/apply', { input: z.strictObject({ name: z.string(), email: z.email() }), appendTo: 'applications' }),
+			contact: c.form('/contact', { input: z.strictObject({ email: z.email(), body: z.string() }), appendTo: 'messages' }),
+			csp: {
+				styleSrc: [{ origin: 'http://fonts.example.com', purpose: 'A stylesheet' }],
+				fontSrc: [{ origin: 'https://*.example.com', purpose: 'Any font' }],
+			},
+		}))
+		expect(problemsOf(() => compileContract(wrong, tables))).toEqual([
+			"csp styleSrc: 'http://fonts.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
+			"csp fontSrc: 'https://*.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
+		])
 	})
 
 	test('a script or frame origin that is not https, or a wildcard', () => {

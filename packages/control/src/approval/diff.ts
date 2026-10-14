@@ -152,7 +152,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 			}),
 		],
 	})
-	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc'] as const) {
+	for (const directive of ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc'] as const) {
 		compareSet(
 			changes,
 			(baseline.csp[directive] ?? []).map((source) => source.origin),

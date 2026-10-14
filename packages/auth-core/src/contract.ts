@@ -426,6 +426,10 @@ export interface CspExtensions {
 	readonly scriptSrc?: readonly CspSource[]
 	/** Present only when the contract names a frame origin; `frame-src` is emitted only then. */
 	readonly frameSrc?: readonly CspSource[]
+	/** Present only when the contract names a stylesheet origin, such as a hosted font's stylesheet. */
+	readonly styleSrc?: readonly CspSource[]
+	/** Present only when the contract names a font origin. */
+	readonly fontSrc?: readonly CspSource[]
 }
 
 export interface CspSource {

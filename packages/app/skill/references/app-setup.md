@@ -118,8 +118,9 @@ export default serve(contract, { database: scoped(tables) })
   webhook, a link mount. An SPA's `access` is `{ member: true }`, `{ action, over }`, or `{ public: true }` for a page
   anyone opens without signing in (a landing page, a public form): the approver sees it as "for anyone". A public SPA
   at `/` answers every `GET` no more specific endpoint serves; give a member SPA its own prefix (`/app`). Sections:
-  `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`, `scriptSrc`, `frameSrc`: exact
-  `https://` origins, each with a `purpose`, at most 16 each). No path under `/__fabrika`.
+  `files`, `jobs`, `exports`, `csp` (`connectSrc`, `imgSrc`, `frameAncestors`, `scriptSrc`, `frameSrc`, `styleSrc`,
+  `fontSrc`: exact `https://` origins, each with a `purpose`, at most 16 each). A hosted typeface needs both its
+  stylesheet origin in `styleSrc` and its font origin in `fontSrc`; font files under the SPA's `dir` need neither. No path under `/__fabrika`.
 - A public form's abuse control, all optional on `c.form`: `rate: { perClient, perForm }` (per minute, shared by
   every instance; 10 and 100 by default; 429 past either), `honeypot: '<field>'` (a `z.optional(z.string())` input
   field the page hides; a filled one gets the same answer and writes nothing) and

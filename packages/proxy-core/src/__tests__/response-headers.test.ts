@@ -40,7 +40,15 @@ const DOWNLOAD = endpointRow({
 })
 const HEALTH = anonymousRow({ id: 'health', kind: 'health', method: 'GET', path: '/healthz', admission: null })
 
-const CSP = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: ['https://portal.example'], scriptSrc: [], frameSrc: [] }
+const CSP = {
+	connectSrc: ['https://api.maps.example'],
+	imgSrc: [],
+	frameAncestors: ['https://portal.example'],
+	scriptSrc: [],
+	styleSrc: [],
+	fontSrc: [],
+	frameSrc: [],
+}
 const OPERATIONS = 'https://operations.example.com'
 const CONTRACT = contractAppWith([ME, DOWNLOAD, HEALTH], ['/api'], { csp: CSP, operationsOrigin: OPERATIONS })
 const POLICY = headerPolicy(CSP, OPERATIONS)
@@ -71,6 +79,17 @@ describe('the CSP of named script and frame origins', () => {
 		expect(csp([])).toContain("default-src 'self';")
 		expect(csp([widget])).toContain("default-src 'self';")
 		expect(csp([widget])).toContain(`frame-src 'self' ${widget}`)
+	})
+})
+
+describe('the CSP of named style and font origins', () => {
+	test('a declared style origin joins style-src and a declared font origin joins font-src', () => {
+		const csp = (origins: Partial<CspOrigins>) => headerPolicy({ ...CSP, ...origins }, null).find(([name]) => name === 'Content-Security-Policy')?.[1]
+		expect(csp({})).toContain("style-src 'self' 'unsafe-inline';")
+		expect(csp({})).toContain("font-src 'self' data:;")
+		const fonts = csp({ styleSrc: ['https://fonts.googleapis.com'], fontSrc: ['https://fonts.gstatic.com'] })
+		expect(fonts).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;")
+		expect(fonts).toContain("font-src 'self' data: https://fonts.gstatic.com;")
 	})
 })
 

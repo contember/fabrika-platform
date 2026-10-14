@@ -266,7 +266,15 @@ describe('contract apps — the endpoint table', () => {
 		expect(table.endpoints.every((row) => isDigest(row.digest))).toBe(true)
 		expect(table.reservedPrefixes).toEqual([...artifact.reservedPrefixes])
 		expect(table.snapshot).toBe(contractDigest(artifact))
-		expect(table.csp).toEqual({ connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [] })
+		expect(table.csp).toEqual({
+			connectSrc: ['https://api.maps.example'],
+			imgSrc: [],
+			frameAncestors: [],
+			scriptSrc: [],
+			styleSrc: [],
+			fontSrc: [],
+			frameSrc: [],
+		})
 	})
 
 	test('a manifest written before script and frame origins existed parses with none', () => {
@@ -279,6 +287,20 @@ describe('contract apps — the endpoint table', () => {
 		const table = contractProxyTable({ ...artifact, csp: { ...artifact.csp, scriptSrc: [widget], frameSrc: [widget] } })
 		expect(table.csp.scriptSrc).toEqual(['https://challenges.cloudflare.com'])
 		expect(table.csp.frameSrc).toEqual(['https://challenges.cloudflare.com'])
+		expect(parseProxyManifest({ apps: [{ ...app, ...table }] })?.apps[0]).toEqual({ ...app, ...table, scheme: 'https' })
+	})
+
+	test('a manifest written before style and font origins existed parses with none', () => {
+		const { styleSrc: _style, fontSrc: _font, ...older } = app.csp
+		expect(parseProxyManifest({ apps: [{ ...app, csp: older }] })?.apps[0]).toEqual({ ...app, scheme: 'https' })
+	})
+
+	test('a contract that names style and font origins carries them', () => {
+		const stylesheet = { origin: 'https://fonts.googleapis.com', purpose: 'the typeface stylesheet' }
+		const fonts = { origin: 'https://fonts.gstatic.com', purpose: 'the typeface files' }
+		const table = contractProxyTable({ ...artifact, csp: { ...artifact.csp, styleSrc: [stylesheet], fontSrc: [fonts] } })
+		expect(table.csp.styleSrc).toEqual(['https://fonts.googleapis.com'])
+		expect(table.csp.fontSrc).toEqual(['https://fonts.gstatic.com'])
 		expect(parseProxyManifest({ apps: [{ ...app, ...table }] })?.apps[0]).toEqual({ ...app, ...table, scheme: 'https' })
 	})
 
@@ -336,6 +358,8 @@ describe('contract apps — the endpoint table', () => {
 			...app,
 			csp: { ...app.csp, frameSrc: Array.from({ length: MAX_CSP_ORIGINS + 1 }, (_, index) => `https://frame${index}.example`) },
 		}],
+		['a style origin that is not https', { ...app, csp: { ...app.csp, styleSrc: ['http://fonts.example'] } }],
+		['a wildcard font origin', { ...app, csp: { ...app.csp, fontSrc: ['https://*.example.com'] } }],
 		['a 17th origin in one directive', {
 			...app,
 			csp: { ...app.csp, imgSrc: Array.from({ length: MAX_CSP_ORIGINS + 1 }, (_, index) => `https://tiles${index}.example`) },
