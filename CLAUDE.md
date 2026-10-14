@@ -48,7 +48,9 @@ that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. `FABR
 caddy 2.10.2 binary (copy it out of the `caddy:2.10.2-alpine` image) and runs the generated proxy chain in a real
 Caddy (`packages/proxy/src/__tests__/caddy.live.test.ts`). `FABRIKA_TEST_CLAMSCAN_BIN` names a `clamscan` (or a wrapper
 that runs the `clamav/clamav:1.4` image with the batch directory mounted at its own path) and runs the file scan against
-a real ClamAV (`packages/app/src/__tests__/{clamscan,file-scan}.test.ts`). A green `bun test` with everything skipped proves
+a real ClamAV (`packages/app/src/__tests__/{clamscan,file-scan}.test.ts`). The scan refuses signatures older than three
+days (`signatures_stale`), and the image's own go stale between releases: keep them in a volume refreshed with
+`docker run --rm -v <volume>:/var/lib/clamav clamav/clamav:1.4 freshclam`, and mount that volume in the wrapper. A green `bun test` with everything skipped proves
 nothing about any of them — run them before trusting those halves.
 
 `release:validate` enforces that every package is either `private: true` or declares
