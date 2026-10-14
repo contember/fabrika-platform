@@ -60,4 +60,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [162](162-the-generated-tests-have-no-column-write-case.md) — A column's own write action is enforced, but no generated policy test proves it.
 - [163](163-the-installation-hosts-send-no-hsts.md) — Only an `https` application host gets HSTS; IAM's and Control's hosts get none.
 - [164](164-a-job-without-handle-prints-the-builders-type.md) — A job, webhook, link or export procedure without `.handle` prints the builder's type, not a one-line fix.
+- [165](165-app-dev-has-no-stand-in-for-an-import.md) — `fabrika app dev` stands in for a form's challenge and an outside HTTP provider, not for a `connect` import.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
