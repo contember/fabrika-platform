@@ -15,6 +15,7 @@ const Edit = z.strictObject({ id: z.uuid(), title: z.string().min(1).max(200), a
 const ById = z.strictObject({ id: z.uuid(), expectVersion: z.int() })
 const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
 const Done = z.strictObject({ done: z.boolean() })
+const STATUSES = ['new', 'hired']
 const Counts = z.strictObject({ items: z.array(z.strictObject({ status: z.string(), count: z.string() })) })
 const Columns = z.strictObject({ columns: z.array(z.string()) })
 const Row = z.strictObject({ id: z.string(), name: z.string(), status: z.string() })
@@ -49,7 +50,10 @@ export const admin = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ input, ctx }) => ({ columns: Object.keys(await ctx.db.app.positions.get(input.id)).sort() })),
 	counts: r.query({ output: Counts, access: { action: 'candidates.count', app: true } })
 		.handle(async ({ ctx }) => ({
-			items: (await ctx.db.app.candidates.aggregate({ groupBy: ['status'], count: true })).map((row) => ({ status: row.status, count: row.count })),
+			// A count-only action has no aggregate: it counts each status the migration's check allows.
+			items: await Promise.all(
+				STATUSES.map(async (status) => ({ status, count: String(await ctx.db.app.candidates.count({ where: [['status', '=', status]] })) })),
+			),
 		})),
 	audit: r.query({ output: Log, access: { action: 'audit.read', app: true } })
 		.handle(async ({ ctx }) => ({

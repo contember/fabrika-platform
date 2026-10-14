@@ -93,6 +93,7 @@ import {
 	updateActions,
 	type UpdateValues,
 	type VersionArguments,
+	visibleFor,
 } from './policy'
 import { frameworkSideOf, type Locator, register } from './registry'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
@@ -465,7 +466,7 @@ function checkRecordReach(context: TableContext, grant: AppGrant, reach: AppReac
 	}
 	if (includesName(appCount, grant.action)) {
 		throw new CapabilityError(
-			`an app capability of ${grant.action} only counts ${model.name} (its appCount): it reads no row, so list and a scope fragment need its read action ${read}${
+			`an app capability of ${grant.action} only counts ${model.name} (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action ${read}${
 				appRead.length === 0 ? '' : ` or one of its appRead (${appRead.join(', ')})`
 			}`,
 		)
@@ -739,7 +740,13 @@ export function versionArgument(context: TableContext, options: readonly unknown
 	return BinaryOperationNode.create(column(context.model.name, version), OperatorNode.create('='), ValueNode.create(expected))
 }
 
-async function selectRows<S>(context: TableContext, scope: OperationNode | undefined, state: SelectState, action: string): Promise<S[]> {
+async function selectRows<S>(
+	context: TableContext,
+	scope: OperationNode | undefined,
+	state: SelectState,
+	action: string,
+	visible: readonly string[] = context.model.visible,
+): Promise<S[]> {
 	const run = storeRunner(context)
 	for (let index = 0; index < state.joins.length; index++) {
 		const join = state.joins[index]
@@ -750,7 +757,7 @@ async function selectRows<S>(context: TableContext, scope: OperationNode | undef
 	if (scope === undefined) {
 		return []
 	}
-	const node = selectNode(state, context.model.visible, scope, undefined, context.model.dates)
+	const node = selectNode(state, visible, scope, undefined, context.model.dates)
 	const rows = await (await run.read()).run<S>(node, guard(context, 'SelectQueryNode', scope))
 	return answerDays(context.model.name, joinedDays(context.model.dates, state), rows)
 }
@@ -965,17 +972,14 @@ interface AggregateInput {
 	readonly max?: unknown
 }
 
-function aggregateColumns(context: TableContext, spec: AggregateInput): AggregateColumns {
+function aggregateColumns(table: string, shape: TableShape, spec: AggregateInput): AggregateColumns {
 	const list = (field: string, value: unknown): string[] => {
 		if (value === undefined) {
 			return []
 		}
 		const names = parseList(value, (name) => {
-			if (!inSet(context.shape.visible, name)) {
-				throw new QueryRefusedError(
-					'unknown_column',
-					`${String(name)} is not a column of ${context.model.name} (columns: ${context.model.visible.join(', ')})`,
-				)
+			if (!inSet(shape.visible, name)) {
+				throw new QueryRefusedError('unknown_column', `${String(name)} is not a column of ${table} (columns: ${namesOf(shape.visible).join(', ')})`)
 			}
 			return name
 		})
@@ -992,14 +996,14 @@ function aggregateColumns(context: TableContext, spec: AggregateInput): Aggregat
 	return columns
 }
 
-function aggregateFilter<Row>(context: TableContext, where: AggregateSpec<Row>['where']): SelectState | undefined {
+function aggregateFilter<Row>(shape: TableShape, where: AggregateSpec<Row>['where']): SelectState | undefined {
 	if (where === undefined) {
 		return undefined
 	}
 	if (typeof where !== 'function') {
 		throw new QueryRefusedError('invalid_argument', 'aggregate where takes a callback')
 	}
-	const start = startSelect<Row, NoColumns>(context.shape)
+	const start = startSelect<Row, NoColumns>(shape)
 	const state = finishSelect(where(start), start)
 	if (state.columns !== undefined || state.orderBy.length > 0 || state.limit !== undefined || state.offset !== undefined || state.joins.length > 0) {
 		throw new QueryRefusedError('invalid_argument', 'aggregate where takes where conditions only')
@@ -1011,13 +1015,14 @@ export async function aggregateRows<Row, O>(
 	context: TableContext,
 	run: Runner,
 	scope: OperationNode | undefined,
+	shape: TableShape,
 	spec: AggregateSpec<Row>,
 ): Promise<O[]> {
 	if (typeof spec !== 'object' || spec === null) {
 		throw new QueryRefusedError('invalid_argument', 'aggregate takes { groupBy, count, sum, min, max, where }')
 	}
-	const columns = aggregateColumns(context, spec)
-	const filter = aggregateFilter(context, spec.where)
+	const columns = aggregateColumns(context.model.name, shape, spec)
+	const filter = aggregateFilter(shape, spec.where)
 	if (scope === undefined) {
 		return []
 	}
@@ -1161,7 +1166,7 @@ export class DimensionTable<DB, P, T extends string> {
 		within: Within<ListDimensionOf<P, T>, ReadAction<P, T>>,
 		spec: S,
 	): Promise<AggregateRow<Row<DB, P, T>, S>[]> {
-		return aggregateRows(this.#context, storeRunner(this.#context), dimensionListPredicate(this.#context, within, 'read'), spec)
+		return aggregateRows(this.#context, storeRunner(this.#context), dimensionListPredicate(this.#context, within, 'read'), this.#context.shape, spec)
 	}
 }
 Object.freeze(DimensionTable.prototype)
@@ -1219,7 +1224,7 @@ export class ChildTable<DB, P, T extends string> {
 	}
 
 	async aggregate<const S extends AggregateSpec<Row<DB, P, T>>>(scope: ChildListScope<P, T>, spec: S): Promise<AggregateRow<Row<DB, P, T>, S>[]> {
-		return aggregateRows(this.#context, storeRunner(this.#context), childListPredicate(this.#context, scope, 'read'), spec)
+		return aggregateRows(this.#context, storeRunner(this.#context), childListPredicate(this.#context, scope, 'read'), this.#context.shape, spec)
 	}
 }
 Object.freeze(ChildTable.prototype)
@@ -1235,6 +1240,8 @@ export interface TableProbe {
 	select(capability: unknown): Promise<readonly Readonly<Record<string, unknown>>[]>
 	/** `aggregate(capability, { count: true })`; zero rows when the capability reaches none. */
 	count(capability: unknown): Promise<string>
+	/** `aggregate(capability, { groupBy: columns, count: true })`: the values of `columns` in each group, and its count. */
+	group(capability: unknown, columns: readonly string[]): Promise<readonly Readonly<Record<string, unknown>>[]>
 	insert(capability: unknown, values: unknown): Promise<unknown>
 	update(capability: unknown, key: string | undefined, values: unknown, expectVersion?: number): Promise<unknown>
 	remove(capability: unknown, key?: string): Promise<void>
@@ -1258,6 +1265,11 @@ function probeOf(context: TableContext): TableProbe {
 		}
 		return child ? childListPredicate(context, capability, 'read') : dimensionListPredicate(context, capability, 'read')
 	}
+	// An `app` capability reads the columns of its own action, as ctx.db.app does; any other the read action's.
+	const visible = (capability: unknown): readonly string[] => {
+		const grant = runtimeOf(context.connection).capabilities.resolve(capability)
+		return visibleFor(context.model, grant.kind === 'app' ? grant.action : requiredAction(context, 'read'))
+	}
 	const run = storeRunner(context)
 	return freeze({
 		mode: child ? 'child' : 'dimension',
@@ -1269,13 +1281,23 @@ function probeOf(context: TableContext): TableProbe {
 				list(capability, 'rows'),
 				finishSelect(start, start),
 				requiredAction(context, 'read'),
+				visible(capability),
 			)
 		},
+		group: async (capability: unknown, columns: readonly string[]) =>
+			aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(
+				context,
+				run,
+				list(capability, 'rows'),
+				actionShape(context.model, visible(capability)),
+				{ groupBy: columns, count: true },
+			),
 		count: async (capability: unknown) => {
 			const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(
 				context,
 				run,
 				list(capability, 'counts'),
+				context.shape,
 				{ count: true },
 			)
 			const count = row === undefined ? '0' : ownEntry(row, 'count')
@@ -1307,6 +1329,7 @@ function appProbeOf(context: TableContext): TableProbe {
 			context,
 			run,
 			every(capability),
+			context.shape,
 			{ count: true },
 		)
 		const value = row === undefined ? '0' : ownEntry(row, 'count')
@@ -1331,6 +1354,11 @@ function appProbeOf(context: TableContext): TableProbe {
 			)
 		},
 		count,
+		group: async (capability: unknown, columns: readonly string[]) =>
+			aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(context, run, every(capability), context.shape, {
+				groupBy: columns,
+				count: true,
+			}),
 		insert: async (capability: unknown, values: unknown) => insertIntoApplication(context, run, capability, values),
 		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
 			const scope = appRowPredicate(context, capability, key, 'update')
@@ -1357,6 +1385,11 @@ function destinationOf(models: TableModels, model: TableModel, parent: TableMode
 		}
 	}
 	return undefined
+}
+
+/** What a select or an aggregate of a capability that reads `visible` may name: those columns, and no join. */
+export function actionShape(model: TableModel, visible: readonly string[]): TableShape {
+	return freeze({ table: model.name, visible: nameSet(visible), joinable: freeze({}), dates: model.dates })
 }
 
 function shapeOf(model: TableModel, joinable: Readonly<Record<string, JoinShape>>): TableShape {

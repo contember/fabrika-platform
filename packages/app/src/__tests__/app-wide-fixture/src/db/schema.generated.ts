@@ -10,6 +10,8 @@ export interface CandidatesTable {
 	created_by: string
 	version: number
 	reason_id: string | null
+	score: number | null
+	notes: string | null
 }
 
 export interface ExportsTable {
@@ -51,6 +53,8 @@ export const columns: TypedColumnList<DB> = {
 			'created_by',
 			'version',
 			'reason_id',
+			'score',
+			'notes',
 		],
 		foreignKeys: [],
 	},

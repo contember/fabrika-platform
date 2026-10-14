@@ -63,7 +63,7 @@ type Candidates<A extends string> = AppQuery<A>['db']['app']['candidates']
 /** An action of the candidates' appRead lists every row; one of their appCount counts them and lists none. */
 export type AppReachContext = [
 	Expect<Equal<Reached<Candidates<'candidates.export'>>, 'list' | 'count' | 'aggregate'>>,
-	Expect<Equal<Reached<Candidates<'candidates.count'>>, 'count' | 'aggregate'>>,
+	Expect<Equal<Reached<Candidates<'candidates.count'>>, 'count'>>,
 	Expect<Equal<Reached<Candidates<'positions.read'>>, never>>,
 ]
 

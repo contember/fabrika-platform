@@ -478,7 +478,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   which `satisfies` meets only with an entry without a scope, so a scoped holder is the proxy's 403. `#access` reads
   nothing and mints `ctx.app` (`AppCapability`, `mint.app`); `ctx.db.app` (`endpointData`) holds every application
   table (`scope: { app }`) and, read-only, every dimension and child table whose read action or `appRead` holds the
-  action (its counts only for an `appCount` action). It has no
+  action, with the columns of that action (`count` only for an `appCount` action). It has no
   `ctx.members`, `ctx.links` or delegation. Never add a check of the grant's scope here: the requirement is the check.
   An `on`, `in` or `over` endpoint's `ctx.db.app` is built from its `Ref` or `Within` (`endpointData`): every
   application table, read-only, read where the endpoint's action is the table's read action.

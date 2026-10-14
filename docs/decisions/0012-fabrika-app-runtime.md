@@ -243,8 +243,9 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   global grant of its action, and `ctx.db.app.<table>` reads and writes the application tables (`scope: { app:
   '<why>' }`) with that action and reads every row of each dimension and child table whose read action it is, as
   `over` with `'all'` would. A dimension or child table may name further actions that read every row app-wide,
-  read-only (`actions.appRead`: an export, a bulk send), and actions that only count and aggregate it
-  (`actions.appCount`: an operations counter), so an export is granted apart from reading. An `on`, `in` or `over` endpoint reads an application table too, read-only and every
+  read-only with the columns of that action (`actions.appRead`: an export, a bulk send), and actions that only count
+  its rows (`actions.appCount`: an operations counter, no aggregate, whose groups would be values), so an export is
+  granted apart from reading. An `on`, `in` or `over` endpoint reads an application table too, read-only and every
   row, where its action is the table's read action: the table's read action decides who reads it. So a code list an
   administrator edits, the check of a value against it in a scoped mutation, and the log row of an export across
   every record stay on the road; a reference table stays migration-managed and read-only. A

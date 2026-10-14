@@ -119,10 +119,14 @@ describe('the generated cases of application-wide data', () => {
 			'a scoped site of positions.read reads every row',
 			'a scoped site of positions.manage reads no row',
 		])
-		expect(tests.get(policyTestPath('candidates'))?.cases.slice(-3)).toEqual([
+		expect(tests.get(policyTestPath('candidates'))?.cases.slice(-7)).toEqual([
 			'an app endpoint of candidates.export lists every row',
+			'an app endpoint of candidates.export reads the columns of its own action',
 			'an app endpoint of candidates.count counts every row',
 			'an app endpoint of candidates.count lists no row',
+			'an app endpoint of candidates.count groups no row',
+			'get leaves out notes, which has its own read action',
+			'get leaves out score, which has its own read action',
 		])
 		expect(tests.get(policyTestPath('exports'))?.cases).toEqual([
 			'get by a global holder succeeds',

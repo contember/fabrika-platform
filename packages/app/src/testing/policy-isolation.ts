@@ -77,6 +77,21 @@ export interface PolicyIsolationKit {
 	appCount(action: string): Promise<AppCountOutcome>
 	/** Lists from an `app` endpoint of `action`, one of the table's `appCount`: the data layer must refuse it. */
 	appListWithCount(action: string): Promise<MisuseOutcome>
+	/**
+	 * Lists from an `app` endpoint of `action`, one of the table's `appRead`: `leaked` names each answered column that
+	 * declares another read action, `missing` each column that declares exactly `action` and was not answered.
+	 */
+	appColumns(action: string): Promise<AppColumnsOutcome>
+	/**
+	 * Groups by the key and every column from an `app` endpoint of `action`, one of the table's `appCount`: a group is a
+	 * row's values, so the data layer must refuse it.
+	 */
+	appGroupWithCount(action: string): Promise<MisuseOutcome>
+}
+
+export interface AppColumnsOutcome extends IsolationOutcome {
+	readonly leaked: readonly string[]
+	readonly missing: readonly string[]
 }
 
 /**
@@ -380,6 +395,8 @@ function appReachProbe(vocabulary: Vocabulary<string, string, string>, action: s
 			list: c.query({ output: Keys, access: { action, app: true } }),
 			count: c.query({ output: Count, access: { action, app: true } }),
 			listRefused: c.query({ output: Refused, access: { action, app: true } }),
+			columns: c.query({ output: Columns, access: { action, app: true } }),
+			groupRefused: c.query({ output: Refused, access: { action, app: true } }),
 		}),
 	}))
 }
@@ -396,6 +413,21 @@ function appReachKit<DB, P>(
 	postgres: TestDatabase,
 	seed: () => Promise<IsolationWorlds>,
 ) {
+	const policy = tablePolicies(tables)[table]
+	const columnReads: Readonly<Record<string, string>> = Object.fromEntries(
+		Object.entries(policy?.columns ?? {}).flatMap(([column, declared]) => (declared.read === undefined ? [] : [[column, declared.read]])),
+	)
+	const refusedBy = async (run: () => Promise<unknown>): Promise<{ readonly refused: boolean }> => {
+		try {
+			await run()
+			return { refused: false }
+		} catch (error) {
+			if (isCapabilityError(error)) {
+				return { refused: true }
+			}
+			throw error
+		}
+	}
 	const kits = new Map<string, ReturnType<typeof appReachClient>>()
 	const appReachClient = (action: string) => {
 		const probeContract = appReachProbe(contract.vocabulary, action)
@@ -409,17 +441,9 @@ function appReachKit<DB, P>(
 					probe: {
 						list: async ({ ctx }) => ({ keys: (await probe.select(ctx.app)).map((row) => String(row[key])) }),
 						count: async ({ ctx }) => ({ count: await probe.count(ctx.app) }),
-						listRefused: async ({ ctx }) => {
-							try {
-								await probe.select(ctx.app)
-								return { refused: false }
-							} catch (error) {
-								if (isCapabilityError(error)) {
-									return { refused: true }
-								}
-								throw error
-							}
-						},
+						listRefused: ({ ctx }) => refusedBy(() => probe.select(ctx.app)),
+						columns: async ({ ctx }) => ({ columns: [...new Set((await probe.select(ctx.app)).flatMap((row) => Object.keys(row)))] }),
+						groupRefused: ({ ctx }) => refusedBy(() => probe.group(ctx.app, [...new Set([key, ...(policy?.insert ?? [])])])),
 					},
 				}),
 			}),
@@ -450,6 +474,22 @@ function appReachKit<DB, P>(
 		async appListWithCount(action: string): Promise<MisuseOutcome> {
 			await seed()
 			return attempt(async () => ({ status: 200, ...(await client(action).listRefused()) }), (status) => ({ status, refused: false }))
+		},
+		async appColumns(action: string): Promise<AppColumnsOutcome> {
+			await seed()
+			return attempt(async () => {
+				const answered = new Set((await client(action).columns()).columns)
+				const declared = Object.entries(columnReads)
+				return {
+					status: 200,
+					leaked: declared.filter(([column, read]) => read !== action && answered.has(column)).map(([column]) => column),
+					missing: declared.filter(([column, read]) => read === action && !answered.has(column)).map(([column]) => column),
+				}
+			}, (status) => ({ status, leaked: [], missing: [] }))
+		},
+		async appGroupWithCount(action: string): Promise<MisuseOutcome> {
+			await seed()
+			return attempt(async () => ({ status: 200, ...(await client(action).groupRefused()) }), (status) => ({ status, refused: false }))
 		},
 	}
 }

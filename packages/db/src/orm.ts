@@ -13,9 +13,10 @@ import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } 
 import { linksPredicate, linkValues } from './links'
 import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
-import { modelOf, namesAction, type TableModel, type TableModels, updatableBy } from './policy'
+import { modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
+	actionShape,
 	aggregateRows,
 	type AggregateSpec,
 	appKeyPredicate,
@@ -180,23 +181,6 @@ function writing<A extends unknown[], R>(
 ): (...args: A) => Promise<R> {
 	const refusal = writeRefusal(site, operation)
 	return refusal === undefined ? bound(site, method) : refused(site, 'read_only', refusal)
-}
-
-/**
- * The columns a capability of `action` reads: every one that declares no read action of its own, or exactly this
- * one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
- */
-function visibleFor(model: TableModel, action: string): readonly string[] {
-	const columns = namesOf(model.columns)
-	const visible: string[] = []
-	for (let index = 0; index < columns.length; index++) {
-		const name = columns[index] ?? ''
-		const declared = hasOwn(model.columnReads, name) ? model.columnReads[name] : undefined
-		if (declared === undefined || declared === action) {
-			visible[visible.length] = name
-		}
-	}
-	return freeze(visible)
 }
 
 /** A `Ref` of `dimension` whose action the table names: a capability reads its own target and its subtree with it. */
@@ -409,7 +393,7 @@ function listedRows(context: TableContext, site: DataSite, run: Runner, scope: (
 	return freeze({
 		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key)),
 		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
-		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), spec)),
+		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
 	})
 }
 
@@ -429,25 +413,27 @@ function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, c
 		if (model.scope.mode === 'app') {
 			setOwn(handle, model.name, applicationRows(context, site, run, capability))
 		} else if (model.scope.mode === 'dimension' || model.scope.mode === 'child') {
-			setOwn(handle, model.name, appRecordRows(context, site, run, capability))
+			setOwn(handle, model.name, appRecordRows(context, site, run, capability, grant.action))
 		}
 	}
 	return freeze(handle)
 }
 
 /**
- * A dimension or child table under an `app` capability, read-only and every row: listed with its read action or an
- * action of its `appRead`, counted and aggregated with those or an action of its `appCount`.
+ * A dimension or child table under an `app` capability of `action`, read-only and every row, with the columns that
+ * action reads (`visibleFor`): listed and aggregated with its read action or an action of its `appRead`, counted with
+ * those or an action of its `appCount`.
  */
-function appRecordRows(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
-	const visible = context.model.visible
+function appRecordRows(context: TableContext, site: DataSite, run: Runner, capability: unknown, action: string): object {
+	const visible = visibleFor(context.model, action)
+	const shape = actionShape(context.model, visible)
 	const key = [keyOf(context.model)]
 	return freeze({
 		list: bound(site, async (options?: unknown) => listRows(context, run, appRecordPredicate(context, capability, 'rows'), visible, options, key)),
 		count: bound(site, async (options?: unknown) => countRows(context, run, appRecordPredicate(context, capability, 'counts'), visible, options)),
 		aggregate: bound(
 			site,
-			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appRecordPredicate(context, capability, 'counts'), spec),
+			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appRecordPredicate(context, capability, 'rows'), shape, spec),
 		),
 	})
 }
@@ -474,7 +460,7 @@ function scopedApplicationRows(context: TableContext, site: DataSite, run: Runne
 	return freeze({
 		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key)),
 		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
-		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), spec)),
+		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
 		get: bound(site, async (id: unknown) => {
 			scope()
 			return selectOne(context, run, appKeyPredicate(model, id), visible)
@@ -521,7 +507,10 @@ function applicationRows(context: TableContext, site: DataSite, run: Runner, cap
 	return freeze({
 		list: bound(site, async (options?: unknown) => listRows(context, run, appListPredicate(context, capability), visible, options, key)),
 		count: bound(site, async (options?: unknown) => countRows(context, run, appListPredicate(context, capability), visible, options)),
-		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appListPredicate(context, capability), spec)),
+		aggregate: bound(
+			site,
+			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appListPredicate(context, capability), context.shape, spec),
+		),
 		get: bound(site, async (id: unknown) => {
 			const action = namedApp(context, capability)
 			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action))
@@ -607,7 +596,7 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 	return freeze({
 		list: bound(site, async (options?: unknown) => listRows(context, run, everything(), visible, options, keyed ? [keyOf(model)] : visible)),
 		count: bound(site, async (options?: unknown) => countRows(context, run, everything(), visible, options)),
-		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, everything(), spec)),
+		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, everything(), context.shape, spec)),
 		get: bound(site, async (id: unknown) => {
 			const scope = everything()
 			const node = selectNode(rowState(table, [], [], 1), visible, scope, byKey(id), model.dates)
@@ -694,10 +683,6 @@ function readOptions(options: unknown, allowed: readonly string[], what: string)
 		setOwn(read, key, descriptor.value)
 	}
 	return read
-}
-
-function shapeFor(model: TableModel, visible: readonly string[]): TableShape {
-	return freeze({ table: model.name, visible: nameSet(visible), joinable: freeze({}), dates: model.dates })
 }
 
 function conditionsOf(shape: TableShape, where: unknown): (Compare | Contains)[] {
@@ -855,7 +840,7 @@ async function listRows(
 ): Promise<{ readonly items: Readonly<Record<string, unknown>>[]; readonly next: string | null }> {
 	const table = context.model.name
 	const options = readOptions(input, ['where', 'orderBy', 'limit', 'after'], 'list')
-	const shape = shapeFor(context.model, visible)
+	const shape = actionShape(context.model, visible)
 	const conditions = conditionsOf(shape, options['where'])
 	const order = orderOf(shape, options['orderBy'], tiebreak)
 	const limit = limitOf(options['limit'])
@@ -891,7 +876,7 @@ async function countRows(
 ): Promise<number> {
 	const table = context.model.name
 	const options = readOptions(input, ['where'], 'count')
-	const conditions = conditionsOf(shapeFor(context.model, visible), options['where'])
+	const conditions = conditionsOf(actionShape(context.model, visible), options['where'])
 	if (scope === undefined) {
 		return 0
 	}

@@ -84,7 +84,7 @@ export interface IndexedTable {
 	readonly actions: { readonly read: string; readonly insert: string; readonly update: string; readonly delete: string }
 	/** The actions besides `read` with which an `app` endpoint lists every row (`actions.appRead`). */
 	readonly appRead: string
-	/** The actions with which an `app` endpoint only counts and aggregates every row (`actions.appCount`). */
+	/** The actions with which an `app` endpoint only counts every row (`actions.appCount`). */
 	readonly appCount: string
 	/** Every column, before any is hidden. */
 	readonly row: object
@@ -398,27 +398,32 @@ export interface ApplicationRows<T extends string, E extends IndexedTable, A ext
 	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
 }
 
-/** A dimension or child table under an `app` endpoint of action `A`: every row read-only, or only its counts. */
+/**
+ * A dimension or child table under an `app` endpoint of action `A`: every row read-only, with the columns `A` reads
+ * (`RowFor`), or only how many rows match. A count-only action has no `aggregate`: a group or a minimum is a value.
+ */
 export interface AppRecordRows<T extends string, E extends IndexedTable, A extends string> {
-	readonly list: [A] extends [E['actions']['read'] | E['appRead']] ? (options?: ListOptions<TableRow<E>>) => Promise<ListPage<TableRow<E>>>
+	readonly list: [A] extends [E['actions']['read'] | E['appRead']] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
 		: Unavailable<
 			`a list of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead, and this endpoint holds '${A}'`
 		>
-	readonly count: [A] extends [E['actions']['read'] | E['appRead'] | E['appCount']] ? (options?: CountOptions<TableRow<E>>) => Promise<number>
+	readonly count: [A] extends [E['actions']['read'] | E['appRead'] | E['appCount']] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number>
 		: Unavailable<
 			`a count of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead or appCount, and this endpoint holds '${A}'`
 		>
-	readonly aggregate: [A] extends [E['actions']['read'] | E['appRead'] | E['appCount']]
-		? <const S extends AggregateSpec<TableRow<E>>>(spec: S) => Promise<AggregateRow<TableRow<E>, S>[]>
+	readonly aggregate: [A] extends [E['actions']['read'] | E['appRead']]
+		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
 		: Unavailable<
-			`a count of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead or appCount, and this endpoint holds '${A}'`
+			`an aggregate of ${T} needs its read action '${
+				& E['actions']['read']
+				& string}' or an action of its appRead, and this endpoint holds '${A}': an appCount action only counts`
 		>
 }
 
 /**
  * `ctx.db.app` of an `app` endpoint: every application table, and every dimension and child table read-only, all
  * rows, where the endpoint's action is its read action or an action of its `appRead` (`over` with `'all'` reads them
- * so), or only their counts and aggregates with an action of its `appCount`.
+ * so), or only their counts with an action of its `appCount`.
  */
 export type ApplicationTables<Ix extends AnyDbIndex, A extends string, K extends DataKind> =
 	& { readonly [T in Ix['applications']]: ApplicationRows<T, Ix['tables'][T], A, K> }

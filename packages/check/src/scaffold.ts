@@ -102,6 +102,10 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 				`an app endpoint of ${action} lists every row`,
 				`expect(await kit.appList(${quote(action)})).toEqual({ status: 200, rows: ['own', 'other'] })`,
 			),
+			testCase(
+				`an app endpoint of ${action} reads the columns of its own action`,
+				`expect(await kit.appColumns(${quote(action)})).toEqual({ status: 200, leaked: [], missing: [] })`,
+			),
 		)
 	}
 	for (const action of actions.appCount ?? []) {
@@ -110,6 +114,10 @@ const isolationCases = (policy: TablePolicyArtifact, dimension: string): readonl
 			testCase(
 				`an app endpoint of ${action} lists no row`,
 				`expect(await kit.appListWithCount(${quote(action)})).toEqual({ status: 200, refused: true })`,
+			),
+			testCase(
+				`an app endpoint of ${action} groups no row`,
+				`expect(await kit.appGroupWithCount(${quote(action)})).toEqual({ status: 200, refused: true })`,
 			),
 		)
 	}

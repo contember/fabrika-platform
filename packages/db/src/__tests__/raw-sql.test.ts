@@ -338,7 +338,7 @@ describe('ctx.sql.scope of an app capability reaches what ctx.db.app reaches', (
 		await sql(z.object({}))`select n.id from notes n where ${sql.scope(authority.app('notes.export'), 'notes', 'n')}`
 		expect(dialect.log.map((statement) => statement.sql)).toEqual(['select n.id from notes n where (true)'])
 		expect(() => sql.scope(authority.app('notes.count'), 'notes')).toThrow(
-			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list and a scope fragment need its read action notes.read',
+			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action notes.read',
 		)
 	})
 

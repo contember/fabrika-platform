@@ -589,6 +589,23 @@ export function namesAction(model: TableModel, action: string): boolean {
 	return false
 }
 
+/**
+ * The columns a capability of `action` reads: every one that declares no read action of its own, or exactly this
+ * one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
+ */
+export function visibleFor(model: TableModel, action: string): readonly string[] {
+	const columns = namesOf(model.columns)
+	const visible: string[] = []
+	for (let index = 0; index < columns.length; index++) {
+		const name = columns[index] ?? ''
+		const declared = hasOwn(model.columnReads, name) ? model.columnReads[name] : undefined
+		if (declared === undefined || declared === action) {
+			visible[visible.length] = name
+		}
+	}
+	return freeze(visible)
+}
+
 /** Every action that updates a column of `model`: its update action and each column's own write action. */
 export function updateActions(model: TableModel): readonly string[] {
 	const actions: string[] = model.actions.update === undefined ? [] : [model.actions.update]

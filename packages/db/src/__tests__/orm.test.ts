@@ -13,10 +13,12 @@ import { Database, type InvocationTransaction, runFixedStatement } from '../data
 import { CapabilityError, ConflictError, DatabaseError, NotFoundError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
 import type { DataKind, UnscopedMode } from '../orm-types'
+import { readTables } from '../policy'
 import { scoped } from '../store'
 import { TestAuthority } from './fixtures/authority'
 import { migration } from './fixtures/schema'
-import { tables } from './fixtures/tables'
+import { columns } from './fixtures/schema'
+import { policies, tables, vocabulary } from './fixtures/tables'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR]
@@ -59,6 +61,9 @@ beforeAll(async () => {
 	const layer = scoped(tables)
 	bindScopedDatabase(layer, { database, capabilities: alice })
 	data = dataAccessOf(layer)
+	const exportLayer = scoped(exportTables)
+	bindScopedDatabase(exportLayer, { database, capabilities: alice })
+	exportData = dataAccessOf(exportLayer)
 })
 
 afterAll(async () => {
@@ -69,9 +74,21 @@ afterAll(async () => {
 	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
 })
 
+/** The fixture's policies with `notes.body` read with `notes.export` only: a column an export reads and the read action does not. */
+const exportTables = readTables(
+	columns,
+	{ ...policies, notes: { ...policies.notes, columns: { ...policies.notes.columns, body: { read: 'notes.export' } } } },
+	vocabulary,
+)
+let exportData: DataAccess | undefined
+const exporting = { invocation: () => invocation('query', {}, exportData) }
+
 /** One invocation and the site its handles are made for, as the framework builds them for a handler. */
-function invocation(kind: DataKind, unscoped: Readonly<Record<string, UnscopedMode>> = {}) {
-	const transaction: InvocationTransaction = data.invocation(kind === 'query')
+function invocation(kind: DataKind, unscoped: Readonly<Record<string, UnscopedMode>> = {}, access: DataAccess | undefined = data) {
+	if (access === undefined) {
+		throw new Error('the data layer is not bound')
+	}
+	const transaction: InvocationTransaction = access.invocation(kind === 'query')
 	const site: DataSite = {
 		kind,
 		unscoped,
@@ -83,7 +100,7 @@ function invocation(kind: DataKind, unscoped: Readonly<Record<string, UnscopedMo
 		},
 		session: () => transaction.session(),
 	}
-	return { transaction, handles: data.handles(site) }
+	return { transaction, handles: access.handles(site) }
 }
 
 /** Calls `path` (`deals.list`, `get`) on an untyped handle, as a handler whose types were defeated would. */
@@ -428,9 +445,14 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		expect(await call(exporting, 'notes.count', { where: [['id', '=', elsewhere]] })).toBe(1)
 		const counting = handles.app(alice.app('notes.count'))
 		expect(await call(counting, 'notes.count', { where: [['id', '=', elsewhere]] })).toBe(1)
-		expect(await call(counting, 'notes.aggregate', { groupBy: ['workspace_id'], count: true })).toContainEqual({ workspace_id: 'w3', count: '1' })
+		// A group is a row value: a count-only action answers how many rows match, never which values they hold.
+		await expect(call(counting, 'notes.aggregate', { groupBy: ['id', 'title', 'body'], count: true })).rejects.toThrow(
+			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action notes.read',
+		)
+		await expect(call(counting, 'notes.aggregate', { count: true })).rejects.toBeInstanceOf(CapabilityError)
+		await expect(call(counting, 'notes.aggregate', { max: ['body'] })).rejects.toBeInstanceOf(CapabilityError)
 		await expect(call(counting, 'notes.list')).rejects.toThrow(
-			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list and a scope fragment need its read action notes.read or one of its appRead (notes.export)',
+			'an app capability of notes.count only counts notes (its appCount): it reads no row, so list, aggregate and a scope fragment need its read action notes.read or one of its appRead (notes.export)',
 		)
 		expect(Reflect.get(Reflect.get(counting, 'notes'), 'get')).toBeUndefined()
 		const other = handles.app(alice.app('notes.write'))
@@ -438,6 +460,31 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 			'an app capability of notes.write does not reach notes: ctx.db.app lists it for its read action notes.read or one of its appRead (notes.export) only',
 		)
 		await expect(call(handles.app(alice.app('notes.export')), 'note_comments.list')).rejects.toBeInstanceOf(CapabilityError)
+		await transaction.commit()
+	})
+
+	test('an app capability reads the columns of its own action: an appRead action sees a column only where it declares no read action or exactly that one', async () => {
+		const id = await seedNote('a title only notes.read sees', 'w3', 'o2')
+		const { transaction, handles } = exporting.invocation()
+		const exported = handles.app(alice.app('notes.export'))
+		const [item] = itemsOf(await call(exported, 'notes.list', { where: [['id', '=', id]] }))
+		expect(item?.['body']).toBe('body')
+		expect(item).not.toHaveProperty('title')
+		expect(item).not.toHaveProperty('internal')
+		await expect(call(exported, 'notes.count', { where: [['title', '=', 'a title only notes.read sees']] })).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(call(exported, 'notes.aggregate', { groupBy: ['title'], count: true })).rejects.toThrow('title is not a column of notes')
+		await expect(call(exported, 'notes.list', { orderBy: [['title', 'asc']] })).rejects.toBeInstanceOf(QueryRefusedError)
+		expect(
+			await call(exported, 'notes.aggregate', {
+				groupBy: ['body'],
+				count: true,
+				where: (q: { where: (...args: unknown[]) => unknown }) => q.where('id', '=', id),
+			}),
+		)
+			.toEqual([{ body: 'body', count: '1' }])
+		const [read] = itemsOf(await call(handles.app(alice.app('notes.read')), 'notes.list', { where: [['id', '=', id]] }))
+		expect(read?.['title']).toBe('a title only notes.read sees')
+		expect(read).not.toHaveProperty('body')
 		await transaction.commit()
 	})
 

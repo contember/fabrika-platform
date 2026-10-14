@@ -28,7 +28,8 @@ export const vocabulary = {
 
 export type Action = VocabularyAction<typeof vocabulary>
 
-export const tables = defineTables(vocabulary, columns)({
+/** The policies as authored, for a suite that reads a variant of them through `readTables`. */
+export const policies = {
 	organizations: {
 		scope: { dimension: 'organization' },
 		actions: { read: 'notes.read', insert: 'organizations.create' },
@@ -80,4 +81,6 @@ export const tables = defineTables(vocabulary, columns)({
 	},
 	countries: { scope: { reference: 'read-only lookup data' }, actions: { read: 'notes.read' } },
 	contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },
-})
+} as const
+
+export const tables = defineTables(vocabulary, columns)(policies)

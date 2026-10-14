@@ -8,7 +8,7 @@ export const tables = defineTables(vocabulary, columns)({
 		actions: { read: 'candidates.read', appRead: ['candidates.export'], appCount: ['candidates.count'] },
 		version: 'version',
 		createdBy: 'created_by',
-		columns: { reason_id: { write: 'candidates.review' } },
+		columns: { reason_id: { write: 'candidates.review' }, score: { read: 'candidates.export' }, notes: { read: 'candidates.review' } },
 	},
 	positions: {
 		scope: { app: 'the open positions an administrator edits' },
