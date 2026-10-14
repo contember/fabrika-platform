@@ -29,8 +29,8 @@
 		"archiveSha256": "2040d69c8da442a88817c841359ece578e36fd25e1421cb4fdc7f781a95c9858"
 	},
 	"application": {
-		"commitSha": "4afa23c83e2bf7ecb1058b29f7481e899d528b25",
-		"treeSha": "2a800f9a09b38bf72ec8c97b1d3882eee65ac6ba",
+		"commitSha": "e8709ffe3e57573fa118276d3ab347b5bafea285",
+		"treeSha": "e54613dad5970fe4a566d210e6d5c8d81c28dddc",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -40,7 +40,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "f8b02111f95c4da3192ea45f414543d4b78087bc",
+				"sha": "dbf11ad1c31c4418e9dfe3220fe4e7caef260774",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -52,7 +52,7 @@
 			},
 			{
 				"path": "build-web.ts",
-				"sha": "550b8e8079bde4a9e23fea17f3abaca208bcf4d7",
+				"sha": "40827afdb8319f2ac0afb6a9602dd8fafe392578",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -124,7 +124,7 @@
 			},
 			{
 				"path": "package.json",
-				"sha": "4742a8ff7e7cab9dc391bce1711dca59b36b7ac0",
+				"sha": "8c7de7447f4f0578033d848654783a1cd052fa8c",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -238,13 +238,13 @@
 			},
 			{
 				"path": "tsconfig.json",
-				"sha": "8d56bc77a3520bc0d14295e0bce0ca31b8ea08d3",
+				"sha": "46312f2614b2384358586f831faa1d33ab2cfa72",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "web",
-				"sha": "939165011b2c70c85c93df4474636b135b0a76cf",
+				"sha": "24c3cca3a0bdb794c4ce41361489f8cfd462305d",
 				"type": "tree",
 				"mode": "040000"
 			},
@@ -262,13 +262,13 @@
 			},
 			{
 				"path": "web/index.html",
-				"sha": "109f0f5fab683051d3914f6864538532175d07b9",
+				"sha": "a065756ba117cf046f791ac43ca3e03b14d17121",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
-				"path": "web/main.ts",
-				"sha": "b69f13151258e6acd7d1d0008d8667e6dca763eb",
+				"path": "web/main.tsx",
+				"sha": "c8c1783f8df18f05c0294dbca3b90479efe9a94e",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -287,12 +287,12 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 86458,
-		"archiveSha256": "9a3de9ecdc9b9a8ebc0c23ecf4dab8ddaeb87a155af72011fa794bdca70e785d"
+		"archiveBytes": 97252,
+		"archiveSha256": "7b26ad071e9c506e73cb6ec99b561772b312fb2254e42150b56bb2c25340d1d8"
 	},
 	"agentChange": {
-		"commitSha": "03379fe999ee3048918c50ea2817d8217592873f",
-		"treeSha": "6fd7811b2b5c53fbc2ecb6608c42049811ddff24",
+		"commitSha": "e9ebe9af8db105436dfa07c946541c81a30e1078",
+		"treeSha": "6487ffa073519d9433d03254b88fdbbfef6a8a85",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -302,7 +302,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "f8b02111f95c4da3192ea45f414543d4b78087bc",
+				"sha": "dbf11ad1c31c4418e9dfe3220fe4e7caef260774",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -314,7 +314,7 @@
 			},
 			{
 				"path": "build-web.ts",
-				"sha": "550b8e8079bde4a9e23fea17f3abaca208bcf4d7",
+				"sha": "40827afdb8319f2ac0afb6a9602dd8fafe392578",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -398,7 +398,7 @@
 			},
 			{
 				"path": "package.json",
-				"sha": "4742a8ff7e7cab9dc391bce1711dca59b36b7ac0",
+				"sha": "8c7de7447f4f0578033d848654783a1cd052fa8c",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -518,13 +518,13 @@
 			},
 			{
 				"path": "tsconfig.json",
-				"sha": "8d56bc77a3520bc0d14295e0bce0ca31b8ea08d3",
+				"sha": "46312f2614b2384358586f831faa1d33ab2cfa72",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
 				"path": "web",
-				"sha": "939165011b2c70c85c93df4474636b135b0a76cf",
+				"sha": "24c3cca3a0bdb794c4ce41361489f8cfd462305d",
 				"type": "tree",
 				"mode": "040000"
 			},
@@ -542,13 +542,13 @@
 			},
 			{
 				"path": "web/index.html",
-				"sha": "109f0f5fab683051d3914f6864538532175d07b9",
+				"sha": "a065756ba117cf046f791ac43ca3e03b14d17121",
 				"type": "blob",
 				"mode": "100644"
 			},
 			{
-				"path": "web/main.ts",
-				"sha": "b69f13151258e6acd7d1d0008d8667e6dca763eb",
+				"path": "web/main.tsx",
+				"sha": "c8c1783f8df18f05c0294dbca3b90479efe9a94e",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -567,7 +567,7 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 87309,
-		"archiveSha256": "771cf0f635b11e1c48e17117acbf1be477d4689bdd35e23df4548df16017f891"
+		"archiveBytes": 98042,
+		"archiveSha256": "9b019300cea5f87ea202a2c39717d7ee4e7f19c62ce614f9368e2e5f7d1caa9c"
 	}
 }
