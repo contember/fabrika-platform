@@ -44,6 +44,7 @@ import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
+import type { HandlerErrorSink } from '../jobs/runner'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import {
 	type LabelledTestCaller,
@@ -103,6 +104,8 @@ export interface TestKitOptions {
 	readonly connect?: Readonly<Record<string, TestConnection>>
 	/** What answers a form's challenge verification in place of the provider: a stand-in for its siteverify. */
 	readonly challengeFetch?: ChallengeFetch
+	/** What a job's handler threw, shown on the developer's own machine: `fabrika app dev` sets it, a test need not. */
+	readonly revealHandlerErrors?: HandlerErrorSink
 }
 
 export interface TestConnection {
@@ -316,6 +319,7 @@ export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C
 		files: options.files,
 		...(options.scanner === undefined ? {} : { scanner: options.scanner }),
 		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
+		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		membership,
 		connectBindings,
 		workloadTokens,

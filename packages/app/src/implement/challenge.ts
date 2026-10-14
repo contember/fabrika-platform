@@ -20,7 +20,11 @@ export const CHALLENGE_LIMITS = {
 	maxSkewMs: 60_000,
 } as const
 
-export type ChallengeFetch = (request: Request) => Promise<Response>
+/**
+ * How the siteverify request reaches the provider. `check` is what a passing answer confirms (the host and the form),
+ * for a stand-in that answers as the provider would; the provider itself reads only the request.
+ */
+export type ChallengeFetch = (request: Request, check: ChallengeCheck) => Promise<Response>
 
 /** `failed` is the visitor's (400); `unavailable` and `misconfigured` are the platform's or the operator's (503). */
 export type ChallengeOutcome = 'passed' | 'failed' | 'unavailable' | 'misconfigured'
@@ -73,6 +77,7 @@ export function turnstileVerifier(secret: string, fetch: ChallengeFetch, now: ()
 						redirect: 'manual',
 						signal: deadline.signal,
 					}),
+					check,
 				)
 				const type = response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase()
 				if (response.status !== 200 || type !== 'application/json') {

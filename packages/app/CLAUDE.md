@@ -100,7 +100,9 @@ src/
                       the writes checked as IAM checks them, live in the directory and the next token; it records them,
                       accepts an invitation, seeds the invitations and links a generated case cancels or revokes, and
                       resolves the key of a link it issued; it lists the invitations it sent (the dev mail view)
-    dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract
+    dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract;
+                      DEV_OUTBOX_ORIGIN and the DevOutside the seed reads the dev outbox through
+    challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes

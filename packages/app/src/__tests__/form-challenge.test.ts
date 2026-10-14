@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import { CHALLENGE_LIMITS, type ChallengeFetch, TURNSTILE_VERIFY_URL, turnstileVerifier } from '../implement/challenge'
 import { clientKey } from '../implement/form-admission'
+import { passingChallenge } from '../testing/challenge'
 
 describe('the client a request counts as', () => {
 	test.each<[string | null, string]>([
@@ -103,4 +104,13 @@ describe('a Turnstile verification', () => {
 		expect(await turnstileVerifier('secret-1', hanging, () => NOW).verify(CHECK)).toBe('unavailable')
 		expect(Date.now() - started).toBeLessThan(CHALLENGE_LIMITS.timeoutMs + 1000)
 	}, CHALLENGE_LIMITS.timeoutMs + 3000)
+})
+
+describe("the kits' passing challenge", () => {
+	test('passes every widget token for the host and the form the check names, and no other', async () => {
+		const verifier = turnstileVerifier('dev-secret', passingChallenge)
+		expect(await verifier.verify(CHECK)).toBe('passed')
+		expect(await verifier.verify({ ...CHECK, hostname: 'other.example', action: 'contact' })).toBe('passed')
+		expect(await verifier.verify({ ...CHECK, token: 'with space' })).toBe('failed')
+	})
 })

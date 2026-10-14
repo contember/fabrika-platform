@@ -8,18 +8,20 @@ import { CONTRACT_FILE, IMPLEMENTATION_FILE } from '@fabrika/app/build'
 import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
-import { type DevKit, devKit, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
+import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
 import { TEST_POSTGRES_URL, type TestDatabase, testDatabase } from '@fabrika/db/testing'
 import { PostgresMigrationError } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
+import { DEV_ENV_FILE, DevEnvProblem, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
 import { DEFAULT_SEED, importSeed, isLocalPath, NOTHING_SEEDED, parseSeeded, type Seeded, seedPath, SeedProblem } from './app-dev-seed'
 import {
 	type Badge,
 	type CurrentView,
 	type DevView,
+	type MailView,
 	noticePage,
 	pickerPage,
 	type RoleView,
@@ -40,8 +42,10 @@ and a throwaway schema of the database in ${TEST_POSTGRES_URL}, migrated from db
 The seed module (--seed, or ${DEFAULT_SEED} when it exists) default-exports a DevSeed of @fabrika/app/testing: it
 receives the kit, writes through the endpoints, and answers the personas, link pages and scope values to offer.
 Pick who the browser is at /__fabrika/dev; every SPA page shows a toolbar that switches the caller and lists the
-mail IAM sent. The application's own variables come from the environment. It listens on 127.0.0.1 (or ::1,
-localhost) only, port 3000 unless --port says otherwise (0 picks a free one), and prints the address it serves.
+mail IAM sent and the requests the application sent to ${DEV_OUTBOX_ORIGIN}, the dev outbox. A form's challenge
+passes. The application's own variables come from ${DEV_ENV_FILE} (NAME=value lines) over the environment. What the
+seed or a job's handler throws is printed with its stack. It listens on 127.0.0.1 (or ::1, localhost) only, port
+3000 unless --port says otherwise (0 picks a free one), and prints the address it serves.
 `
 
 const LOOPBACK: ReadonlySet<string> = new Set(['127.0.0.1', '::1', 'localhost'])
@@ -50,6 +54,7 @@ const PICKER_PATH = '/__fabrika/dev'
 const CHOOSE_PATH = '/__fabrika/dev/as'
 const ACCEPT_PATH = '/__fabrika/dev/accept'
 const STATE_PATH = '/__fabrika/dev/state'
+const OUTBOX_PATH = '/__fabrika/dev/outbox/'
 const TOOLBAR_PATH = '/__fabrika/dev/toolbar.js'
 const CHOICE_COOKIE = 'fabrika-dev-as'
 const MAX_SCOPE_VALUE = 200
@@ -69,12 +74,16 @@ export class AppDevError extends Error {
 }
 
 /**
- * What of a startup failure reaches the terminal: the message of `app dev`'s own refusal, of the seed's answer, of the
- * framework's boot and of the migration runner, which name no value of the environment; anything else (an application
- * module, the seed's own code, a driver, a dependency `deps` built) may carry a credential, so it is a fixed code.
+ * What of a startup failure reaches the terminal: the message of `app dev`'s own refusal (the seed's own throw, with its
+ * stack, included), of the seed's answer, of `dev/dev.env`, of the framework's boot and of the migration runner;
+ * anything else (an application module, a driver, a dependency `deps` built) may carry a credential, so it is a fixed
+ * code.
  */
 export function startupFailure(error: unknown): Error {
-	if (error instanceof AppDevError || error instanceof SeedProblem || error instanceof BootError || error instanceof PostgresMigrationError) {
+	if (
+		error instanceof AppDevError || error instanceof SeedProblem || error instanceof DevEnvProblem || error instanceof BootError
+		|| error instanceof PostgresMigrationError
+	) {
 		return new Error(error.message)
 	}
 	return new Error('app dev could not start: start_failed (the error is withheld: it may contain a credential)')
@@ -195,18 +204,26 @@ export async function startAppDev(app: ContractImplementation<AnyContract>, opti
 	}
 }
 
-/** The seed's answer; its own code may throw anything, which is withheld, and its answer's problems are named. */
-async function runSeed(dev: DevKit<AnyContract>, path: string | null): Promise<Seeded> {
+/**
+ * The seed's answer, and its answer's problems named. What its own code throws is printed whole, stack included: the
+ * developer's code on the developer's machine.
+ */
+async function runSeed(dev: DevKit<AnyContract>, outside: DevOutside, path: string | null): Promise<Seeded> {
 	if (path === null) return NOTHING_SEEDED
 	let answer: unknown
 	try {
 		const seed = await importSeed(path)
-		answer = await seed(dev.kit)
+		answer = await seed(dev.kit, outside)
 	} catch (error) {
 		if (error instanceof SeedProblem) throw error
-		throw new AppDevError('app dev could not seed: seed_failed (the error is withheld: it may contain a credential; run the same calls in a test)')
+		throw new AppDevError(`app dev could not seed: the seed threw\n${Bun.inspect(error)}`)
 	}
 	return parseSeeded(dev, answer)
+}
+
+/** What a job's handler threw, printed whole on the developer's terminal. */
+const printHandlerError = (where: string, error: unknown): void => {
+	console.error(`fabrika app dev: ${where} threw\n${Bun.inspect(error)}`)
 }
 
 /** The server over the kit of `app`, on `postgres` when it has a data layer; its `stop` also drops the schema. */
@@ -215,17 +232,35 @@ async function serveThroughKit(
 	options: AppDevOptions,
 	postgres: TestDatabase | null,
 ): Promise<AppDevServer> {
+	const outbox = devOutbox()
+	const restoreFetch = outbox.install()
+	try {
+		return await serveDevKit(app, options, postgres, outbox, restoreFetch)
+	} catch (error) {
+		restoreFetch()
+		throw error
+	}
+}
+
+async function serveDevKit(
+	app: ContractImplementation<AnyContract>,
+	options: AppDevOptions,
+	postgres: TestDatabase | null,
+	outbox: DevOutside,
+	restoreFetch: () => void,
+): Promise<AppDevServer> {
 	const contract = app.contract
 	const vocabulary = contract.vocabulary
 	const hasFiles = Object.keys(contract.surface.files ?? {}).length > 0
 	const dev = devKit(app, {
 		root: options.root,
-		env: applicationVariables(options.env),
+		env: { ...applicationVariables(options.env), ...readDevEnv(options.root) },
 		...(postgres === null ? {} : { database: postgres.database }),
 		...(hasFiles ? { files: new MemoryFileObjects() } : {}),
+		revealHandlerErrors: printHandlerError,
 	})
 	const kit = dev.kit
-	const seeded = await runSeed(dev, options.seed)
+	const seeded = await runSeed(dev, outbox, options.seed)
 	const text = stringsOf(vocabulary.locale ?? 'en')
 	const title = vocabulary.displayName ?? vocabulary.app
 	const mounts = Object.values(kit.artifact.mounts)
@@ -323,16 +358,23 @@ async function serveThroughKit(
 		})),
 		anonymousHref: chooseHref({ anonymous: '1' }, next),
 		links: seeded.links.map((link) => ({ title: link.title, description: link.description, href: link.url })),
-		mail: dev.invitations().map((invitation) => ({
-			to: invitation.email,
-			subject: text.invitation(invitation.role, scopeLabel(invitation.scope.type, invitation.scope.value)),
-			status: invitation.status,
-			action: invitation.status === 'open'
-				? { label: text.accept, href: `${ACCEPT_PATH}?${new URLSearchParams({ invitation: invitation.id, next }).toString()}` }
-				: invitation.status === 'accepted' && invitees.has(invitation.id)
-				? { label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }
-				: null,
-		})),
+		mail: [
+			...dev.invitations().map((invitation): MailView => ({
+				to: invitation.email,
+				subject: text.invitation(invitation.role, scopeLabel(invitation.scope.type, invitation.scope.value)),
+				status: invitation.status,
+				action: invitation.status === 'open'
+					? { label: text.accept, href: `${ACCEPT_PATH}?${new URLSearchParams({ invitation: invitation.id, next }).toString()}` }
+					: invitation.status === 'accepted' && invitees.has(invitation.id)
+					? { label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }
+					: null,
+			})),
+			...outbox.outbox().map((message): MailView => ({
+				...mailHeadOf(message),
+				status: 'sent',
+				action: { label: text.openMessage, href: `${OUTBOX_PATH}${message.id}` },
+			})),
+		],
 		pickerHref: `${PICKER_PATH}?${new URLSearchParams({ next }).toString()}`,
 	})
 
@@ -435,8 +477,18 @@ async function serveThroughKit(
 		return new Response(withToolbar(await response.text(), TOOLBAR_PATH), { status: 200, statusText: response.statusText, headers })
 	}
 
+	/** A message of the dev outbox, its body as it came (JSON indented); its headers, which carry keys, are not kept. */
+	const outboxMessage = (path: string): Response => {
+		const message = outbox.outbox().find((candidate) => `${OUTBOX_PATH}${candidate.id}` === path)
+		if (message === undefined) return plain(404, 'no such message in the dev outbox')
+		return new Response(`${message.method} ${DEV_OUTBOX_ORIGIN}${message.path}\n\n${shownBody(message)}\n`, {
+			headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+		})
+	}
+
 	const devRoute = (request: Request, url: URL): Response | null => {
 		if (request.method !== 'GET') return null
+		if (url.pathname.startsWith(OUTBOX_PATH)) return outboxMessage(url.pathname)
 		switch (url.pathname) {
 			case PICKER_PATH:
 				return new Response(pickerPage(viewOf(choiceOf(request), nextOf(url.searchParams.get('next')))), { headers: PAGE_HEADERS })
@@ -483,6 +535,7 @@ async function serveThroughKit(
 			try {
 				await server.stop(true)
 			} finally {
+				restoreFetch()
 				await postgres?.close()
 			}
 		},

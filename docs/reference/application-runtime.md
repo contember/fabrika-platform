@@ -1171,19 +1171,25 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 - `fabrika app dev` (`packages/cli/src/app-dev.ts`) serves the application through this kit (`devKit`, the kit with
   its stand-in IAM) on a loopback port, to click through its screens: a throwaway schema of
   `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and dropped on exit, the SPAs from their built
-  directories, file objects in memory, and the application's variables from the environment without the `FABRIKA_*`
-  names. A seed module (`--seed`, or `dev/seed.ts`) default-exports a `DevSeed`: it gets the kit, writes through the
+  directories, file objects in memory, and the application's variables from `dev/dev.env` over the environment without
+  the `FABRIKA_*` names. A form's challenge passes (`passingChallenge`), and every request the process sends to
+  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox: point a mail provider's URL at it) is captured, answered
+  200 and listed in the mail view. What the seed or a job's handler throws is printed with its stack. A seed module
+  (`--seed`, or `dev/seed.ts`) default-exports a `DevSeed`: it gets the kit and the dev outbox, writes through the
   endpoints, and answers personas (a person the kit made), link pages (a URL `ctx.links` answered) and labelled scope
   values. `/__fabrika/dev` picks the caller: a persona, a role of the vocabulary held app-wide or in one scope value,
   or anonymous; a cookie keeps the choice, which never reaches the application, and the kit's own session never leaves
   the process. A sign-in the proxy answers (a redirect to the kit's IAM, a 401's `loginUrl`) points to the picker.
   Every SPA page it serves gets a same-origin toolbar script (the kit's `script-src 'self'` admits it; `app dev`
-  changes no policy): who the browser is, a persona switch, the link pages, and the invitations the stand-in IAM sent,
-  each with a link that accepts it as IAM's onboarding does. The stand-in IAM signs no password, so there is no reset
+  changes no policy): who the browser is, a persona switch, the link pages, the invitations the stand-in IAM sent, each
+  with a link that accepts it as IAM's onboarding does, and the dev outbox's messages. The stand-in IAM signs no password, so there is no reset
   mail. It listens on `127.0.0.1`, `::1` or `localhost` only, answers no request addressed to another host name, and
   prints its address and nothing of the environment. Cron jobs do not run there.
 - The kit's stand-in IAM mints for the key of a share link it issued through `ctx.links`, as IAM resolves a link key:
-  the mount's grants on the link's object, bound to its chain, until the link is revoked.
+  the mount's grants on the link's object, bound to its chain, until the link is revoked. A job's own key, and the
+  tokens the kit signs for it, are its credential at the stand-in's link operations, as at IAM's: its declared actions
+  app-wide, its declared `issues` mount only, and only links it issued; so a job's `ctx.links` works in a plain kit and
+  under `fabrika app dev`.
 - `kit.fetch` takes a request as it reaches the proxy; `kit.browser(caller?)` adds
   what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
   request's credentials are `omit`, the caller's session cookie. Both refuse a host

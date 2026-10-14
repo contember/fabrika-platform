@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { parseAppDevArgs } from '../app-dev'
+import { devOutbox, readDevEnv } from '../app-dev-outside'
 
 setDefaultTimeout(60_000)
 
@@ -22,6 +23,7 @@ const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 const CLI = join(import.meta.dir, '..', 'index.ts')
 const TEMPLATE = join(import.meta.dir, '..', '..', '..', '..', 'examples', 'zerops-app')
 const DEV_APP = join(import.meta.dir, 'fixtures', 'dev-app')
+const DEV_OUTSIDE = join(import.meta.dir, 'fixtures', 'dev-outside')
 const TOOLBAR_TAG = '<script src="/__fabrika/dev/toolbar.js" defer></script>'
 
 if (url === '') {
@@ -148,6 +150,47 @@ describe('fabrika app dev refuses before it serves', () => {
 	})
 })
 
+describe("app dev's stand-ins for the outside, without serving", () => {
+	test('dev/dev.env: NAME=value lines, comments and quotes; a malformed line or a framework name is refused by its line', () => {
+		const root = mkdtempSync(join(tmpdir(), 'fabrika-app-dev-env-'))
+		try {
+			expect(readDevEnv(root)).toEqual({})
+			mkdirSync(join(root, 'dev'))
+			writeFileSync(join(root, 'dev', 'dev.env'), '# comment\n\nPLAIN=one\nQUOTED="two words"\nSINGLE=\'3\'\nEMPTY=\n')
+			expect(readDevEnv(root)).toEqual({ PLAIN: 'one', QUOTED: 'two words', SINGLE: '3', EMPTY: '' })
+			writeFileSync(join(root, 'dev', 'dev.env'), 'OK=1\nno equals sign here\n')
+			expect(() => readDevEnv(root)).toThrow('app dev: dev/dev.env line 2 is no NAME=value')
+			writeFileSync(join(root, 'dev', 'dev.env'), 'FABRIKA_IAM_ISSUER=secret-value-9\n')
+			expect(() => readDevEnv(root)).toThrow('line 1 sets FABRIKA_IAM_ISSUER, a framework variable')
+			expect(() => readDevEnv(root)).not.toThrow('secret-value-9')
+		} finally {
+			rmSync(root, { recursive: true, force: true })
+		}
+	})
+
+	test('the dev outbox captures a request to its origin, body only, passes every other on, and restores fetch', async () => {
+		const original = globalThis.fetch
+		const outbox = devOutbox()
+		const restore = outbox.install()
+		try {
+			const answer = await fetch('https://outbox.invalid/mail', {
+				method: 'POST',
+				headers: { Authorization: 'Bearer key-31', 'Content-Type': 'application/json' },
+				body: JSON.stringify({ to: 'a@example.test', subject: 'Hi' }),
+			})
+			expect(answer.status).toBe(200)
+			expect(outbox.outbox()).toEqual([
+				{ id: 1, method: 'POST', path: '/mail', contentType: 'application/json', body: '{"to":"a@example.test","subject":"Hi"}' },
+			])
+			expect(JSON.stringify(outbox.outbox())).not.toContain('key-31')
+			await expect(fetch('http://127.0.0.1:1/unreachable')).rejects.toThrow()
+		} finally {
+			restore()
+		}
+		expect(globalThis.fetch).toBe(original)
+	})
+})
+
 /** The session-level advisory lock that holds a test schema, as `@fabrika/db/testing` derives it. */
 const schemaLockKey = (schema: string): string =>
 	String(createHash('sha256').update(`fabrika-test-schema:${schema}`, 'utf8').digest().readUIntBE(0, 6) + 1)
@@ -182,7 +225,7 @@ describe.skipIf(url === '')('fabrika app dev that cannot start', () => {
 		}
 	})
 
-	test("a seed that throws is a fixed code, and one whose answer is wrong is named by the entry's position", async () => {
+	test("a seed that throws is printed whole, stack included, and one whose answer is wrong is named by the entry's position", async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'fabrika-app-dev-seed-'))
 		try {
 			writeFileSync(join(dir, 'throws.ts'), "export default async () => { throw new Error(`seeding with ${process.env['SEED_TOKEN']}`) }\n")
@@ -195,8 +238,10 @@ describe.skipIf(url === '')('fabrika app dev that cannot start', () => {
 				`--seed=${join(dir, 'throws.ts')}`,
 			])
 			expect(thrown.code).toBe(1)
-			expect(thrown.output).toContain('app dev could not seed: seed_failed')
-			expect(thrown.output).not.toContain('seed-secret-41aa')
+			expect(thrown.output).toContain('app dev could not seed: the seed threw')
+			// The developer's own code on the developer's machine: its message and where it threw.
+			expect(thrown.output).toContain('seeding with seed-secret-41aa')
+			expect(thrown.output).toContain('throws.ts:1')
 			expect(thrown.output).not.toContain(url)
 			const stranger = await exited(TEMPLATE, { FABRIKA_TEST_POSTGRES_URL: url }, ['--port=0', `--seed=${join(dir, 'stranger.ts')}`])
 			expect(stranger.code).toBe(1)
@@ -412,5 +457,43 @@ describe.skipIf(url === '')('fabrika app dev on an application with a share link
 		} finally {
 			await postgres?.close()
 		}
+	})
+})
+
+describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a form's challenge, the dev outbox, dev/dev.env", () => {
+	let origin = ''
+	let stop: () => Promise<{ readonly code: number; readonly output: string }> = () => Promise.resolve({ code: 0, output: '' })
+
+	beforeAll(async () => {
+		// The shell sets no application variable: the challenge secret and the mail provider come from dev/dev.env.
+		const server = await served(DEV_OUTSIDE)
+		origin = server.origin
+		stop = server.stop
+	})
+
+	afterAll(async () => {
+		const { code, output } = await stop()
+		expect(code).toBe(0)
+		// The seed ran the job that throws: its message and stack are printed, on the developer's machine.
+		expect(output).toContain("fabrika app dev: job 'broken' attempt 1 threw")
+		expect(output).toContain('the broken job threw on purpose')
+		for (const secret of [url, 'dev-turnstile-secret', 'dev-mail-key']) expect(output).not.toContain(secret)
+	})
+
+	test("the seed's sign-up passed the challenge, and the mail the job sent is in the mail view with its body", async () => {
+		const { mail } = await stateOf(origin, null)
+		expect(mail).toHaveLength(1)
+		const [sent] = mail
+		expect(sent?.subject).toBe('Welcome aboard')
+		expect(sent?.detail).toBe('To: ada@signup.example · sent')
+		expect(sent?.action?.label).toBe('Open the message')
+		const opened = await fetch(new URL(sent?.action?.href ?? '', origin))
+		expect(opened.status).toBe(200)
+		expect(opened.headers.get('X-Content-Type-Options')).toBe('nosniff')
+		const body = await opened.text()
+		expect(body).toStartWith('POST https://outbox.invalid/mail')
+		expect(body).toContain('Hello ada@signup.example, your sign-up is in.')
+		expect(body).not.toContain('dev-mail-key')
+		expect((await fetch(`${origin}__fabrika/dev/outbox/99`)).status).toBe(404)
 	})
 })

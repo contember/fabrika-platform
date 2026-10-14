@@ -45,7 +45,7 @@ import type { RequestExecutionContext } from '../fetch'
 import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
-import { bindJobs, type ContractJobs } from '../jobs/runner'
+import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runner'
 import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
@@ -116,6 +116,11 @@ export interface BootOptions {
 	readonly operationsFetch?: (request: Request) => Promise<Response>
 	/** What asks a form's challenge provider to verify a token; `fetch` by default. */
 	readonly challengeFetch?: ChallengeFetch
+	/**
+	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
+	 * application withholds because it may carry a credential.
+	 */
+	readonly revealHandlerErrors?: HandlerErrorSink
 }
 
 export interface ContractApp {
@@ -728,6 +733,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		membership,
 		capabilities: issuer.authority,
 		containers,
+		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)

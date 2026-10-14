@@ -137,11 +137,17 @@ arguments and reports.
   a proxy rule, an IAM or a second enforcement decision here.
   - The seed (`src/app-dev-seed.ts`): `--seed=<module>`, or `dev/seed.ts` when it exists, default-exports a `DevSeed`
     that gets the kit before the first request. Its answer is parsed at the boundary: a persona is a person that kit
-    made, a link is a local path. A seed that throws is `seed_failed` with no message; a wrong answer names the
-    entry's position, never what the seed wrote.
+    made, a link is a local path. A seed that throws is printed whole, message and stack (the developer's code on the
+    developer's machine), and so is what a job's handler threw (`revealHandlerErrors`); a wrong answer names the
+    entry's position, never what the seed wrote. Nothing else of the application's errors is printed.
+  - The outside (`src/app-dev-outside.ts`): `dev/dev.env` (`NAME=value`, no `FABRIKA_*`) sets the application's
+    variables over the environment's; the dev outbox replaces the process's `fetch` for `DEV_OUTBOX_ORIGIN`
+    (`https://outbox.invalid`) only, keeps each request's method, path, content type and body (never a header), and
+    answers 200; the seed reads it as its second argument and the mail view lists it. A form's challenge passes
+    (`devKit`'s `passingChallenge`).
   - The routes under `/__fabrika/dev`: the picker, `as` (a persona, a role in a scope value, an accepted invitee, or
     anonymous; it sets the cookie the application never sees), `accept` (an invitation the stand-in IAM sent),
-    `state` (the toolbar's JSON) and `toolbar.js`. Every `text/html` 200 of an SPA or link mount gets the toolbar's
+    `state` (the toolbar's JSON), `toolbar.js` and `outbox/<id>` (a captured message, as text). Every `text/html` 200 of an SPA or link mount gets the toolbar's
     same-origin script tag; the kit's CSP already admits it, so `app dev` changes no header the kit answers.
   - The UI (`src/app-dev-ui.ts`) is self-contained HTML, CSS and a shadow-DOM script, colored by `--fd-*` custom
     properties, light and dark. The picker answers its own strict CSP and runs no script.

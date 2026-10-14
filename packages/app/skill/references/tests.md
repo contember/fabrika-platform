@@ -290,7 +290,8 @@ if (postgres !== null) {
   stand-in, or the real ClamAV one, `clamscanScanner()` of `@fabrika/app/bun`.
 - A form's challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
   also when the test's `challengeFetch` answers success. Send a fresh token with each submission
-  (`crypto.randomUUID()`).
+  (`crypto.randomUUID()`). `passingChallenge` (`@fabrika/app/testing`) is a `challengeFetch` that passes every token;
+  a stand-in of your own receives the check (`hostname`, `action`) a passing answer must confirm as its second argument.
 - `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
   that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).

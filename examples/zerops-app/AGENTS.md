@@ -731,21 +731,43 @@ export default seed
 - `scopes` names the values the seed made, by dimension, with the label a person knows them by; the picker offers
   them for a membership role.
 - Check every call the seed makes: an endpoint that refuses answers a status, and the seed goes on without its data.
-  A seed that throws stops `app dev` with `seed_failed` and no message, because the message may carry a credential;
-  run the same calls in a test to see why.
-- Mail the application sends through its own stand-ins is the seed's business. The invitations IAM would e-mail are
-  listed by `app dev` itself.
+  Throw when one does: a seed that throws stops `app dev` and prints its error with the stack.
+- `dev.runJob('<job>')` runs a cron job from the seed (`app dev` runs none on its schedule). A job's `ctx.links` works:
+  the stand-in IAM takes the job's own key. What a job's handler throws is printed with its stack, here only.
+
+## Outside the application
+
+- `dev/dev.env` holds the application's variables for `app dev`, one `NAME=value` per line (`#` comments, quotes
+  optional). They win over the shell's; a `FABRIKA_*` name is refused. Commit it: it holds stand-in values, never a
+  real secret.
+- A form's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the form's
+  `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
+  does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
+  key `1x00000000000000000000AA`; its token is the same every time, so only its first submission is admitted.
+- Point an outside provider at the dev outbox: `app dev` captures every request the process sends to
+  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. The mail view
+  lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
+- The seed's second argument reads the outbox: `outside.outbox()` is every captured request, oldest first
+  (`{ id, method, path, contentType, body }`), so the seed can open a link the application mailed.
+
+```text dev/dev.env
+# Stand-in values for fabrika app dev.
+TURNSTILE_SECRET=dev
+TURNSTILE_SITE_KEY=1x00000000000000000000AA
+MAIL_API_URL=https://outbox.invalid/mail
+MAIL_API_KEY=dev
+```
 
 ## In the browser
 
 - `/__fabrika/dev` is the picker: the personas, another role of the vocabulary (a membership role with a scope value),
-  anonymous, the link pages, and the mail IAM sent. It speaks the vocabulary's `locale` and shows its `displayName`.
+  anonymous, the link pages, and the mail: what IAM sent and what reached the dev outbox. It speaks the vocabulary's `locale` and shows its `displayName`.
 - Every SPA page carries a toolbar in the bottom corner: who you are, the personas to switch to (the page reloads as
   that caller), the picker, the link pages, and the mail. An invitation's link accepts it; the browser is the invited
   person from then on.
 - The choice stays in a cookie the application never sees. The data is gone when the command stops.
 - It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
-  addressed to another host name, and runs no cron job: test those with `kit.runJob`.
+  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`.
 
 ---
 
@@ -4996,7 +5018,8 @@ if (postgres !== null) {
   stand-in, or the real ClamAV one, `clamscanScanner()` of `@fabrika/app/bun`.
 - A form's challenge token is single use: a second submission with the same token answers 400 `challenge_failed`,
   also when the test's `challengeFetch` answers success. Send a fresh token with each submission
-  (`crypto.randomUUID()`).
+  (`crypto.randomUUID()`). `passingChallenge` (`@fabrika/app/testing`) is a `challengeFetch` that passes every token;
+  a stand-in of your own receives the check (`hostname`, `action`) a passing answer must confirm as its second argument.
 - `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
   that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).

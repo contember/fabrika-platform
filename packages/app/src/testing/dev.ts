@@ -3,6 +3,7 @@
 import type { AnyContract, DimensionOf } from '../contract/define'
 import type { ContractImplementation } from '../implement/implement'
 import type { PersonTestCaller, TestCaller } from './caller'
+import { passingChallenge } from './challenge'
 import { bootTestKit, type TestKit, type TestKitOptions } from './kit'
 import type { SentInvitation, TestMembership } from './membership'
 
@@ -37,11 +38,30 @@ export interface DevSeedResult<C extends AnyContract> {
 	readonly scopes?: { readonly [D in DimensionOf<C>]?: readonly DevScopeValue[] }
 }
 
+/** The origin `fabrika app dev` captures every request to: an outside provider's stand-in, named by its path. */
+export const DEV_OUTBOX_ORIGIN = 'https://outbox.invalid'
+
+/** A request the application sent to `DEV_OUTBOX_ORIGIN` under `fabrika app dev`: its body, never its headers. */
+export interface DevOutboxMessage {
+	readonly id: number
+	readonly method: string
+	/** The path it was sent to: `/mail`. */
+	readonly path: string
+	readonly contentType: string | null
+	readonly body: string
+}
+
+/** What `fabrika app dev` stands in for outside the application, for the seed to read. */
+export interface DevOutside {
+	/** Every request sent to `DEV_OUTBOX_ORIGIN` so far, oldest first. */
+	outbox(): readonly DevOutboxMessage[]
+}
+
 /**
  * The default export of `dev/seed.ts`: it receives the application's test kit, the API its tests use, writes through the
- * endpoints, and answers who and what the picker offers.
+ * endpoints, and answers who and what the picker offers. `outside` reads what the application sent to the dev outbox.
  */
-export type DevSeed<C extends AnyContract> = (dev: TestKit<C>) => Promise<DevSeedResult<C>> | DevSeedResult<C>
+export type DevSeed<C extends AnyContract> = (dev: TestKit<C>, outside: DevOutside) => Promise<DevSeedResult<C>> | DevSeedResult<C>
 
 export interface DevKit<C extends AnyContract> {
 	readonly kit: TestKit<C>
@@ -55,9 +75,12 @@ export interface DevKit<C extends AnyContract> {
 
 const isPerson = (caller: TestCaller): caller is PersonTestCaller => caller.kind === 'human' && caller.email !== null
 
-/** The test kit of `app` with its stand-in IAM, and what `fabrika app dev` shows of it. */
+/**
+ * The test kit of `app` with its stand-in IAM, and what `fabrika app dev` shows of it. A form's challenge passes
+ * (`passingChallenge`) unless `options.challengeFetch` answers it.
+ */
 export function devKit<C extends AnyContract>(app: ContractImplementation<C>, options: Omit<TestKitOptions, 'membership'> = {}): DevKit<C> {
-	const { kit, standIn, callerOf } = bootTestKit(app, options)
+	const { kit, standIn, callerOf } = bootTestKit(app, { challengeFetch: passingChallenge, ...options })
 	if (standIn === null) {
 		throw new Error('a kit without its own membership transport stands in for IAM')
 	}

@@ -7,7 +7,7 @@ import { serve } from '@fabrika/app/implement'
 import { devKit, testKit } from '@fabrika/app/testing'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing'
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -52,7 +52,11 @@ const shareNote = app.cron('0 4 * * *', { actions: ['notes.read', 'notes.share']
 	if (jobRun.revoke) await ctx.links.revoke(link.id)
 })
 
-const contract = app.contract((c) => ({ api: c.rpc('/api', { sharing }), shared, jobs: { shareNote } }))
+const broken = app.cron('0 5 * * *', { actions: ['notes.read'], scope: 'app' }).handle(() => {
+	throw new Error('the broken job threw on purpose')
+})
+
+const contract = app.contract((c) => ({ api: c.rpc('/api', { sharing }), shared, jobs: { shareNote, broken } }))
 const served = serve(contract, { database: scoped(tables) })
 
 const post = (body: unknown, headers: Record<string, string> = {}): RequestInit => ({
@@ -103,6 +107,28 @@ describe.skipIf(postgres === null)("a job's ctx.links through the kit's stand-in
 		expect(await kit.runJob('shareNote')).toEqual({ status: 'succeeded', attempts: 1 })
 		const revoked = await kit.fetch('/s/api/note', post({}, { Authorization: `Bearer ${jobRun.url.slice(jobRun.url.indexOf('#') + 1)}` }))
 		expect(revoked.status).toBe(401)
+	})
+})
+
+describe.skipIf(postgres === null)("a job handler's own error", () => {
+	test('reaches revealHandlerErrors, the sink app dev sets; without it the log carries only the fixed code', async () => {
+		if (postgres === null) return
+		const logged = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const quiet = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
+			expect(await quiet.runJob('broken')).toMatchObject({ status: 'failed', code: 'handler_failed' })
+			expect(logged.mock.calls.flat().join('\n')).not.toContain('threw on purpose')
+
+			const revealed: { where: string; message: string }[] = []
+			const kit = testKit(serve(contract, { database: scoped(tables) }), {
+				database: postgres.database,
+				revealHandlerErrors: (where, error) => revealed.push({ where, message: error instanceof Error ? error.message : String(error) }),
+			})
+			expect(await kit.runJob('broken')).toMatchObject({ status: 'failed', code: 'handler_failed' })
+			expect(revealed[0]).toEqual({ where: "job 'broken' attempt 1", message: 'the broken job threw on purpose' })
+		} finally {
+			logged.mockRestore()
+		}
 	})
 })
 

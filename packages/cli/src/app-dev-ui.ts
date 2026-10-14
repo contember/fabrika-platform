@@ -51,7 +51,8 @@ export interface LinkView {
 export interface MailView {
 	readonly to: string
 	readonly subject: string
-	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired'
+	/** An invitation's state, or `sent` for a message of the dev outbox. */
+	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired' | 'sent'
 	readonly action: { readonly label: string; readonly href: string } | null
 }
 
@@ -94,6 +95,7 @@ interface Strings {
 	readonly invitation: (role: string, scope: string) => string
 	readonly accept: string
 	readonly continueAs: string
+	readonly openMessage: string
 	readonly status: Readonly<Record<MailView['status'], string>>
 	readonly to: string
 	readonly picker: string
@@ -122,13 +124,14 @@ const STRINGS: Readonly<Record<Locale, Strings>> = {
 		links: 'Link pages',
 		linksText: 'Each opens as the holder of a link the application issued.',
 		openLink: 'Open as link holder',
-		mail: 'Mail sent by IAM',
-		mailText: 'The invitations the stand-in IAM would have e-mailed.',
-		noMail: 'IAM has sent nothing yet.',
+		mail: 'Mail',
+		mailText: 'The invitations the stand-in IAM would have e-mailed, and what the application sent to the dev outbox.',
+		noMail: 'Nothing has been sent yet.',
 		invitation: (role, scope) => `Invitation: ${role} in ${scope}`,
 		accept: 'Accept invitation',
 		continueAs: 'Continue as this person',
-		status: { open: 'waiting', accepted: 'accepted', cancelled: 'cancelled', expired: 'expired' },
+		openMessage: 'Open the message',
+		status: { open: 'waiting', accepted: 'accepted', cancelled: 'cancelled', expired: 'expired', sent: 'sent' },
 		to: 'To',
 		picker: 'Choose another caller',
 		close: 'Close',
@@ -154,13 +157,14 @@ const STRINGS: Readonly<Record<Locale, Strings>> = {
 		links: 'Stránky přes odkaz',
 		linksText: 'Každá se otevře jako držitel odkazu, který aplikace vydala.',
 		openLink: 'Otevřít jako držitel odkazu',
-		mail: 'Pošta od IAM',
-		mailText: 'Pozvánky, které by zástupný IAM odeslal e-mailem.',
-		noMail: 'IAM zatím nic neodeslal.',
+		mail: 'Pošta',
+		mailText: 'Pozvánky, které by zástupný IAM odeslal e-mailem, a co aplikace poslala do vývojové schránky.',
+		noMail: 'Zatím nebylo nic odesláno.',
 		invitation: (role, scope) => `Pozvánka: ${role} v ${scope}`,
 		accept: 'Přijmout pozvánku',
 		continueAs: 'Pokračovat jako tato osoba',
-		status: { open: 'čeká', accepted: 'přijata', cancelled: 'zrušena', expired: 'vypršela' },
+		openMessage: 'Otevřít zprávu',
+		status: { open: 'čeká', accepted: 'přijata', cancelled: 'zrušena', expired: 'vypršela', sent: 'odesláno' },
 		to: 'Komu',
 		picker: 'Vybrat jiného volajícího',
 		close: 'Zavřít',

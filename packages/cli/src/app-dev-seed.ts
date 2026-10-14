@@ -69,14 +69,14 @@ export function seedPath(root: string, given: string | null): string | null {
 	return existsSync(conventional) ? conventional : null
 }
 
-/** The seed's default export, a function; its import runs application code, so the caller withholds what it throws. */
-export async function importSeed(path: string): Promise<(dev: unknown) => unknown> {
+/** The seed's default export, a function of the kit and the dev outbox. */
+export async function importSeed(path: string): Promise<(dev: unknown, outside: unknown) => unknown> {
 	const module: unknown = await import(pathToFileURL(path).href)
 	const seed: unknown = typeof module === 'object' && module !== null ? Reflect.get(module, 'default') : undefined
 	if (typeof seed !== 'function') {
 		throw new SeedProblem('app dev: the seed module default-exports no function: export default (async (dev) => { … }) satisfies DevSeed<…>')
 	}
-	return (dev) => Reflect.apply(seed, undefined, [dev])
+	return (dev, outside) => Reflect.apply(seed, undefined, [dev, outside])
 }
 
 /** What `answer`, the seed's result, offers the picker, or a `SeedProblem` naming the entry that is wrong. */

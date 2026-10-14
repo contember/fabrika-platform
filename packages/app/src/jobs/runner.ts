@@ -158,7 +158,11 @@ interface RunnerContext {
 	readonly membership: IamMembership | null
 	readonly capabilities: CapabilityAuthority
 	readonly containers: ReadonlyMap<string, readonly string[]>
+	readonly revealHandlerErrors: HandlerErrorSink | null
 }
+
+/** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
+export type HandlerErrorSink = (where: string, error: unknown) => void
 
 export interface JobBindingInput {
 	readonly artifact: ContractArtifact
@@ -186,6 +190,8 @@ export interface JobBindingInput {
 	readonly capabilities: CapabilityAuthority
 	/** Each dimension's containers, nearest first: a link's chain. */
 	readonly containers: ReadonlyMap<string, readonly string[]>
+	/** What a job's handler threw, for `fabrika app dev`; without it the error is only its fixed code. */
+	readonly revealHandlerErrors?: HandlerErrorSink
 }
 
 interface BoundFrameworkJob {
@@ -278,6 +284,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		membership: input.membership,
 		capabilities: input.capabilities,
 		containers: input.containers,
+		revealHandlerErrors: input.revealHandlerErrors ?? null,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -598,7 +605,11 @@ async function attemptOnce(
 	try {
 		const ran = runInRequest(frame, async () => {
 			await job.handler({ ctx })
-		}).then(() => null, failureOf)
+		}).then(() => null, (error: unknown) => {
+			const failed = failureOf(error)
+			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
+			return failed
+		})
 		const timeout = clock.wait(job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
 		const result = await Promise.race([ran, timeout])
 		return result === TIMED_OUT ? failure('timeout') : result
