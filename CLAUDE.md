@@ -82,6 +82,7 @@ packages/
   proxy-core proxy                # the auth enforcement decision and its `/manifest` wire contract · its Caddy deployment
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
   check                           # the application checker (`fabrika-check`), for applications, not this repo
+  ui                              # the paved road's React component kit, router and theme for application SPAs (ADR-0052)
   db                              # the scoped data layer applications use on Postgres (Kysely over Bun.SQL)
 examples/app examples/zerops-app  # a worked app per provider
 examples/crm                      # the CRM on the paved road: the acceptance application of the framework
@@ -167,6 +168,7 @@ contract note (`*-contract`), the substantial ones are:
   its Caddy deployment, private because it is an artifact · `packages/operations/` —
   the Operations kernel · `packages/dashboard/` — the console SPA for all three planes.
 - `packages/db/` — the scoped data layer for applications: table policies, stores, the query guard.
+- `packages/ui/` — the React component kit, router and theme of application SPAs; `@fabrika/app/react` holds their hooks.
 - `packages/runner-container/` + `packages/runner-cloudflare/` — the deploy container and its Worker ·
   `packages/local-stack/` — the Docker dev stack behind every `local:*` command.
 
