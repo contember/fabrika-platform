@@ -25,7 +25,6 @@ import {
 import { type ReactNode, useState } from 'react'
 import { DEAL_STAGES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_DEAL } from '../../src/schemas'
 import { type Activity, api, type Deal, type Member, type Task } from '../api'
-import { uploadAttachment } from '../files'
 import { dateTime, day, isClosed, money, nextStage, orNull, orOmitted, stageLabel, stageOf, stageTone, text, wholeNumber } from '../format'
 import { href } from '../routes'
 import { describe, Loaded, useReport } from './common'
@@ -267,13 +266,14 @@ function DealActivity({ deal }: { readonly deal: Deal }) {
 	)
 }
 
-/** Attachments uploaded in this page view: the framework has no endpoint that lists a deal's files. */
+/** Attachments uploaded in this page view; the screen does not list the deal's earlier files (`api.files.attachments.list`). */
 const uploadedThisSession = new Map<string, readonly { readonly id: string; readonly name: string }[]>()
 
 function Attachments({ deal }: { readonly deal: Deal }) {
 	const [uploads, setUploads] = useState(uploadedThisSession.get(deal.id) ?? [])
 	const [formKey, setFormKey] = useState(0)
-	const upload = useAction(uploadAttachment)
+	// A file collection's calls are functions of the client, not procedures: `useAction` gives them the hooks' state.
+	const upload = useAction(({ dealId, file }: { readonly dealId: string; readonly file: File }) => api.files.attachments.upload(dealId, file))
 	const report = useReport()
 	const submit = async (form: FormData) => {
 		const file = form.get('file')

@@ -598,7 +598,7 @@ export function MyTasks() {
 					? 'ready'
 					: 'loading'}
 				error={mine.error?.message}
-				onRetry={() => void mine.refetch()}
+				onRetry={() => void mine.retry()}
 				loadMore={{
 					hasMore: mine.hasMore,
 					loading: mine.loadingMore,
@@ -3711,7 +3711,7 @@ export function MyTasks() {
 					? 'ready'
 					: 'loading'}
 				error={mine.error?.message}
-				onRetry={() => void mine.refetch()}
+				onRetry={() => void mine.retry()}
 				empty="Nothing assigned to you."
 				loadMore={{
 					hasMore: mine.hasMore,
@@ -3835,7 +3835,9 @@ export function EditTask(
 - `mutate(input)` never throws: it answers `{ ok: true, data }` or `{ ok: false, error }`, and the hook keeps
   `status`, `pending`, `data` and `error`. It first checks the input with the procedure's own schema: a refused input
   is a `validation` error with its field paths, and nothing is sent.
-- After a success it refetches what its group shows (`api.tasks` for `api.tasks.edit`).
+- After a success, and after a `conflict`, it refetches what its group shows (`api.tasks` for `api.tasks.edit`). Key
+  a form that edits a versioned row by its version (`key={task.version}`): after a conflict it reseeds from the
+  current row, and the next save sends the current `expectVersion`.
   `useMutation(api.comments.add, { invalidates: [api.comments, api.tasks.get] })` names other procedures or groups;
   `invalidates: []` refetches nothing. `useInvalidate()(api.tasks)` refetches on demand.
 - `FabrikaError` is one union for every refusal: `unauthenticated` (`loginUrl`: the client made with `bounceOnAuth`
@@ -3845,9 +3847,9 @@ export function EditTask(
 - `Form` shows its `error`: a summary on top, and each `fields[name]` under the `Field` of that `name`. `Field` gives
   its control the `name`, an `id`, its label and `aria-describedby`; the control needs nothing else. `Form` hands
   `onSubmit` the `FormData`: read the fields by name, and leave the checking to the procedure's schema.
-- A call that is no procedure of the client yet — a file upload, until the client covers file collections — runs
-  through `useAction(async (input) => …)`, with the same state and error union; it refetches only what `invalidates`
-  names.
+- A call that is no procedure — a file collection's `api.files.<name>.upload(owner, file)`, `list`, `download` —
+  runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
+  `invalidates` names.
 
 ## Who is signed in: useCaller and Can
 

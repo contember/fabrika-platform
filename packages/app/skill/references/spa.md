@@ -347,9 +347,9 @@ export function EditTask(
 - `Form` shows its `error`: a summary on top, and each `fields[name]` under the `Field` of that `name`. `Field` gives
   its control the `name`, an `id`, its label and `aria-describedby`; the control needs nothing else. `Form` hands
   `onSubmit` the `FormData`: read the fields by name, and leave the checking to the procedure's schema.
-- A call that is no procedure of the client yet — a file upload, until the client covers file collections — runs
-  through `useAction(async (input) => …)`, with the same state and error union; it refetches only what `invalidates`
-  names.
+- A call that is no procedure — a file collection's `api.files.<name>.upload(owner, file)`, `list`, `download` —
+  runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
+  `invalidates` names.
 
 ## Who is signed in: useCaller and Can
 

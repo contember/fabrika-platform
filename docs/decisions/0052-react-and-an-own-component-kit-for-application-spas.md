@@ -82,8 +82,8 @@ Three constraints shape the answer:
 - A screen is composed of kit components and hooks; a new pattern goes into `@fabrika/ui` once, not into each
   application.
 - The client's procedures expose their output schema (`procedure.output`). Its type is part of `ProcedureCall`.
-- File collections have no typed client yet (backlog 144). Until they do, an upload is `useAction` over the
-  application's own `fetch`; when the client covers them, an upload is a mutation like any other.
+- A file collection's calls on the client (`api.files.<name>.upload`, `list`, `download`) are functions, not
+  procedures: a page runs them through `useAction`, which gives them the same state and error union.
 - The hooks have no retry, no refetch on window focus and no time-based expiry. A page refetches by invalidation or
   `refetch()`.
 - The router has no nested layouts, loaders or search-parameter state; a screen keeps its filters in React state.
