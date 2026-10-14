@@ -264,6 +264,16 @@ describe('a refusal follows the import as Bun resolves it', () => {
 		])
 	})
 
+	test("the screen tests' DOM kit is test-only: a test file of web/ loads it, a page does not", async () => {
+		expect(
+			await refusals({
+				...ARCHITECTURE_APP,
+				'web/__tests__/dom.ts': "import { installDom } from '@fabrika/app/react/testing'\ninstallDom()\n",
+				'web/main.ts': withImport('web/main.ts', "import { type } from '@fabrika/app/react/testing'"),
+			}, ['test-only-import', 'spa-server-import']),
+		).toEqual(['web/main.ts:1:1 spa-server-import', 'web/main.ts:1:1 test-only-import'])
+	})
+
 	test('through the nearest tsconfig.json, its extends and targets relative to the file that declares them', async () => {
 		const inherited = {
 			...ARCHITECTURE_APP,

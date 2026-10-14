@@ -94,7 +94,7 @@ const ALLOWED_ENV = 'values the framework hands the handler through deps or ctx'
  * The test kits: the application's signs tokens with its own key and boots the application a second way; the
  * database's reaches tables by name and seeds rows past the data layer. Production never loads either.
  */
-const TEST_KITS = ['@fabrika/app/testing', '@fabrika/db/testing']
+const TEST_KITS = ['@fabrika/app/testing', '@fabrika/app/react/testing', '@fabrika/db/testing']
 const TEST_ONLY_ALLOWED = 'the kit in a test file (*.test.ts, *.spec.ts or a __tests__ directory) only'
 
 export const isTestKit = (specifier: string): boolean => TEST_KITS.some((kit) => specifier === kit || specifier.startsWith(`${kit}/`))

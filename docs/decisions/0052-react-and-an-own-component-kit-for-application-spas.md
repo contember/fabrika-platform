@@ -39,9 +39,10 @@ Three constraints shape the answer:
      document. A hook takes a client procedure (`api.deals.get`) as the typed name of the call and runs it on the
      provider's client of that mount, so a test hands the provider a client over the test kit while the page keeps its
      module-level client.
-   - `useQuery(procedure, input | skip)`, `useInfiniteQuery(procedure, input, { pages })` for the `{ items, next }`
-     cursor lists, `useMutation(procedure, { invalidates })`, `useInvalidate()`, and `useAction(fn)` for a call that is
-     no client procedure. The cache is keyed by procedure and input; one view or many share one request; a mutation
+   - `useQuery(procedure, input | skip, { keepPrevious })` (`keepPrevious` keeps the previous input's answer while the
+     next loads: the `{ items, total }` offset lists), `useInfiniteQuery(procedure, input, { pages })` for the
+     `{ items, next }` cursor lists, `useMutation(procedure, { invalidates })`, `useInvalidate()`, `useDownload(procedure)`
+     for an attachment procedure on the provider's client, and `useAction(fn)` for a call that is no client procedure. The cache is keyed by procedure and input; one view or many share one request; a mutation
      refetches its own group by default (`api.deals` after `api.deals.create`) or what `invalidates` names; an
      invalidation refetches what a view shows and forgets the rest.
    - Answers come back through the procedure's output schema (`procedure.output`, which the client now exposes), so
@@ -60,7 +61,9 @@ Three constraints shape the answer:
    it depends on no `@fabrika/*` package: the form helpers read the hooks' errors structurally (`FormErrorLike`).
    Components are styled only through CSS custom properties defined in one theme stylesheet (`@fabrika/ui/styles.css`,
    tokens in `theme.css`) that the application imports and overrides; dark mode is a second token set under
-   `data-theme="dark"`. The CSS is plain `.css` shipped with the package: no CSS-in-JS runtime, no Tailwind.
+   `data-theme="dark"`. The CSS is plain `.css` shipped with the package: no CSS-in-JS runtime, no Tailwind. An
+   application changes the look through tokens and the components' props (variants), never through the kit's class
+   names, which are no contract; a design the tokens and props cannot reach becomes a token or a variant of the kit.
 5. **Routing is a minimal typed history router in `@fabrika/ui`** (`createRouter(routes, { base })`), not
    `@buzola/router`. Buzola types its routes from file-based codegen that imports every route module at build time
    (outside the shell-slice plugin), so it adds a generated file to the application, a second build plugin and a build
@@ -84,6 +87,8 @@ Three constraints shape the answer:
 - The client's procedures expose their output schema (`procedure.output`). Its type is part of `ProcedureCall`.
 - A file collection's calls on the client (`api.files.<name>.upload`, `list`, `download`) are functions, not
   procedures: a page runs them through `useAction`, which gives them the same state and error union.
+- A screen test installs its DOM with `installDom` of `@fabrika/app/react/testing` (happy-dom over Bun's own web
+  platform, navigation off) and types with its `type(label, value)`; the checker keeps that module to test files.
 - The hooks have no retry, no refetch on window focus and no time-based expiry. A page refetches by invalidation or
   `refetch()`.
 - The router has no nested layouts, loaders or search-parameter state; a screen keeps its filters in React state.
