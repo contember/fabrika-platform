@@ -68,7 +68,8 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
 - `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own
   read of the contract and `src/db/tables.ts`) and deletes a generated test it no longer writes; a hand-written test
   is never touched. It connects to nothing. `src/__tests__/fixtures/isolation-app/` is an application whose
-  generated tests are committed and run with this package's suite; `db.test.ts` fails when they differ from what the
+  generated tests are committed and run with this package's suite, always on a copy in a private temporary directory
+  (concurrent runs of the suite share the committed directory); `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
 - `db test-isolation` is the platform's run of them (the Zerops start script): the files must equal the scaffold's
   output and no endpoint may lack its input fixture, then `bun --config=<empty> test

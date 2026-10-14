@@ -1,5 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { provisioningCredential, quotedIdentifier, scramVerifier } from './application-postgres-roles'
 import { PostgresMigrationError } from './postgres-migration-error'
 import { PostgresDatabase } from './sql-postgres'
@@ -10,6 +10,20 @@ export interface TestProvisioner {
 	readonly url: string
 	/** Drops every role the provisioner created, with everything those roles own, then the provisioner itself. */
 	drop(): Promise<void>
+}
+
+/**
+ * Every grant or revoke on a database changes its one `pg_database` row, and two concurrent changes of that row fail with
+ * `tuple concurrently updated`, so each change waits for this transaction-level lock first.
+ */
+export const DATABASE_GRANT_LOCK_KEY: number = createHash('sha256').update('fabrika-db:database-grants', 'utf8').digest().readUIntBE(0, 6) + 1
+
+/** Grants (or revokes) CREATE on `database` to `role`, serialized with every other run that does so on the same server. */
+export async function changeCreateOnDatabase(admin: SqlDatabase, change: 'grant' | 'revoke', role: string, database: string): Promise<void> {
+	const statement = change === 'grant'
+		? `GRANT CREATE ON DATABASE ${quotedIdentifier(database)} TO ${quotedIdentifier(role)}`
+		: `REVOKE CREATE ON DATABASE ${quotedIdentifier(database)} FROM ${quotedIdentifier(role)}`
+	await admin.batch([admin.prepare(`SELECT pg_catalog.pg_advisory_xact_lock(${DATABASE_GRANT_LOCK_KEY})`), admin.prepare(statement)])
 }
 
 /** Before Postgres 16, CREATEROLE may grant membership in any role that is not a superuser, `pg_execute_server_program` included. */
@@ -44,7 +58,7 @@ export async function createTestProvisioner(provisioningUrl: string): Promise<Te
 			)
 		}
 		await admin.prepare(`CREATE ROLE ${name} LOGIN CREATEROLE NOINHERIT PASSWORD '${scramVerifier(password)}'`).run()
-		await admin.prepare(`GRANT CREATE ON DATABASE ${quotedIdentifier(self.database)} TO ${name}`).run()
+		await changeCreateOnDatabase(admin, 'grant', name, self.database)
 		const database = self.database
 		url.username = name
 		url.password = password
@@ -59,7 +73,7 @@ async function dropTestProvisioner(provisioningUrl: string, name: string, databa
 	try {
 		await admin.prepare(`GRANT ${name} TO CURRENT_USER`).run()
 		await dropCreatedRoles(admin, name)
-		await admin.prepare(`REVOKE CREATE ON DATABASE ${quotedIdentifier(database)} FROM ${name}`).run()
+		await changeCreateOnDatabase(admin, 'revoke', name, database)
 		await admin.prepare(`DROP ROLE ${name}`).run()
 	} finally {
 		await admin.close()

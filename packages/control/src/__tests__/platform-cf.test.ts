@@ -62,6 +62,9 @@ const deployInput = (): ProviderDeployInput => ({
 	},
 })
 
+/** A whole provider deploy, which a loaded host stretches past the 5 s default. */
+const DEPLOY_TIMEOUT_MS = 30_000
+
 describe('Cloudflare control IAM options', () => {
 	// This test used to assert the OPPOSITE — that the IAM coordinates ride into the job's credentials
 	// under their canonical names. They must not: the container runs the checkout's own code, and
@@ -96,7 +99,7 @@ describe('Cloudflare control IAM options', () => {
 
 		expect(jobs).toHaveLength(1)
 		expect(Object.keys(jobs[0]?.credentials ?? {})).toEqual(['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'])
-	})
+	}, DEPLOY_TIMEOUT_MS)
 })
 
 function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindings {

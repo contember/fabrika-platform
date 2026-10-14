@@ -14,7 +14,8 @@ import {
 } from '../application-postgres-migrations.js'
 import { postgresRoleUrl } from '../application-postgres-roles.js'
 import type { PostgresMigration } from '../postgres-migrations.js'
-import { createTestProvisioner } from '../postgres-test-provisioner.js'
+import { changeCreateOnDatabase, createTestProvisioner } from '../postgres-test-provisioner.js'
+import { PostgresDatabase } from '../sql-postgres.js'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
 
 if (!hasPostgres) console.warn(`application-postgres-roles.test.ts ${skipReason}`)
@@ -78,19 +79,25 @@ function createRoleOnly(): Provisioner {
 		setUp: () =>
 			as(superuserUrl, async (sql) => {
 				await sql.unsafe(`CREATE ROLE ${name} LOGIN CREATEROLE PASSWORD '${password}'`)
-				await sql.unsafe(`GRANT CREATE ON DATABASE ${await currentDatabase(sql)} TO ${name}`)
+				await changeCreate('grant', name)
 			}),
-		tearDown: () =>
-			as(superuserUrl, async (sql) => {
-				await sql.unsafe(`REVOKE CREATE ON DATABASE ${await currentDatabase(sql)} FROM ${name}`)
-				await sql.unsafe(`DROP ROLE ${name}`)
-			}),
+		tearDown: async () => {
+			await changeCreate('revoke', name)
+			await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${name}`))
+		},
 	}
 }
 
-async function currentDatabase(sql: SQL): Promise<string> {
-	const [row] = await sql.unsafe('SELECT current_database() AS name')
-	return String(row?.name)
+/** CREATE on the test database for `role`, through the lock every run that changes the database's row takes. */
+async function changeCreate(change: 'grant' | 'revoke', role: string): Promise<void> {
+	const admin = PostgresDatabase.connect(superuserUrl, { max: 1 })
+	try {
+		const database = await admin.prepare('SELECT current_database() AS name').first<{ name: string }>()
+		if (database === null) throw new Error('the test database has no name')
+		await changeCreateOnDatabase(admin, change, role, database.name)
+	} finally {
+		await admin.close()
+	}
 }
 
 interface Application {
@@ -348,8 +355,8 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 		const password = `pw${hex()}`
 		await as(superuserUrl, async (sql) => {
 			await sql.unsafe(`CREATE ROLE ${name} LOGIN PASSWORD '${password}'`)
-			await sql.unsafe(`GRANT CREATE ON DATABASE ${await currentDatabase(sql)} TO ${name}`)
 		})
+		await changeCreate('grant', name)
 		const appId = `roles-${hex()}`
 		const migrations = definePostgresApplicationMigrations({ appId, directory: '/unused' })
 		try {
@@ -359,10 +366,8 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 			const schemas = await as(superuserUrl, (sql) => sql.unsafe('SELECT nspname FROM pg_namespace WHERE nspname = $1', [migrations.schema]))
 			expect([...schemas]).toEqual([])
 		} finally {
-			await as(superuserUrl, async (sql) => {
-				await sql.unsafe(`REVOKE CREATE ON DATABASE ${await currentDatabase(sql)} FROM ${name}`)
-				await sql.unsafe(`DROP ROLE ${name}`)
-			})
+			await changeCreate('revoke', name)
+			await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${name}`))
 		}
 	})
 
@@ -395,6 +400,27 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				]),
 		)
 		expect([...left]).toEqual([])
+	})
+
+	test('concurrent grants and revokes on the one database row all succeed: each waits for the shared lock', async () => {
+		const names = Array.from({ length: 8 }, () => `fabrika_grant_${hex()}`)
+		await as(superuserUrl, async (sql) => {
+			for (const name of names) await sql.unsafe(`CREATE ROLE ${name}`)
+		})
+		try {
+			const outcomes = await Promise.allSettled(names.map(async (name) => {
+				for (let round = 0; round < 5; round++) {
+					await changeCreate('grant', name)
+					await changeCreate('revoke', name)
+				}
+			}))
+			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toEqual([])
+		} finally {
+			for (const name of names) {
+				await changeCreate('revoke', name)
+				await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${name}`))
+			}
+		}
 	})
 
 	test('a provisioning credential without a password is refused before it connects', async () => {

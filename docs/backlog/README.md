@@ -48,7 +48,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 8 KiB token bound at a few dozen workspaces; the 1000-value `Within` cap sits behind it.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [111](111-an-attachment-has-no-xlsx-format.md) — `attachment()` encodes CSV only; an export with typed cells needs `format: 'xlsx'`, a writer that the WU19 review kept out of the sprint.
-- [114](114-tests-flake-when-runs-share-one-host.md) — Four suites share a directory, a catalog row or a wall-clock budget with concurrent runs and flake.
 - [115](115-a-burst-of-postgres-batches-larger-than-the-pool-hangs.md) — A Bun SQL `batch` holds its connection idle while pool queries queue behind it; a burst larger than the pool hangs.
 - [116](116-verify-the-paved-road-zerops-facts-on-a-real-account.md) — Role creation by `db`, ClamAV on a real service, and the pre-WU12 Notes schema need one live sitting.
 - [117](117-an-application-test-cannot-inject-a-database-fault.md) — The checker refuses Bun's SQL and `process.env` in tests too; only the job clock can fail an attempt.

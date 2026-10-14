@@ -6,13 +6,17 @@ import { generateSchema } from '@fabrika/db/codegen'
 import { applicationDatabaseSchema, definePostgresApplicationMigrations, dropApplicationDatabase, PostgresDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { runCli } from '..'
 import { type DbCommandDependencies, runDbCommand } from '../db'
 import { readJunitCases } from '../junit'
+
+// The scaffold cases run the whole checker over a copied fixture, and a test-isolation run makes a throwaway schema and
+// runs every generated case: under a loaded host either outlasts the 5 s default.
+setDefaultTimeout(30_000)
 
 const roots: string[] = []
 
@@ -88,6 +92,13 @@ const SCAFFOLDED = [...POLICY_TESTS, ENDPOINTS]
 const isolationApp = (): string => {
 	const root = appRoot()
 	cpSync(ISOLATION_APP, root, { recursive: true })
+	return root
+}
+
+/** A copy that `bun test` can run: its imports resolve through this package's dependencies. */
+const runnableIsolationApp = (): string => {
+	const root = isolationApp()
+	symlinkSync(join(import.meta.dir, '..', '..', 'node_modules'), join(root, 'node_modules'))
 	return root
 }
 
@@ -323,9 +334,6 @@ const application = (): { root: string; source: DbCommandDependencies['source'];
 }
 
 describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
-	// A test-isolation run makes a throwaway schema and runs every generated case: two of them take about 5 s alone.
-	setDefaultTimeout(30_000)
-
 	test('migrate applies new files once and refuses an edited one', async () => {
 		const { root, source } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
@@ -348,76 +356,62 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		)
 	})
 
+	const testIsolation = (root: string, argv: readonly string[] = []) =>
+		run(root, 'test-isolation', argv, { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
+
 	test('test-isolation runs every generated case of the fixture, whatever its bunfig.toml says', async () => {
-		const bunfig = join(ISOLATION_APP, 'bunfig.toml')
-		const preload = join(ISOLATION_APP, 'skip-everything.ts')
-		writeFileSync(preload, "import { mock, test } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: test.skip }))\n")
-		writeFileSync(bunfig, '[test]\npreload = ["./skip-everything.ts"]\nroot = "nowhere"\n')
-		try {
-			const output = await run(ISOLATION_APP, 'test-isolation', [], { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
-			expect(output).toBe('95 generated cases passed\n')
-		} finally {
-			rmSync(bunfig, { force: true })
-			rmSync(preload, { force: true })
-		}
+		const root = runnableIsolationApp()
+		writeFileSync(join(root, 'skip-everything.ts'), "import { mock, test } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: test.skip }))\n")
+		writeFileSync(join(root, 'bunfig.toml'), '[test]\npreload = ["./skip-everything.ts"]\nroot = "nowhere"\n')
+		expect(await testIsolation(root)).toBe('95 generated cases passed\n')
 	})
 
 	/**
-	 * Runs `work` with the fixture's `src/app.ts` replaced by `edit` of it, and, when `leaky`, its note handler serving the
-	 * first caller's note to everyone after it (the cache the endpoint tests must catch); then puts the originals back.
-	 * The cache is a module only the handler imports, since the shell module holds literals only.
+	 * A runnable copy of the fixture with its `src/app.ts` replaced by `edit` of it, and, when `leaky`, its note handler
+	 * serving the first caller's note to everyone after it (the cache the endpoint tests must catch). The cache is a
+	 * module only the handler imports, since the shell module holds literals only.
 	 */
-	const withApplication = async (edit: (source: string) => string, work: () => Promise<void>, leaky = true): Promise<void> => {
-		const app = join(ISOLATION_APP, 'src', 'app.ts')
-		const endpoints = join(ISOLATION_APP, 'src', 'notes', 'endpoints.ts')
-		const memo = join(ISOLATION_APP, 'src', 'notes', 'memo.ts')
-		const originals = { app: readFileSync(app, 'utf8'), endpoints: readFileSync(endpoints, 'utf8') }
-		writeFileSync(app, edit(originals.app))
+	const editedApplication = (edit: (source: string) => string, leaky = true): string => {
+		const root = runnableIsolationApp()
+		const app = join(root, 'src', 'app.ts')
+		writeFileSync(app, edit(readFileSync(app, 'utf8')))
 		if (leaky) {
+			const endpoints = join(root, 'src', 'notes', 'endpoints.ts')
 			writeFileSync(
-				memo,
+				join(root, 'src', 'notes', 'memo.ts'),
 				'let cached: { id: string; title: string } | undefined\n\nexport const remembered = (note: { id: string; title: string }) => (cached ??= note)\n',
 			)
 			writeFileSync(
 				endpoints,
 				`import { remembered } from './memo'\n${
-					originals.endpoints.replace('const note = await ctx.db.target.get()', 'const note = remembered(await ctx.db.target.get())')
+					readFileSync(endpoints, 'utf8').replace('const note = await ctx.db.target.get()', 'const note = remembered(await ctx.db.target.get())')
 				}`,
 			)
 		}
-		try {
-			await work()
-		} finally {
-			writeFileSync(app, originals.app)
-			writeFileSync(endpoints, originals.endpoints)
-			rmSync(memo, { force: true })
-		}
+		return root
 	}
-	const testIsolation = (argv: readonly string[] = []) =>
-		run(ISOLATION_APP, 'test-isolation', argv, { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
+
 	test('a mock of bun:test in application code neither silences the generated cases nor passes the checker', async () => {
 		const mocked = (source: string): string =>
 			`import { mock } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: () => {}, describe: (_: string, body: () => void) => body(), expect: () => ({}), afterAll: () => {} }))\n${source}`
-		await withApplication(mocked, async () => {
-			expect((await checkApplication({ root: ISOLATION_APP })).map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/app.ts mock-module')
-			const failed = await failure(testIsolation())
-			expect(failed).toContain('db test-isolation: 94 of 95 generated cases passed')
-			expect(failed).toContain(`${ENDPOINTS}: api.notes.get: the answer to one scope holds nothing of the scope answered before it (failed)`)
-		})
+		const root = editedApplication(mocked)
+		expect((await checkApplication({ root })).map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/app.ts mock-module')
+		const failed = await failure(testIsolation(root))
+		expect(failed).toContain('db test-isolation: 94 of 95 generated cases passed')
+		expect(failed).toContain(`${ENDPOINTS}: api.notes.get: the answer to one scope holds nothing of the scope answered before it (failed)`)
 	})
 
 	test('the startup run prints no output of the tests, so a credential a dependency writes stays out of the log', async () => {
 		const password = decodeURIComponent(new URL(url).password)
 		const diagnostic = (source: string): string =>
 			`${source}\nconsole.error(\`DIAGNOSTIC connect failed for \${decodeURIComponent(new URL(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '').password)}\`)\n`
-		await withApplication(diagnostic, async () => {
-			const failed = await failure(testIsolation())
-			expect(failed).not.toContain('DIAGNOSTIC')
-			if (password.length > 3) expect(failed).not.toContain(password)
-			expect(failed).toContain('rerun with --verbose locally to see the test output')
-			const verbose = await failure(testIsolation(['--verbose']))
-			expect(verbose).toContain('db test-isolation:')
-		})
+		const root = editedApplication(diagnostic)
+		const failed = await failure(testIsolation(root))
+		expect(failed).not.toContain('DIAGNOSTIC')
+		if (password.length > 3) expect(failed).not.toContain(password)
+		expect(failed).toContain('rerun with --verbose locally to see the test output')
+		const verbose = await failure(testIsolation(root, ['--verbose']))
+		expect(verbose).toContain('db test-isolation:')
 	})
 
 	test('the generated tests load application code, so they get a throwaway provisioner, never the provisioning credential', async () => {
@@ -426,9 +420,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			`import { readFileSync as readEnvironment, writeFileSync as writeEnvironment } from 'node:fs'\n${source}\nwriteEnvironment(${
 				JSON.stringify(seen)
 			}, JSON.stringify({ environ: readEnvironment('/proc/self/environ', 'latin1'), url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '' }))\n`
-		await withApplication(recording, async () => {
-			expect(await testIsolation()).toBe('95 generated cases passed\n')
-		}, false)
+		expect(await testIsolation(editedApplication(recording, false))).toBe('95 generated cases passed\n')
 		const recorded = z.object({ environ: z.string(), url: z.string() }).parse(JSON.parse(readFileSync(seen, 'utf8')))
 		const password = decodeURIComponent(new URL(url).password)
 		expect(recorded.environ).not.toContain(url)
@@ -443,34 +435,25 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	})
 
 	test('a fixture the endpoint schema refuses fails its cases', async () => {
-		const files = ['src/schemas.ts', ENDPOINTS, 'src/__tests__/endpoint-access.fixtures.ts'].map((path) => join(ISOLATION_APP, path))
-		const originals = files.map((path) => (existsSync(path) ? readFileSync(path, 'utf8') : null))
-		try {
-			const schemas = files[0] ?? ''
-			writeFileSync(
-				schemas,
-				readFileSync(schemas, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
-			)
-			writeFileSync(
-				files[2] ?? '',
-				`${originals[2] ?? ''}export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'not a T number' } }\n`,
-			)
-			await run(ISOLATION_APP, 'test-scaffold')
-			const failed = await failure(testIsolation())
-			expect(failed).toContain('db test-isolation: 92 of 95 generated cases passed')
-			expect(failed).toContain(`${ENDPOINTS}: api.notes.rename: the note of another scope is 404 (failed)`)
-		} finally {
-			files.forEach((path, index) => {
-				const original = originals[index]
-				if (original === null || original === undefined) rmSync(path, { force: true })
-				else writeFileSync(path, original)
-			})
-		}
+		const root = runnableIsolationApp()
+		const schemas = join(root, 'src', 'schemas.ts')
+		writeFileSync(
+			schemas,
+			readFileSync(schemas, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
+		)
+		const fixtures = join(root, 'src', '__tests__', 'endpoint-access.fixtures.ts')
+		const original = existsSync(fixtures) ? readFileSync(fixtures, 'utf8') : ''
+		writeFileSync(fixtures, `${original}export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'not a T number' } }\n`)
+		await run(root, 'test-scaffold')
+		const failed = await failure(testIsolation(root))
+		expect(failed).toContain('db test-isolation: 92 of 95 generated cases passed')
+		expect(failed).toContain(`${ENDPOINTS}: api.notes.rename: the note of another scope is 404 (failed)`)
 	})
 
 	test('--verbose prints the test output locally', async () => {
-		expect(await testIsolation(['--verbose'])).toContain('95 generated cases passed')
-		expect(await testIsolation(['--verbose'])).toContain('95 pass')
+		const verbose = await testIsolation(runnableIsolationApp(), ['--verbose'])
+		expect(verbose).toContain('95 generated cases passed')
+		expect(verbose).toContain('95 pass')
 	})
 
 	test('the isolation fixture’s schema module is what codegen writes for its migrations', async () => {
