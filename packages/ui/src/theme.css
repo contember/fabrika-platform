@@ -69,6 +69,25 @@
 
 	--fui-sidebar-width: 232px;
 	--fui-shell-min-height: 100vh;
+	/* The main region's padding: wide screens, then below the breakpoint. */
+	--fui-main-padding: var(--fui-space-6);
+	--fui-main-padding-narrow: var(--fui-space-4);
+	/* A field's label. */
+	--fui-label-size: var(--fui-text-sm);
+	--fui-label-weight: var(--fui-weight-medium);
+	--fui-label-color: var(--fui-text);
+	/* A table's column heads: `uppercase` and a tracking such as 0.04em give small capitals. */
+	--fui-table-head-size: var(--fui-text-sm);
+	--fui-table-head-weight: var(--fui-weight-medium);
+	--fui-table-head-color: var(--fui-text-muted);
+	--fui-table-head-transform: none;
+	--fui-table-head-tracking: normal;
+	/* The widths a DataTable column takes by its `width`. */
+	--fui-column-width-xs: 64px;
+	--fui-column-width-sm: 120px;
+	--fui-column-width-md: 180px;
+	--fui-column-width-lg: 260px;
+	--fui-column-width-xl: 360px;
 	--fui-side-panel-width: 320px;
 	--fui-content-max-width: 1280px;
 	--fui-dialog-width: 480px;

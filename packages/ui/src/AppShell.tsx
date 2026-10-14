@@ -15,14 +15,19 @@ export interface AppShellProps {
 	/** The signed-in caller, shown at the end of the top bar. */
 	readonly user?: ReactNode
 	readonly actions?: ReactNode
+	/** The top bar: shown when there is a `user` or `actions`, unless `false`. */
+	readonly topBar?: boolean
+	/** The current navigation item: a soft accent (the default), or `filled` with the accent and an inverted count. */
+	readonly navStyle?: 'soft' | 'filled'
 	readonly children: ReactNode
 	readonly navLabel?: string
 	readonly className?: string
 }
 
-export function AppShell({ brand, nav, user, actions, children, navLabel = 'Main', className }: AppShellProps) {
+export function AppShell({ brand, nav, user, actions, topBar, navStyle = 'soft', children, navLabel = 'Main', className }: AppShellProps) {
+	const showTopBar = topBar !== false && (user !== undefined || actions !== undefined)
 	return (
-		<div className={classNames('fui-app', 'fui-shell', className)}>
+		<div className={classNames('fui-app', 'fui-shell', navStyle === 'filled' && 'fui-shell--nav-filled', className)}>
 			<div className="fui-shell__sidebar">
 				<div className="fui-shell__brand">{brand}</div>
 				<nav className="fui-shell__nav" aria-label={navLabel}>
@@ -43,10 +48,12 @@ export function AppShell({ brand, nav, user, actions, children, navLabel = 'Main
 				</nav>
 			</div>
 			<div className="fui-shell__body">
-				<header className="fui-shell__topbar">
-					<div className="fui-shell__actions">{actions}</div>
-					{user !== undefined && <div className="fui-shell__user">{user}</div>}
-				</header>
+				{showTopBar && (
+					<header className="fui-shell__topbar">
+						<div className="fui-shell__actions">{actions}</div>
+						{user !== undefined && <div className="fui-shell__user">{user}</div>}
+					</header>
+				)}
 				<main className="fui-shell__main">{children}</main>
 			</div>
 		</div>

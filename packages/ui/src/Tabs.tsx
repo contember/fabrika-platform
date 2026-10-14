@@ -13,6 +13,8 @@ export interface TabsProps<K extends string> {
 	readonly items: readonly TabItem<K>[]
 	readonly active: K
 	readonly onChange: (key: K) => void
+	/** `underline` (the default) marks the active tab by a line under it; `boxed` puts each tab in a box, its count after a dot. */
+	readonly variant?: 'underline' | 'boxed'
 	readonly className?: string
 }
 
@@ -32,7 +34,7 @@ function targetIndex(key: string, current: number, length: number): number | und
 }
 
 /** A WAI-ARIA tab list with automatic activation: moving focus with the keyboard also selects. */
-export function Tabs<K extends string>({ label, items, active, onChange, className }: TabsProps<K>) {
+export function Tabs<K extends string>({ label, items, active, onChange, variant = 'underline', className }: TabsProps<K>) {
 	const tabs = useRef(new Map<K, HTMLButtonElement>())
 	const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		const current = items.findIndex((item) => tabs.current.get(item.key) === event.target)
@@ -45,7 +47,12 @@ export function Tabs<K extends string>({ label, items, active, onChange, classNa
 		if (item.key !== active) onChange(item.key)
 	}
 	return (
-		<div className={classNames('fui-tabs', className)} role="tablist" aria-label={label} onKeyDown={handleKeyDown}>
+		<div
+			className={classNames('fui-tabs', variant === 'boxed' && 'fui-tabs--boxed', className)}
+			role="tablist"
+			aria-label={label}
+			onKeyDown={handleKeyDown}
+		>
 			{items.map((item) => {
 				const selected = item.key === active
 				return (

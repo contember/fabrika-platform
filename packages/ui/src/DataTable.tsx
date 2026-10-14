@@ -10,7 +10,13 @@ export interface Column<Row> {
 	readonly align?: 'start' | 'end'
 	/** Takes the width the other columns leave; the remaining columns shrink to their content. */
 	readonly grow?: boolean
+	/** A width of the column scale (`--fui-column-width-<size>`), on its head and its cells. */
+	readonly width?: ColumnWidth
+	/** Its cells wrap their text instead of keeping it on one line. */
+	readonly wrap?: boolean
 }
+
+export type ColumnWidth = 'xs' | 'sm' | 'md' | 'lg' | 'xl'
 
 export interface TableSelection {
 	readonly selected: ReadonlySet<string>
@@ -99,7 +105,13 @@ export function DataTable<Row>({
 	}
 
 	const cellClassName = (column: Column<Row>) =>
-		classNames('fui-table__cell', column.align === 'end' && 'fui-table__cell--end', column.grow && 'fui-table__cell--grow')
+		classNames(
+			'fui-table__cell',
+			column.align === 'end' && 'fui-table__cell--end',
+			column.grow && 'fui-table__cell--grow',
+			column.width !== undefined && `fui-table__cell--width-${column.width}`,
+			column.wrap && 'fui-table__cell--wrap',
+		)
 
 	return (
 		<div className={classNames('fui-data-table', className)}>

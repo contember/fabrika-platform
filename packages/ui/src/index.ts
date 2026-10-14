@@ -4,6 +4,7 @@ export { Card, type CardProps, Section, type SectionProps } from './Card'
 export { Columns, type ColumnsProps, SidePanel, type SidePanelProps } from './Columns'
 export {
 	type Column,
+	type ColumnWidth,
 	DataTable,
 	type DataTableProps,
 	type LoadMore,
