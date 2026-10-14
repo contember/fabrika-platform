@@ -450,9 +450,14 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
   capability's whole predicate on that table, as the handles apply it — a `Ref`'s object and every link of its chain,
   a `Within`'s values, its container grants on their own columns, every row for `all`, none when empty, an `app`
   capability's every row — with each value a bound parameter. A fragment carries the action of its capability, and
-  the tag checks it against what the statement does with its table: on the target of an `UPDATE` or `DELETE` (matched
-  by table name, at any depth) it needs that operation's own action from the table's policy, an `app` capability
-  writes only application tables and a `Ref` or `Within` none; anywhere else it reads, with an action the handles read
+  the tag checks it against what its own query block does with its relation. The tag lexes the statement into blocks:
+  each `SELECT`, `INSERT`, `UPDATE` and `DELETE` opens one, which ends with the parenthesis it stands in or at the next
+  block of its depth, so a subquery, a data-modifying CTE and an `INSERT`'s `SELECT` are blocks of their own, and
+  `ON CONFLICT … DO UPDATE` is an `UPDATE` of its `INSERT`'s target. A fragment whose table and alias are the relation
+  its block's `UPDATE` or `DELETE` writes (the target's alias, or its name without one) needs that operation's own
+  action from the table's policy, and an `app` capability writes only application tables and a `Ref` or `Within`
+  none. Every other fragment reads, another occurrence of the written table too (`from notes m`, a subquery), with an
+  action the handles read
   the table with (any action the table names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it
   for with an `app` capability, a scoped site's application table by its read action). A reference table as an
   `INSERT`, `UPDATE` or `DELETE` target is refused. A fragment that reaches its table for no use the site may make

@@ -392,46 +392,96 @@ interface Target {
 	readonly operation: WriteOperation
 }
 
-/** The name at `index`, `schema.name` read as its name; `undefined` when no name is there. */
-function targetName(tokens: readonly SqlToken[], index: number): string | undefined {
+/** The relation an UPDATE or DELETE writes: its table, under its alias (the table's name without one). */
+interface Written {
+	readonly table: string
+	readonly alias: string
+	readonly operation: 'update' | 'delete'
+}
+
+/** What a statement writes, and for each interpolation, in order, the UPDATE or DELETE of the query block it stands in. */
+interface StatementWrites {
+	readonly targets: readonly Target[]
+	readonly blocks: readonly (Written | undefined)[]
+}
+
+/** Words that cannot be an alias: what follows a target that has none. */
+const NOT_ALIASES: ReadonlySet<string> = new Set(['SET', 'WHERE', 'USING', 'RETURNING', 'DEFAULT', 'VALUES', 'SELECT', 'ON', 'OVERRIDING'])
+
+/** The target name at `index` (`ONLY` and a schema skipped) and its alias, or `undefined` when no name is there. */
+function targetAt(tokens: readonly SqlToken[], index: number): { readonly table: string; readonly alias: string } | undefined {
 	const at = upperWord(tokens[index]) === 'ONLY' ? index + 1 : index
-	return isPunct(tokens[at + 1], '.') ? nameText(tokens[at + 2]) : nameText(tokens[at])
+	const qualified = isPunct(tokens[at + 1], '.')
+	const table = qualified ? nameText(tokens[at + 2]) : nameText(tokens[at])
+	if (table === undefined) return undefined
+	let next = qualified ? at + 3 : at + 1
+	if (upperWord(tokens[next]) === 'AS') next++
+	const word = upperWord(tokens[next])
+	const alias = tokens[next]?.kind === 'quoted' || (word !== undefined && !NOT_ALIASES.has(word)) ? nameText(tokens[next]) : undefined
+	return { table, alias: alias ?? table }
 }
 
 /**
- * Every `INSERT INTO`, `UPDATE` and `DELETE FROM` target of the statement. `ON CONFLICT … DO UPDATE` and a locking
- * clause (`FOR UPDATE`, `FOR NO KEY UPDATE`) name no target.
+ * Every `INSERT INTO`, `UPDATE` and `DELETE FROM` target of the statement, and the query block of each interpolation.
+ * A block opens at a `SELECT`, `INSERT`, `UPDATE` or `DELETE` and closes with the parenthesis it stands in, or at the
+ * next block of its depth: a subquery, a data-modifying CTE and an `INSERT`'s `SELECT` are blocks of their own.
+ * `ON CONFLICT … DO UPDATE` is an UPDATE of the INSERT's target; a locking clause (`FOR UPDATE`) writes nothing.
  */
-function writeTargets(tokens: readonly SqlToken[]): Target[] {
+function statementWrites(tokens: readonly SqlToken[]): StatementWrites {
 	const targets: Target[] = []
-	for (let index = 0; index < tokens.length; index++) {
-		const word = upperWord(tokens[index])
-		const next = upperWord(tokens[index + 1])
-		let at: number | undefined
-		let operation: WriteOperation | undefined
-		if (word === 'INSERT' && next === 'INTO') {
-			at = index + 2
-			operation = 'insert'
-		} else if (word === 'DELETE' && next === 'FROM') {
-			at = index + 2
-			operation = 'delete'
-		} else if (word === 'UPDATE' && !['DO', 'FOR', 'KEY'].includes(upperWord(tokens[index - 1]) ?? '')) {
-			at = index + 1
-			operation = 'update'
-		}
-		const table = at === undefined ? undefined : targetName(tokens, at)
-		if (table !== undefined && operation !== undefined) targets.push({ table, operation })
+	const blocks: (Written | undefined)[] = []
+	const open: { readonly depth: number; readonly write: Written | undefined }[] = []
+	const inserts = new Map<number, { readonly table: string; readonly alias: string }>()
+	let depth = 0
+	const enter = (write: Written | undefined) => {
+		while ((open[open.length - 1]?.depth ?? -1) >= depth) open.pop()
+		open.push({ depth, write })
 	}
-	return targets
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]
+		if (isPunct(token, '(')) {
+			depth++
+			continue
+		}
+		if (isPunct(token, ')')) {
+			depth--
+			while ((open[open.length - 1]?.depth ?? -1) > depth) open.pop()
+			for (const level of inserts.keys()) if (level > depth) inserts.delete(level)
+			continue
+		}
+		if (isPunct(token, '$') && isDigit(tokens[index + 1])) {
+			blocks.push(open[open.length - 1]?.write)
+			continue
+		}
+		const word = upperWord(token)
+		const next = upperWord(tokens[index + 1])
+		if (word === 'SELECT') {
+			enter(undefined)
+		} else if (word === 'INSERT' && next === 'INTO') {
+			const target = targetAt(tokens, index + 2)
+			enter(undefined)
+			if (target !== undefined) {
+				inserts.set(depth, target)
+				targets.push({ table: target.table, operation: 'insert' })
+			}
+		} else if (word === 'DELETE' && next === 'FROM') {
+			const target = targetAt(tokens, index + 2)
+			enter(target === undefined ? undefined : { ...target, operation: 'delete' })
+			if (target !== undefined) targets.push({ table: target.table, operation: 'delete' })
+		} else if (word === 'UPDATE') {
+			const before = upperWord(tokens[index - 1])
+			if (before === 'FOR' || before === 'KEY') continue
+			const target = before === 'DO' ? inserts.get(depth) : targetAt(tokens, index + 1)
+			enter(target === undefined ? undefined : { ...target, operation: 'update' })
+			if (target !== undefined) targets.push({ table: target.table, operation: 'update' })
+		}
+	}
+	return { targets, blocks }
 }
 
-/** What a fragment on `table` is to the statement: the target of each UPDATE and DELETE of it, or else read. */
-function usesOf(targets: readonly Target[], table: string): ScopeUse[] {
-	const uses: ScopeUse[] = []
-	for (const target of targets) {
-		if (target.table === table && target.operation !== 'insert' && !uses.includes(target.operation)) uses.push(target.operation)
-	}
-	return uses.length === 0 ? ['read'] : uses
+/** What a fragment on `table` under `alias` is to its block: the relation its UPDATE or DELETE writes, or else read. */
+function fragmentUse(written: Written | undefined, table: string, alias: string): ScopeUse {
+	return written !== undefined && written.table === table && written.alias === alias ? written.operation : 'read'
 }
 
 /** Words that open the clause a scope may stand in. */
@@ -564,7 +614,7 @@ function checkInterpolations(parts: readonly string[], values: readonly unknown[
 
 /**
  * The template with every scope spliced in as text around its own values, and the values a parameter each. Each
- * fragment is rendered for what its table is to the statement: the target of its UPDATE or DELETE, or read.
+ * fragment is rendered for what its relation is to its query block: the one its UPDATE or DELETE writes, or read.
  */
 function expandScopes(
 	site: SqlSite,
@@ -574,8 +624,8 @@ function expandScopes(
 	writeTarget: WriteTarget,
 ): { parts: string[]; values: unknown[] } {
 	checkInterpolations(parts, values)
-	const targets = site.mode === 'write' ? writeTargets(lexSql(statementText(parts)).tokens) : []
-	for (const target of targets) writeTarget(target.table, target.operation)
+	const writes: StatementWrites = site.mode === 'write' ? statementWrites(lexSql(statementText(parts)).tokens) : { targets: [], blocks: [] }
+	for (const target of writes.targets) writeTarget(target.table, target.operation)
 	const expanded: string[] = [parts[0] ?? '']
 	const bound: unknown[] = []
 	for (let index = 0; index < values.length; index++) {
@@ -590,8 +640,7 @@ function expandScopes(
 		if (fragment.site !== site) {
 			refuse('sql_scope', 'a ctx.sql.scope(…) of another invocation or site is refused; build it with this ctx.sql')
 		}
-		let terms: ScopeTerms = []
-		for (const use of usesOf(targets, fragment.table)) terms = termsOf(fragment.capability, fragment.table, use)
+		const terms = termsOf(fragment.capability, fragment.table, fragmentUse(writes.blocks[index], fragment.table, fragment.alias))
 		const rendered = scopeFragment(terms, fragment.alias)
 		expanded[expanded.length - 1] += rendered.parts[0] ?? ''
 		for (let position = 0; position < rendered.values.length; position++) {

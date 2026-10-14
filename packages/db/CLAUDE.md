@@ -293,10 +293,12 @@ and the target `Ref`, so no handler can call it.
   `scopeTerms` (`store.ts`) for what its table is to the statement (`ScopeUse`): a `Ref`'s object column and every link
   of its chain (`linkValues`), a `Within`'s values and container grants as `ctx.db.within` matches them, `(true)` for
   `all`, `(false)` when empty, and `(true)` for an `app` capability and for a scoped read of an application table. The
-  tag lexes the statement's `INSERT INTO`, `UPDATE` and `DELETE FROM` targets (`writeTargets` in `sql.ts`, data-modifying
-  CTEs too) before it renders a fragment. A fragment on an `UPDATE` or `DELETE` target, matched by table name, needs
-  that operation's own action (`checkWriteTarget`), and an `app` capability writes application tables only, a `Ref` or
-  `Within` never one. A fragment anywhere else reads, with an action the handles read the table with: any action it
+  tag lexes the statement into query blocks before it renders a fragment (`statementWrites` in `sql.ts`): each
+  `SELECT`, `INSERT`, `UPDATE` and `DELETE` opens one, which ends with its parenthesis or at the next block of its
+  depth, and `ON CONFLICT … DO UPDATE` is an `UPDATE` of its `INSERT`'s target. A fragment whose table and alias are
+  the relation its own block's `UPDATE` or `DELETE` writes needs that operation's own action (`checkWriteTarget`), and
+  an `app` capability writes application tables only, a `Ref` or `Within` never one. Any other fragment reads (another
+  occurrence of the written table too), with an action the handles read the table with: any action it
   names for a `Ref`, its read action for a `Within`, what `ctx.db.app` lists it for with an `app` capability
   (`checkAppReach`: an application table under any action it names, a dimension or child table under its read action
   or one of `actions.appRead`), and its read action for a scoped site's application table (`scopedApplicationRead`).

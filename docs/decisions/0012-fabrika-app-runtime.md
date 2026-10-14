@@ -262,8 +262,10 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   invocation's transaction and parsed by `Row`. It exists only on a site that declares `sql: 'read' | 'write'`; a
   query and an export may declare only `'read'`.
   A scope fragment (`ctx.sql.scope`) carries its capability's action, and the tag holds it to what the statement does
-  with the table: the target of an `UPDATE` or `DELETE` needs that operation's action, any other table an action the
-  handles read it with, and a reference table is never a write target. `sql` stays one declaration per site; there is
+  with the relation in its own query block: the relation an `UPDATE`, `DELETE` or `ON CONFLICT … DO UPDATE` writes needs
+  that operation's action, any other an action the handles read it with, and a reference table is never a write
+  target. The blocks come from the lexer's parentheses, not from a SQL parser: the tag reads no grammar it does not
+  need, and a write without a fragment stays the declared deviation. `sql` stays one declaration per site; there is
   no per-table `sql` declaration, so a write without a fragment is the declared deviation, not a checked one.
 - **Every step off the road is declared in the shell**, as a plain literal the contract digest covers:
 

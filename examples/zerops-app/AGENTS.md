@@ -664,12 +664,13 @@ dimension value takes `access: { action, app: true }`.
   also uses stays `over`.
 - `ctx.db.app` holds every application table (`scope: { app: '<why>' }`, `references/table-and-migration.md`), with
   each operation's own action, and every scoped table, read-only and every row: `list`, `count` and `aggregate` where
-  the endpoint's action is its read action or one its policy names in `actions.appRead`, and only `count` and
-  `aggregate` where it is one of `actions.appCount`. `ctx.app` is the capability.
+  the endpoint's action is its read action or one its policy names in `actions.appRead`, with the columns of that
+  action (a column whose own read action is another is left out, as for a `Ref`), and only `count({ where })` where it
+  is one of `actions.appCount`. `ctx.app` is the capability.
 - So an export, a bulk send or an operations counter runs under an action of its own, not the read action: the table
   names it (`appRead: ['candidates.export']`, `appCount: ['candidates.count']`), and a global holder of only the read
-  action gets 403 from that endpoint. An `aggregate` with `groupBy` answers each group's values, so an `appCount`
-  action sees the values of the columns it groups by.
+  action gets 403 from that endpoint. An `appCount` action has no `aggregate`: a group, a minimum or a sum is a row's
+  value. Count each value of a known set with its own `where` (`count({ where: [['status', '=', status]] })`).
 - An endpoint `on`, `in` or `over` a dimension reads an application table too, read-only and every row, where its
   action is the table's read action: `list`, `count`, `aggregate` and `get(id)` of `ctx.db.app.<table>`, and no write.
   With another action the table is a type error that names its read action, and a refusal at run time. So a code list
@@ -692,7 +693,7 @@ dimension value takes `access: { action, app: true }`.
 | `within.<table>` (`over`)                              | `list(options)`, `count({ where })`, `aggregate(spec)`                                                                                                                                          |
 | `reference.<table>`                                    | `list(options)`, `count({ where })`: no `get`; look a row up by its key with `where` (`priorities.get` below)                                                                                   |
 | `app.<table>` (`app: true`), an application table      | `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; in a mutation `getForUpdate(id)`, `insert(values)`, `update(id, values, { expectVersion })`, `remove(id, { expectVersion })` |
-| `app.<table>` (`app: true`), a scoped table            | `list(options)` (read action or `appRead`), `count({ where })`, `aggregate(spec)` (also `appCount`)                                                                                             |
+| `app.<table>` (`app: true`), a scoped table            | `list(options)` (read action or `appRead`), `count({ where })` (also `appCount`), `aggregate(spec)`                                                                                             |
 | `app.<table>` (`on`, `in`, `over`)                     | an application table whose read action is the endpoint's: `list(options)`, `count({ where })`, `aggregate(spec)`, `get(id)`; no write                                                           |
 | `unscoped.<table>` (declared)                          | `list`, `count`, `aggregate`, `get(id)` (not of a reference table or an inbox, which have no key); with `'write'` also `insert`, `update`, `remove`                                             |
 
@@ -1026,9 +1027,11 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `read` action (the intake job of `references/public-intake.md`).
 - **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
   table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
-  never scopes a write; anywhere else it needs an action the handles read the table with. A refused fragment fails
-  the call before anything is sent. A read of the written table in the same statement is held to the write action
-  too: scope it with that capability.
+  never scopes a write; anywhere else it needs an action the handles read the table with. `insert … on conflict do
+  update … where ${…}` is an update of the inserted table. The fragment answers for its own query block: a CTE that
+  updates and a statement that deletes take one capability each, and another occurrence of the written table (a
+  subquery, `from tasks other`) reads with a read capability under its own alias. A refused fragment fails the call
+  before anything is sent.
 - **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
   top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
   The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a
@@ -3203,8 +3206,9 @@ export const tables = defineTables(vocabulary, columns)({
 - `actions` maps `read`, `insert`, `update` and `delete` to vocabulary actions. `insert` and `update` list the columns
   that those actions write; nothing else is writable.
 - A dimension or child table may also list `appRead: ['<action>', …]`, actions besides `read` with which an `app: true`
-  endpoint lists every row, read-only (an export, a bulk send), and `appCount: ['<action>', …]`, actions with which it
-  only counts and aggregates every row and reads none (an operations counter). Each is a widening the approver sees.
+  endpoint lists every row, read-only (an export, a bulk send), with the columns of that action, and
+  `appCount: ['<action>', …]`, actions with which it only counts rows (`count({ where })`) and reads none, no aggregate
+  (an operations counter). Each is a widening the approver sees.
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.

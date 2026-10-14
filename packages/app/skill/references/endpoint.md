@@ -441,9 +441,11 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
   `read` action (the intake job of `references/public-intake.md`).
 - **A fragment carries its action into the statement.** On the table an `update` or `delete` writes it needs the
   table's own update or delete action (`ctx.within('tasks.write', 'project')` for `update tasks`), so a read action
-  never scopes a write; anywhere else it needs an action the handles read the table with. A refused fragment fails
-  the call before anything is sent. A read of the written table in the same statement is held to the write action
-  too: scope it with that capability.
+  never scopes a write; anywhere else it needs an action the handles read the table with. `insert … on conflict do
+  update … where ${…}` is an update of the inserted table. The fragment answers for its own query block: a CTE that
+  updates and a statement that deletes take one capability each, and another occurrence of the written table (a
+  subquery, `from tasks other`) reads with a read capability under its own alias. A refused fragment fails the call
+  before anything is sent.
 - **A fragment is a conjunct.** It stands alone, joined by AND, at the top level of a WHERE or JOIN … ON clause whose
   top level holds no OR: `where (<the whole filter>) and ${…}`, `join projects p on p.id = t.project_id and ${…}`.
   The tag refuses `where a or ${…}`, `where a or b and ${…}`, `not ${…}`, a fragment in parentheses or outside such a

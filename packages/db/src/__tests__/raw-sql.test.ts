@@ -743,3 +743,108 @@ describe.skipIf(opened === null)("ctx.sql.scope: the capability's whole predicat
 		await mine.transaction.rollback()
 	})
 })
+
+describe.skipIf(opened === null)('ctx.sql.scope on Postgres: each fragment answers for the relation of its own query block', () => {
+	const Id = z.object({ id: z.string() })
+	const Title = z.object({ id: z.string(), title: z.string() })
+	const inW1 = <const A extends string>(action: A) => alice.within('workspace', action, ['w1'])
+	const noteRef = <const A extends string>(action: A, id: string) => alice.ref('note', action, id, { workspace: 'w1', organization: 'o1' })
+	const titles = async (work: ReturnType<typeof invocation>, prefix: string) =>
+		(await work.sql(Title)`select id, title from notes where id like ${`${prefix}%`} order by id`).map((row) => `${row.id}:${row.title}`)
+	const seedBlock = async (prefix: string) => {
+		const writer = invocation('write')
+		await writer.sql(z.object({}))`insert into notes (id, workspace_id, organization_id, title, created_by, version)
+			values (${`${prefix}-a`}, 'w1', 'o1', 'before', 'u', 1), (${`${prefix}-b`}, 'w1', 'o1', 'before', 'u', 1)`
+		await writer.sql(z.object({}))`insert into settings (id, value) values (${prefix}, 'before')`
+		await writer.transaction.commit()
+	}
+
+	test('ON CONFLICT … DO UPDATE is an UPDATE of the INSERT target: a read capability is refused for every grant kind', async () => {
+		await seedBlock('conflict')
+		const refusals: [(sql: SqlTag) => Promise<unknown>, string][] = [
+			[
+				(sql) =>
+					sql(Id)`insert into settings (id, value) values ('conflict', 'changed')
+						on conflict (id) do update set value = excluded.value where ${sql.scope(alice.app('settings.read'), 'settings')} returning id`,
+				'UPDATE of settings needs its update action settings.edit; the capability holds settings.read',
+			],
+			[
+				(sql) =>
+					sql(Id)`insert into settings as s (id, value) values ('conflict', 'changed')
+						on conflict (id) do update set value = excluded.value where ${sql.scope(inW1('settings.read'), 'settings', 's')} returning id`,
+				'a scoped site writes no application table: UPDATE of settings',
+			],
+			[
+				(sql) =>
+					sql(Id)`insert into notes (id, workspace_id, organization_id, title, created_by, version)
+						values ('conflict-a', 'w1', 'o1', 'changed', 'u', 1)
+						on conflict (id) do update set title = excluded.title where ${sql.scope(noteRef('notes.read', 'conflict-a'), 'notes')} returning id`,
+				'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
+			],
+			[
+				(sql) =>
+					sql(Id)`insert into notes (id, workspace_id, organization_id, title, created_by, version)
+						select id, workspace_id, organization_id, 'changed', created_by, version from notes where id = 'conflict-b'
+						on conflict (id) do update set title = excluded.title where ${sql.scope(inW1('notes.read'), 'notes')} returning id`,
+				'UPDATE of notes needs its update action notes.write; the capability holds notes.read',
+			],
+		]
+		for (const [statement, message] of refusals) {
+			const work = invocation('write')
+			await expect(statement(work.sql)).rejects.toThrow(message)
+			await work.transaction.rollback()
+		}
+		const reader = invocation('write')
+		expect(await titles(reader, 'conflict')).toEqual(['conflict-a:before', 'conflict-b:before'])
+		await reader.transaction.rollback()
+	})
+
+	test('ON CONFLICT … DO UPDATE under the update action writes the conflicting row', async () => {
+		await seedBlock('upsert')
+		const work = invocation('write')
+		await work.sql(Id)`insert into settings as s (id, value) values ('upsert', 'changed')
+			on conflict (id) do update set value = excluded.value where ${work.sql.scope(alice.app('settings.edit'), 'settings', 's')} returning id`
+		await work.sql(Id)`insert into notes (id, workspace_id, organization_id, title, created_by, version)
+			values ('upsert-a', 'w1', 'o1', 'changed', 'u', 1)
+			on conflict (id) do update set title = excluded.title where ${work.sql.scope(noteRef('notes.write', 'upsert-a'), 'notes')} returning id`
+		expect(await work.sql(z.object({ value: z.string() }))`select value from settings where id = 'upsert'`).toEqual([{ value: 'changed' }])
+		expect(await titles(work, 'upsert')).toEqual(['upsert-a:changed', 'upsert-b:before'])
+		await work.transaction.rollback()
+	})
+
+	test('two data-modifying CTE blocks of one table each answer for their own capability', async () => {
+		await seedBlock('cte')
+		const work = invocation('write')
+		await work.sql(Id)`with changed as (
+				update notes set title = 'updated' where id = 'cte-a' and ${work.sql.scope(inW1('notes.write'), 'notes')} returning id
+			)
+			delete from notes where id = 'cte-b' and ${work.sql.scope(inW1('notes.delete'), 'notes')} returning id`
+		expect(await titles(work, 'cte')).toEqual(['cte-a:updated'])
+		await work.transaction.rollback()
+		const swapped = invocation('write')
+		await expect(
+			swapped.sql(Id)`with changed as (
+				update notes set title = 'updated' where id = 'cte-a' and ${swapped.sql.scope(inW1('notes.delete'), 'notes')} returning id
+			)
+			delete from notes where id = 'cte-b' and ${swapped.sql.scope(inW1('notes.write'), 'notes')} returning id`,
+		).rejects.toThrow('UPDATE of notes needs its update action notes.write; the capability holds notes.delete')
+		await swapped.transaction.rollback()
+	})
+
+	test('another occurrence of the written table reads: a subquery or a self-join takes its read action', async () => {
+		await seedBlock('self')
+		const work = invocation('write')
+		await work.sql(Id)`update notes set title = 'from-subquery'
+			where id in (select m.id from notes m where m.id = 'self-a' and ${work.sql.scope(inW1('notes.read'), 'notes', 'm')})
+				and ${work.sql.scope(inW1('notes.write'), 'notes')} returning id`
+		await work.sql(Id)`update notes set title = 'from-join' from notes m
+			where notes.id = m.id and m.id = 'self-b' and ${work.sql.scope(inW1('notes.read'), 'notes', 'm')}
+				and ${work.sql.scope(inW1('notes.write'), 'notes')} returning notes.id`
+		expect(await titles(work, 'self')).toEqual(['self-a:from-subquery', 'self-b:from-join'])
+		await expect(
+			work.sql(Id)`update notes set title = 'x' from notes m
+				where notes.id = m.id and ${work.sql.scope(inW1('notes.read'), 'notes', 'm')} and ${work.sql.scope(inW1('notes.read'), 'notes')}`,
+		).rejects.toThrow('UPDATE of notes needs its update action notes.write; the capability holds notes.read')
+		await work.transaction.rollback()
+	})
+})
