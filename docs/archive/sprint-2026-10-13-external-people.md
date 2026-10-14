@@ -1,23 +1,32 @@
-> **OUTCOME — shipped 2026-10-13.** An application invites people from outside the organization by e-mail and IAM
-> keeps them out of internal roles. IAM knows a principal's affiliation and a role declared `external`; an external
-> holds only such roles, at every grant write, at reconcile and at resolution, issues only self-bound keys, never
-> authenticates by OIDC and is promoted only by an installation admin (WU1, ADR-0051). An application-wide staff role
-> may assign a membership role (WU2). IAM's pages and e-mails speak the application's language (`en`, `cs`), refusals
-> included, and a password action or an invitation ends in the application (WU3). An application words IAM's e-mails
-> in plain text; IAM builds the HTML (WU4, an MVP). One e-mail onboards a new external person: the principal is created
-> at acceptance with its password and grant in one transaction, under the inviter's checked authority and schema
-> revision, never over another signed-in account; resend rotates the link (WU5). Before them, backlog 113 gave the
-> generated tests a stand-in IAM for writes, and WU25 closed the fresh-agent trial's last gaps (`statusOf`, the loop's
-> wording, backlog 137). The owner cut the partner-portal recipe (WU6), application-authored HTML and repeated review
-> rounds. Every unit had a GPT review; WU1 took four rounds (independent keys, two Postgres races, two deadlocks), WU5
-> two (two P1 races). Commit map: backlog 113 → `aedd6992`…`aefc55f4`, WU3 → `fd0d21cc`…`c96aca62`, WU25 →
-> `de0876ee`…`c4bf574b`, WU1 → `c99bcc69`…`5778ddd5`, WU4 → `859e8691`…`0b75f748`, WU2 → `6c0338ef`…`52cbd14f`, WU5 →
-> `a381cbf9`…`3dbcdab7`. Verification at `3dbcdab7`: typecheck, lint, `format:check`, and `bun run test` with Postgres
-> and S3: 7465 pass, 38 skip, 0 fail; the agent interfaces 318, `examples/zerops-app` 47 and `examples/crm` 162 pass,
-> 0 fail. The fresh-agent trial of group B after WU24/WU25: opus-b 3 runs (1 failing), within the cap; gpt-b 4 runs (1
-> failing) in each of rounds 3, 4 and 5, one over the cap, each failure in the agent's own test code. Backlog closed:
-> 113, 137. Deferred: a browser run of the flows (138), application HTML e-mails (139), the stand-in's missing
-> membership answers (140), the supplementing-grant race (141).
+> **OUTCOME — shipped 2026-10-13.** An application invites people from outside the organization by e-mail, and IAM
+> keeps them out of internal roles.
+>
+> **Shipped.**
+>
+> - IAM knows a principal's affiliation and a role declared `external`. An external holds only such roles, at every
+>   grant write, at reconcile and at resolution; never authenticates by OIDC; is promoted only by an installation
+>   admin (WU1, [ADR-0051](../decisions/0051-external-principals.md)).
+> - An application-wide staff role may assign a membership role (WU2).
+> - IAM's pages and e-mails speak the application's language (`en`, `cs`), and a password action or an invitation
+>   ends in the application (WU3).
+> - An application words IAM's e-mails in plain text; IAM builds the HTML (WU4, an MVP).
+> - One e-mail onboards a new external person: the principal, its password and its grant are created at acceptance in
+>   one transaction, under the inviter's checked authority; resend rotates the link (WU5).
+> - Before them: the generated tests got a stand-in IAM for writes (backlog 113), and WU25 closed the fresh-agent
+>   trial's last gaps (backlog 137).
+>
+> **Commits** (first…last on main):
+>
+> - backlog 113 `aedd6992`…`aefc55f4` · WU3 `fd0d21cc`…`c96aca62` · WU25 `de0876ee`…`c4bf574b`
+> - WU1 `c99bcc69`…`5778ddd5` · WU4 `859e8691`…`0b75f748` · WU2 `6c0338ef`…`52cbd14f` · WU5 `a381cbf9`…`3dbcdab7`
+>
+> **Verification** at `3dbcdab7`: typecheck, lint, `format:check`; `bun run test` with Postgres and S3 7465 pass, 38
+> skip, 0 fail; agent interfaces 318, `examples/zerops-app` 47, `examples/crm` 162 pass. One GPT review per unit; WU1
+> took four rounds, WU5 two.
+>
+> **Backlog.** Closed: 113, 137. Deferred, all since shipped: a browser run of the flows (138, `804ce201`), application
+> HTML e-mails (139, `63dd2583`), the stand-in's missing membership answers (140, `6a05c7d3`), the supplementing-grant
+> race (141, `fd13b8ea`). Cut by the owner: the partner-portal recipe (WU6) and application-authored HTML in WU4.
 
 # Sprint — external people and a complete password flow (2026-10-13)
 
@@ -35,26 +44,15 @@ to end in a browser.
 Design consulted with GPT (gpt-6-astra) and Opus, both read-only over HEAD; they agreed on every point below except
 when the external principal is created (decision D3).
 
-## Refs re-verified at HEAD (2026-10-13)
+## What HEAD contradicted (2026-10-13)
 
-- ✔ Principals are `user` | `service`; nothing marks a person external — `packages/iam/migrations-postgres/0001_init.sql:24`.
-- ✔ An e-mail assignment opens a 7-day invitation and never creates a principal; acceptance needs a principal signed in
-  on IAM with the invited mailbox — `packages/iam/src/membership.ts:66`, `packages/iam/src/auth/invitations.ts:31-41`.
-- ✔ Only an installation admin creates a user (`inviteUser`) and issues its enrollment, as two operations —
-  `packages/iam/src/admin/principals.ts:110-133`, `packages/iam/src/admin/passwords.ts:49`.
-- ✔ A password action lives one hour — `packages/iam/src/password-service.ts:9`.
-- ✔ Repeating an invitation sends nothing (`ON CONFLICT … DO NOTHING`) — `packages/iam/src/repositories/membership.ts:300-312`.
-- ⚠ An assigner must hold its role in exactly the scope value: a global staff role cannot invite into a company —
-  `packages/app/src/contract/build.ts:365-369`, `packages/iam/src/repositories/membership.ts:132-142`.
-- ⚠ OIDC claims any principal with that mailbox and no `external_id`, a password-only one included, and a known
-  principal skips the domain allowlist — `packages/iam/src/resolve.ts:157-170`, `packages/iam/src/auth/oidc.ts:92-102`.
-- ⚠ The bootstrap admin is recognised by mailbox alone at resolution — `packages/iam/src/resolve.ts:263-267`.
-- ✔ E-mails and pages are fixed English — `packages/iam/src/invitation-email.ts:13`, `packages/iam/src/password-email.ts:10`,
-  `packages/iam/src/password-pages.ts:139`; a completed password action lands on IAM's own origin —
-  `packages/iam/src/auth/password.ts:309-316`.
-- ✔ Already there: the hybrid login renders password and SSO together (`packages/iam/src/auth/login.ts:50-57`),
-  forgot-password enrolls a pending account (`auth/password.ts:241-243`), cancelling an invitation
-  (`membership.ts:468-484`), password replacement revokes password-origin sessions (`password-db.ts:299`).
+The design needed three changes to IAM's rules, each resolved by a unit:
+
+- A global staff role could not assign a membership role in a company: an assigner had to hold its role in the exact
+  value → WU2.
+- OIDC claimed any principal with the mailbox and no `external_id`, and a known principal skipped the domain
+  allowlist → WU1.
+- The bootstrap admin was recognised by mailbox alone at resolution → WU1.
 
 ## Decisions
 
@@ -163,46 +161,14 @@ WU1, WU2 and WU4.
 
 ## Run log
 
-- **Backlog 113, done.** The endpoint access kit boots with a stand-in IAM for writes
-  (`kitMembership`, `packages/app/src/testing/membership.ts`): delegation, `creates` (global grant), `members.manage`
-  on the value, `assignableBy`, the role's actions, `issuedBy` and the link grants on the chain. A `creates` endpoint
-  gets two cases (one-scope holder 403, global holder answered). Its `assignableBy` check is today's (a membership
-  role in the exact value); WU2 widens IAM's rule, and the stand-in must follow it. Gap left for WU6: an `on` endpoint
-  that cancels an invitation or revokes a link by id fails its generated cases (the stand-in answers an unknown id
-  404, as IAM does); the skill's "Not built yet" says so.
-- WU3: `locale` and `displayName` sit beside `app` in the vocabulary (the artifact carries each only when declared, so
-  digests stay; a change is a widening approval line, because the name stands beside a password field). IAM stores
-  them in `app_presentation` and the forgot-password app in `password_action_tokens.app` (migration 0011, both
-  dialects). No `principals.locale`: an app-less action speaks the installation default, `en`, which is a constant, not
-  a deploy variable. A completed action or an accepted invitation lands on the app's first registered return origin;
-  the set-password and invitation pages widen `form-action` by that one origin, as the login page does for a handoff.
-  WU4 replaces `messageTemplatesFor` (`packages/iam/src/messages.ts`) with the application's templates over the same
-  `MessageValues`. A browser run of sign-in → forgot → reset → back in the application is still owed.
-- **WU1 (2026-10-13).** Shipped → [ADR-0051](../decisions/0051-external-principals.md). Deviations: the domain
-  allowlist's known-principal bypass now admits only an internal principal (an internal invited row keeps today's
-  bypass, so hybrid linking is unchanged), rather than applying the allowlist to every row with no `external_id`.
-  Review round: promotion revokes the principal's sessions and pending password actions, because it widens what
-  the principal reaches (a bootstrap mailbox becomes an installation admin). The checker's hint is
-  `member-admits-external`. `resolveUserPrincipal`'s label-refresh warning no longer names the IdP mailbox.
-- WU4 (MVP, owner's scope cut): `mail` beside `locale` in the vocabulary holds a subject and a plain text per message
-  and language, inline strings (8 KiB text, 200-character one-line subject), with `{{name}}` placeholders from
-  `MAIL_PLACEHOLDERS` (`@fabrika/auth-core`); `companyLabel` and `message` are empty until WU5 passes them. The build,
-  the checker and IAM's reconcile refuse an unknown placeholder and a text without `{{actionUrl}}` with one rule
-  (`mailTemplateProblems`). IAM stores them in `app_mail_templates` (migration 0013, both dialects, after WU1's 0012), renders the text as is and writes the HTML part itself (escaped paragraphs and its own button). A change is one
-  widening approval line: the diff has no generic contract-change line, so without it a template change read
-  `unchanged`. **Deferred:** application-authored HTML templates (the sanitizer, link rules against registered return
-  origins, and files beside the contract).
-- **WU2 (2026-10-13).** Shipped: `assignableBy` may name an application-wide role (no `member`, never a built-in);
-  the build and IAM's schema parser accept it, and IAM counts that role held in the value or as a global grant
-  (`ASSIGNING_GRANT`, `repositories/membership.ts`), at assignment, revocation, the acceptance re-check and inside the
-  acceptance's guarded `EXISTS` (`FOR SHARE` on Postgres). The stand-in follows; the generated cases' manager may now
-  hold an application-wide assigner, always in the value. ADR-0022 rule 6 states who assigns.
-- **WU5 (2026-10-13).** Shipped: `ctx.members.assign(ref, { email }, role, { label, message, resend })` (`InvitationOptions`,
-  bounds in `invitationOptionsProblem`; migration 0014 stores `company_label` and `message` on the invitation). The
-  smaller resend API was chosen: `resend: true` on assign rotates the open invitation's token and restarts its 7 days,
-  no new IAM method. The accept POST answers a set-password form when `invitationOffer` is `create`; its POST runs
-  `MembershipRepository.acceptAsNewPrincipal`, one batch from the principal row to the three records, then the IAM
-  session and the landing. Every acceptance now names the token hash in its guarded write. An assign to an external
-  role for an address `organizationMailbox` names (bootstrap, an exact `HUMAN_EMAILS` entry, a `HUMAN_EMAIL_DOMAINS`
-  domain) is `internal_mailbox`, whether or not a principal holds it, so the answer says nothing about who has an
-  account. **Still owed:** the browser run of the whole path, also for a person invited by two companies.
+- Backlog 113 → shipped (`b45f8cf6`); an `on` endpoint that cancels an invitation or revokes a link by id → backlog 140.
+- WU3: the locale and display name in `app_presentation`, the installation default for an app-less action, and the
+  landing on the first return origin → `packages/iam/CLAUDE.md`; the browser run → backlog 138.
+- WU1 → [ADR-0051](../decisions/0051-external-principals.md), with the allowlist bypass for internal principals only
+  and promotion revoking sessions.
+- WU4: `mail` templates, `MAIL_PLACEHOLDERS` and `mailTemplateProblems` → `packages/iam/CLAUDE.md`; application HTML →
+  backlog 139.
+- WU2: who assigns → [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6, `packages/iam/CLAUDE.md`.
+- WU5: the invitation-bound enrollment → [ADR-0020](../decisions/0020-compose-human-authentication-methods.md); the
+  resend, `internal_mailbox` and `acceptAsNewPrincipal` → ADR-0022 rule 6, `packages/iam/CLAUDE.md`; the browser run →
+  backlog 138; the supplementing-grant race → backlog 141.
