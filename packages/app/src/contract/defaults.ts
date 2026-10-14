@@ -59,8 +59,9 @@ export const ATTACHMENT_LIMITS = {
 	maxCellLength: 32_767,
 } as const
 
-/** The one type an attachment answers with. */
+/** The type each attachment format answers with. */
 export const CSV_CONTENT_TYPE = 'text/csv; charset=utf-8'
+export const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 /** Export procedures are served here, one path per procedure, and each export's description at its own path. */
 export { CONNECT_PREFIX } from '@fabrika/auth-core'

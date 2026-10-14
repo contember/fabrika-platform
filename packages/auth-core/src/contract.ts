@@ -184,7 +184,8 @@ export type OutputShape = SchemaShape | AttachmentShape
  */
 export interface AttachmentShape {
 	readonly type: 'attachment'
-	readonly format: 'csv'
+	/** `csv`: RFC 4180 text; `xlsx`: one sheet of typed cells. */
+	readonly format: AttachmentFormat
 	/** The `Content-Disposition` file name: a fixed name the contract declares, never one a request sends. */
 	readonly filename: string
 	/** The encoded file's limit, in bytes: an encoding over it fails the invocation and sends no body. */
@@ -192,6 +193,8 @@ export interface AttachmentShape {
 	readonly maxRows: number
 	readonly columns: readonly AttachmentColumn[]
 }
+
+export type AttachmentFormat = 'csv' | 'xlsx'
 
 export interface AttachmentColumn {
 	readonly name: string

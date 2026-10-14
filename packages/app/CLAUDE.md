@@ -138,6 +138,7 @@ src/
     connect.ts        Connector, wireImports, connectContext (ctx.connect per request), connectVariables
     bounded.ts        readBoundedBytes: a body under a byte budget and a deadline
     attachment.ts     encodeCsv and the response of an attachment output: RFC 4180, formula escape, size bounds
+    xlsx.ts           encodeXlsx: one sheet of typed cells in a stored ZIP, the framework's own writer
   files/              c.files: served by boot, never imported by an application
     collections.ts    the upload, download, list and remove endpoints, the file locator, the sweep, ctx.files
     handle.ts         the types of ctx.files (types only, browser-safe)
@@ -506,7 +507,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   its log row) keeps the row only with its file. Every text cell that starts with `=`, `+`, `-`, `@`, a tab, CR or LF, also after leading whitespace,
   or their full-width forms, gets a leading `'` before RFC 4180 quoting; a number keeps its sign. Rows over
   `maxRows`, a cell over `maxCellLength` and the first field past `maxBytes` (UTF-8, counted field by field) are
-  `ServerFault`s (`attachment_rows`, `attachment_cell`, `attachment_size`): a 500, no file, a rollback. The answer
+  `ServerFault`s (`attachment_rows`, `attachment_cell`, `attachment_size`): a 500, no file, a rollback. An XLSX
+  (`xlsx.ts`) keeps the same bounds, every other part and header counted in `maxBytes` from the start, and writes every
+  text as an inline string, never a formula; keep it free of a dependency and of Bun APIs, as the Worker adapter serves
+  it too. The answer
   takes the header policy like any procedure (the proxy applies it there too); `Content-Type` and the
   `Content-Disposition` of `files/treatment.ts`'s `contentDisposition` stay. The client's attachment procedure is
   not a function: `download(api.<procedure>, input)` posts, saves the file in a browser and answers it as a `File`.

@@ -4,6 +4,7 @@
 import {
 	type AccessForm,
 	assertNoAmbiguity,
+	type AttachmentFormat,
 	type BodyAdmission,
 	BUILTIN_ROLE_KEYS,
 	type Caller,
@@ -101,7 +102,10 @@ const TIMEOUT = /^[1-9][0-9]*[smh]$/
 const DIGEST = /^sha256:[0-9a-f]+$/
 const FRAMEWORK_PREFIX = '/__fabrika'
 /** A fixed name a header carries as it is: no path, no quoting, no extension but the format's. */
-const ATTACHMENT_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.csv$/
+const ATTACHMENT_FILENAMES: Readonly<Record<AttachmentFormat, RegExp>> = {
+	csv: /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.csv$/,
+	xlsx: /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.xlsx$/,
+}
 /** The `boundTo` and job `scope` value for the whole application; no dimension may take the name. */
 const APP_SCOPE = 'app'
 const AUDIENCE = 'any consumer user'
@@ -800,11 +804,13 @@ class ArtifactBuilder {
 		}
 		const at = `${where} attachment`
 		this.#options(at, 'attachment', attachment.unknownOptions)
-		if (attachment.format !== 'csv') {
-			this.#problem(at, `format '${attachment.format}' is not a file format the framework encodes (allowed: 'csv')`)
+		const format: AttachmentFormat = attachment.format === 'xlsx' ? 'xlsx' : 'csv'
+		if (attachment.format !== format) {
+			this.#problem(at, `format '${attachment.format}' is not a file format the framework encodes (allowed: 'csv', 'xlsx')`)
 		}
-		if (!ATTACHMENT_FILENAME.test(attachment.filename)) {
-			this.#problem(at, `filename '${attachment.filename}' is not a file name (allowed: ${ATTACHMENT_FILENAME.source})`)
+		const filename = ATTACHMENT_FILENAMES[format]
+		if (!filename.test(attachment.filename)) {
+			this.#problem(at, `filename '${attachment.filename}' is not a file name (allowed: ${filename.source})`)
 		}
 		const maxBytes = this.#attachmentLimit(at, 'maxBytes', attachment.maxBytes, ATTACHMENT_LIMITS.maxBytes)
 		const maxRows = this.#attachmentLimit(at, 'maxRows', attachment.maxRows ?? ATTACHMENT_LIMITS.defaultMaxRows, ATTACHMENT_LIMITS.maxRows)
@@ -822,7 +828,7 @@ class ArtifactBuilder {
 				this.#problem(at, `column '${column.name}' is not a cell (allowed: a string, number, boolean, enum or literal, optional or nullable)`)
 			}
 		}
-		return { type: 'attachment', format: 'csv', filename: attachment.filename, maxBytes, maxRows, columns }
+		return { type: 'attachment', format, filename: attachment.filename, maxBytes, maxRows, columns }
 	}
 
 	#attachmentLimit(where: string, field: string, value: number, ceiling: number): number {

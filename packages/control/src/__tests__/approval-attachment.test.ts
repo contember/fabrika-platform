@@ -1,5 +1,6 @@
 // An attachment output in the conservative access diff (ADR-0050 §3): a new file endpoint names its file; a larger
-// limit, a new column and a switch between JSON and a file widen; a smaller limit, a lost column and a rename do not.
+// limit, a new column, another format and a switch between JSON and a file widen; a smaller limit, a lost column and a
+// rename do not.
 
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
@@ -16,10 +17,10 @@ function snapshot(contract: string): AccessSnapshot {
 }
 
 /** `BASE` with `api.notes` answering a file of `row` under `filename`, at most `maxBytes`. */
-const withExport = (row: string, maxBytes: number, filename = 'notes.csv'): string =>
+const withExport = (row: string, maxBytes: number, filename = 'notes.csv', format = 'csv'): string =>
 	edited(
 		GET,
-		`${GET}\n\t\tnotes: c.query({ output: attachment({ format: 'csv', filename: '${filename}', row: ${row}, maxBytes: ${maxBytes} }), access: { action: 'notes.read', over: 'workspace' } }),`,
+		`${GET}\n\t\tnotes: c.query({ output: attachment({ format: '${format}', filename: '${filename}', row: ${row}, maxBytes: ${maxBytes} }), access: { action: 'notes.read', over: 'workspace' } }),`,
 		edited(IMPORTS, WITH_ATTACHMENT),
 	)
 
@@ -55,6 +56,16 @@ describe('an attachment output in the approval diff', () => {
 				{ widens: false, line: 'Endpoint `api.notes` file name changes from `notes.csv` to `all-notes.csv`' },
 				{ widens: false, line: 'Endpoint `api.notes` file size limit changes from 1000 to 500' },
 				{ widens: false, line: 'Endpoint `api.notes` output loses field `title`' },
+			],
+		})
+	})
+
+	test('a CSV file that becomes an XLSX names the format change, which widens', () => {
+		expect(lines(withExport(ROW, 10_000), withExport(ROW, 10_000, 'notes.xlsx', 'xlsx'))).toEqual({
+			outcome: 'widening',
+			changes: [
+				{ widens: true, line: 'Endpoint `api.notes` file format changes from `"csv"` to `"xlsx"`' },
+				{ widens: false, line: 'Endpoint `api.notes` file name changes from `notes.csv` to `notes.xlsx`' },
 			],
 		})
 	})

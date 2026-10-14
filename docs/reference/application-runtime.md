@@ -315,9 +315,15 @@ Per request, in this order:
    the handler, project the output through its schema (a union through its first
    branch that accepts the value), answer `{ result }`. An `attachment()` output answers
    a file instead: the rows the handler returned, encoded as CSV (`text/csv; charset=utf-8`,
-   `Content-Disposition: attachment` with the declared name) before the invocation's
-   transaction commits; a file over its `maxBytes` or `maxRows` is a 500 with no file and
-   no commit.
+   `Content-Disposition: attachment` with the declared name) or, for `format: 'xlsx'`, as one
+   sheet of typed cells (`implement/xlsx.ts`), before the invocation's transaction commits; a
+   file over its `maxBytes` or `maxRows` is a 500 with no file and no commit. The XLSX is the
+   framework's own writer, without a dependency: a ZIP of stored entries (no compression)
+   holding the six SpreadsheetML parts, about 3.5 KB before the cells. A number and a boolean
+   are typed cells, a string column whose schema is `z.iso.date()` or `z.iso.datetime()` a
+   date cell of the 1900 date system (a value before 1900-03-01 stays text), and every other
+   value an inline string, which no reader evaluates as a formula, so XLSX needs no `'` escape.
+   Characters XML cannot carry are written in SpreadsheetML's `_xHHHH_` escape.
 
 | Form                    | Hands the handler                         | Refuses with                                            |
 | ----------------------- | ----------------------------------------- | ------------------------------------------------------- |

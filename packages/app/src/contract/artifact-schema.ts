@@ -91,7 +91,7 @@ const recordShape: z.ZodType<RecordShape> = z.lazy(() =>
 
 const attachmentShape: z.ZodType<AttachmentShape> = z.strictObject({
 	type: z.literal('attachment'),
-	format: z.literal('csv'),
+	format: z.enum(['csv', 'xlsx']),
 	filename: name,
 	maxBytes: z.int().positive(),
 	maxRows: z.int().positive(),

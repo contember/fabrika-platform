@@ -864,7 +864,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   its own statement. Every strict input (procedures, forms, webhooks) and every path parameter refuses a string or key
   holding U+0000 with a 400, because Postgres `text` cannot store it. A declared `frame-src` keeps `'self'`, so removing
   the last frame origin narrows, as the approval diff already says.
-- **WU19 — file-download responses.** CSV only; XLSX → [backlog 111](../backlog/111-an-attachment-has-no-xlsx-format.md).
+- **WU19 — file-download responses.** CSV only; XLSX → backlog 111, since shipped as `format: 'xlsx'`.
   The attachment output → `packages/app/CLAUDE.md`.
 - **WU19 review round 1.** (1) The row bound ran after projection and validation had copied the whole result; the
   attachment path now checks the count before it reads a row and projects, validates and encodes row by row. (2) The

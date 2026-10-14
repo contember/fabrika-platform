@@ -308,7 +308,10 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 			run: {
 				start: 'sh /var/www/fabrika/start.generated.sh',
 				healthCheck: { httpGet: { port: 3000, path: '/healthz' } },
-				crontab: [{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purge', allContainers: false }],
+				crontab: [
+					{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purge', allContainers: false },
+					{ timing: '41 * * * *', command: './node_modules/.bin/fabrika job run fabrika-file-sweep', allContainers: false },
+				],
 				envVariables: {
 					FABRIKA_CONTRACT_DIGEST: contractDigest(notesContract),
 					// The TLS port, the database and the TLS mode are named, never left to the driver (zerops-platform.md).

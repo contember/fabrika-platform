@@ -1,15 +1,17 @@
-// The file an `attachment()` output answers: the rows the handler returned, encoded as CSV (RFC 4180) in UTF-8. The
-// whole file is encoded and measured before a byte is sent, so a file over its limit fails the invocation, which
-// then rolls back, instead of sending a partial body. The limits are met while the rows are read, never after.
+// The file an `attachment()` output answers: the rows the handler returned, encoded as CSV (RFC 4180) in UTF-8, or as
+// XLSX (`xlsx.ts`). The whole file is encoded and measured before a byte is sent, so a file over its limit fails the
+// invocation, which then rolls back, instead of sending a partial body. The limits are met while the rows are read,
+// never after.
 
 import type { AttachmentShape } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { attachmentOf } from '../contract/attachment'
-import { ATTACHMENT_LIMITS, CSV_CONTENT_TYPE } from '../contract/defaults'
+import { ATTACHMENT_LIMITS, CSV_CONTENT_TYPE, XLSX_CONTENT_TYPE } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { contentDisposition } from '../files/treatment'
 import { ServerFault } from './faults'
 import { project, ProjectionRefusedError } from './project'
+import { encodeXlsx } from './xlsx'
 
 /** A byte order mark: without it a spreadsheet reads the file in the machine's legacy code page. */
 const BYTE_ORDER_MARK = '\uFEFF'
@@ -33,13 +35,15 @@ export function attachmentResponse(endpoint: string, shape: AttachmentShape, out
 	if (mark === null) {
 		throw new ServerFault('contract_inconsistent', `'${endpoint}' answers an attachment, and its output schema is no attachment()`)
 	}
-	const body = encodeCsv(endpoint, shape, rows, (row) => validRow(endpoint, mark.row, row))
+	const rowOf = (row: unknown) => validRow(endpoint, mark.row, row)
+	const xlsx = shape.format === 'xlsx'
+	const body = xlsx ? encodeXlsx(endpoint, shape, rows, rowOf) : encodeCsv(endpoint, shape, rows, rowOf)
 	return new Response(body, {
 		status: 200,
 		headers: {
-			'Content-Type': CSV_CONTENT_TYPE,
+			'Content-Type': xlsx ? XLSX_CONTENT_TYPE : CSV_CONTENT_TYPE,
 			'Content-Length': String(body.byteLength),
-			'Content-Disposition': contentDisposition('text/csv', shape.filename),
+			'Content-Disposition': contentDisposition(xlsx ? XLSX_CONTENT_TYPE : 'text/csv', shape.filename),
 		},
 	})
 }

@@ -1152,13 +1152,18 @@ export const reports = app.group({ callers: ['human'] }, (r) => ({
 
 `output: attachment({ format: 'csv', filename, row, maxBytes, maxRows? })` (`@fabrika/app/contract`) makes the endpoint
 answer a file: the handler returns the rows (an array of `row`), and the framework writes the CSV. `exportProject`
-above is one.
+above is one. `format: 'xlsx'` writes a spreadsheet instead, from the same rows.
 
 - `row` is a `z.strictObject` of scalar fields (string, number, boolean, enum, literal; nullable or optional); its
-  field names are the header line, in their order. `filename` is fixed (`[A-Za-z0-9._-]`, ending in `.csv`).
+  field names are the header line, in their order. `filename` is fixed (`[A-Za-z0-9._-]`, ending in `.csv`, or
+  `.xlsx` for an XLSX).
 - The framework writes RFC 4180 CSV in UTF-8 with a byte order mark, and puts `'` before every text cell a spreadsheet
   would run as a formula (one that starts with `=`, `+`, `-`, `@`, a tab or a line break, also after spaces). Never
   write CSV by hand.
+- An XLSX has one sheet with typed cells: a number cell, a boolean cell, and a date cell for a string column whose
+  schema is `z.iso.date()` or `z.iso.datetime()` (shown in UTC); every other value is text, which no spreadsheet runs
+  as a formula, so it keeps its `=`. Its parts take about 3.5 KB beyond the cells: declare `maxBytes` above that.
+  Never write an XLSX by hand or add a library for it.
 - `maxBytes` (at most 16 MiB) and `maxRows` (10 000 unless declared, at most 100 000) bound the file; a cell holds at
   most 32 767 characters. Past a limit the call fails with a 500 and sends no file. Bound the rows in the query too.
 - **An audited export is a mutation** that writes its log row through `ctx.db` and returns the rows: `exportProject`

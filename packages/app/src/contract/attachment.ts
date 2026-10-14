@@ -26,9 +26,13 @@ export interface AttachmentBrand {
 }
 
 export interface AttachmentOptions<R> {
-	/** `'csv'`: RFC 4180, UTF-8 with a byte order mark, a header line of the row's field names. */
-	readonly format: 'csv'
-	/** The file name the browser saves: `[A-Za-z0-9._-]`, ending in `.csv`. */
+	/**
+	 * `'csv'`: RFC 4180, UTF-8 with a byte order mark, a header line of the row's field names. `'xlsx'`: one sheet, the
+	 * header row of the field names, then a number, boolean or text cell per value, and a date cell for a string whose
+	 * schema is `z.iso.date()` or `z.iso.datetime()`.
+	 */
+	readonly format: 'csv' | 'xlsx'
+	/** The file name the browser saves: `[A-Za-z0-9._-]`, ending in `.csv` or `.xlsx`, as the format. */
 	readonly filename: string
 	/** The row schema: a strict object of scalar fields, in the file's column order. */
 	readonly row: R
