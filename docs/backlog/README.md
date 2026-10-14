@@ -65,4 +65,21 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [135](135-deleting-a-zerops-secret-named-like-a-descriptor-variable-is-forbidden.md) — A Zerops secret named like a `run.envVariables` entry can fail to delete with `userDataDeleteForbidden`.
 - [139](139-an-application-cannot-author-the-html-of-iams-e-mails.md) — application e-mail templates are plain text; IAM builds the HTML.
 - [141](141-an-acceptance-is-not-serialized-with-every-grant-of-its-inviter.md) — removing a supplementing grant of the inviter is not serialized with an acceptance.
+- [142](142-a-data-layer-capability-refusal-fails-as-handler-failed.md) — `@fabrika/db`'s `CapabilityError` fails a request as `handler_failed`, with no reason.
+- [143](143-no-server-code-reads-a-file-collection.md) — A handler or a job cannot list, check or open a collection's files, and only a dimension table owns one.
+- [144](144-the-typed-client-has-no-file-collections-and-no-answer-type.md) — `createClient` has no file rows and exports no type of a procedure's input or answer.
+- [145](145-a-link-collection-serves-every-link-mount-of-its-dimension.md) — `link: true` serves every link mount of the owner's dimension; it cannot name the mounts.
+- [146](146-a-request-handler-has-no-abort-signal.md) — A request handler has no `ctx.signal`, and an outbound call fails the generated cases.
+- [147](147-a-handler-and-a-page-do-not-know-the-callers-own-address.md) — No trusted caller address in `ctx.principal`, and a page learns nothing about who is signed in.
+- [148](148-the-checker-reads-a-local-binding-as-a-global.md) — A local `window` or `fit` is refused as the global or the focused test of its name.
+- [149](149-a-job-drains-its-inbox-and-outbox-without-per-record-attempts.md) — The intake recipe drains unbounded, stops on one bad record, and sends no idempotency key.
+- [150](150-the-csp-has-no-style-or-font-origin.md) — The contract's `csp` cannot extend `style-src` or `font-src`.
+- [151](151-the-spa-and-the-server-cannot-share-a-pure-function.md) — No module both the SPA and a slice may import for shared pure code.
+- [152](152-the-test-kit-serves-no-spa-build.md) — The kit answers every SPA with an empty document; no local run of an application.
+- [153](153-only-the-generated-endpoint-tests-stand-in-for-iams-membership-writes.md) — `testKit` and the policy kit refuse IAM's membership writes; only the endpoint access kit stands in.
+- [154](154-an-endpoint-reads-its-own-target-only-under-an-action-its-table-names.md) — The skill's "reads its own target, whatever its action" holds only for actions the table names.
+- [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
+- [156](156-a-member-directory-has-no-sign-in-time-and-no-list-across-values.md) — No last sign-in, and one directory call per value.
+- [157](157-an-endpoint-holds-one-capability.md) — An operation across two dimensions needs raw SQL and `unscoped` reads.
+- [158](158-no-document-says-who-enforces-each-guarantee.md) — No table of which guarantee the types, the checker, the runtime or the review enforces.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
