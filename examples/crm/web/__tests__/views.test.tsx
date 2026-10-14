@@ -129,6 +129,7 @@ if (postgres !== null) {
 		test('an address that names no screen says so', async () => {
 			open(manager, '/nowhere')
 			await until(() => document.body.textContent?.includes('This address names no screen of the CRM.') === true, 'the not-found screen')
+			expect(document.querySelector('[aria-current="page"]')).toBeNull()
 		})
 	})
 

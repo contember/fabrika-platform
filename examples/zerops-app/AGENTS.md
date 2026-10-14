@@ -640,11 +640,11 @@ if (root !== null) {
 import { shellSlicePlugin } from '@fabrika/check/bun-plugin'
 import { join } from 'node:path'
 
+const outdir = join(import.meta.dir, 'dist', 'web')
 const built = await Bun.build({
 	entrypoints: [join(import.meta.dir, 'web', 'index.html')],
-	outdir: join(import.meta.dir, 'dist', 'web'),
+	outdir,
 	target: 'browser',
-	publicPath: '/',
 	define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 	plugins: [shellSlicePlugin({ root: import.meta.dir })],
 })
@@ -652,15 +652,19 @@ if (!built.success) {
 	for (const log of built.logs) console.error(String(log))
 	process.exit(1)
 }
+const index = Bun.file(join(outdir, 'index.html'))
+await Bun.write(
+	index,
+	(await index.text()).replaceAll(/(src|href)="\.\//g, '$1="/'),
+)
 ```
 
 - The SPA imports `@fabrika/app/client`, `@fabrika/app/react`, `@fabrika/ui`, React, `fabrika.contract.ts`,
   `src/schemas.ts`, `src/shared/` and its own modules; never a slice, `src/db/` or a Bun or Node module. The plugin loads the
   contract without its handlers. A row type the screen declares (`Task` above) is checked against the answer where
   the rows are passed in.
-- `publicPath: '/'` is the SPA's prefix: the mount answers `index.html` for every path under it, so the page loads its
-  assets from there and a deep link renders. Keep `outdir` inside the application: Bun resolves nothing for such a
-  build outside it. `define` gives React's production build.
+- The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every path
+  under it, so a deep link such as `/tasks/<id>` renders. `define` gives React's production build.
 - Set text through JSX, never `dangerouslySetInnerHTML` or `innerHTML`. Same-origin calls carry the session cookie.
 - **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
   `{ label, email, actions: { app, scopes } }`. `useCaller()` (`@fabrika/app/react`) answers `{ label, email,

@@ -4,19 +4,23 @@
 import { shellSlicePlugin } from '@fabrika/check/bun-plugin'
 import { join } from 'node:path'
 
-export const buildWeb = (outdir: string, options: { readonly metafile?: boolean; readonly minify?: boolean } = {}) =>
-	Bun.build({
+export async function buildWeb(outdir: string, options: { readonly metafile?: boolean; readonly minify?: boolean } = {}) {
+	const built = await Bun.build({
 		entrypoints: [join(import.meta.dir, 'web', 'index.html')],
 		outdir,
 		target: 'browser',
-		// The mount answers `index.html` for every path under `/`, so the page loads its assets from the root.
-		publicPath: '/',
 		// React's production build: without it the bundle carries React's development checks.
 		define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 		minify: options.minify ?? true,
 		metafile: options.metafile ?? false,
 		plugins: [shellSlicePlugin({ root: import.meta.dir })],
 	})
+	// The mount answers `index.html` for every path under `/`, so the page loads its assets from the root: a deep link
+	// such as /notes/<id> renders. Bun's `publicPath` does the same, but fails to resolve in a process that built before.
+	const index = Bun.file(join(outdir, 'index.html'))
+	if (built.success) await Bun.write(index, (await index.text()).replaceAll(/(src|href)="\.\//g, '$1="/'))
+	return built
+}
 
 if (import.meta.main) {
 	const built = await buildWeb(join(import.meta.dir, 'dist', 'web'))

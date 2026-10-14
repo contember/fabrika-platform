@@ -11,7 +11,7 @@ const SERVER_MODULE =
 const HANDLER_CODE = ['getForUpdate', 'only a note in the trash is restored', 'ConflictError', 'fromRow', 'ctx.transaction']
 
 test('the SPA bundle holds the client and the contract, no handler and no server module', async () => {
-	// Under the application, as the real build's `dist/web`: Bun resolves nothing for a `publicPath` build outside it.
+	// Under the application, beside the real build's `dist/web`.
 	const dist = join(import.meta.dir, '..', '..', 'dist')
 	mkdirSync(dist, { recursive: true })
 	const outdir = mkdtempSync(join(dist, 'bundle-test-'))

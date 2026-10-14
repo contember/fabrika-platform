@@ -66,8 +66,8 @@ Three constraints shape the answer:
    (outside the shell-slice plugin), so it adds a generated file to the application, a second build plugin and a build
    step the checker would have to accept; it also relies on the Navigation API and `URLPattern`. An application needs a
    handful of typed patterns, which `createRouter` covers with the History API. The SPA mount's asset server answers
-   `index.html` for a path that names no file, so deep links work; the build sets `publicPath` so assets resolve from
-   any path.
+   `index.html` for a path that names no file, so deep links work; the build points the page's assets at the prefix
+   so they resolve from any path (Bun's own `publicPath` fails to resolve in a process that already built once).
 6. **The kit loads nothing from another origin.** The theme's font token is a system stack, and the components'
    styles ship with the package, so the kit runs under the default same-origin `style-src` and `font-src`. An
    application that wants a typeface self-hosts its files in the SPA bundle, or names the font service's origins in
