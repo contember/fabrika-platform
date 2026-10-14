@@ -73,10 +73,15 @@ describe('an attachment output in the static reader', () => {
 		expect(read.endpoints.find((row) => row.id === 'api.inline')?.output?.type).toBe('attachment')
 	})
 
-	test('a format other than csv is refused in the runtime words: XLSX is not built', () => {
-		expect(() => readContractSource(files("attachment({ format: 'xlsx', filename: 'x.csv', row: Row, maxBytes: 10 })"), {})).toThrow(
-			"procedure 'api.inline' attachment: format 'xlsx' is not a file format the framework encodes (allowed: 'csv')",
+	test('a format the framework does not write is refused in the runtime words, and an XLSX takes an .xlsx name', () => {
+		expect(() => readContractSource(files("attachment({ format: 'ods', filename: 'x.csv', row: Row, maxBytes: 10 })"), {})).toThrow(
+			"procedure 'api.inline' attachment: format 'ods' is not a file format the framework encodes (allowed: 'csv', 'xlsx')",
 		)
+		expect(() => readContractSource(files("attachment({ format: 'xlsx', filename: 'x.csv', row: Row, maxBytes: 10 })"), {})).toThrow(
+			"procedure 'api.inline' attachment: filename 'x.csv' is not a file name (allowed: ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\\.xlsx$)",
+		)
+		const read = readContractSource(files("attachment({ format: 'xlsx', filename: 'x.xlsx', row: Row, maxBytes: 10_000 })"), {})
+		expect(read.endpoints.find((row) => row.id === 'api.inline')?.output).toMatchObject({ type: 'attachment', format: 'xlsx', filename: 'x.xlsx' })
 	})
 
 	test('an option the builder does not take is refused in the runtime words', () => {

@@ -18,6 +18,8 @@ import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores
 import { contract as intakeContract } from '../../../app/src/__tests__/fixtures/intake/fabrika.contract'
 import { tables as intakeTables } from '../../../app/src/__tests__/fixtures/intake/src/db/tables'
 import { contract as jobsContract } from '../../../app/src/__tests__/fixtures/jobs-notes/fabrika.contract'
+import { contract as kitFilesContract } from '../../../app/src/__tests__/fixtures/kit-files/fabrika.contract'
+import { tables as kitFilesTables } from '../../../app/src/__tests__/fixtures/kit-files/src/db/tables'
 import { contract as multiTenantContract } from '../../../app/src/__tests__/fixtures/multi-tenant/fabrika.contract'
 import { tables as multiTenantTables } from '../../../app/src/__tests__/fixtures/multi-tenant/src/db/tables'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
@@ -138,6 +140,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app scoped-files (a file collection on a table read from source)',
 		root: join(APP_TESTS, 'fixtures', 'scoped-files'),
 		evaluated: () => compileContract(filesContract, filesTables),
+	},
+	{
+		name: '@fabrika/app kit-files (ctx.files of handlers and jobs, a scanning link collection, read from source)',
+		root: join(APP_TESTS, 'fixtures', 'kit-files'),
+		evaluated: () => compileContract(kitFilesContract, kitFilesTables),
 	},
 	{
 		name: '@fabrika/app jobs-notes (the scoped-notes tables)',
