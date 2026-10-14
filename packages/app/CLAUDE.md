@@ -44,6 +44,8 @@ bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honey
 bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
 bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handler: a cancelled request, the budget
+bun test src/__tests__/outbox-rule.test.ts      # the generated cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
@@ -499,6 +501,12 @@ vocabulary (`packages/db/CLAUDE.md`).
   takes the header policy like any procedure (the proxy applies it there too); `Content-Type` and the
   `Content-Disposition` of `files/treatment.ts`'s `contentDisposition` stay. The client's attachment procedure is
   not a function: `download(api.<procedure>, input)` posts, saves the file in a browser and answers it as a `File`.
+- **Every handler's `ctx.signal` ends with its request** (`handlerSignal` in `bounded.ts`): the request's own signal
+  (the client left, the runtime closed the connection) or `REQUEST_BUDGET_MS`, which equals `Bun.serve`'s default
+  `idleTimeout`. A procedure commits only while it is live (`request_cancelled` otherwise). A webhook delivery gets one
+  too, but commits regardless: its delivery key already decides a redelivery. The skill's rule that an endpoint the
+  generated tests cover calls no outside service (an outbox row and a job instead) is what keeps those cases, which
+  boot without the application's variables, at 200 (`outbox-rule.test.ts`).
 - **Output is projected, then validated:** `project` walks the output's zod schema
   and keeps the fields it declares; a union takes the first branch, in order, whose
   schema accepts the value reduced to it. The strict output schema then validates

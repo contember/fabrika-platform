@@ -17,7 +17,7 @@ export const SERVER_FAULTS = {
 	contract_inconsistent: 'the compiled endpoint misses what its kind needs (a path parameter, a body limit or a capability kind)',
 	webhook_binding_mismatch: "a webhook binding reaches another dimension than the webhook's",
 	workload_unauthorized: "the workload's key or token does not carry the authority its declaration needs",
-	request_cancelled: 'the request was cancelled before its transaction committed; nothing it wrote is kept',
+	request_cancelled: 'the request was cancelled or outlived its budget before its transaction committed; nothing it wrote is kept',
 	file_object_missing: "a file's object is missing from storage",
 	file_object_mismatch: "a file's object has another size than its row records",
 	file_key_taken: "a new file's object key already held an object this upload did not write",

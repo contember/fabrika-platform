@@ -48,6 +48,7 @@ import type { RequestExecutionContext } from '../fetch'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
+import { handlerSignal } from './bounded'
 import type { BrowserConfig } from './browser-config'
 import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
@@ -428,6 +429,7 @@ export class ContractRuntime {
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
 		const site = served.site
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
+		const signal = handlerSignal(request)
 		try {
 			let result: unknown
 			try {
@@ -437,6 +439,7 @@ export class ContractRuntime {
 					const ctx = Object.freeze({
 						principal: caller.principal,
 						requestId: frame.id,
+						signal,
 						...access.context,
 						...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
 							credential: caller.token,
@@ -451,7 +454,7 @@ export class ContractRuntime {
 				frame.end()
 			}
 			const answer = this.#answerOf(served, result)
-			await invocation?.commit(request.signal)
+			await invocation?.commit(signal)
 			return answer
 		} finally {
 			await invocation?.rollback()
@@ -802,7 +805,8 @@ export class ContractRuntime {
 							db: siteData(invocation.handles('mutation', site, subject)),
 							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
 						}
-					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs, delivery, ...data }) })
+					const signal = handlerSignal(request)
+					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, signal, refs, delivery, ...data }) })
 				})
 			} finally {
 				frame.end()

@@ -233,7 +233,8 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 ## Rules
 
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
-  and connector calls do not.
+  and connector calls do not. An endpoint the generated tests cover calls no outside service (an e-mail, a provider's
+  API): it records an outbox row, and a job sends it (`references/jobs.md`).
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,

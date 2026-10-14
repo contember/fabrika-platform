@@ -1151,14 +1151,11 @@ import { mailer } from '../mail'
 
 const Sent = z.strictObject({ sentTo: z.string() })
 
-/** How long the provider may take: a request has no signal of its own. */
-const SEND_TIMEOUT_MS = 10000
-
 export const settings = app.group({ callers: ['human'] }, (r) => ({
 	testMail: r.mutation({ output: Sent, access: { member: true } })
 		.handle(async ({ ctx }) => {
 			const to = ctx.principal.email
-			await mailer.get().sendTest(to, AbortSignal.timeout(SEND_TIMEOUT_MS))
+			await mailer.get().sendTest(to, ctx.signal)
 			return { sentTo: to }
 		}),
 }))
@@ -1169,7 +1166,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
   its login method's (an operator may accept an IdP's unverified address). An input that named one would let any member mail any address
   past every consent the application asks for. Never take a recipient from the input for "send it to me".
 - `{ member: true }` admits any member of the application and reaches no data: the endpoint mails only the caller.
-  The generated tests give a `member` endpoint no case, so the test below is yours.
+  The generated tests give a `member` endpoint no case, so the test below is yours. That is also why it may call the
+  provider itself: the generated cases boot without the mail variables (`references/endpoint.md`). The call takes
+  `ctx.signal`, so it stops when the person leaves or the request runs past its 10 s.
 - The page shows the button only to someone signed in: its SPA reads `/hr/__fabrika-me.json` (`references/app-setup.md`).
 
 ## Tests

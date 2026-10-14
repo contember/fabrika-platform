@@ -1,5 +1,17 @@
-// Reading a body with a byte budget. A body over the budget, or one whose reader the deadline cancels, is never
-// buffered whole: the stream is cancelled and nothing of it is kept.
+// Reading a body with a byte budget, and a handler's time budget. A body over the budget, or one whose reader the
+// deadline cancels, is never buffered whole: the stream is cancelled and nothing of it is kept.
+
+/**
+ * How long a request handler runs before its `ctx.signal` aborts and its transaction cannot commit. It equals
+ * `Bun.serve`'s default `idleTimeout`, which already closes a connection the server sends nothing on for that long, so
+ * both runtimes stop a handler at the same point.
+ */
+export const REQUEST_BUDGET_MS = 10_000
+
+/** A handler's `ctx.signal`: aborted when the client leaves (`request.signal`) or once `budgetMs` passed. */
+export function handlerSignal(request: Request, budgetMs: number = REQUEST_BUDGET_MS): AbortSignal {
+	return AbortSignal.any([request.signal, AbortSignal.timeout(budgetMs)])
+}
 
 export interface BoundedRead {
 	readonly maxBytes: number

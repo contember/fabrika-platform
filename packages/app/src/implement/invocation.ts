@@ -230,7 +230,10 @@ export class Invocation {
 	async commit(signal: AbortSignal | null): Promise<void> {
 		if (signal?.aborted === true) {
 			await this.#transaction.rollback()
-			throw new ServerFault('request_cancelled', `request ${this.#frame.id} was cancelled before its transaction committed; nothing it wrote is kept`)
+			throw new ServerFault(
+				'request_cancelled',
+				`request ${this.#frame.id} was cancelled or outlived its budget before its transaction committed; nothing it wrote is kept`,
+			)
 		}
 		await this.#transaction.commit()
 	}

@@ -15,7 +15,7 @@ export { type ContractJobs, type JobClock, JobError, type JobFailureCode, type J
 export type { JobContext, JobHandler, JobHandlersOf, JobPrincipal } from '../jobs/types'
 export { LINK_BOOTSTRAP_SCRIPT } from './anonymous'
 export { boot, BootError, type BootOptions, type ContractApp, type IamKeySource } from './boot'
-export { readBoundedBytes } from './bounded'
+export { readBoundedBytes, REQUEST_BUDGET_MS } from './bounded'
 export { AppCapability, CapabilityRefusedError, Ref, Within } from './capability'
 export { CHALLENGE_LIMITS, type ChallengeFetch, TURNSTILE_VERIFY_URL } from './challenge'
 export { type ConnectFailure, type ConnectFetch, type ConnectResult, type ConnectVariables, connectVariables, isJsonMediaType } from './connect'

@@ -144,7 +144,8 @@ export default serve(contract, { database: scoped(tables) })
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
-  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`).
+  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`). A handler of an endpoint the
+  generated tests cover records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
 
 ## The deploy surface (Zerops)
 

@@ -293,7 +293,8 @@ if (postgres !== null) {
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
   that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
-  where it is used, not in `build` (`references/public-intake.md`).
+  where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
+  generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
   process. Import the test kits from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.

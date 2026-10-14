@@ -225,7 +225,8 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 ## Rules
 
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
-  and connector calls do not.
+  and connector calls do not. An endpoint the generated tests cover calls no outside service (an e-mail, a provider's
+  API): it records an outbox row, and a job sends it (`references/jobs.md`).
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
@@ -441,7 +442,8 @@ export default serve(contract, { database: scoped(tables) })
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
-  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`).
+  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`). A handler of an endpoint the
+  generated tests cover records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
 
 ## The deploy surface (Zerops)
 
@@ -642,13 +644,20 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 | `{ member: true }`                             | any member, no application data   | nothing                                                     | nothing                                                                                     |
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal`
-  (`{ kind: 'user', id, label, email }` for a `human` caller) and `ctx.requestId`. An `on`, `in` or `over` endpoint
-  also reads `ctx.db.app.<table>`: each application table whose read action is the endpoint's action, every row,
-  read-only (below).
+  (`{ kind: 'user', id, label, email }` for a `human` caller), `ctx.requestId` and `ctx.signal`, which aborts when
+  the client leaves or the request runs past its budget (10 s); its transaction then rolls back. Pass it to every
+  outbound call. An `on`, `in` or `over` endpoint also reads `ctx.db.app.<table>`: each application table whose read
+  action is the endpoint's action, every row, read-only (below).
 - `ctx.principal.email` is the mailbox IAM recorded for the person, lower-cased, from the token: the address to mail,
   not a proof that the person controls it. Mail "send it to me"
   there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
+- **An endpoint the generated tests cover calls no outside service.** They boot without your variables, so a handler
+  that calls one answers 500 in each case, and a request cannot undo the call when its transaction rolls back. Such an
+  endpoint records an outbox row in its transaction, and a job sends it with an attempt count and an idempotency key
+  (`references/jobs.md`). A call that is the request's whole purpose, such as a test e-mail to the caller, lives in a
+  `{ member: true }` endpoint, which they do not cover (`references/public-intake.md`). The framework's own calls (IAM,
+  the file store, `ctx.connect`) are not outside.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
@@ -2756,14 +2765,11 @@ import { mailer } from '../mail'
 
 const Sent = z.strictObject({ sentTo: z.string() })
 
-/** How long the provider may take: a request has no signal of its own. */
-const SEND_TIMEOUT_MS = 10000
-
 export const settings = app.group({ callers: ['human'] }, (r) => ({
 	testMail: r.mutation({ output: Sent, access: { member: true } })
 		.handle(async ({ ctx }) => {
 			const to = ctx.principal.email
-			await mailer.get().sendTest(to, AbortSignal.timeout(SEND_TIMEOUT_MS))
+			await mailer.get().sendTest(to, ctx.signal)
 			return { sentTo: to }
 		}),
 }))
@@ -2774,7 +2780,9 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
   its login method's (an operator may accept an IdP's unverified address). An input that named one would let any member mail any address
   past every consent the application asks for. Never take a recipient from the input for "send it to me".
 - `{ member: true }` admits any member of the application and reaches no data: the endpoint mails only the caller.
-  The generated tests give a `member` endpoint no case, so the test below is yours.
+  The generated tests give a `member` endpoint no case, so the test below is yours. That is also why it may call the
+  provider itself: the generated cases boot without the mail variables (`references/endpoint.md`). The call takes
+  `ctx.signal`, so it stops when the person leaves or the request runs past its 10 s.
 - The page shows the button only to someone signed in: its SPA reads `/hr/__fabrika-me.json` (`references/app-setup.md`).
 
 ## Tests
@@ -3644,7 +3652,8 @@ if (postgres !== null) {
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
   that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
-  where it is used, not in `build` (`references/public-intake.md`).
+  where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
+  generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).
 - Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
   process. Import the test kits from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.

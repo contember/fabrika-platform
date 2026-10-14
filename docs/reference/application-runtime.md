@@ -438,7 +438,13 @@ run every statement of their handles in one transaction, opened by the first sta
 `idle_in_transaction_session_timeout` (30 s), so a handler that waits on something else while it holds row locks
 loses them. It commits after the handler returned, its output passed validation and an attachment's file was
 encoded; a throw, a refused output, a file over its limit, a cancelled request or a statement the database refused
-rolls it back, and nothing the handler wrote is kept. A query
+rolls it back, and nothing the handler wrote is kept. A request handler's `ctx.signal` aborts when the client leaves
+or the request runs past `REQUEST_BUDGET_MS` (10 s, `Bun.serve`'s default `idleTimeout`, which closes such a
+connection anyway); its transaction then cannot commit (`request_cancelled`). An endpoint the generated tests cover
+calls no outside service: it records an outbox row in its transaction and a job makes the call, because the generated
+tests boot without the application's variables and a call does not roll back. A call that is the request's whole
+purpose (the recipe's test e-mail) lives in a `{ member: true }` endpoint, which they do not cover, and takes
+`ctx.signal`. A query
 and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.

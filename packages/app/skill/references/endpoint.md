@@ -50,13 +50,20 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 | `{ member: true }`                             | any member, no application data   | nothing                                                     | nothing                                                                                     |
 
 - Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal`
-  (`{ kind: 'user', id, label, email }` for a `human` caller) and `ctx.requestId`. An `on`, `in` or `over` endpoint
-  also reads `ctx.db.app.<table>`: each application table whose read action is the endpoint's action, every row,
-  read-only (below).
+  (`{ kind: 'user', id, label, email }` for a `human` caller), `ctx.requestId` and `ctx.signal`, which aborts when
+  the client leaves or the request runs past its budget (10 s); its transaction then rolls back. Pass it to every
+  outbound call. An `on`, `in` or `over` endpoint also reads `ctx.db.app.<table>`: each application table whose read
+  action is the endpoint's action, every row, read-only (below).
 - `ctx.principal.email` is the mailbox IAM recorded for the person, lower-cased, from the token: the address to mail,
   not a proof that the person controls it. Mail "send it to me"
   there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
+- **An endpoint the generated tests cover calls no outside service.** They boot without your variables, so a handler
+  that calls one answers 500 in each case, and a request cannot undo the call when its transaction rolls back. Such an
+  endpoint records an outbox row in its transaction, and a job sends it with an attempt count and an idempotency key
+  (`references/jobs.md`). A call that is the request's whole purpose, such as a test e-mail to the caller, lives in a
+  `{ member: true }` endpoint, which they do not cover (`references/public-intake.md`). The framework's own calls (IAM,
+  the file store, `ctx.connect`) are not outside.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a

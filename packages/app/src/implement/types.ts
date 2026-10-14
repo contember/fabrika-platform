@@ -12,10 +12,15 @@ import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } fro
 import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
-/** What every handler gets: who called, and this request's id. */
+/** What every handler gets: who called, this request's id, and the signal that ends it. */
 export interface RequestContext<P> {
 	readonly principal: P
 	readonly requestId: string
+	/**
+	 * Aborts when the client leaves or the request outlives `REQUEST_BUDGET_MS`; its transaction then rolls back. Pass
+	 * it to every outbound call, so the call stops with the request.
+	 */
+	readonly signal: AbortSignal
 }
 
 /** The capability an access form hands. `{ member: true }` hands none. */
