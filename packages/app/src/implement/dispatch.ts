@@ -174,6 +174,8 @@ export interface FormAdmission {
 	readonly fields: SubmissionFields
 	/** The challenge's verifier, with the secret the application variable holds; `null` without a challenge. */
 	readonly challenge: ChallengeVerifier | null
+	/** The one token the challenge does not record, so it passes again: `fabrika app dev`'s test widget's; `null` otherwise. */
+	readonly repeatableToken: string | null
 }
 
 export interface RuntimeParts {
@@ -724,7 +726,7 @@ export class ContractRuntime {
 			return jsonResponse({ result: { received: true } }, 200)
 		}
 		if (admission.challenge !== null) {
-			await this.#challenge(served.form, admission.challenge, submission.token, request)
+			await this.#challenge(served.form, admission.challenge, submission.token, request, admission.repeatableToken)
 		}
 		// One transaction: a row that fails to insert gives its place in the form's bucket back.
 		if (!(await this.#framework().appendToInbox(served.form, submission.row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }))) {
@@ -738,8 +740,11 @@ export class ContractRuntime {
 		return jsonResponse({ result: { received: true } }, 200)
 	}
 
-	/** The token verifies for this host and this form, and was not accepted before: a failure is 400, an unreachable provider 503. */
-	async #challenge(form: string, verifier: ChallengeVerifier, token: string | null, request: Request): Promise<void> {
+	/**
+	 * The token verifies for this host and this form, and was not accepted before unless it is the `repeatable` one: a
+	 * failure is 400, an unreachable provider 503.
+	 */
+	async #challenge(form: string, verifier: ChallengeVerifier, token: string | null, request: Request, repeatable: string | null): Promise<void> {
 		const outcome = token === null ? 'failed' : await verifier.verify({ token, hostname: new URL(request.url).hostname, action: form })
 		if (outcome === 'unavailable') {
 			throw new ServerFault('challenge_unavailable', `the ${verifier.provider} challenge of '${form}' could not be verified`, 503)
@@ -748,7 +753,8 @@ export class ContractRuntime {
 			throw new ServerFault('challenge_misconfigured', `the ${verifier.provider} challenge of '${form}' refused the application's secret`, 503)
 		}
 		const refused = token === null || outcome === 'failed'
-			|| !(await this.#framework().forms.recordChallenge(form, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs))
+			|| (token !== repeatable
+				&& !(await this.#framework().forms.recordChallenge(form, sha256Hex(token), CHALLENGE_LIMITS.maxAgeMs + CHALLENGE_LIMITS.maxSkewMs)))
 		if (refused) {
 			throw new HttpError(400, 'challenge_failed', 'The challenge did not verify; solve it again')
 		}

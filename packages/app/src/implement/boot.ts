@@ -117,6 +117,11 @@ export interface BootOptions {
 	/** What asks a form's challenge provider to verify a token; `fetch` by default. */
 	readonly challengeFetch?: ChallengeFetch
 	/**
+	 * The developer's own machine only (`fabrika app dev`): the token a form's challenge admits more than once, which
+	 * Turnstile's always-passing test widget hands out for every submission. Every other token stays single use.
+	 */
+	readonly repeatableChallengeToken?: string
+	/**
 	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
 	 * application withholds because it may carry a credential.
 	 */
@@ -532,6 +537,7 @@ function formAdmission(name: string, artifact: ContractArtifact, options: BootOp
 		perForm: mount.rate?.perForm ?? FORM_LIMITS.perForm,
 		fields: Object.freeze(submissionFieldsOf(mount)),
 		challenge,
+		repeatableToken: challenge === null ? null : (options.repeatableChallengeToken ?? null),
 	})
 }
 

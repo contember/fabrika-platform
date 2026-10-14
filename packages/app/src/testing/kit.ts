@@ -38,7 +38,7 @@ import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
 import type { FILE_SWEEP_JOB } from '../files/collections'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
-import { boot, type ContractApp } from '../implement/boot'
+import { boot, type BootOptions, type ContractApp } from '../implement/boot'
 import type { ChallengeFetch } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
@@ -216,7 +216,14 @@ export interface BootedTestKit<C extends AnyContract> {
 	callerOf(value: unknown): TestCaller | undefined
 }
 
-export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions): BootedTestKit<C> {
+/** What only `fabrika app dev`'s kit boots with, never a test's. */
+export type DevBootOptions = Pick<BootOptions, 'repeatableChallengeToken'>
+
+export function bootTestKit<C extends AnyContract>(
+	app: ContractImplementation<C>,
+	options: TestKitOptions,
+	dev: DevBootOptions = {},
+): BootedTestKit<C> {
 	refuseInProduction('@fabrika/app/testing')
 	const name = app.contract.vocabulary.app
 	const appId = `${name}@${TEST_ENVIRONMENT}`
@@ -319,6 +326,7 @@ export function bootTestKit<C extends AnyContract>(app: ContractImplementation<C
 		files: options.files,
 		...(options.scanner === undefined ? {} : { scanner: options.scanner }),
 		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
+		...dev,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		membership,
 		connectBindings,

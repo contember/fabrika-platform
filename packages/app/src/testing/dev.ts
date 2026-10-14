@@ -3,7 +3,7 @@
 import type { AnyContract, DimensionOf } from '../contract/define'
 import type { ContractImplementation } from '../implement/implement'
 import type { PersonTestCaller, TestCaller } from './caller'
-import { passingChallenge } from './challenge'
+import { passingChallenge, TURNSTILE_TEST_TOKEN } from './challenge'
 import { bootTestKit, type TestKit, type TestKitOptions } from './kit'
 import type { SentInvitation, TestMembership } from './membership'
 
@@ -77,10 +77,13 @@ const isPerson = (caller: TestCaller): caller is PersonTestCaller => caller.kind
 
 /**
  * The test kit of `app` with its stand-in IAM, and what `fabrika app dev` shows of it. A form's challenge passes
- * (`passingChallenge`) unless `options.challengeFetch` answers it.
+ * (`passingChallenge`) unless `options.challengeFetch` answers it, and admits the test widget's token
+ * (`TURNSTILE_TEST_TOKEN`) at every submission; any other token is single use, as deployed.
  */
 export function devKit<C extends AnyContract>(app: ContractImplementation<C>, options: Omit<TestKitOptions, 'membership'> = {}): DevKit<C> {
-	const { kit, standIn, callerOf } = bootTestKit(app, { challengeFetch: passingChallenge, ...options })
+	const { kit, standIn, callerOf } = bootTestKit(app, { challengeFetch: passingChallenge, ...options }, {
+		repeatableChallengeToken: TURNSTILE_TEST_TOKEN,
+	})
 	if (standIn === null) {
 		throw new Error('a kit without its own membership transport stands in for IAM')
 	}

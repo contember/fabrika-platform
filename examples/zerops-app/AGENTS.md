@@ -749,7 +749,8 @@ export default seed
 - A form's challenge passes in `app dev`: the stand-in answers Turnstile's siteverify for any token. Set the form's
   `secret` variable to any value in `dev/dev.env`, and send a fresh `challengeToken` with each submission, as a test
   does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
-  key `1x00000000000000000000AA`; its token is the same every time, so only its first submission is admitted.
+  key `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
+  submission; a deployed application records it like any other, so there it passes once.
 - Point an outside provider at the dev outbox: `app dev` captures every request the process sends to
   `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. The mail view
   lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.

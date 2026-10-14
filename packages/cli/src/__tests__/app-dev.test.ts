@@ -496,4 +496,14 @@ describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a form
 		expect(body).not.toContain('dev-mail-key')
 		expect((await fetch(`${origin}__fabrika/dev/outbox/99`)).status).toBe(404)
 	})
+
+	test("the always-passing test widget's token submits the form again; any other token only once", async () => {
+		const join = (email: string, challengeToken: string) =>
+			fetch(`${origin}join`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, challengeToken }) })
+		expect((await join('ben@signup.example', 'XXXX.DUMMY.TOKEN.XXXX')).status).toBe(200)
+		expect((await join('cleo@signup.example', 'XXXX.DUMMY.TOKEN.XXXX')).status).toBe(200)
+		const once = crypto.randomUUID()
+		expect((await join('dan@signup.example', once)).status).toBe(200)
+		expect((await join('eve@signup.example', once)).status).toBe(400)
+	})
 })

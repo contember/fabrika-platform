@@ -789,6 +789,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   16 KiB answer, the request's host and the form's name as `action`, a token at most 300 s old),
   then records its digest in `fabrika_form_challenges`, so a second use is a replay: a failed or
   replayed token is 400, an unreachable provider or a refused secret 503, and neither writes a row.
+  Only `fabrika app dev` admits one token again (`BootOptions.repeatableChallengeToken`): the one
+  Turnstile's always-passing test widget hands out for every submission.
   The secret is the application variable the contract names; without it the application does not
   boot. `siteKey: '<VARIABLE>'` names the widget's public site key, which every SPA mount's
   `__fabrika-config.json` serves (Operations, below). Turnstile's origin joins `script-src` and `frame-src` (`frame-src 'self' <origins>`, so a

@@ -315,6 +315,13 @@ describe.skipIf(!hasPostgres)('the challenge', () => {
 		expect(await count('applications')).toBe(1)
 	})
 
+	test("Turnstile's test-widget token is single use too: only app dev admits it again", async () => {
+		const app = start()
+		expect((await apply(app, '203.0.113.72', { challengeToken: 'XXXX.DUMMY.TOKEN.XXXX' })).status).toBe(200)
+		expect((await apply(app, '203.0.113.73', { challengeToken: 'XXXX.DUMMY.TOKEN.XXXX' })).status).toBe(400)
+		expect(await count('applications')).toBe(1)
+	})
+
 	test("refused challenges do not take from the form's ceiling", async () => {
 		const verify = siteverify()
 		verify.answer = () => Response.json({ success: false, 'error-codes': ['invalid-input-response'] })

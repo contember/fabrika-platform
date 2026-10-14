@@ -105,7 +105,8 @@ src/
                       resolves the key of a link it issued; it lists the invitations it sent (the dev mail view)
     dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract;
                       DEV_OUTBOX_ORIGIN and the DevOutside the seed reads the dev outbox through
-    challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default
+    challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default;
+                      TURNSTILE_TEST_TOKEN, the test widget's token devKit admits at every submission
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
@@ -622,7 +623,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   a byte budget and no redirect; it passes only `success` for the request's host, the form's name as `action`
   and a fresh `challenge_ts`. A token the visitor got wrong is 400 (`challenge_failed`); an unreachable provider or
   one that refuses the secret is a 503 `ServerFault`. A passed token's digest is recorded under the form
-  (`recordChallenge`): a second use is a replay, whatever the provider answers. The secret is the application
+  (`recordChallenge`): a second use is a replay, whatever the provider answers. Only `devKit` exempts one token
+  (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes); never set it outside `app dev`. The secret is the application
   variable the contract names (`challenge.secret`), read by `boot`, which refuses to start without it; never put
   the value in the contract or a log.
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the

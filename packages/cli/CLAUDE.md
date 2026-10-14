@@ -144,7 +144,8 @@ arguments and reports.
     variables over the environment's; the dev outbox replaces the process's `fetch` for `DEV_OUTBOX_ORIGIN`
     (`https://outbox.invalid`) only, keeps each request's method, path, content type and body (never a header), and
     answers 200; the seed reads it as its second argument and the mail view lists it. A form's challenge passes
-    (`devKit`'s `passingChallenge`).
+    (`devKit`'s `passingChallenge`), and Turnstile's test-widget token passes at every submission
+    (`TURNSTILE_TEST_TOKEN`); any other token is single use.
   - The routes under `/__fabrika/dev`: the picker, `as` (a persona, a role in a scope value, an accepted invitee, or
     anonymous; it sets the cookie the application never sees), `accept` (an invitation the stand-in IAM sent),
     `state` (the toolbar's JSON), `toolbar.js` and `outbox/<id>` (a captured message, as text). Every `text/html` 200 of an SPA or link mount gets the toolbar's
