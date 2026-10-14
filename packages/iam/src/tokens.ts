@@ -27,7 +27,7 @@ import {
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { sessionUsable } from './auth'
-import type { CredentialGrantRow, CredentialRow } from './db'
+import type { CredentialGrantRow, CredentialRow, PrincipalRow } from './db'
 import { principalStatus } from './db'
 import type { Env } from './env'
 import { resolvePermissionsAt } from './resolve'
@@ -87,6 +87,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 			subject: principal.id,
 			type: principal.type,
 			label: principal.label,
+			...mailboxClaim(principal),
 			permissions,
 			issuedAt: now,
 			expiresAt,
@@ -139,6 +140,7 @@ export async function mintFromKey(
 			...(effective.type === undefined ? {} : { type: effective.type }),
 			...(effective.workload === undefined ? {} : { workload: effective.workload }),
 			label: effective.label,
+			...(effective.email === undefined ? {} : { email: effective.email }),
 			permissions: effective.permissions,
 			...(effective.link === undefined ? {} : { link: effective.link }),
 			issuedAt: now,
@@ -206,6 +208,8 @@ export type ResolvedCredential =
 		/** A workload principal's name (`job`, `webhook`), or a connector's consuming application (`app`). */
 		workload?: string
 		label: string | null
+		/** A user principal's mailbox. */
+		email?: string
 		permissions: PermissionEntry[]
 		link?: LinkTokenClaims
 	}
@@ -274,7 +278,15 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	// Inline grants on a bound credential are a DOWNSCOPE restriction: keep only what the principal
 	// actually holds (effective = resolve(principal) ∩ inline). No inline → the principal's full set.
 	const permissions = inline.length === 0 ? resolved : inline.filter((e) => permits(resolved, e.action, e.scope ?? undefined))
-	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, permissions }
+	return { ok: true, subject: principal.id, type: principal.type, label: principal.label, ...mailboxClaim(principal), permissions }
+}
+
+/**
+ * A user's mailbox for its token: `principals.email`, normalized by `PrincipalRepository`, the address the person signs
+ * in with. An application mails it as `ctx.principal.email`, so it is never `label`, the spelling the person sees.
+ */
+function mailboxClaim(principal: PrincipalRow): { email?: string } {
+	return principal.type === 'user' && principal.email !== null ? { email: principal.email } : {}
 }
 
 /** A `credential_grants` row → a `PermissionEntry` (source 'grant'; both scope cols null = global). */

@@ -4,7 +4,7 @@ import { createLocalJWKSet, jwtVerify } from 'jose'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
 import { mintFromKey, mintToken } from '../tokens'
-import { createHarness, seedInlineGrant, seedUser } from './helpers/harness'
+import { createHarness, seedInlineGrant, seedService, seedUser } from './helpers/harness'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const FUTURE = Math.floor(Date.now() / 1000) + 3600
@@ -239,5 +239,40 @@ describe('the access token size bound', () => {
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'narrow' })
 		expect(result.ok).toBe(true)
 		if (result.ok) expect(result.token.length).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
+	})
+})
+
+describe("a user token carries the principal's mailbox", () => {
+	async function claimsOf(token: string, app: string) {
+		const { payload } = await jwtVerify(token, createLocalJWKSet((await getSigner(ENV)).jwks()), { issuer: 'https://propustka.test', audience: app })
+		return parseAccessClaims(payload)
+	}
+
+	test('a session mints the mailbox IAM stores beside the spelling it labels the person with', async () => {
+		const h = createHarness()
+		const principalId = seedUser(h.sqlite, { sub: 'g-ann', email: 'ann@b.cz', label: 'Ann@B.cz' })
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session: await h.signSession(principalId), requestId: 'r' })
+		if (!result.ok) throw new Error('expected ok')
+		const claims = await claimsOf(result.token, 'example-app')
+		expect(claims?.email).toBe('ann@b.cz')
+		expect(claims?.label).toBe('Ann@B.cz')
+	})
+
+	test("a key bound to the person carries it too, and a service's key none", async () => {
+		const h = createHarness()
+		const person = seedUser(h.sqlite, { sub: 'g-key', email: 'key@b.cz' })
+		const machine = seedService(h.sqlite, { commonName: 'ci' })
+		for (const [principalId, key] of [[person, 'px_person-key'], [machine, 'px_service-key']] as const) {
+			await h.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId, issuedBy: person, grants: [] })
+		}
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const personal = await mintFromKey(services, ENV, { app: 'example-app', key: 'px_person-key', requestId: 'r' })
+		const scripted = await mintFromKey(services, ENV, { app: 'example-app', key: 'px_service-key', requestId: 'r' })
+		if (!personal.result.ok || !scripted.result.ok) throw new Error('expected ok')
+		expect((await claimsOf(personal.result.token, 'example-app'))?.email).toBe('key@b.cz')
+		const service = await claimsOf(scripted.result.token, 'example-app')
+		expect(service?.ptype).toBe('service')
+		expect(service?.email).toBeUndefined()
 	})
 })

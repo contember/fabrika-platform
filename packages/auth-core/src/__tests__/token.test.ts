@@ -229,3 +229,42 @@ describe('workload claims', () => {
 		}
 	})
 })
+
+describe('the mailbox of a user token', () => {
+	const userParams = {
+		iss: ISS,
+		app: 'notes@prod',
+		subject: 'user-1',
+		type: 'user' as const,
+		label: 'Ann@Example.com',
+		permissions: perms,
+		issuedAt: 1,
+		expiresAt: 2,
+	}
+
+	test("a user token carries the principal's mailbox beside its spelling, and it round-trips", () => {
+		const built = buildAccessClaims({ ...userParams, email: 'ann@example.com' })
+		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(built)))
+		expect(parsed?.email).toBe('ann@example.com')
+		expect(parsed?.label).toBe('Ann@Example.com')
+		expect(parseAccessClaims(JSON.parse(JSON.stringify(buildAccessClaims(userParams))))?.email).toBeUndefined()
+	})
+
+	test('only a user token carries one', () => {
+		expect(() => buildAccessClaims({ ...userParams, type: 'service', email: 'ann@example.com' })).toThrow()
+		expect(() => buildAccessClaims({ ...userParams, type: undefined, email: 'ann@example.com' })).toThrow()
+		const service = buildAccessClaims({ ...userParams, type: 'service' })
+		expect(parseAccessClaims({ ...service, email: 'ann@example.com' })).toBeNull()
+		const anonymous = buildAccessClaims({ ...userParams, type: undefined })
+		expect(parseAccessClaims({ ...anonymous, email: 'ann@example.com' })).toBeNull()
+		const job = buildAccessClaims({ ...userParams, type: 'job', workload: 'digest' })
+		expect(parseAccessClaims({ ...job, email: 'ann@example.com' })).toBeNull()
+	})
+
+	test('a mailbox that is not normalized, not a string or no address rejects the whole token', () => {
+		for (const email of ['Ann@Example.com', ' ann@example.com', '', 'ann', 7, null]) {
+			expect(parseAccessClaims({ ...buildAccessClaims(userParams), email })).toBeNull()
+		}
+		expect(() => buildAccessClaims({ ...userParams, email: 'Ann@Example.com' })).toThrow()
+	})
+})

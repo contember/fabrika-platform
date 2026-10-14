@@ -23,6 +23,7 @@
  */
 
 import { numberField, prop, stringField } from './json'
+import { isNormalizedMailbox } from './membership'
 import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
 import type { ResolvedPrincipal } from './rpc'
 import { isWorkloadKind, type PermissionEntry, type PermissionSource, type Scope, type TokenPrincipalType } from './types'
@@ -104,6 +105,11 @@ export interface AccessTokenClaims {
 	workload?: string
 	/** Audit actor label — the principal's label, or the credential label, or null (anonymous). */
 	label: string | null
+	/**
+	 * Only on a user token: the principal's mailbox as IAM stores it (`normalizeEmailIdentity`), the address its
+	 * sign-in or invitation verified. A user's `label` is that address as it was spelled, never a substitute for it.
+	 */
+	email?: string
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
 	oauth?: OAuthTokenClaims
 	/** Present only on a share-link token, which has no `ptype`: `sub` is then the link key's id. */
@@ -183,6 +189,8 @@ export interface AccessTokenParams {
 	workload?: string
 	/** Audit actor label, or null for an unlabeled anonymous token. */
 	label: string | null
+	/** A user principal's normalized mailbox; refused with any other `type`. */
+	email?: string
 	permissions: PermissionEntry[]
 	issuedAt: number
 	expiresAt: number
@@ -256,6 +264,12 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 	if (params.workload !== undefined) {
 		claims.workload = params.workload
 	}
+	if (params.email !== undefined) {
+		if (params.type !== 'user' || !isNormalizedMailbox(params.email)) {
+			throw new Error('Only a user token carries a mailbox, and only a normalized one')
+		}
+		claims.email = params.email
+	}
 	if (params.link !== undefined) {
 		if (params.type !== undefined) throw new Error('A share-link token has no principal type')
 		claims.link = { mount: params.link.mount, chain: params.link.chain.map((scope) => ({ type: scope.type, value: scope.value })) }
@@ -297,12 +311,19 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (workload === undefined) {
 		return null
 	}
+	const email = parseEmail(prop(payload, 'email'), ptype)
+	if (email === undefined) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
 	}
 	if (workload !== null) {
 		claims.workload = workload
+	}
+	if (email !== null) {
+		claims.email = email
 	}
 	if (oauth !== null) {
 		claims.oauth = oauth
@@ -326,6 +347,14 @@ function parseWorkload(value: unknown, ptype: TokenPrincipalType | null): string
 		return value === undefined ? null : undefined
 	}
 	return typeof value === 'string' && isWorkloadName(value) ? value : undefined
+}
+
+/** Absent → null; a normalized mailbox on a user token → it; anything else → undefined. */
+function parseEmail(value: unknown, ptype: TokenPrincipalType | null): string | null | undefined {
+	if (value === undefined) {
+		return null
+	}
+	return ptype === 'user' && typeof value === 'string' && isNormalizedMailbox(value) ? value : undefined
 }
 
 /** Absent → null; a mount and a non-empty chain → the claims; anything else → undefined. */

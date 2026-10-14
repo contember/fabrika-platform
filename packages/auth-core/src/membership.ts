@@ -139,6 +139,11 @@ export function normalizeEmailIdentity(value: string): string {
 	return value.normalize('NFC').trim().toLocaleLowerCase('en-US')
 }
 
+/** A mailbox as IAM stores it: already normalized, and an address. */
+export function isNormalizedMailbox(value: string): boolean {
+	return value === normalizeEmailIdentity(value) && /^[^\s@]+@[^\s@]+$/.test(value)
+}
+
 /** The normalized address IAM invites for `address`, or `null` for one it refuses as no address. */
 export function invitedAddress(address: string): string | null {
 	const email = normalizeEmailIdentity(address)

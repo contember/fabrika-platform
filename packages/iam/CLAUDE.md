@@ -85,7 +85,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   equality. Never ask the engine to case-fold an identity — SQLite's `LOWER()` is ASCII-only where
   Postgres's is full Unicode, so `LOWER(email) = LOWER(?)` used to make the BACKEND decide whether two
   addresses were one person. `principal_email_claims` is the second lock over the same rule and moves
-  with a principal whose address changes.
+  with a principal whose address changes. A user's token carries `principals.email` as its `email` claim
+  (`mailboxClaim` in `src/tokens.ts`, on a session's and a user key's token alike), which an application reads as
+  `ctx.principal.email` and mails; never put `label` there.
 - **The OIDC flight cookie is signed** (`Signer.signInternal`, audience `fabrika:iam:oidc-flight`).
   Its `state` cannot authenticate itself — whoever writes the cookie writes `state` too — and
   `Path=/auth` does not stop a sibling host under a shared domain from tossing in a second one. Every

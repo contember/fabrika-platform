@@ -62,6 +62,10 @@ bun test               # app-environment · canonical-path · contract-canonical
   workload token is. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job, webhook and connector families
   (`workloadKeyVariable`, `isWorkloadKeyVariable`; `connectVariables`, `isConnectKeyVariable`, `isConnectUrlVariable`).
   `RpcCaller` is `human | machine`: an `app:<id>` reaches only an export row, a `link` only its own link mount.
+- **Only a user token carries `email`, the principal's normalized mailbox** (`isNormalizedMailbox`), beside `label`,
+  its spelling. `buildAccessClaims` throws and `parseAccessClaims` refuses the token for an `email` on any other kind
+  or one that is not normalized. The claim is optional here; `@fabrika/app` refuses a `human` caller whose token lacks
+  it, so an application on this version needs an IAM that mints it.
 - **A share-link token has no `ptype` and carries `link: { mount, chain }`.** `principalKind` reads the
   kind ADR-0022 rule 3 checks (`user`, `service`, `link`); a plain anonymous token has none, so no
   contract mount admits it. `parseAccessClaims` rejects a link claim next to a `ptype` or OAuth claims.
