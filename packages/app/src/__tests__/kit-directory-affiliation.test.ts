@@ -17,6 +17,7 @@ function caller(id: string, affiliation: TestCaller['affiliation'], actions: rea
 		link: null,
 		id,
 		label: `${id}@notes.test`,
+		email: `${id}@notes.test`,
 		affiliation,
 		disabled: false,
 		perms: actions.map((action) => ({ action, scope: W1, source: 'grant' })),

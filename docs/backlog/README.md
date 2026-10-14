@@ -70,7 +70,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [144](144-the-typed-client-has-no-file-collections-and-no-answer-type.md) — `createClient` has no file rows and exports no type of a procedure's input or answer.
 - [145](145-a-link-collection-serves-every-link-mount-of-its-dimension.md) — `link: true` serves every link mount of the owner's dimension; it cannot name the mounts.
 - [146](146-a-request-handler-has-no-abort-signal.md) — A request handler has no `ctx.signal`, and an outbound call fails the generated cases.
-- [147](147-a-handler-and-a-page-do-not-know-the-callers-own-address.md) — No trusted caller address in `ctx.principal`, and a page learns nothing about who is signed in.
 - [148](148-the-checker-reads-a-local-binding-as-a-global.md) — A local `window` or `fit` is refused as the global or the focused test of its name.
 - [149](149-a-job-drains-its-inbox-and-outbox-without-per-record-attempts.md) — The intake recipe drains unbounded, stops on one bad record, and sends no idempotency key.
 - [150](150-the-csp-has-no-style-or-font-origin.md) — The contract's `csp` cannot extend `style-src` or `font-src`.

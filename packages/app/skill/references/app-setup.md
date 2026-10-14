@@ -263,6 +263,24 @@ if (!built.success) {
 - The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts` and its own modules; never a slice,
   `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
 - Set text with `textContent`, never `innerHTML`. Same-origin calls carry the session cookie.
+- **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
+  `{ label, email, actions: { app, scopes } }`, read by `parsePageCaller` (`@fabrika/app/client`). `app` lists the
+  actions held as a global grant, `scopes` each value with its own (`{ type, value, actions }`); a pattern grant is
+  listed as the contract's actions it covers. It comes from the token and asks IAM nothing. Use it to greet the person
+  and to show or hide a control, never as the check: every endpoint decides again, so a hidden button is no
+  protection. A public SPA answers it 401, because its pages arrive without a token, signed in or not.
+
+```ts web/caller.ts
+import { parsePageCaller } from '@fabrika/app/client'
+
+/** Who the page's person is, and whether they hold `action` app-wide. */
+export const signedIn = async (action: string) => {
+	const response = await fetch('/__fabrika-me.json')
+	if (!response.ok) return null
+	const caller = parsePageCaller(await response.json())
+	return { email: caller.email, holds: caller.actions.app.includes(action) }
+}
+```
 
 ## Ignored files
 

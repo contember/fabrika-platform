@@ -791,6 +791,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
 			release: options.environment.framework['FABRIKA_RELEASE']?.trim() || null,
 		}),
+		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 	})
 	return Object.freeze({ fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec), jobs: jobs.jobs })
 }

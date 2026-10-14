@@ -1222,6 +1222,36 @@ CONFIGURATION rather than its runtime environment: the deploy makes each declare
 the app's config is compiled, and the config decides what to do with it. A variable the artifact does
 not declare is refused where it is set.
 
+## Who calls
+
+A handler's `ctx.principal` comes from the verified token. A `human` caller is
+`{ kind: 'user', id, label, email }`: `email` is the token's `email` claim, the person's
+mailbox as IAM stores it (lower-cased), and `label` the spelling IAM displays. A `machine`
+caller is `{ kind: 'service', id, label }` and has no address, and neither has a link holder or
+a connector. `boot` refuses (401) a `human` token without the claim, so an application on this
+version needs an IAM that mints it.
+
+Every member SPA serves `<prefix>/__fabrika-me.json` to the person its access admitted, from
+the same token and without asking IAM:
+
+```json
+{
+	"label": "Ann@Example.com",
+	"email": "ann@example.com",
+	"actions": {
+		"app": ["positions.read"],
+		"scopes": [{ "type": "org", "value": "acme", "actions": ["tasks.read"] }]
+	}
+}
+```
+
+`app` holds the actions granted globally, `scopes` each value with its own, sorted by
+dimension and value; a pattern grant (`*`, `tasks.*`) is listed as the contract's actions it
+covers. `parsePageCaller` (`@fabrika/app/client`) reads it. It is information for the page,
+never a check: every endpoint decides again. A public SPA answers it 401, because the proxy
+forwards no token to an anonymous kind. The test kit serves it for a test caller, whose
+`email` is `<kind>-<n>@<app>.test` or the `email` option, lower-cased.
+
 ## Browser error reporting
 
 Fabrika supplies an application's Operations ingest settings as two managed

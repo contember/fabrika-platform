@@ -204,8 +204,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   (the framework's other errors are such values); any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
-- Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
-  the caller. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
+- Never take a user, owner or tenant id from the input, nor the caller's own address. The scope comes from the access
+  form; `ctx.principal.id` is the caller, and `ctx.principal.email` its address. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
   anyone outside the org, and its label comes from that answer, never from the input.
 
 ## Off the road: declare it

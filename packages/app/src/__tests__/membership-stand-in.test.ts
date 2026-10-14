@@ -41,7 +41,20 @@ function callersOf(callers: readonly Held[], tokens: ReadonlyMap<string, MintedT
 }
 
 function person(id: string, perms: readonly PermissionEntry[], kind: LabelledTestCaller['kind'] = 'human'): LabelledTestCaller {
-	return { kind, app: null, link: null, id, label: `${id}@notes.test`, affiliation: 'internal', disabled: false, perms, key: `px_${id}`, cookie: null }
+	const email = kind === 'human' ? `${id}@notes.test` : null
+	return {
+		kind,
+		app: null,
+		link: null,
+		id,
+		label: `${id}@notes.test`,
+		email,
+		affiliation: 'internal',
+		disabled: false,
+		perms,
+		key: `px_${id}`,
+		cookie: null,
+	}
 }
 
 const holder: LinkTestCaller = {
@@ -50,6 +63,7 @@ const holder: LinkTestCaller = {
 	link: { mount: 'shared', chain: [NOTE, ACME] },
 	id: 'link-1',
 	label: null,
+	email: null,
 	affiliation: 'internal',
 	disabled: false,
 	perms: [entry('notes.read', NOTE)],

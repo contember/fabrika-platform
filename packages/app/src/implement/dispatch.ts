@@ -32,7 +32,7 @@ import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
-import { BROWSER_CONFIG_FILE, joinPath, WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
+import { BROWSER_CONFIG_FILE, joinPath, PAGE_CALLER_FILE, WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import {
 	BadRequestError,
@@ -66,7 +66,7 @@ import {
 	type MembershipRequest,
 	type ReadDirectory,
 } from './membership'
-import { presentedBy, type Principal } from './principal'
+import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
 import type { WorkloadCredential } from './workload'
@@ -201,6 +201,8 @@ export interface RuntimeParts {
 	readonly kick: (job: string) => Promise<void>
 	/** What every SPA mount answers at `<prefix>/__fabrika-config.json`, and nothing else of the environment. */
 	readonly browserConfig: BrowserConfig
+	/** The contract's actions, sorted: what a caller document lists a pattern grant as. */
+	readonly actions: readonly string[]
 }
 
 /** The browser-safe Operations settings: the ingest DSN (a public key) and the release, or `null` without them. */
@@ -284,11 +286,11 @@ export class ContractRuntime {
 				case 'health':
 					return jsonResponse({ status: 'ok' }, 200)
 				case 'spa': {
-					await this.#authorize(served.row, request)
-					return await this.#spaFile(served, request)
+					const caller = await this.#authorize(served.row, request)
+					return await this.#spaFile(served, request, caller)
 				}
 				case 'public-spa':
-					return await this.#spaFile(served, request)
+					return await this.#spaFile(served, request, null)
 				case 'link-spa':
 					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
 						return bootstrapResponse()
@@ -318,10 +320,21 @@ export class ContractRuntime {
 		}
 	}
 
-	/** An SPA mount's files, and at `<prefix>/__fabrika-config.json` the browser's Operations settings. */
-	async #spaFile(served: { readonly prefix: string; readonly dir: string }, request: Request): Promise<Response> {
-		if (rawRequestTarget(request.url).pathname === joinPath(served.prefix, BROWSER_CONFIG_FILE)) {
+	/**
+	 * An SPA mount's files, at `<prefix>/__fabrika-config.json` the browser's Operations settings, and at
+	 * `<prefix>/__fabrika-me.json` the caller document of the person the mount admitted. A public mount admits no one:
+	 * the proxy forwards no token there, so it cannot say whether the visitor is signed in.
+	 */
+	async #spaFile(served: { readonly prefix: string; readonly dir: string }, request: Request, caller: Caller | null): Promise<Response> {
+		const path = rawRequestTarget(request.url).pathname
+		if (path === joinPath(served.prefix, BROWSER_CONFIG_FILE)) {
 			return jsonResponse(this.#parts.browserConfig, 200)
+		}
+		if (path === joinPath(served.prefix, PAGE_CALLER_FILE)) {
+			if (caller === null || caller.principal.kind !== 'user') {
+				throw new UnauthorizedError('A public page carries no caller')
+			}
+			return jsonResponse(pageCallerOf(caller.principal, caller.perms, this.#parts.actions), 200)
 		}
 		return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
 	}
@@ -385,8 +398,12 @@ export class ContractRuntime {
 			throw new UnauthorizedError('The credential does not verify')
 		}
 		const presented = presentedBy(verified.claims)
-		if (presented === null || !row.callers.includes(presented.caller)) {
-			throw new ForbiddenError(`A ${presented?.caller ?? 'resource'} caller cannot call '${row.id}' (callers: ${row.callers.join(', ')})`)
+		if (presented === 'no_mailbox') {
+			throw new UnauthorizedError('The credential names a person without an address')
+		}
+		if (presented === 'no_caller' || !row.callers.includes(presented.caller)) {
+			const caller = presented === 'no_caller' ? 'resource' : presented.caller
+			throw new ForbiddenError(`A ${caller} caller cannot call '${row.id}' (callers: ${row.callers.join(', ')})`)
 		}
 		if (!satisfies(row.requirement, verified.claims.perms)) {
 			throw new ForbiddenError(`'${row.id}' needs ${describeRequirement(row)}, and the caller holds none`)

@@ -10,9 +10,9 @@ import { introspectCatalog, renderSchema } from '@fabrika/db/codegen'
 import { testDatabase } from '@fabrika/db/testing'
 import { classifyMigrations } from '@fabrika/platform-node/sql'
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
 import { z } from 'zod/v4'
@@ -30,8 +30,8 @@ const BASE = ['SKILL.md', 'references/app-setup.md', 'references/table-and-migra
  * A reference file that is an application of its own: the directory of `skill-app/` that holds its catalog (`null` for
  * one without tables), and the base's files it uses as they are.
  */
-const STANDALONE: Readonly<Record<string, { readonly catalog: string | null; readonly shared: readonly string[] }>> = {
-	'references/public-intake.md': { catalog: 'public-intake', shared: ['package.json', 'tsconfig.json', 'src/app-kit.ts'] },
+const STANDALONE: Readonly<Record<string, { readonly catalog: string | null; readonly shared: readonly string[]; readonly run?: true }>> = {
+	'references/public-intake.md': { catalog: 'public-intake', shared: ['package.json', 'tsconfig.json', 'src/app-kit.ts'], run: true },
 	'references/start.md': { catalog: null, shared: ['package.json', 'tsconfig.json'] },
 }
 
@@ -201,6 +201,38 @@ describe('the code blocks of the agent skill', () => {
 		test(`${app.name} compiles clean as an application of its own`, () => {
 			const shared = [...base].filter(([path]) => app.shared.includes(path))
 			expect(compile(app, new Map([...shared, ...filesOf(app.sources)]))).toEqual([])
+		}, 120_000)
+	}
+
+	// A recipe whose tests prove what it promises runs them: its files are written under the template, whose
+	// node_modules resolve the workspace's packages, and `bun test` runs there on a throwaway schema.
+	for (const app of others.filter((app) => STANDALONE[app.name]?.run === true)) {
+		test(`${app.name}: its own tests pass on Postgres`, () => {
+			if ((process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '') === '') {
+				console.warn(`skill-code.test.ts did not run the tests of ${app.name}: set FABRIKA_TEST_POSTGRES_URL`)
+				return
+			}
+			const directory = mkdtempSync(join(templateDir, '.skill-run-'))
+			try {
+				const shared = [...base].filter(([path]) => app.shared.includes(path))
+				for (const [path, code] of [...generatedFiles(app), ...shared, ...filesOf(app.sources)]) {
+					mkdirSync(dirname(join(directory, path)), { recursive: true })
+					writeFileSync(join(directory, path), code)
+				}
+				const run = Bun.spawnSync(['bun', 'test', '--isolate', 'src/'], {
+					cwd: directory,
+					env: { ...process.env, FABRIKA_TEST_POSTGRES_REQUIRED: '1' },
+				})
+				const output = `${run.stdout.toString()}${run.stderr.toString()}`
+				if (run.exitCode !== 0) console.error(output)
+				expect({ exitCode: run.exitCode, failed: / [1-9]\d* fail/.test(output), passed: / [1-9]\d* pass/.test(output) }).toEqual({
+					exitCode: 0,
+					failed: false,
+					passed: true,
+				})
+			} finally {
+				rmSync(directory, { recursive: true })
+			}
 		}, 120_000)
 	}
 

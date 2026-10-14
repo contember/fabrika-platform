@@ -13,8 +13,10 @@ import {
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	type IamMembershipRpc,
+	isNormalizedMailbox,
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
+	normalizeEmailIdentity,
 	PROXY_TOKEN_HEADER,
 	SESSION_COOKIE,
 	TOKEN_ALG,
@@ -41,6 +43,7 @@ import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import {
 	type LabelledTestCaller,
 	type LinkTestCaller,
+	type PersonTestCaller,
 	resolveGrants,
 	type TestCaller,
 	type TestCallerOptions,
@@ -106,6 +109,7 @@ export interface TestKit<C extends AnyContract> {
 	readonly artifact: ContractArtifact
 	/** A new principal of the test IAM holding `grants`, with a fresh credential; only a link holder has no label. */
 	testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
+	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: 'human' }): PersonTestCaller
 	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] }): LabelledTestCaller
 	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
 	/**
@@ -279,6 +283,7 @@ function bootTestKit<C extends AnyContract>(
 	let issued = 0
 
 	function testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
+	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: 'human' }): PersonTestCaller
 	function testCaller(
 		grants: readonly TestGrant<C>[],
 		options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] },
@@ -295,6 +300,13 @@ function bootTestKit<C extends AnyContract>(
 		}
 		if (callerOptions.link !== undefined && kind !== 'link') {
 			throw new Error("only a link holder's key is bound to an object: testCaller(grants, { kind: 'link', link: { mount, chain } })")
+		}
+		if (callerOptions.email !== undefined && kind !== 'human') {
+			throw new Error('only a person has an address: testCaller(grants, { email }) is a human')
+		}
+		const email = kind === 'human' ? normalizeEmailIdentity(callerOptions.email ?? `${kind}-${issued}@${name}.test`) : null
+		if (email !== null && !isNormalizedMailbox(email)) {
+			throw new Error(`a test caller's email is an address, not '${email}'`)
 		}
 		const affiliation = callerOptions.affiliation ?? 'internal'
 		if (affiliation === 'external') {
@@ -327,11 +339,12 @@ function bootTestKit<C extends AnyContract>(
 				kind,
 				app: null,
 				label: null,
+				email: null,
 				link: link === undefined
 					? null
 					: Object.freeze({ mount: link.mount, chain: Object.freeze(link.chain.map((scope) => Object.freeze({ ...scope }))) }),
 			})
-			: Object.freeze({ ...credentials, kind, app: consumer, label: callerOptions.label ?? `${kind}-${issued}@${name}.test`, link: null })
+			: Object.freeze({ ...credentials, kind, app: consumer, label: callerOptions.label ?? `${kind}-${issued}@${name}.test`, email, link: null })
 		memberships.set(
 			caller,
 			grants.flatMap((grant) => ('role' in grant ? [{ role: grant.role, scope: grant.scope ?? null }] : [])),
@@ -358,6 +371,7 @@ function bootTestKit<C extends AnyContract>(
 			...(caller.app === null ? {} : { workload: caller.app }),
 			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
+			...(caller.email === null ? {} : { email: caller.email }),
 			permissions: [...caller.perms],
 			issuedAt: now,
 			expiresAt: now + TOKEN_TTL_SECONDS,

@@ -446,6 +446,13 @@ refuses to start on a mismatch.
 The publish order stays proxy, application, IAM. Because of the digest check the order is safe in both
 directions. During a switch, changed endpoints answer 503 and new endpoints answer 404.
 
+**The caller document is information, not a decision.** Every member SPA answers `<prefix>/__fabrika-me.json` under
+the mount's own access, from the token the proxy injected and nothing else: the person's label and mailbox, the
+actions held as global grants, and each scope value with its actions, a pattern grant listed as the contract's actions
+it covers. A page greets the person and shows or hides controls by it; every endpoint still decides on its own. A
+public SPA answers it 401: the proxy forwards no token to an anonymous kind, so the application cannot tell a signed-in
+visitor from an anonymous one.
+
 An app owns the check an endpoint row cannot make: `can(action, scope)` over an
 application-owned object, resolved from validated request data. The framework of ADR-0012 also repeats
 the caller-kind and requirement checks. These checks are authorization. They never replace the proxy's
@@ -481,6 +488,11 @@ still refuses any `Authorization` header, as authorization.
   the bootstrap `admin` grant reach only a registry of platform audiences, separate from
   `adminAudiences`.
 - **An application token cannot call `issueKey`, `revokeKey` or `listPrincipals`**, on any transport.
+- **A user token carries the person's mailbox.** Beside `label`, the address as the person or an administrator spelled
+  it, a token of `ptype: 'user'` carries `email`: `principals.email`, normalized, on a session's token and a user key's
+  alike. The framework hands it to a handler as `ctx.principal.email`, the one address a "send it to me" action
+  mails; a service, workload or link token carries none, and the parser refuses one there. A contract application
+  refuses (401) a `human` token without it, so an application on this version needs an IAM that mints it.
 - **Delegation grants.** For an endpoint whose action is a dimension's `members.manage`, or that
   creates a value of a dimension, the proxy obtains a single-use grant bound to the endpoint and the
   request. IAM requires it for scope creation, assignment and revocation, so a handler on another
@@ -617,5 +629,11 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
 - **A shared parent-domain session cookie, or every app on one hostname.** The first fails on
   `*.zerops.app` and forces apps under a platform domain. The second breaks routing by `Host` and loses
   cookie and CORS isolation between apps.
+- **Promise that a user's `label` is its address.** Rejected: `label` is the spelling, not the normalized mailbox, and
+  every writer of a label would carry the promise. The `email` claim is the column IAM matches identities by.
+- **Ask IAM who the page's person is.** Rejected: the token already states the label, the mailbox and the grants, and
+  an IAM call per page load would be a second source that disagrees with the token for up to its lifetime.
+- **Answer `{ signedIn: false }` to an anonymous caller of the caller document.** Rejected: a public page arrives
+  without a token whether its visitor is signed in or not, so the answer would claim what the application cannot know.
 - **A separate Cloudflare entrypoint for redemption.** Real churn for little gain; the code's own
   properties stop replay.

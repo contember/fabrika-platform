@@ -196,8 +196,8 @@ export const tasks = app.group({ callers: ['human'] }, (r) => ({
   (the framework's other errors are such values); any other throw is a 500.
 - One action per endpoint. A column that another action writes gets its own write action and its own endpoint
   (`assign` above). Never check a second action inside a handler: split the endpoint.
-- Never take a user, owner or tenant id from the input. The scope comes from the access form; `ctx.principal.id` is
-  the caller. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
+- Never take a user, owner or tenant id from the input, nor the caller's own address. The scope comes from the access
+  form; `ctx.principal.id` is the caller, and `ctx.principal.email` its address. A person someone picks (`assign` above) is checked with `ctx.members.get(id)`, which answers `null` for
   anyone outside the org, and its label comes from that answer, never from the input.
 
 ## Off the road: declare it
@@ -556,6 +556,24 @@ if (!built.success) {
 - The SPA imports `@fabrika/app/client`, `fabrika.contract.ts`, `src/schemas.ts` and its own modules; never a slice,
   `src/db/` or a Bun or Node module. The plugin loads the contract without its handlers.
 - Set text with `textContent`, never `innerHTML`. Same-origin calls carry the session cookie.
+- **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
+  `{ label, email, actions: { app, scopes } }`, read by `parsePageCaller` (`@fabrika/app/client`). `app` lists the
+  actions held as a global grant, `scopes` each value with its own (`{ type, value, actions }`); a pattern grant is
+  listed as the contract's actions it covers. It comes from the token and asks IAM nothing. Use it to greet the person
+  and to show or hide a control, never as the check: every endpoint decides again, so a hidden button is no
+  protection. A public SPA answers it 401, because its pages arrive without a token, signed in or not.
+
+```ts web/caller.ts
+import { parsePageCaller } from '@fabrika/app/client'
+
+/** Who the page's person is, and whether they hold `action` app-wide. */
+export const signedIn = async (action: string) => {
+	const response = await fetch('/__fabrika-me.json')
+	if (!response.ok) return null
+	const caller = parsePageCaller(await response.json())
+	return { email: caller.email, holds: caller.actions.app.includes(action) }
+}
+```
 
 ## Ignored files
 
@@ -610,8 +628,11 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 | `{ action, app: true }`                        | data of the whole application     | `app.<table>.list`, `.get(id)`; every row of a scoped table | `app.<table>.insert(v)`, `.update(id, v, …)`, `.remove(id, …)` of an application table      |
 | `{ member: true }`                             | any member, no application data   | nothing                                                     | nothing                                                                                     |
 
-- Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
-  for a `human` caller) and `ctx.requestId`.
+- Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal`
+  (`{ kind: 'user', id, label, email }` for a `human` caller) and `ctx.requestId`.
+- `ctx.principal.email` is the person's own address as IAM knows it, lower-cased, from the token. Mail "send it to me"
+  there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
+  (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
@@ -1493,7 +1514,8 @@ export const contract = app.contract((c) => ({
 
 A visitor who has no account submits a form on a public page, confirms the e-mail address through a link, attaches
 files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code list of
-open positions, and HR exports every candidate with an audit row. This file is an application of its own (`intake`);
+open positions, HR exports every candidate with an audit row, and a member checks the mail setup with a test e-mail to
+their own address. This file is an application of its own (`intake`);
 its `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
 
 Every piece lets in someone who is not signed in, so ask the human before you build it, and say what each one lets the
@@ -1727,6 +1749,7 @@ import { intake } from './src/intake/endpoints'
 import { portal } from './src/portal/endpoints'
 import { positions } from './src/positions/endpoints'
 import { Register, Resend } from './src/schemas'
+import { settings } from './src/settings/endpoints'
 
 export const contract = app.contract((c) => ({
 	site: c.spa('/', { dir: 'dist/site', access: { public: true } }),
@@ -1745,7 +1768,7 @@ export const contract = app.contract((c) => ({
 		then: 'intake',
 	}),
 	portal,
-	api: c.rpc('/api', { candidates, positions }),
+	api: c.rpc('/api', { candidates, positions, settings }),
 	hr: c.spa('/hr', {
 		dir: 'dist/hr',
 		access: { action: 'candidates.read', over: 'candidate' },
@@ -1803,6 +1826,14 @@ import { defineDeps } from '@fabrika/app/implement'
 export interface Mailer {
 	/** Sends the link to `to`; throws when the provider refuses, and gives up once `signal` aborts. */
 	sendLink(to: string, url: string, signal: AbortSignal): Promise<void>
+	/** Sends a fixed test message to `to`, the same way. */
+	sendTest(to: string, signal: AbortSignal): Promise<void>
+}
+
+interface Message {
+	readonly to: string
+	readonly subject: string
+	readonly text: string
 }
 
 /** Read when a mail is sent: the generated tests boot the application without its variables. */
@@ -1814,27 +1845,38 @@ const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	return value
 }
 
-export const mailer = defineDeps((env): Mailer => ({
-	async sendLink(to, url, signal) {
-		const origin = variable(env, 'INTAKE_ORIGIN')
+export const mailer = defineDeps((env): Mailer => {
+	const send = async (message: Message, signal: AbortSignal) => {
 		const response = await fetch(variable(env, 'MAIL_API_URL'), {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
 				'Content-Type': 'application/json',
 			},
-			body: JSON.stringify({
-				to,
-				subject: 'Confirm your address',
-				text: `Open ${origin}${url} to confirm your address.`,
-			}),
+			body: JSON.stringify(message),
 			signal,
 		})
 		if (!response.ok) {
 			throw new Error(`the mail provider answered ${response.status}`)
 		}
-	},
-}))
+	}
+	return {
+		sendLink: (to, url, signal) =>
+			send({
+				to,
+				subject: 'Confirm your address',
+				text: `Open ${
+					variable(env, 'INTAKE_ORIGIN')
+				}${url} to confirm your address.`,
+			}, signal),
+		sendTest: (to, signal) =>
+			send({
+				to,
+				subject: 'A test e-mail from the intake',
+				text: 'The intake can send you e-mail.',
+			}, signal),
+	}
+})
 ```
 
 ```ts src/app.ts
@@ -2408,6 +2450,35 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
 - Only an `app` endpoint reads an application table. A code list that a link holder or a scoped endpoint must read
   is a reference table instead (`references/table-and-migration.md`), changed by a migration.
 
+## A test e-mail to yourself
+
+```ts src/settings/endpoints.ts
+import { z } from 'zod/v4'
+import { app } from '../app-kit'
+import { mailer } from '../mail'
+
+const Sent = z.strictObject({ sentTo: z.string() })
+
+/** How long the provider may take: a request has no signal of its own. */
+const SEND_TIMEOUT_MS = 10000
+
+export const settings = app.group({ callers: ['human'] }, (r) => ({
+	testMail: r.mutation({ output: Sent, access: { member: true } })
+		.handle(async ({ ctx }) => {
+			const to = ctx.principal.email
+			await mailer.get().sendTest(to, AbortSignal.timeout(SEND_TIMEOUT_MS))
+			return { sentTo: to }
+		}),
+}))
+```
+
+- **The address is the caller's, from the token.** `ctx.principal.email` is the person's own address as IAM knows it
+  (lower-cased), so the input has no address field. An input that named one would let any member mail any address
+  past every consent the application asks for. Never take a recipient from the input for "send it to me".
+- `{ member: true }` admits any member of the application and reaches no data: the endpoint mails only the caller.
+  The generated tests give a `member` endpoint no case, so the test below is yours.
+- The page shows the button only to someone signed in: its SPA reads `/hr/__fabrika-me.json` (`references/app-setup.md`).
+
 ## Tests
 
 - The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
@@ -2428,6 +2499,7 @@ export const positions = app.group({ callers: ['human'] }, (r) => ({
 - The e-mail provider is a stand-in too: `testKit(app, { env: { MAIL_API_URL, MAIL_API_KEY: 'test', INTAKE_ORIGIN:
   'https://intake.test' } })` points the mailer at a test URL, which `standInMail()` answers. Call its `restore()` in
   `afterEach`.
+- The test e-mail goes to the caller's own address: the test sends no address and reads the recipient from the stand-in.
 
 ```ts src/__tests__/mail-stand-in.ts
 import { spyOn } from 'bun:test'
@@ -2449,6 +2521,75 @@ export const standInMail = () => {
 		Object.assign(answer, { preconnect: passOn.preconnect }),
 	)
 	return { sent, restore: () => spy.mockRestore() }
+}
+```
+
+```ts src/__tests__/settings.test.ts
+import { createClient } from '@fabrika/app/client'
+import { type IamMembershipRpc, testKit } from '@fabrika/app/testing'
+import { testDatabase } from '@fabrika/db/testing'
+import { MemoryFileObjects } from '@fabrika/platform/testing'
+import { afterAll, afterEach, describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
+import { contract } from '../../fabrika.contract'
+import app from '../app'
+import { MAIL_API_URL, standInMail } from './mail-stand-in'
+
+const postgres = await testDatabase({
+	migrations: new URL('../../db/migrations/', import.meta.url),
+	label: 'settings.test.ts',
+})
+
+/** This test issues no link: every membership request is refused. */
+const refused = (): Promise<{ ok: false; reason: 'not_allowed' }> =>
+	Promise.resolve({ ok: false, reason: 'not_allowed' })
+const membership: IamMembershipRpc = {
+	requestDelegation: refused,
+	createScope: refused,
+	assignMember: refused,
+	revokeMember: refused,
+	listMembers: refused,
+	findMember: refused,
+	issueLink: refused,
+	revokeLink: refused,
+}
+
+const Mail = z.strictObject({
+	to: z.string(),
+	subject: z.string(),
+	text: z.string(),
+})
+
+if (postgres !== null) {
+	afterAll(() => postgres.close())
+	const kit = testKit(app, {
+		database: postgres.database,
+		files: new MemoryFileObjects(),
+		membership,
+		env: {
+			MAIL_API_URL,
+			MAIL_API_KEY: 'test',
+			INTAKE_ORIGIN: 'https://intake.test',
+			TURNSTILE_SECRET: 'test',
+		},
+	})
+	let restore = () => {}
+	afterEach(() => restore())
+
+	describe('the test e-mail', () => {
+		test("goes to the caller's own address, which the call does not name", async () => {
+			const mail = standInMail()
+			restore = mail.restore
+			const lead = kit.testCaller([{ role: 'hr_lead' }], {
+				email: 'Lead@Intake.test',
+			})
+			const api = createClient(contract, 'api', { fetch: kit.browser(lead) })
+			expect(await api.settings.testMail()).toEqual({ sentTo: 'lead@intake.test' })
+			expect(mail.sent.map((body) => Mail.parse(JSON.parse(body)).to)).toEqual([
+				'lead@intake.test',
+			])
+		})
+	})
 }
 ```
 
@@ -3087,6 +3228,10 @@ if (postgres !== null) {
   holder's (`kind: 'link'`) is `null`; it is `ctx.principal.label`, and the directory's label where it shows labels.
   Assert a stored label against `caller.label` or the directory's answer (`members.list` above), never against a
   literal of the default form.
+- A human's `email` is `ctx.principal.email`: `<kind>-<n>@<app>.test` unless you pass `{ email }`, which the kit
+  lower-cases as IAM does (`kit.testCaller(grants, { email: 'Ann@Example.com' })` mails `ann@example.com`). A
+  `machine`, `app` or `link` caller's `email` is `null`. The SPA's `<prefix>/__fabrika-me.json` answers the caller's
+  label, email and actions in the kit as in production (`kit.browser(caller)('/__fabrika-me.json')`).
 - `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
   path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
 - A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`

@@ -72,6 +72,7 @@ src/
   client/             @fabrika/app/client — browser-safe
     contract.ts       createClient: the typed client of a contract mount; download, the call of an attachment procedure
     share.ts          shareKey: the key the share SPA's bootstrap kept
+    caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope or a file
   testing/            @fabrika/app/testing — no test-runner dependency
@@ -243,7 +244,9 @@ src/
 - Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; an SPA serves
   `GET <prefix>/*`, anonymous (kind `public-spa`, no token) with `access: { public: true }`,
   which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release }` (the
-  browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset) and nothing else of the environment; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
+  browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset) and nothing else of the environment, and
+  `<prefix>/__fabrika-me.json` (`PAGE_CALLER_FILE`) with the caller document (`pageCallerOf` in `principal.ts`) under
+  the mount's own access, 401 on a public SPA; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook
@@ -405,7 +408,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   mapping the proxy applies too (`presentedBy` only adds the principal): `ptype:
   'user'` is `human`, `ptype: 'service'` is `machine`, `ptype: 'app'` is `app:<workload>`, an
   anonymous token (a share link) is `link`. A job or webhook token and an OAuth resource token
-  are no caller. Never map a token to a caller kind anywhere else.
+  are no caller. Never map a token to a caller kind anywhere else. A `human` principal's `email` is the token's
+  `email` claim and nothing else (never derived from `label`); a `human` token without it is 401 (`no_mailbox`).
+- **The caller document is information for the page, never a check.** `pageCallerOf` lists the token's grants as
+  the contract's actions each covers (a pattern included), global ones apart from each scope value's, and asks IAM
+  nothing. Never let an endpoint, or the framework, decide by it.
 - **Admission** treats a request without an `Authorization` header as a session
   request: when it is not a `GET` it needs `Sec-Fetch-Site: same-origin`. A
   cross-site page cannot add that header without a preflight, and the application
@@ -769,7 +776,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision. The owner kit's
   `testCaller(grants, { kind: 'app', app })` is the consumer's key: an `app` token naming the consumer.
 - Its tokens are signed with a generated key and verified by the application's own
-  verifier, so a test cannot reach a handler the production pipeline would refuse.
+  verifier, so a test cannot reach a handler the production pipeline would refuse. A human caller's token carries
+  its `email` (`PersonTestCaller`), normalized as IAM normalizes it; the stand-in directories answer that address.
 - **The kit answers only its own origin.** `kit.fetch` refuses another host, and
   `kit.browser` reads the effective request (a `Request` input's headers, `init`'s
   `credentials: 'omit'`) before it adds the session. A token above

@@ -45,8 +45,11 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
 | `{ action, app: true }`                        | data of the whole application     | `app.<table>.list`, `.get(id)`; every row of a scoped table | `app.<table>.insert(v)`, `.update(id, v, …)`, `.remove(id, …)` of an application table      |
 | `{ member: true }`                             | any member, no application data   | nothing                                                     | nothing                                                                                     |
 
-- Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal` (`{ kind: 'user', id, label }`
-  for a `human` caller) and `ctx.requestId`.
+- Every endpoint also has `ctx.db.reference.<table>` (reference tables), `ctx.principal`
+  (`{ kind: 'user', id, label, email }` for a `human` caller) and `ctx.requestId`.
+- `ctx.principal.email` is the person's own address as IAM knows it, lower-cased, from the token. Mail "send it to me"
+  there and take no recipient from the input (`references/public-intake.md`). A `machine` caller
+  (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a

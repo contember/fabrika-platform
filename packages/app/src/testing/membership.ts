@@ -226,7 +226,7 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, inpu
 		members.push({
 			principalId: member.id,
 			label: manager || dimension.directory === 'labels' ? member.label : null,
-			email: manager ? member.label : null,
+			email: manager ? member.email : null,
 			roles,
 			disabled: member.disabled,
 			affiliation: member.affiliation,

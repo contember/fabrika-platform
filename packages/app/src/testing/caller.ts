@@ -24,6 +24,8 @@ export interface TestCallerOptions {
 	readonly via?: 'session' | 'key'
 	readonly id?: string
 	readonly label?: string
+	/** A human's address (`ctx.principal.email`), normalized as IAM stores it. Only a human has one. */
+	readonly email?: string
 	/**
 	 * Defaults to `internal`. An `external` human holds only roles the contract declares `external`, as IAM resolves it
 	 * (ADR-0051); the kit refuses any other grant for one.
@@ -69,6 +71,14 @@ export interface LabelledTestCaller extends TestCallerCredential {
 	readonly app: string | null
 	readonly link: null
 	readonly label: string
+	/** A human's normalized address, which its token carries; `null` for a script and a connector. */
+	readonly email: string | null
+}
+
+/** A person, whose token carries its address: `ctx.principal.email` of its requests. */
+export interface PersonTestCaller extends LabelledTestCaller {
+	readonly kind: 'human'
+	readonly email: string
 }
 
 /** The holder of a share link: an anonymous key, which carries no label. */
@@ -78,6 +88,7 @@ export interface LinkTestCaller extends TestCallerCredential {
 	/** The link mount and chain the key is bound to; `null` for a key bound to nothing. */
 	readonly link: TestLink | null
 	readonly label: null
+	readonly email: null
 }
 
 export type TestCaller = LabelledTestCaller | LinkTestCaller

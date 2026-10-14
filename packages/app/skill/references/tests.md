@@ -193,6 +193,10 @@ if (postgres !== null) {
   holder's (`kind: 'link'`) is `null`; it is `ctx.principal.label`, and the directory's label where it shows labels.
   Assert a stored label against `caller.label` or the directory's answer (`members.list` above), never against a
   literal of the default form.
+- A human's `email` is `ctx.principal.email`: `<kind>-<n>@<app>.test` unless you pass `{ email }`, which the kit
+  lower-cases as IAM does (`kit.testCaller(grants, { email: 'Ann@Example.com' })` mails `ann@example.com`). A
+  `machine`, `app` or `link` caller's `email` is `null`. The SPA's `<prefix>/__fabrika-me.json` answers the caller's
+  label, email and actions in the kit as in production (`kit.browser(caller)('/__fabrika-me.json')`).
 - `kit.browser(caller)` and `kit.fetch` serve one origin, `https://<app>.test` (`kit.origin`). Call a route by its
   path (`kit.browser(owner)('/api/tasks.get', { method: 'POST', … })`), never with another host.
 - A member directory (`ctx.members.list()` and `get(id)`) answers from the kit's own callers: everyone `testCaller`

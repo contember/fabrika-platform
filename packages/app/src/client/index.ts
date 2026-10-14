@@ -1,4 +1,5 @@
 // @fabrika/app/client — the typed client of a contract application, for its SPA and for scripts. Browser-safe.
+export { type PageCaller, parsePageCaller } from './caller'
 export {
 	type AttachmentProcedure,
 	type ClientMount,

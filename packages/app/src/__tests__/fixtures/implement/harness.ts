@@ -45,7 +45,7 @@ const JWKS: Promise<Jwks> = signingKeys.then(async ({ publicKey }) => {
 })
 
 /** `claims` signed with the harness's key, as IAM signs a token. */
-async function sign(claims: AccessTokenClaims): Promise<string> {
+export async function sign(claims: AccessTokenClaims): Promise<string> {
 	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign((await signingKeys).privateKey)
 }
 
@@ -215,6 +215,7 @@ export async function token(kind: TokenKind, perms: PermissionEntry[], audience 
 		subject: kind === 'link' ? 'credential-1' : `${kind}-1`,
 		...(kind === 'link' ? {} : { type: kind }),
 		label: kind === 'link' ? null : `${kind}@notes.test`,
+		...(kind === 'user' ? { email: 'user@notes.test' } : {}),
 		permissions: perms,
 		issuedAt: now - 10,
 		expiresAt: now + 300,
