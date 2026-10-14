@@ -270,12 +270,13 @@ async function serveThroughKit(
 
 	const scopeLabel = (type: string, value: string): string => seeded.scopes.get(type)?.find((known) => known.value === value)?.label ?? value
 
+	const externalBadge: Badge = { text: text.external, tone: 'external' }
 	const badgesOf = (caller: TestCaller): Badge[] => [
 		...dev.membershipsOf(caller).map((held): Badge => ({
 			text: held.scope === null ? held.role : `${held.role} · ${scopeLabel(held.scope.type, held.scope.value)}`,
 			tone: 'role',
 		})),
-		...(caller.affiliation === 'external' ? [{ text: text.external, tone: 'external' as const }] : []),
+		...(caller.affiliation === 'external' ? [externalBadge] : []),
 	]
 
 	const currentOf = (choice: Choice | null): CurrentView | null => {

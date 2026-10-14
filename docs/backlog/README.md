@@ -59,4 +59,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [155](155-creating-a-top-level-value-makes-the-creator-its-member.md) — `creates` makes the creator a member; staff cannot create a value without joining it.
 - [157](157-an-endpoint-holds-one-capability.md) — An operation across two dimensions needs raw SQL and `unscoped` reads.
 - [159](159-an-application-directory-page-and-an-expired-role-regrant.md) — A 100-person directory page exceeds D1's bind limit; an expired global role cannot be regranted.
+- [161](161-app-dev-review-findings.md) — The kit's share links never expire, and an app dev seed error can print a record key.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
