@@ -152,8 +152,10 @@ URL stops working.
 
 The sidecar is a GitHub repository the operator owns. Its workflow runs `platform deploy` at the pinned tag.
 
-Steps 4 and 5 do not depend on this step: the installation from step 1 already runs. The sidecar is what
-upgrades it later (step 6). Run this step before or after step 5. Only `platform upgrade` needs it.
+The installation from step 1 already runs, and the sidecar is what upgrades it later (step 6). But `init`
+triggers the workflow, and its run redeploys every platform service, control included. A deploy that is in
+flight when control restarts fails, and its log names no reason. So run this step BEFORE step 5, and wait for
+its run to end before the first `control deploy` (see the check below). Step 4 can run meanwhile.
 
 `init` takes the integration token step 1 minted, never the personal one. The secrets file holds it as
 `FABRIKA_ZEROPS_ACCESS_TOKEN`, beside the provisioning key. Run `init` from a directory that is NOT inside
@@ -169,9 +171,16 @@ one too. Otherwise pass `--checkout=<dir>` outside one:
 - Without `--repo` the repository is `contember/fabrika-zerops-<installation>`. Pass `--repo` for any
   other organization.
 - Keep the local checkout path. `platform upgrade` needs it later (`--sidecar=<dir>`).
+- `--tag` is written only into a NEW sidecar. An existing one keeps its `fabrika.ref`. When that pins another
+  tag, `init` writes the GitHub Environment and then refuses to trigger the run, which would deploy the other
+  tag. Its message names the fix: `fabrika platform upgrade --provider=zerops --to=<tag> --sidecar=<dir>`.
 
-**Check.** The `platform` workflow run in the sidecar repository ends green:
-`gh run list --repo <owner>/<name>`.
+**Check.** The `platform` workflow run in the sidecar repository ends green. Wait for it before step 5:
+
+```bash
+gh run list --repo <owner>/<name> --workflow=platform.yml --limit=1   # its id, status and conclusion
+gh run watch <run id> --repo <owner>/<name> --exit-status              # returns when the run ends; non-zero if it failed
+```
 
 ## Step 4. Mint a machine key for `fabrika control`
 
@@ -217,11 +226,15 @@ places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config 
   Source, a browser flow), then register without `--installation-id`.
 
 **Use the installation's release in the application.** The application's `@fabrika/*` packages, the CLI
-among them, must be the version of the tag you installed: for `v0.4.3`, `^0.4.3`. Another version can build
-a manifest this installation's control refuses or reads differently. From the fabrika clone of step 0, run
-`bun scripts/release.ts example-pin <application checkout> --tag=<tag>`. It rewrites every `@fabrika/*` range
-and commits nothing. Commit and push the change in the application repository, then run `bun install` there.
-Check with `bun pm ls | grep @fabrika/cli`.
+among them, must be exactly the version of the tag you installed: for `v0.4.3`, `0.4.3`, not a range such as
+`^0.4.3`, which resolves a later patch. Another version can build a manifest this installation's control
+refuses or reads differently. The example's `main` pins the latest release; for an older installation, from
+the fabrika clone of step 0, run `bun scripts/release.ts example-pin <application checkout> --tag=<tag>`. It
+pins every `@fabrika/*` package exactly and commits nothing. Run `bun install` in the application repository,
+then commit and push `package.json` and `bun.lock`. Check that every `@fabrika/*` package, the transitive ones
+included, is the tag's version: `bun pm ls --all | grep @fabrika/`. Releases up to v0.4.6 name their own
+`@fabrika/*` dependencies by a range, so a transitive one can still resolve a later patch of that line. Then
+install the newest patch instead (step 6 upgrades an installation).
 
 1. **Create a namespace** with the preset and core package the human chose (see Decisions). Without a
    custom domain bound to its proxy, pass `--public-access=zerops-subdomain`; the default is
@@ -232,6 +245,9 @@ Check with `bun pm ls | grep @fabrika/cli`.
    fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> --public-access=zerops-subdomain
    fabrika control namespaces get    --namespace=<id>
    ```
+
+   The namespace's Zerops project is `fabrika-<env>-<namespace id>`, beside the installation's
+   `fabrika-<env>`. Pass `--project=<name>` for another name; it cannot change after `create`.
 
    `create` returns while the state is `pending`. Provisioning takes several minutes. Poll `get` every
    30 seconds until it is `ready`.
@@ -264,8 +280,12 @@ Check with `bun pm ls | grep @fabrika/cli`.
      once and refuses one that is not publicly readable, so the failure shows here and not at deploy. A
      private repository needs the GitHub App connected in the console first (Settings → Source, a browser
      flow for the human); then omit the flag.
+   - The public origin is where IAM returns a person after sign-in; without one, sign-in to the application
+     fails with "… is not a registered return origin for this app". For a host the namespace lists, `register`
+     sets `https://<free host>` itself and prints `public origin https://<host>` on stderr. For a custom domain
+     the namespace cannot list, add `--public-origin=https://<domain>`.
    - `register` CREATES and refuses a second registration. A changed manifest goes through
-     `control apps environments put` with the same placement flags.
+     `control apps environments put` with the same placement flags. `put` derives no public origin.
 
 3. **Deploy and follow it.**
 
@@ -289,6 +309,13 @@ Check with `bun pm ls | grep @fabrika/cli`.
 
    On an environment named `prod`, a change that widens access waits for a person to approve it in the
    console before it deploys.
+
+4. **Give the administrator a role in the application.** The step 2 grant administers the installation; it
+   holds none of the application's actions, so the application answers `forbidden` to the administrator.
+   No `fabrika` command grants an application role. The human does it in the console: Access → Users → the
+   administrator → Add grant. Pick the application `<id>@<env>` (the example: `notes@<env>`), Named role / policy,
+   a role the application declares (the example's `editor` reads, writes and deletes notes), the global scope,
+   and Add grant. It takes effect at the next sign-in.
 
 **Check.** The run ends `succeeded`. `https://<host>/healthz` answers 200, and `/` redirects to the IAM
 sign-in. A green run proves only that Zerops accepted the build: have the human sign in and use the app.
