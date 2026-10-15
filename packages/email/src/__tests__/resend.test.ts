@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { EmailDeliveryError } from '../email.js'
-import { type EmailFetch, ResendEmailSender } from '../resend.js'
+import { EmailDeliveryError, type EmailFetch } from '../email.js'
+import { ResendEmailSender } from '../resend.js'
 import { isValidEmailAddress, isValidEmailFrom } from '../validation.js'
 
 const validMessage = {
@@ -10,6 +10,9 @@ const validMessage = {
 	html: '<p>Your account is ready.</p>',
 	idempotencyKey: 'welcome/user-1',
 }
+
+const signal = new AbortController().signal
+const SENDER = { address: 'auth@example.test' }
 
 function jsonResponse(body: unknown, status: number): Response {
 	return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -28,9 +31,9 @@ describe('ResendEmailSender', () => {
 			requests.push(new Request(input, init))
 			return jsonResponse({ id: 'email-123' }, 200)
 		}
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'Fabrika <auth@example.test>', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: { address: 'auth@example.test', name: 'Fabrika' }, fetch })
 
-		await expect(sender.send(validMessage)).resolves.toEqual({ status: 'accepted', provider: 'resend', messageId: 'email-123' })
+		await expect(sender.send(validMessage, signal)).resolves.toEqual({ status: 'accepted', provider: 'resend', messageId: 'email-123' })
 		const request = requests[0]
 		if (request === undefined) throw new Error('Expected a request')
 		expect(request.url).toBe('https://api.resend.com/emails')
@@ -53,9 +56,9 @@ describe('ResendEmailSender', () => {
 			body = await new Request(input, init).json()
 			return jsonResponse({ id: 'email-text' }, 200)
 		}
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
 
-		await sender.send({ to: validMessage.to, subject: validMessage.subject, text: validMessage.text, idempotencyKey: 'text/user-1' })
+		await sender.send({ to: validMessage.to, subject: validMessage.subject, text: validMessage.text, idempotencyKey: 'text/user-1' }, signal)
 		expect(body).toEqual({ from: 'auth@example.test', to: 'ada@example.test', subject: 'Welcome', text: 'Your account is ready.' })
 	})
 
@@ -63,11 +66,12 @@ describe('ResendEmailSender', () => {
 		const secret = 're_secret_that_must_not_leak'
 		const messageBody = 'Your account is ready.'
 		const fetch: EmailFetch = async () => jsonResponse({ name: 'validation_error', message: `${secret}: ${messageBody}` }, 422)
-		const sender = new ResendEmailSender({ apiKey: secret, from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: secret, from: SENDER, fetch })
 
-		const error = await caught(sender.send({ ...validMessage, text: messageBody }))
+		const error = await caught(sender.send({ ...validMessage, text: messageBody }, signal))
 		expect(error.code).toBe('provider_rejected')
 		expect(error.retryable).toBe(false)
+		expect(error.outcome).toBe('not_sent')
 		expect(error.httpStatus).toBe(422)
 		expect(error.message).not.toContain(secret)
 		expect(error.message).not.toContain(messageBody)
@@ -75,9 +79,9 @@ describe('ResendEmailSender', () => {
 
 	test.each([429, 500, 503])('classifies HTTP %d as retryable', async (status) => {
 		const fetch: EmailFetch = async () => new Response('not JSON', { status })
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
 
-		const error = await caught(sender.send(validMessage))
+		const error = await caught(sender.send(validMessage, signal))
 		expect(error.retryable).toBe(true)
 		expect(error.httpStatus).toBe(status)
 		expect(error.code).toBe(status === 429 ? 'rate_limited' : 'provider_unavailable')
@@ -87,9 +91,9 @@ describe('ResendEmailSender', () => {
 		const fetch: EmailFetch = async () => {
 			throw new Error(`socket failed re_secret ${validMessage.text}`)
 		}
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
 
-		const error = await caught(sender.send(validMessage))
+		const error = await caught(sender.send(validMessage, signal))
 		expect(error.code).toBe('network_error')
 		expect(error.retryable).toBe(true)
 		expect(error.message).not.toContain('re_secret')
@@ -101,9 +105,9 @@ describe('ResendEmailSender', () => {
 			new Promise<Response>((_resolve, reject) => {
 				init?.signal?.addEventListener('abort', () => reject(new Error('aborted with private provider state')), { once: true })
 			})
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch, timeoutMs: 5 })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch, timeoutMs: 5 })
 
-		const error = await caught(sender.send(validMessage))
+		const error = await caught(sender.send(validMessage, signal))
 		expect(error.code).toBe('request_timeout')
 		expect(error.retryable).toBe(true)
 	})
@@ -114,18 +118,20 @@ describe('ResendEmailSender', () => {
 		jsonResponse({ message: 'accepted' }, 200),
 	])('rejects a malformed success response as retryable', async (response) => {
 		const fetch: EmailFetch = async () => response
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
 
-		const error = await caught(sender.send(validMessage))
+		const error = await caught(sender.send(validMessage, signal))
 		expect(error.code).toBe('malformed_response')
 		expect(error.retryable).toBe(true)
 	})
 
 	test('validates configuration before making requests', () => {
-		expect(() => new ResendEmailSender({ apiKey: '', from: 'auth@example.test' })).toThrow('Resend API key is invalid')
-		expect(() => new ResendEmailSender({ apiKey: 're_secret', from: 'not-an-email' })).toThrow('Resend sender is invalid')
-		expect(() => new ResendEmailSender({ apiKey: 're_secret', from: 'Bad\nName <auth@example.test>' })).toThrow('Resend sender is invalid')
-		expect(() => new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', timeoutMs: 0 })).toThrow('Resend timeout is invalid')
+		expect(() => new ResendEmailSender({ apiKey: '', from: SENDER })).toThrow('Resend API key is invalid')
+		expect(() => new ResendEmailSender({ apiKey: 're_secret', from: { address: 'not-an-email' } })).toThrow('Resend sender is invalid')
+		expect(() => new ResendEmailSender({ apiKey: 're_secret', from: { address: 'auth@example.test', name: 'Bad\nName' } })).toThrow(
+			'Resend sender is invalid',
+		)
+		expect(() => new ResendEmailSender({ apiKey: 're_secret', from: SENDER, timeoutMs: 0 })).toThrow('Resend timeout is invalid')
 	})
 
 	test.each([
@@ -134,10 +140,10 @@ describe('ResendEmailSender', () => {
 	])('preserves provider ids without trimming and tolerates unrelated fields', async (body) => {
 		const sender = new ResendEmailSender({
 			apiKey: 're_secret',
-			from: 'auth@example.test',
+			from: SENDER,
 			fetch: async () => jsonResponse(body, 200),
 		})
-		await expect(sender.send(validMessage)).resolves.toEqual({ status: 'accepted', provider: 'resend', messageId: body.id })
+		await expect(sender.send(validMessage, signal)).resolves.toEqual({ status: 'accepted', provider: 'resend', messageId: body.id })
 	})
 
 	test.each([null, [], [{ id: 'email-123' }], 'email-123', 123, { id: null }, { id: 123 }, { id: false }].map((body) => ({ body })))(
@@ -145,10 +151,10 @@ describe('ResendEmailSender', () => {
 		async ({ body }) => {
 			const sender = new ResendEmailSender({
 				apiKey: 're_secret',
-				from: 'auth@example.test',
+				from: SENDER,
 				fetch: async () => jsonResponse(body, 202),
 			})
-			const error = await caught(sender.send(validMessage))
+			const error = await caught(sender.send(validMessage, signal))
 			expect(error.message).toBe('Resend returned an invalid success response')
 			expect(error.code).toBe('malformed_response')
 			expect(error.httpStatus).toBe(202)
@@ -157,7 +163,9 @@ describe('ResendEmailSender', () => {
 	)
 
 	test.each(
-		[null, [], ['concurrent_idempotent_requests'], 'concurrent_idempotent_requests', {}, { name: null }, { name: 42 }, { name: '' }].map((body) => ({
+		[null, [], ['concurrent_idempotent_requests'], 'concurrent_idempotent_requests', {}, { name: null }, { name: 42 }, { name: '' }, {
+			name: 'a_future_conflict',
+		}].map((body) => ({
 			body,
 		})),
 	)(
@@ -165,14 +173,15 @@ describe('ResendEmailSender', () => {
 		async ({ body }) => {
 			const sender = new ResendEmailSender({
 				apiKey: 're_secret',
-				from: 'auth@example.test',
+				from: SENDER,
 				fetch: async () => jsonResponse(body, 409),
 			})
-			const error = await caught(sender.send(validMessage))
+			const error = await caught(sender.send(validMessage, signal))
 			expect(error.message).toBe('Resend rejected the request (409)')
 			expect(error.code).toBe('provider_rejected')
 			expect(error.httpStatus).toBe(409)
 			expect(error.retryable).toBe(false)
+			expect(error.outcome).toBe('not_sent')
 		},
 	)
 
@@ -189,9 +198,9 @@ describe('ResendEmailSender', () => {
 			requests++
 			return jsonResponse({ id: 'unexpected' }, 200)
 		}
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
 
-		const error = await caught(sender.send(message))
+		const error = await caught(sender.send(message, signal))
 		expect(error.code).toBe('invalid_message')
 		expect(error.retryable).toBe(false)
 		expect(requests).toBe(0)
@@ -200,12 +209,92 @@ describe('ResendEmailSender', () => {
 	test('treats a concurrent idempotent request as retryable', async () => {
 		const fetch: EmailFetch = async () =>
 			jsonResponse({ name: 'concurrent_idempotent_requests', message: 'private provider detail', future: { supported: true } }, 409)
-		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
 
-		const error = await caught(sender.send(validMessage))
+		const error = await caught(sender.send(validMessage, signal))
 		expect(error.code).toBe('request_in_progress')
 		expect(error.retryable).toBe(true)
 		expect(error.httpStatus).toBe(409)
+	})
+
+	test('answers idempotency_conflict when the key already carried a different message', async () => {
+		const fetch: EmailFetch = async () => jsonResponse({ name: 'invalid_idempotent_request', message: 'private provider detail' }, 409)
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
+
+		const error = await caught(sender.send(validMessage, signal))
+		expect(error.code).toBe('idempotency_conflict')
+		expect(error.retryable).toBe(false)
+		expect(error.outcome).toBe('unknown')
+		expect(error.httpStatus).toBe(409)
+		expect(error.message).not.toContain('private provider detail')
+	})
+
+	test.each([401, 403])('classifies HTTP %d as a configuration refusal', async (status) => {
+		const fetch: EmailFetch = async () => jsonResponse({ name: 'restricted_api_key', message: 'private provider detail' }, status)
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
+
+		const error = await caught(sender.send(validMessage, signal))
+		expect(error.code).toBe('provider_unauthorized')
+		expect(error.retryable).toBe(false)
+		expect(error.outcome).toBe('not_sent')
+		expect(error.httpStatus).toBe(status)
+	})
+
+	test.each([
+		{ name: 'daily_quota_exceeded', code: 'quota_exceeded' },
+		{ name: 'monthly_quota_exceeded', code: 'quota_exceeded' },
+		{ name: 'rate_limit_exceeded', code: 'rate_limited' },
+	])('classifies a 429 named $name as $code', async ({ name, code }) => {
+		const fetch: EmailFetch = async () => jsonResponse({ name, message: 'private provider detail' }, 429)
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch })
+
+		const error = await caught(sender.send(validMessage, signal))
+		expect(error.code).toBe(code)
+		expect(error.retryable).toBe(true)
+		expect(error.outcome).toBe('not_sent')
+		expect(error.httpStatus).toBe(429)
+	})
+
+	test("tells the caller's abort from its own timeout", async () => {
+		const fetch: EmailFetch = (_input, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+			})
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: SENDER, fetch, timeoutMs: 60_000 })
+
+		const caller = new AbortController()
+		const pending = caught(sender.send(validMessage, caller.signal))
+		caller.abort()
+		const aborted = await pending
+		expect(aborted.code).toBe('aborted')
+		expect(aborted.outcome).toBe('unknown')
+
+		let requests = 0
+		const counting = new ResendEmailSender({
+			apiKey: 're_secret',
+			from: SENDER,
+			fetch: async () => {
+				requests++
+				return jsonResponse({ id: 'unexpected' }, 200)
+			},
+		})
+		expect((await caught(counting.send(validMessage, AbortSignal.abort()))).code).toBe('aborted')
+		expect(requests).toBe(0)
+	})
+
+	test('names the sender, quoting a display name with specials, and passes the reply-to address', async () => {
+		const bodies: unknown[] = []
+		const fetch: EmailFetch = async (input, init) => {
+			bodies.push(await new Request(input, init).json())
+			return jsonResponse({ id: 'email-1' }, 200)
+		}
+		const sender = new ResendEmailSender({ apiKey: 're_secret', from: { address: 'auth@example.test', name: 'Fabrika' }, fetch })
+
+		await sender.send({ ...validMessage, fromName: 'Acme, Inc.', replyTo: 'support@example.test' }, signal)
+		await sender.send({ ...validMessage, idempotencyKey: 'welcome/user-2' }, signal)
+		expect(bodies[0]).toMatchObject({ from: '"Acme, Inc." <auth@example.test>', reply_to: 'support@example.test' })
+		expect(bodies[1]).toMatchObject({ from: 'Fabrika <auth@example.test>' })
+		expect(bodies[1]).not.toHaveProperty('reply_to')
 	})
 })
 

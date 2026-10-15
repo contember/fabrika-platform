@@ -1,4 +1,5 @@
-import type { EmailSender } from '@fabrika/email'
+import { MemoryEmailSender } from '@fabrika/email/memory'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { describe, expect, test } from 'bun:test'
 import { createRuntime } from '../node/runtime'
 import { buildServices } from '../services'
@@ -32,7 +33,9 @@ describe('the IAM Bun runtime environment', () => {
 			expect(runtime.env.FABRIKA_IAM_PROVISIONING_KEY).toBe('px_provisioning')
 			expect(runtime.env.OIDC_ENABLED).toBe('true')
 			expect(runtime.env.PASSWORD_ENABLED).toBe('false')
-			expect(runtime.env.EMAIL_PROVIDER).toBe('none')
+			expect(runtime.env.EMAIL_CONFIG).toEqual({})
+			expect(runtime.env.EMAIL_PROVIDERS).toBe(builtinEmailProviders)
+			expect(buildServices(runtime.env).email).toBeNull()
 		} finally {
 			await runtime.shutdown()
 		}
@@ -87,27 +90,49 @@ describe('the IAM Bun runtime environment', () => {
 		}
 		const runtime = createRuntime(source)
 		try {
-			expect(runtime.env.EMAIL_PROVIDER).toBe('resend')
-			expect(runtime.env.EMAIL_FROM).toBe('Fabrika <auth@example.com>')
-			expect(runtime.env.EMAIL_API_KEY).toBe('private-resend-key')
+			expect(runtime.env.EMAIL_CONFIG).toEqual({
+				FABRIKA_EMAIL_PROVIDER: 'resend',
+				FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>',
+				FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
+			})
+			expect(buildServices(runtime.env).email?.capabilities.idempotent).toBe(true)
 		} finally {
 			await runtime.shutdown()
 		}
 
-		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_FROM: '' })).toThrow('FABRIKA_EMAIL_FROM is required')
-		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is required')
-		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('FABRIKA_EMAIL_PROVIDER must be none or resend')
+		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_FROM: '' })).toThrow('FABRIKA_EMAIL_FROM is missing')
+		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_RESEND_API_KEY: '' })).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
+		expect(() => createRuntime({ ...source, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
+		)
+	})
+
+	test('a composition may name its own provider registry', async () => {
+		const sender = new MemoryEmailSender()
+		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL, FABRIKA_EMAIL_PROVIDER: 'stand-in', FABRIKA_EMAIL_FROM: 'auth@example.com' }
+		const runtime = createRuntime(source, { emailProviders: { 'stand-in': { variables: [], create: () => sender } } })
+		try {
+			expect(buildServices(runtime.env).email).toBe(sender)
+		} finally {
+			await runtime.shutdown()
+		}
+		expect(() => createRuntime(source)).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing')
 	})
 
 	test('a composition email sender serves only a local IAM with no provider configured', async () => {
-		const sender: EmailSender = { send: () => Promise.reject(new Error('not sent in this test')) }
+		const sender = new MemoryEmailSender()
 		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL }
 		const runtime = createRuntime(source, { emailSender: sender })
 		try {
 			expect(runtime.env.EMAIL_SENDER).toBe(sender)
 			expect(buildServices(runtime.env).email).toBe(sender)
 			expect(() => buildServices({ ...runtime.env, ENVIRONMENT: 'stage' })).toThrow('A composition email sender is local-only')
-			expect(() => buildServices({ ...runtime.env, EMAIL_PROVIDER: 'resend' })).toThrow('which must then be none')
+			expect(() =>
+				buildServices({
+					...runtime.env,
+					EMAIL_CONFIG: { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'auth@example.com', FABRIKA_EMAIL_RESEND_API_KEY: 're_key' },
+				})
+			).toThrow('which must then be none')
 		} finally {
 			await runtime.shutdown()
 		}

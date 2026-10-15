@@ -1,4 +1,5 @@
 import { MAX_KEY_LIFETIME_SECONDS, type PermissionEntry } from '@fabrika/auth-core'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { PROVISIONING_ADMIN_ID } from '../auth'
@@ -174,9 +175,6 @@ function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}
 		OIDC_CLIENT_SECRET: 'dummy-oidc-secret',
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
-		EMAIL_PROVIDER: 'none',
-		EMAIL_FROM: '',
-		EMAIL_API_KEY: '',
 	}
 }
 
@@ -195,8 +193,6 @@ function workerBindings(db: Database) {
 		OIDC_CLIENT_SECRET: 'secret',
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
-		EMAIL_PROVIDER: 'none',
-		EMAIL_FROM: '',
 	}
 }
 
@@ -576,7 +572,8 @@ describe('the IAM Worker environment', () => {
 			FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
 		})
 
-		expect(env.EMAIL_API_KEY).toBe('private-resend-key')
+		expect(env.EMAIL_CONFIG?.['FABRIKA_EMAIL_RESEND_API_KEY']).toBe('private-resend-key')
+		expect(env.EMAIL_PROVIDERS).toBe(builtinEmailProviders)
 	})
 
 	// A Worker has no boot, so `local` from a public issuer fails where a Worker fails everything else:

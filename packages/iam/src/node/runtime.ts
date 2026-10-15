@@ -11,7 +11,8 @@
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
 import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
-import type { EmailSender } from '@fabrika/email'
+import { type EmailProviderRegistry, type EmailSender, emailSenderFromEnv, pickEmailEnvironment, readEmailTransportConfig } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -44,6 +45,8 @@ export interface ProcessConfig {
 export interface RuntimeOverrides {
 	/** Replaces `FABRIKA_EMAIL_PROVIDER`'s sender, only with `ENVIRONMENT=local`: the local stack's mail capture. */
 	readonly emailSender?: EmailSender
+	/** The providers `FABRIKA_EMAIL_PROVIDER` may name. Defaults to the built-in ones. */
+	readonly emailProviders?: EmailProviderRegistry
 }
 
 export interface Runtime {
@@ -79,17 +82,14 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const oidcIssuer = oidcEnabled ? required(source, 'OIDC_ISSUER') : source['OIDC_ISSUER'] ?? ''
 	const oidcClientId = oidcEnabled ? required(source, 'OIDC_CLIENT_ID') : source['OIDC_CLIENT_ID'] ?? ''
 	const oidcClientSecret = oidcEnabled ? required(source, 'OIDC_CLIENT_SECRET') : source['OIDC_CLIENT_SECRET'] ?? ''
-	const emailProvider = source['FABRIKA_EMAIL_PROVIDER'] ?? 'none'
-	if (emailProvider !== 'none' && emailProvider !== 'resend') {
-		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
-	}
-	if (overrides.emailSender !== undefined && (environment !== LOCAL_ENVIRONMENT || emailProvider !== 'none')) {
+	const emailConfig = pickEmailEnvironment(source)
+	const emailProviders = overrides.emailProviders ?? builtinEmailProviders
+	const emailConfigured = readEmailTransportConfig(emailConfig, emailProviders).kind !== 'none'
+	if (overrides.emailSender !== undefined && (environment !== LOCAL_ENVIRONMENT || emailConfigured)) {
 		throw new Error('A composition email sender needs ENVIRONMENT=local and FABRIKA_EMAIL_PROVIDER=none')
 	}
-	const emailFrom = emailProvider === 'resend' ? required(source, 'FABRIKA_EMAIL_FROM') : source['FABRIKA_EMAIL_FROM'] ?? ''
-	const emailApiKey = emailProvider === 'resend'
-		? required(source, 'FABRIKA_EMAIL_RESEND_API_KEY')
-		: source['FABRIKA_EMAIL_RESEND_API_KEY'] ?? ''
+	// Built once here as well as per request in `buildServices`, for the same readiness-probe reason as above.
+	emailSenderFromEnv(emailConfig, emailProviders)
 
 	// Parsed here as well as per request in `buildServices`, for the same readiness-probe reason as above.
 	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'])
@@ -134,9 +134,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		OIDC_CLIENT_SECRET: oidcClientSecret,
 		OIDC_SCOPES: source['OIDC_SCOPES'] ?? '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: source['OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
-		EMAIL_PROVIDER: emailProvider,
-		EMAIL_FROM: emailFrom,
-		EMAIL_API_KEY: emailApiKey,
+		EMAIL_CONFIG: emailConfig,
+		EMAIL_PROVIDERS: emailProviders,
 		...(overrides.emailSender === undefined ? {} : { EMAIL_SENDER: overrides.emailSender }),
 	}
 

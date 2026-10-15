@@ -6,6 +6,8 @@
 // them as plaintext. The Custom Domain route comes from `ctx.domain` (`FABRIKA_IAM_HOSTNAME` in the
 // standalone Oblaka adapter).
 
+import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
@@ -24,18 +26,12 @@ interface RemoteConfig {
 	passwordEnabled: boolean
 	oidcIssuer: string
 	oidcClientId: string
-	emailProvider: 'none' | 'resend'
-	emailFrom: string
+	email: EmailTransportConfig
 }
 
 interface AuthenticationConfig {
 	oidcEnabled: boolean
 	passwordEnabled: boolean
-}
-
-interface EmailConfig {
-	provider: 'none' | 'resend'
-	from: string
 }
 
 const requiredDomain = (domain: string | undefined): string => {
@@ -64,13 +60,23 @@ const authenticationConfig = (source: EnvironmentSource): AuthenticationConfig =
 	return config
 }
 
-const emailConfig = (source: EnvironmentSource): EmailConfig => {
-	const provider = source['FABRIKA_EMAIL_PROVIDER'] ?? 'none'
-	if (provider !== 'none' && provider !== 'resend') {
-		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
+/** Refuses an unknown provider and lists every missing or invalid `FABRIKA_EMAIL_*` variable, never a value. */
+const emailConfig = (source: EnvironmentSource): EmailTransportConfig => readEmailTransportConfig(source, builtinEmailProviders)
+
+/** The transport as plaintext Worker vars: the sender split into address and name, and the provider's non-secret variables. */
+const emailVars = (email: EmailTransportConfig, source: EnvironmentSource): Record<string, string> => {
+	if (email.kind === 'none') return { FABRIKA_EMAIL_PROVIDER: 'none' }
+	const vars: Record<string, string> = { FABRIKA_EMAIL_PROVIDER: email.provider, FABRIKA_EMAIL_FROM: email.from.address }
+	if (email.from.name !== undefined) vars['FABRIKA_EMAIL_FROM_NAME'] = email.from.name
+	for (const variable of email.variables) {
+		const value = source[variable.name]
+		if (!variable.secret && value !== undefined && value !== '') vars[variable.name] = value
 	}
-	return { provider, from: source['FABRIKA_EMAIL_FROM'] ?? '' }
+	return vars
 }
+
+const emailVariableNames = (email: EmailTransportConfig, secret: boolean): string[] =>
+	email.kind === 'none' ? [] : email.variables.filter((variable) => variable.secret === secret).map((variable) => variable.name)
 
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
 	const authentication = authenticationConfig(source)
@@ -88,10 +94,6 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 		if (!source['OIDC_CLIENT_SECRET']) missing.push('OIDC_CLIENT_SECRET')
 	}
 	if (!signingKeys) missing.push('FABRIKA_IAM_SIGNING_KEYS')
-	if (email.provider === 'resend') {
-		if (email.from === '') missing.push('FABRIKA_EMAIL_FROM')
-		if (!source['FABRIKA_EMAIL_RESEND_API_KEY']) missing.push('FABRIKA_EMAIL_RESEND_API_KEY')
-	}
 	if (domain === undefined || domain === '') {
 		missing.push('FABRIKA_IAM_HOSTNAME')
 	}
@@ -107,8 +109,7 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 		passwordEnabled: authentication.passwordEnabled,
 		oidcIssuer: oidcIssuer ?? '',
 		oidcClientId: oidcClientId ?? '',
-		emailProvider: email.provider,
-		emailFrom: email.from,
+		email,
 	}
 }
 
@@ -132,8 +133,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 			OIDC_CLIENT_ID: '',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
-			EMAIL_PROVIDER: 'none',
-			EMAIL_FROM: '',
+			FABRIKA_EMAIL_PROVIDER: 'none',
 		}
 	}
 
@@ -153,8 +153,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 		OIDC_CLIENT_ID: config.oidcClientId,
 		OIDC_SCOPES: source['FABRIKA_IAM_OIDC_SCOPES'] ?? '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: source['FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
-		EMAIL_PROVIDER: config.emailProvider,
-		EMAIL_FROM: config.emailFrom,
+		...emailVars(config.email, source),
 	}
 }
 
@@ -182,7 +181,7 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 		...(authentication.oidcEnabled
 			? ['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'FABRIKA_IAM_OIDC_ISSUER', 'FABRIKA_IAM_OIDC_CLIENT_ID']
 			: []),
-		...(email.provider === 'resend' ? ['FABRIKA_EMAIL_FROM'] : []),
+		...(email.kind === 'provider' ? ['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_FROM_NAME', ...emailVariableNames(email, false)] : []),
 	]
 }
 
@@ -193,7 +192,7 @@ export const iamPipelineSecrets = (source: EnvironmentSource): string[] => {
 		'FABRIKA_IAM_SIGNING_KEYS',
 		'FABRIKA_IAM_PROVISIONING_KEY',
 		...(authentication.oidcEnabled ? ['OIDC_CLIENT_SECRET'] : []),
-		...(email.provider === 'resend' ? ['FABRIKA_EMAIL_RESEND_API_KEY'] : []),
+		...emailVariableNames(email, true),
 	]
 }
 

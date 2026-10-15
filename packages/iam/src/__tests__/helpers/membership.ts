@@ -1,6 +1,6 @@
 import { type AppSchema, buildAccessClaims, type WorkloadKind } from '@fabrika/auth-core'
 import type { Scope } from '@fabrika/auth-core'
-import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
+import { EmailDeliveryError, type EmailDeliveryErrorCode, type EmailDeliveryResult, type EmailMessage, type EmailSender } from '@fabrika/email'
 import type { SqlDatabase } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { handleAdmin } from '../../admin/router'
@@ -87,12 +87,15 @@ export const ONBOARDING_SCHEMA: AppSchema = {
 }
 
 export class CapturingEmail implements EmailSender {
+	readonly capabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 } satisfies EmailSender['capabilities']
 	readonly messages: EmailMessage[] = []
-	constructor(private readonly fail = false) {}
+	/** `failure` makes every send answer that code, or throw a plain `Error` for `'foreign'`, after capturing the message. */
+	constructor(private readonly failure: EmailDeliveryErrorCode | 'foreign' | null = null) {}
 
 	send(message: EmailMessage): Promise<EmailDeliveryResult> {
 		this.messages.push(message)
-		if (this.fail) return Promise.reject(new Error('delivery failed'))
+		if (this.failure === 'foreign') return Promise.reject(new Error('delivery failed'))
+		if (this.failure !== null) return Promise.reject(new EmailDeliveryError('delivery failed', { code: this.failure }))
 		return Promise.resolve({ status: 'accepted', provider: 'test', messageId: `message-${this.messages.length}` })
 	}
 

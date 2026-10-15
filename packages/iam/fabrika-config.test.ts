@@ -23,7 +23,11 @@ const ENV_NAMES = [
 	'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
+	'FABRIKA_EMAIL_FROM_NAME',
 	'FABRIKA_EMAIL_RESEND_API_KEY',
+	'FABRIKA_EMAIL_SMARTEMAILING_USERNAME',
+	'FABRIKA_EMAIL_SMARTEMAILING_API_KEY',
+	'FABRIKA_EMAIL_SMARTEMAILING_TAG',
 ]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
 
@@ -86,7 +90,7 @@ describe('IAM resource graph', () => {
 		// `wrangler dev` has no client id or secret to hand it.
 		expect(fromFabrika.options.vars?.['OIDC_ENABLED']).toBe('false')
 		expect(fromFabrika.options.vars?.['PASSWORD_ENABLED']).toBe('true')
-		expect(fromFabrika.options.vars?.['EMAIL_PROVIDER']).toBe('none')
+		expect(fromFabrika.options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBe('none')
 	})
 
 	test('remote fabrika and Oblaka entries materialize the same routed Worker', () => {
@@ -200,9 +204,11 @@ describe('IAM resource graph', () => {
 		}
 		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, resend)
 
-		expect(worker.options.vars?.['EMAIL_PROVIDER']).toBe('resend')
-		expect(worker.options.vars?.['EMAIL_FROM']).toBe('Fabrika <auth@example.com>')
+		expect(worker.options.vars?.['FABRIKA_EMAIL_PROVIDER']).toBe('resend')
+		expect(worker.options.vars?.['FABRIKA_EMAIL_FROM']).toBe('auth@example.com')
+		expect(worker.options.vars?.['FABRIKA_EMAIL_FROM_NAME']).toBe('Fabrika')
 		expect(iamPipelineVars(resend)).toContain('FABRIKA_EMAIL_FROM')
+		expect(iamPipelineVars(resend)).toContain('FABRIKA_EMAIL_FROM_NAME')
 		expect(iamPipelineSecrets(resend)).toContain('FABRIKA_EMAIL_RESEND_API_KEY')
 		expect(JSON.stringify(worker.options)).not.toContain('private-resend-key')
 
@@ -213,7 +219,40 @@ describe('IAM resource graph', () => {
 		delete noKey['FABRIKA_EMAIL_RESEND_API_KEY']
 		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
 		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
-			'FABRIKA_EMAIL_PROVIDER must be none or resend',
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
+		)
+	})
+
+	test('takes the SmartEmailing variables from its declaration: credentials as secrets, the tag as a var', () => {
+		const smartEmailing = {
+			...REMOTE_SOURCE,
+			FABRIKA_EMAIL_PROVIDER: 'smartemailing',
+			FABRIKA_EMAIL_FROM: 'auth@example.com',
+			FABRIKA_EMAIL_FROM_NAME: 'Fabrika',
+			FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'private-smartemailing-user',
+			FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'private-smartemailing-key',
+			FABRIKA_EMAIL_SMARTEMAILING_TAG: 'iam',
+		}
+		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, smartEmailing)
+
+		expect(worker.options.vars).toMatchObject({
+			FABRIKA_EMAIL_PROVIDER: 'smartemailing',
+			FABRIKA_EMAIL_FROM: 'auth@example.com',
+			FABRIKA_EMAIL_FROM_NAME: 'Fabrika',
+			FABRIKA_EMAIL_SMARTEMAILING_TAG: 'iam',
+		})
+		expect(iamPipelineVars(smartEmailing)).toEqual(expect.arrayContaining(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_SMARTEMAILING_TAG']))
+		expect(iamPipelineSecrets(smartEmailing)).toEqual(
+			expect.arrayContaining(['FABRIKA_EMAIL_SMARTEMAILING_USERNAME', 'FABRIKA_EMAIL_SMARTEMAILING_API_KEY']),
+		)
+		expect(iamPipelineVars(smartEmailing)).not.toContain('FABRIKA_EMAIL_SMARTEMAILING_API_KEY')
+		expect(JSON.stringify(worker.options)).not.toContain('private-smartemailing')
+
+		const noCredentials = { ...smartEmailing }
+		delete noCredentials['FABRIKA_EMAIL_SMARTEMAILING_USERNAME']
+		delete noCredentials['FABRIKA_EMAIL_SMARTEMAILING_API_KEY']
+		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noCredentials)).toThrow(
+			'FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing; FABRIKA_EMAIL_SMARTEMAILING_API_KEY is missing',
 		)
 	})
 

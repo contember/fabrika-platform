@@ -29,6 +29,26 @@
 			"bun": "./src/directory.ts",
 			"types": "./src/directory.ts",
 			"default": "./src/directory.ts"
+		},
+		"./memory": {
+			"bun": "./src/memory.ts",
+			"types": "./src/memory.ts",
+			"default": "./src/memory.ts"
+		},
+		"./smartemailing": {
+			"bun": "./src/smartemailing.ts",
+			"types": "./src/smartemailing.ts",
+			"default": "./src/smartemailing.ts"
+		},
+		"./providers": {
+			"bun": "./src/providers.ts",
+			"types": "./src/providers.ts",
+			"default": "./src/providers.ts"
+		},
+		"./conformance": {
+			"bun": "./src/conformance.ts",
+			"types": "./src/conformance.ts",
+			"default": "./src/conformance.ts"
 		}
 	},
 	"scripts": {

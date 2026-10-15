@@ -1,7 +1,7 @@
 import type { EmailMessage } from '@fabrika/email'
 import { type AppPresentation, appQuery } from './app-presentation'
 import type { PrincipalRow } from './db'
-import { renderEmail } from './messages'
+import { EMAIL_SEND_DEADLINE_MS, renderEmail } from './messages'
 import { randomToken } from './oidc'
 import type { ActionIssuance, PasswordActionPurpose } from './password-db'
 import { hashToken } from './secret'
@@ -59,5 +59,5 @@ export async function issuePasswordAction(
 
 export async function deliverPasswordAction(services: Services, action: IssuedPasswordAction): Promise<void> {
 	if (services.email === null || action.message === null) return
-	await services.email.send(action.message)
+	await services.email.send(action.message, AbortSignal.timeout(EMAIL_SEND_DEADLINE_MS))
 }

@@ -41,7 +41,6 @@ const iamEnv = (harness: Harness): Env => ({
 	ENVIRONMENT: 'stage',
 	OIDC_ENABLED: 'false',
 	PASSWORD_ENABLED: 'true',
-	EMAIL_PROVIDER: 'none',
 	ISSUER: ORIGIN,
 	FABRIKA_IAM_SIGNING_KEYS: '',
 	FABRIKA_IAM_PROVISIONING_KEY: PROVISIONING_KEY,

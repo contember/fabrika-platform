@@ -29,6 +29,7 @@ class FastPasswordHasher implements PasswordHasher {
 }
 
 class CapturingEmail implements EmailSender {
+	readonly capabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 } satisfies EmailSender['capabilities']
 	readonly messages: EmailMessage[] = []
 	constructor(private readonly fail = false) {}
 

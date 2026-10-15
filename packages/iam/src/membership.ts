@@ -46,7 +46,7 @@ import {
 	type RevokeMemberResult,
 	type Scope,
 } from '@fabrika/auth-core'
-import type { EmailMessage } from '@fabrika/email'
+import { EmailDeliveryError, type EmailMessage } from '@fabrika/email'
 import { uuidv7 } from '@fabrika/platform'
 import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
@@ -66,7 +66,7 @@ import {
 import type { Env, RequestContext } from './env'
 import { organizationMailbox } from './human-admission'
 import { logError } from './log'
-import { renderEmail } from './messages'
+import { EMAIL_SEND_DEADLINE_MS, renderEmail } from './messages'
 import { randomToken } from './oidc'
 import type { StoredPasswordHash } from './password-crypto'
 import { unixNow } from './repositories/sql'
@@ -474,24 +474,35 @@ async function invite(
 		}
 		invitation = rotated
 	}
+	const withdrawCreated = async (): Promise<void> => {
+		if (!opened.created) return
+		await services.repositories.membership.deleteInvitation(
+			invitation.id,
+			memberEvent(caller, input.requestId, {
+				action: 'iam.member.uninvite',
+				resourceType: 'scope',
+				resourceId: scopeId(input.scope),
+				metadata: { invitationId: invitation.id, role: role.role_key, reason: 'delivery_failed' },
+			}),
+		)
+	}
+	// A resend is a new message with a new link: the sender must not take it for a retry of the first.
+	const idempotencyKey = opened.created ? `iam-invitation-${invitation.id}` : `iam-invitation-${invitation.id}-${uuidv7()}`
+	let invitationMessage: EmailMessage
 	try {
-		// A resend is a new message with a new link: the sender must not take it for a retry of the first.
-		const idempotencyKey = opened.created ? `iam-invitation-${invitation.id}` : `iam-invitation-${invitation.id}-${uuidv7()}`
-		await services.email.send(await invitationEmail(services, caller, invitation, role, token, idempotencyKey))
+		invitationMessage = await invitationEmail(services, caller, invitation, role, token, idempotencyKey)
+	} catch (err) {
+		await withdrawCreated()
+		throw err
+	}
+	try {
+		await services.email.send(invitationMessage, AbortSignal.timeout(EMAIL_SEND_DEADLINE_MS))
 	} catch (err) {
 		logError(`invitation email failed for request '${input.requestId}'`, err)
-		if (opened.created) {
-			await services.repositories.membership.deleteInvitation(
-				invitation.id,
-				memberEvent(caller, input.requestId, {
-					action: 'iam.member.uninvite',
-					resourceType: 'scope',
-					resourceId: scopeId(input.scope),
-					metadata: { invitationId: invitation.id, role: role.role_key, reason: 'delivery_failed' },
-				}),
-			)
-		}
-		// A resent invitation stays open under a link nobody received; resending again sends a new one.
+		// The link may have arrived, so the invitation it names stays open.
+		const mayHaveArrived = err instanceof EmailDeliveryError && err.outcome === 'unknown'
+		if (!mayHaveArrived) await withdrawCreated()
+		// A resent invitation stays open under a link that may not have arrived; resending again sends a new one.
 		return { ok: false, reason: 'delivery_failed' }
 	}
 	return invitedResult(invitation)

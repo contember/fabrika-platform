@@ -13,6 +13,9 @@ import { catalogFor, type MessageValues, type RenderedMessage } from './catalog'
 import { escapeHtml } from './html'
 import type { Services } from './services'
 
+/** How long one send may take. IAM has no request-scoped signal that outlives `waitUntil`, so each send carries its own. */
+export const EMAIL_SEND_DEADLINE_MS = 30_000
+
 type Placeholders<K extends MessageKind> = { readonly [P in MailPlaceholder<K>]: string }
 
 /** The values an application's template of each message names, beside those every message names. */

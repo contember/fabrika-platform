@@ -433,12 +433,43 @@ describe('members.assign by email: an invitation only the verified mailbox can a
 		expect(await assign(f, owner, scope, 'editor', { principalId: editor.id })).toMatchObject({ ok: true })
 	})
 
-	test('a failed delivery leaves no invitation behind', async () => {
-		const f = await fixture(new CapturingEmail(true))
+	test('a delivery that was not sent leaves no invitation behind', async () => {
+		const f = await fixture(new CapturingEmail('provider_rejected'))
 		const owner = await f.person('owner')
 		const scope = await workspaceOf(f, owner)
 		expect(await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })).toEqual({ ok: false, reason: 'delivery_failed' })
 		expect(await f.repositories.membership.listOpenInvitations(APP, scope)).toEqual([])
+	})
+
+	test('a sender that throws outside the error contract leaves no invitation behind', async () => {
+		const f = await fixture(new CapturingEmail('foreign'))
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		expect(await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })).toEqual({ ok: false, reason: 'delivery_failed' })
+		expect(await f.repositories.membership.listOpenInvitations(APP, scope)).toEqual([])
+	})
+
+	test('a message that cannot be rendered leaves no invitation behind and sends nothing', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		f.repositories.appSchema.getPresentation = () => Promise.reject(new Error('template store unavailable'))
+		await expect(assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })).rejects.toThrow('template store unavailable')
+		expect(await f.repositories.membership.listOpenInvitations(APP, scope)).toEqual([])
+		expect(email.messages).toEqual([])
+	})
+
+	test('a delivery with an unknown outcome keeps the invitation its link may name', async () => {
+		const email = new CapturingEmail('network_error')
+		const f = await fixture(email)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		expect(await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })).toEqual({ ok: false, reason: 'delivery_failed' })
+		expect(await f.repositories.membership.listOpenInvitations(APP, scope)).toHaveLength(1)
+		const invitee = await f.repositories.principals.getPrincipalById((await f.person('invitee')).id)
+		if (invitee === null) throw new Error('fixture')
+		expect(await acceptInvitation(f.services, invitee, email.lastToken(), 'accept-req')).toMatchObject({ ok: true })
 	})
 })
 

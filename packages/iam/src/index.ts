@@ -42,6 +42,8 @@ import type {
 	RevokeMemberInput,
 	RevokeMemberResult,
 } from '@fabrika/auth-core'
+import { pickEmailEnvironment } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { createIamApp } from './app'
 import { runIamMaintenance } from './cron'
@@ -76,12 +78,13 @@ import { createIamRpc } from './rpc'
  */
 const workerApp = createIamApp({ clientAddressHeader: 'CF-Connecting-IP', requestIdHeader: 'cf-ray' })
 export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_API_KEY'>
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_CONFIG' | 'EMAIL_PROVIDERS'>
 {
 	DB: D1Database
 	FABRIKA_IAM_SIGNING_KEYS?: string
 	FABRIKA_IAM_PROVISIONING_KEY?: string
-	FABRIKA_EMAIL_RESEND_API_KEY?: string
+	/** The mail transport's vars and secrets, whichever provider they name. */
+	[emailVariable: `FABRIKA_EMAIL_${string}`]: string | undefined
 }
 
 /** Present native Worker bindings as the runtime-neutral IAM environment. */
@@ -92,7 +95,8 @@ export function iamEnv(bindings: WorkerBindings): Env {
 		REPOSITORIES: createIamRepositories(bindings.DB),
 		FABRIKA_IAM_SIGNING_KEYS: bindings.FABRIKA_IAM_SIGNING_KEYS ?? '',
 		FABRIKA_IAM_PROVISIONING_KEY: bindings.FABRIKA_IAM_PROVISIONING_KEY ?? '',
-		EMAIL_API_KEY: bindings.FABRIKA_EMAIL_RESEND_API_KEY ?? '',
+		EMAIL_CONFIG: pickEmailEnvironment(bindings),
+		EMAIL_PROVIDERS: builtinEmailProviders,
 	}
 }
 

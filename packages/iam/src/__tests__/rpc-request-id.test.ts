@@ -36,7 +36,6 @@ function env(h: Harness): Env {
 		ENVIRONMENT: 'stage',
 		OIDC_ENABLED: 'false',
 		PASSWORD_ENABLED: 'true',
-		EMAIL_PROVIDER: 'none',
 		ISSUER: 'https://iam.example.test',
 		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: '',

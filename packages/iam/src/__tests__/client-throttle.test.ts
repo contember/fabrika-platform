@@ -169,7 +169,10 @@ describe('one client is bounded without bounding another', () => {
 			issuer: ISSUER,
 			authentication: { oidc: false, password: true },
 			passwordHasher: new CountingHasher(),
-			email: { send: () => Promise.resolve({ status: 'accepted', provider: 'test', messageId: 'm' }) },
+			email: {
+				capabilities: { idempotent: true, confirmation: 'sync', maxBatch: 1 },
+				send: () => Promise.resolve({ status: 'accepted', provider: 'test', messageId: 'm' }),
+			},
 		})
 		const address = '203.0.113.12'
 		const ctx = new TestContext()
@@ -251,7 +254,6 @@ function appEnv(h: Harness): Env {
 		ENVIRONMENT: 'stage',
 		OIDC_ENABLED: 'false',
 		PASSWORD_ENABLED: 'true',
-		EMAIL_PROVIDER: 'none',
 		ISSUER: ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',

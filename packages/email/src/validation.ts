@@ -1,3 +1,4 @@
+import type { EmailSenderIdentity } from './config.js'
 import { EmailDeliveryError, type EmailMessage } from './email.js'
 
 /** The longest subject a message may have, in UTF-16 code units: RFC 5322's line limit. */
@@ -20,17 +21,35 @@ export function isValidEmailAddress(value: string): boolean {
 	return domain.split('.').every((label) => label.length <= 63 && DOMAIN_LABEL.test(label))
 }
 
+/** A mailbox address, or the legacy `Name <address>` form. */
 export function isValidEmailFrom(value: string): boolean {
-	if (isValidEmailAddress(value)) return true
-	if (value.length === 0 || value.length > 384 || value.trim() !== value || containsControlCharacter(value) || !value.endsWith('>')) return false
+	return parseEmailFrom(value) !== null
+}
+
+/**
+ * Splits a bare address or the legacy `Name <address>` form. A name in one pair of double quotes loses them, since a
+ * transport quotes the name itself when it has to.
+ */
+export function parseEmailFrom(value: string): EmailSenderIdentity | null {
+	if (isValidEmailAddress(value)) return { address: value }
+	if (value.length === 0 || value.length > 384 || value.trim() !== value || containsControlCharacter(value) || !value.endsWith('>')) return null
 
 	const openingBracket = value.lastIndexOf('<')
-	if (openingBracket <= 0 || value.indexOf('<') !== openingBracket || value.indexOf('>') !== value.length - 1) return false
+	if (openingBracket <= 0 || value.indexOf('<') !== openingBracket || value.indexOf('>') !== value.length - 1) return null
 
-	const displayName = value.slice(0, openingBracket).trim()
+	const displayName = unquoted(value.slice(0, openingBracket).trim())
 	const address = value.slice(openingBracket + 1, -1)
-	return displayName.length > 0 && displayName.length <= 128 && !displayName.includes('<') && !displayName.includes('>')
-		&& isValidEmailAddress(address)
+	if (!isValidEmailDisplayName(displayName) || !isValidEmailAddress(address)) return null
+	return { address, name: displayName }
+}
+
+/** 1..128 characters, no control characters and none of `<>"\`, so a transport can always quote it. */
+export function isValidEmailDisplayName(value: string): boolean {
+	return value.length > 0 && value.length <= 128 && !containsControlCharacter(value) && !/[<>"\\]/.test(value)
+}
+
+export function isValidEmailSenderIdentity(identity: EmailSenderIdentity): boolean {
+	return isValidEmailAddress(identity.address) && (identity.name === undefined || isValidEmailDisplayName(identity.name))
 }
 
 export function validateEmailMessage(message: EmailMessage): void {
@@ -42,10 +61,12 @@ export function validateEmailMessage(message: EmailMessage): void {
 	if (message.idempotencyKey.length === 0 || message.idempotencyKey.length > 256 || !isVisibleAscii(message.idempotencyKey)) {
 		throw invalidMessage('Email idempotency key is invalid')
 	}
+	if (message.replyTo !== undefined && !isValidEmailAddress(message.replyTo)) throw invalidMessage('Email reply-to address is invalid')
+	if (message.fromName !== undefined && !isValidEmailDisplayName(message.fromName)) throw invalidMessage('Email sender name is invalid')
 }
 
 function invalidMessage(message: string): EmailDeliveryError {
-	return new EmailDeliveryError(message, { code: 'invalid_message', retryable: false })
+	return new EmailDeliveryError(message, { code: 'invalid_message' })
 }
 
 function containsControlCharacter(value: string): boolean {
@@ -56,7 +77,11 @@ function containsControlCharacter(value: string): boolean {
 	return false
 }
 
-function isVisibleAscii(value: string): boolean {
+function unquoted(value: string): string {
+	return value.length >= 2 && value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value
+}
+
+export function isVisibleAscii(value: string): boolean {
 	for (const character of value) {
 		const code = character.charCodeAt(0)
 		if (code < 33 || code > 126) return false

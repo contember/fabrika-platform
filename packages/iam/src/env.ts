@@ -1,4 +1,4 @@
-import type { EmailSender } from '@fabrika/email'
+import type { EmailEnvironment, EmailProviderRegistry, EmailSender } from '@fabrika/email'
 import type { SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { IamRepositories } from './db'
 
@@ -58,13 +58,13 @@ export interface Env {
 	/** Independent authentication-method switches. Absent preserves the legacy OIDC-only mode. */
 	OIDC_ENABLED?: string
 	PASSWORD_ENABLED?: string
-	/** Shared email transport. `none` or absent disables delivery; `resend` requires sender and API key. */
-	EMAIL_PROVIDER?: string
-	EMAIL_FROM?: string
-	EMAIL_API_KEY?: string
+	/** The installation's `FABRIKA_EMAIL_*` variables. An absent or `none` provider disables delivery. */
+	EMAIL_CONFIG?: EmailEnvironment
+	/** The providers `FABRIKA_EMAIL_PROVIDER` may name. Absent is an empty registry, which admits only `none`. */
+	EMAIL_PROVIDERS?: EmailProviderRegistry
 	/**
-	 * A sender the composition root supplies in place of `EMAIL_PROVIDER`: the local stack's mail capture. A port, not
-	 * a variable, and refused by `buildServices` outside `ENVIRONMENT=local` or beside a configured provider.
+	 * A sender the composition root supplies in place of a configured provider: the local stack's mail capture. A port,
+	 * not a variable, and refused by `buildServices` outside `ENVIRONMENT=local` or beside a configured provider.
 	 */
 	EMAIL_SENDER?: EmailSender
 

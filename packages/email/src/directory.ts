@@ -6,15 +6,19 @@ import { createHash, randomUUID } from 'node:crypto'
 import { link, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
-import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender } from './email.js'
+import { emailContentOf, sameEmailContent } from './content.js'
+import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender, type EmailSenderCapabilities } from './email.js'
 import { validateEmailMessage } from './validation.js'
 
 const capturedEmailSchema = z.object({
 	messageId: z.string().min(1),
+	idempotencyKey: z.string(),
 	to: z.string(),
 	subject: z.string(),
 	text: z.string(),
 	html: z.string().optional(),
+	replyTo: z.string().optional(),
+	fromName: z.string().optional(),
 	capturedAt: z.number().int(),
 })
 
@@ -27,40 +31,41 @@ export interface DirectoryEmailSenderOptions {
 }
 
 export class DirectoryEmailSender implements EmailSender {
+	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 }
 	readonly #directory: string
 	readonly #now: () => number
 
 	constructor(options: DirectoryEmailSenderOptions) {
 		if (!isAbsolute(options.directory)) {
-			throw new EmailDeliveryError('The mail capture directory must be an absolute path', { code: 'invalid_configuration', retryable: false })
+			throw new EmailDeliveryError('The mail capture directory must be an absolute path', { code: 'invalid_configuration' })
 		}
 		this.#directory = options.directory
 		this.#now = options.now ?? Date.now
 	}
 
-	/** One file per idempotency key: a repeated send keeps the first message and answers the same id, as a provider does. */
-	async send(message: EmailMessage): Promise<EmailDeliveryResult> {
+	/** One file per idempotency key: a repeated send of the same message answers the first id, as a provider does. */
+	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
+		if (signal.aborted) throw new EmailDeliveryError('The mail capture was aborted by the caller', { code: 'aborted' })
 		const messageId = createHash('sha256').update(message.idempotencyKey).digest('hex')
-		const captured: CapturedEmail = {
-			messageId,
-			to: message.to,
-			subject: message.subject,
-			text: message.text,
-			...(message.html === undefined ? {} : { html: message.html }),
-			capturedAt: this.#now(),
-		}
+		const captured: CapturedEmail = { messageId, idempotencyKey: message.idempotencyKey, ...emailContentOf(message), capturedAt: this.#now() }
+		const path = join(this.#directory, `${messageId}.json`)
 		// Written aside and linked in, so a reader never sees a partial file and an existing one is never replaced.
 		const pending = join(this.#directory, `.${messageId}.${randomUUID()}.tmp`)
+		let existing: CapturedEmail | null
 		try {
 			await writeFile(pending, JSON.stringify(captured), { flag: 'wx' })
-			await link(pending, join(this.#directory, `${messageId}.json`)).catch((error: unknown) => {
+			existing = await link(pending, path).then(() => null, async (error: unknown) => {
 				if (!isAlreadyCaptured(error)) throw error
+				return readCapturedEmail(path)
 			})
 		} catch {
-			throw new EmailDeliveryError('The mail capture directory could not be written', { code: 'provider_unavailable', retryable: true })
+			throw new EmailDeliveryError('The mail capture directory could not be written', { code: 'provider_unavailable' })
 		} finally {
 			await unlink(pending).catch(() => undefined)
+		}
+		if (existing !== null && !sameEmailContent(existing, captured)) {
+			throw new EmailDeliveryError('A different message was already captured under this idempotency key', { code: 'idempotency_conflict' })
 		}
 		return { status: 'accepted', provider: 'directory', messageId }
 	}
@@ -69,8 +74,12 @@ export class DirectoryEmailSender implements EmailSender {
 /** Every message a `DirectoryEmailSender` captured in `directory`, oldest first. */
 export async function readCapturedEmails(directory: string): Promise<CapturedEmail[]> {
 	const names = (await readdir(directory)).filter((name) => name.endsWith('.json') && !name.startsWith('.'))
-	const emails = await Promise.all(names.map(async (name) => capturedEmailSchema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')))))
+	const emails = await Promise.all(names.map((name) => readCapturedEmail(join(directory, name))))
 	return emails.sort((left, right) => left.capturedAt - right.capturedAt || left.messageId.localeCompare(right.messageId))
+}
+
+async function readCapturedEmail(path: string): Promise<CapturedEmail> {
+	return capturedEmailSchema.parse(JSON.parse(await readFile(path, 'utf8')))
 }
 
 function isAlreadyCaptured(error: unknown): boolean {

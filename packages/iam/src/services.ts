@@ -1,6 +1,5 @@
 import { LOCAL_ENVIRONMENT, parseJsonStringArray, readEnvironmentName } from '@fabrika/auth-core'
-import type { EmailSender } from '@fabrika/email'
-import { ResendEmailSender } from '@fabrika/email/resend'
+import { type EmailSender, emailSenderFromEnv, readEmailTransportConfig } from '@fabrika/email'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
@@ -175,18 +174,14 @@ function buildOidc(env: Env): OidcClient {
 }
 
 function buildEmailSender(env: Env, environment: string): EmailSender | null {
-	const provider = env.EMAIL_PROVIDER ?? 'none'
+	const config = env.EMAIL_CONFIG ?? {}
+	const providers = env.EMAIL_PROVIDERS ?? {}
 	if (env.EMAIL_SENDER !== undefined) {
 		if (environment !== LOCAL_ENVIRONMENT) throw new Error('A composition email sender is local-only; set ENVIRONMENT=local or remove it')
-		if (provider !== 'none') throw new Error('A composition email sender replaces EMAIL_PROVIDER, which must then be none')
+		if (readEmailTransportConfig(config, providers).kind !== 'none') {
+			throw new Error('A composition email sender replaces FABRIKA_EMAIL_PROVIDER, which must then be none')
+		}
 		return env.EMAIL_SENDER
 	}
-	if (provider === 'none') return null
-	if (provider === 'resend') {
-		return new ResendEmailSender({
-			from: required('EMAIL_FROM', env.EMAIL_FROM),
-			apiKey: required('EMAIL_API_KEY', env.EMAIL_API_KEY),
-		})
-	}
-	throw new Error(`Unsupported EMAIL_PROVIDER '${provider}'`)
+	return emailSenderFromEnv(config, providers)
 }

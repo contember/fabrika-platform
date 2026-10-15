@@ -1,5 +1,6 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import type { EmailMessage, EmailSender } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { type AdminContext, AdminUseCaseError, adminUseCases } from '../admin/handlers'
@@ -31,9 +32,10 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		ENVIRONMENT: 'stage',
 		OIDC_ENABLED: String(options.oidc ?? true),
 		PASSWORD_ENABLED: String(options.password ?? true),
-		EMAIL_PROVIDER: options.email === true ? 'resend' : 'none',
-		EMAIL_FROM: options.email === true ? 'auth@example.com' : undefined,
-		EMAIL_API_KEY: options.email === true ? 're_test_key' : undefined,
+		EMAIL_CONFIG: options.email === true
+			? { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'auth@example.com', FABRIKA_EMAIL_RESEND_API_KEY: 're_test_key' }
+			: {},
+		EMAIL_PROVIDERS: builtinEmailProviders,
 		ISSUER: ORIGIN,
 		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: options.provisioningKey ?? '',
@@ -294,6 +296,7 @@ describe('password administration delivery and audit', () => {
 		const user = seedUser(h.sqlite, { sub: null, email: 'mail-user@example.com' })
 		const messages: EmailMessage[] = []
 		const sender: EmailSender = {
+			capabilities: { idempotent: true, confirmation: 'sync', maxBatch: 1 },
 			async send(message) {
 				messages.push(message)
 				return { status: 'accepted', provider: 'test', messageId: 'message-1' }
@@ -321,6 +324,7 @@ describe('password administration delivery and audit', () => {
 		const { id: adminId } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: null, email: 'private-address@example.com' })
 		const sender: EmailSender = {
+			capabilities: { idempotent: true, confirmation: 'sync', maxBatch: 1 },
 			send() {
 				return Promise.reject(new Error('provider body with private-address@example.com and secret-token'))
 			},

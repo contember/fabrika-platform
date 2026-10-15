@@ -1,133 +1,126 @@
 import { z } from 'zod'
-import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender } from './email.js'
-import { isValidEmailFrom, validateEmailMessage } from './validation.js'
+import { type EmailProvider, type EmailSenderIdentity, parseProviderVariables } from './config.js'
+import {
+	EmailDeliveryError,
+	type EmailDeliveryResult,
+	type EmailFetch,
+	type EmailMessage,
+	type EmailSender,
+	type EmailSenderCapabilities,
+} from './email.js'
+import { parseTimeout, postToProvider, type ProviderResponse } from './http.js'
+import { isValidEmailSenderIdentity, isVisibleAscii, validateEmailMessage } from './validation.js'
 
 const RESEND_EMAILS_URL = 'https://api.resend.com/emails'
+const LABEL = 'Resend'
 const resendSuccessSchema = z.object({ id: z.string().min(1) })
 const resendErrorSchema = z.object({ name: z.string() })
-
-export type EmailFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+const QUOTA_ERRORS: ReadonlySet<string> = new Set(['daily_quota_exceeded', 'monthly_quota_exceeded'])
+/** RFC 5322 specials a display name may still hold after validation; any of them makes the name a quoted string. */
+const DISPLAY_NAME_SPECIALS = /[()[\]:;@,.]/
 
 export interface ResendEmailSenderOptions {
 	readonly apiKey: string
-	readonly from: string
+	readonly from: EmailSenderIdentity
 	readonly fetch?: EmailFetch
 	readonly timeoutMs?: number
 }
 
 export class ResendEmailSender implements EmailSender {
+	readonly capabilities: EmailSenderCapabilities = { idempotent: true, confirmation: 'sync', maxBatch: 1 }
 	readonly #apiKey: string
-	readonly #from: string
+	readonly #from: EmailSenderIdentity
 	readonly #fetch: EmailFetch
 	readonly #timeoutMs: number
 
 	constructor(options: ResendEmailSenderOptions) {
 		if (!validApiKey(options.apiKey)) {
-			throw new EmailDeliveryError('Resend API key is invalid', { code: 'invalid_configuration', retryable: false })
+			throw new EmailDeliveryError('Resend API key is invalid', { code: 'invalid_configuration' })
 		}
-		if (!isValidEmailFrom(options.from)) {
-			throw new EmailDeliveryError('Resend sender is invalid', { code: 'invalid_configuration', retryable: false })
-		}
-		const timeoutMs = options.timeoutMs ?? 10_000
-		if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
-			throw new EmailDeliveryError('Resend timeout is invalid', { code: 'invalid_configuration', retryable: false })
+		if (!isValidEmailSenderIdentity(options.from)) {
+			throw new EmailDeliveryError('Resend sender is invalid', { code: 'invalid_configuration' })
 		}
 
 		this.#apiKey = options.apiKey
 		this.#from = options.from
 		this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
-		this.#timeoutMs = timeoutMs
+		this.#timeoutMs = parseTimeout(LABEL, options.timeoutMs)
 	}
 
-	async send(message: EmailMessage): Promise<EmailDeliveryResult> {
+	async send(message: EmailMessage, signal: AbortSignal): Promise<EmailDeliveryResult> {
 		validateEmailMessage(message)
 
-		let response: Response
-		const signal = AbortSignal.timeout(this.#timeoutMs)
-		try {
-			response = await this.#fetch(RESEND_EMAILS_URL, {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${this.#apiKey}`,
-					'Content-Type': 'application/json',
-					'Idempotency-Key': message.idempotencyKey,
-				},
-				signal,
-				body: JSON.stringify({
-					from: this.#from,
-					to: message.to,
-					subject: message.subject,
-					text: message.text,
-					...(message.html === undefined ? {} : { html: message.html }),
-				}),
-			})
-		} catch {
-			if (signal.aborted) {
-				throw new EmailDeliveryError('Resend request timed out', { code: 'request_timeout', retryable: true })
-			}
-			throw new EmailDeliveryError('Resend request failed', { code: 'network_error', retryable: true })
+		const response = await postToProvider({
+			label: LABEL,
+			fetch: this.#fetch,
+			url: RESEND_EMAILS_URL,
+			headers: { Authorization: `Bearer ${this.#apiKey}`, 'Idempotency-Key': message.idempotencyKey },
+			body: {
+				from: formatMailbox(this.#from.address, message.fromName ?? this.#from.name),
+				to: message.to,
+				subject: message.subject,
+				text: message.text,
+				...(message.html === undefined ? {} : { html: message.html }),
+				...(message.replyTo === undefined ? {} : { reply_to: message.replyTo }),
+			},
+			signal,
+			timeoutMs: this.#timeoutMs,
+		})
+
+		if (!response.ok) throw responseError(response)
+
+		const parsed = resendSuccessSchema.safeParse(response.body)
+		if (!parsed.success) {
+			throw new EmailDeliveryError('Resend returned an invalid success response', { code: 'malformed_response', httpStatus: response.status })
 		}
 
-		if (!response.ok) throw await responseError(response)
-
-		const messageId = await readMessageId(response)
-		if (messageId === undefined) {
-			throw new EmailDeliveryError('Resend returned an invalid success response', {
-				code: 'malformed_response',
-				retryable: true,
-				httpStatus: response.status,
-			})
-		}
-
-		return { status: 'accepted', provider: 'resend', messageId }
+		return { status: 'accepted', provider: 'resend', messageId: parsed.data.id }
 	}
 }
 
-async function responseError(response: Response): Promise<EmailDeliveryError> {
-	const providerError = await readProviderError(response)
-	if (response.status === 429) {
-		return new EmailDeliveryError('Resend rate limit exceeded', { code: 'rate_limited', retryable: true, httpStatus: response.status })
+const resendVariablesSchema = z.object({ FABRIKA_EMAIL_RESEND_API_KEY: z.string().refine(validApiKey) })
+
+export const resendEmailProvider: EmailProvider = {
+	variables: [{ name: 'FABRIKA_EMAIL_RESEND_API_KEY', secret: true, required: true }],
+	create({ from, env, fetch }) {
+		const variables = parseProviderVariables(resendVariablesSchema, env)
+		return new ResendEmailSender({ apiKey: variables.FABRIKA_EMAIL_RESEND_API_KEY, from, fetch })
+	},
+}
+
+function responseError(response: ProviderResponse): EmailDeliveryError {
+	const status = response.status
+	const parsed = resendErrorSchema.safeParse(response.body)
+	const name = parsed.success ? parsed.data.name : undefined
+	if (status === 401 || status === 403) {
+		return new EmailDeliveryError(`Resend refused the credentials or the sender (${status})`, { code: 'provider_unauthorized', httpStatus: status })
 	}
-	if (response.status >= 500) {
-		return new EmailDeliveryError('Resend is unavailable', { code: 'provider_unavailable', retryable: true, httpStatus: response.status })
+	if (status === 409 && name === 'concurrent_idempotent_requests') {
+		return new EmailDeliveryError('A matching Resend request is still in progress', { code: 'request_in_progress', httpStatus: status })
 	}
-	if (response.status === 409 && providerError === 'concurrent_idempotent_requests') {
-		return new EmailDeliveryError('A matching Resend request is still in progress', {
-			code: 'request_in_progress',
-			retryable: true,
-			httpStatus: response.status,
+	if (status === 409 && name === 'invalid_idempotent_request') {
+		return new EmailDeliveryError('Resend already accepted a different message under this idempotency key', {
+			code: 'idempotency_conflict',
+			httpStatus: status,
 		})
 	}
-	return new EmailDeliveryError(`Resend rejected the request (${response.status})`, {
-		code: 'provider_rejected',
-		retryable: false,
-		httpStatus: response.status,
-	})
-}
-
-async function readMessageId(response: Response): Promise<string | undefined> {
-	const parsed = resendSuccessSchema.safeParse(await readJson(response))
-	return parsed.success ? parsed.data.id : undefined
-}
-
-async function readProviderError(response: Response): Promise<string | undefined> {
-	const parsed = resendErrorSchema.safeParse(await readJson(response))
-	return parsed.success ? parsed.data.name : undefined
-}
-
-async function readJson(response: Response): Promise<unknown> {
-	try {
-		return await response.json()
-	} catch {
-		return undefined
+	if (status === 429 && name !== undefined && QUOTA_ERRORS.has(name)) {
+		return new EmailDeliveryError('Resend sending quota exceeded', { code: 'quota_exceeded', httpStatus: status })
 	}
+	if (status === 429) {
+		return new EmailDeliveryError('Resend rate limit exceeded', { code: 'rate_limited', httpStatus: status })
+	}
+	if (status >= 500) {
+		return new EmailDeliveryError('Resend is unavailable', { code: 'provider_unavailable', httpStatus: status })
+	}
+	return new EmailDeliveryError(`Resend rejected the request (${status})`, { code: 'provider_rejected', httpStatus: status })
+}
+
+function formatMailbox(address: string, name: string | undefined): string {
+	if (name === undefined) return address
+	return DISPLAY_NAME_SPECIALS.test(name) ? `"${name}" <${address}>` : `${name} <${address}>`
 }
 
 function validApiKey(value: string): boolean {
-	if (value.length === 0 || value.trim() !== value) return false
-	for (const character of value) {
-		const code = character.charCodeAt(0)
-		if (code < 33 || code > 126) return false
-	}
-	return true
+	return value.length > 0 && isVisibleAscii(value)
 }
