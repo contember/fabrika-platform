@@ -13,6 +13,7 @@
 // `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`). GitHub App keys
 // are not among them: each source connection's key lives in the vault (ADR-0029).
 
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import {
 	createCloudflareProxyWorker,
 	D1Database,
@@ -26,7 +27,6 @@ import {
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
 import { controlServiceContract } from './fabrika.service'
-import { VOZKA_APP_ID } from './src/actions'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -131,7 +131,7 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 	return createCloudflareProxyWorker({
 		name: 'vozka-proxy',
 		app: buildControlApplicationWorker(ctx),
-		appId: VOZKA_APP_ID,
+		appId: CONTROL_APP_ID,
 		appHost: ctx.domain ?? 'localhost',
 		// A Worker serves no MCP: the console's table without its `oauth` row.
 		installation: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
@@ -141,7 +141,7 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 }
 
 export default defineApp({
-	id: VOZKA_APP_ID,
+	id: CONTROL_APP_ID,
 	resources: buildControlWorker,
 	schema: controlSchema,
 	pipeline: {

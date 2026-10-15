@@ -1,21 +1,5 @@
-import type { ConsoleAccessDto } from '@fabrika/control-contract'
+import { type ConsoleAccessDto, CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
-
-/**
- * The console actions the console shows and hides by. Control's own are declared in `@fabrika/control`'s
- * `src/actions.ts`, a runtime package browser code may not import, so the strings are repeated here.
- */
-export const CONSOLE_ACTIONS = {
-	DEPLOY_TRIGGER: 'deploy.trigger',
-	DEPLOY_READ: 'deploy.read',
-	APP_MANAGE: 'app.manage',
-	NAMESPACE_MANAGE: 'namespace.manage',
-	SOURCE_CONNECTION_MANAGE: 'source.connection.manage',
-	ACCESS_APPROVE: 'access.approve',
-	OPERATIONS_READ: OPERATIONS_ACTIONS.READ,
-	OPERATIONS_TRIAGE: OPERATIONS_ACTIONS.TRIAGE,
-	OPERATIONS_MANAGE: OPERATIONS_ACTIONS.MANAGE,
-}
 
 /** Every page the navigation links to. */
 export type NavPage =
@@ -68,7 +52,7 @@ export function holdsAt(access: ConsoleAccessDto, action: string, at: { readonly
 
 /** The scope values the caller reads runs in, for a caller that holds `deploy.read` only in some. */
 export function scopedRunReads(access: ConsoleAccessDto): { apps: string[]; environments: string[] } {
-	const held = access.scopes.filter((scope) => scope.actions.includes(CONSOLE_ACTIONS.DEPLOY_READ))
+	const held = access.scopes.filter((scope) => scope.actions.includes(CONTROL_ACTIONS.DEPLOY_READ))
 	return {
 		apps: held.filter((scope) => scope.type === 'app').map((scope) => scope.value),
 		environments: held.filter((scope) => scope.type === 'environment').map((scope) => scope.value),
@@ -77,7 +61,7 @@ export function scopedRunReads(access: ConsoleAccessDto): { apps: string[]; envi
 
 /** The application pages list every application, so they need `app.manage` as a global grant. */
 export function opensApplications(access: ConsoleAccessDto | null): boolean {
-	return access === null || holdsGlobally(access, CONSOLE_ACTIONS.APP_MANAGE)
+	return access === null || holdsGlobally(access, CONTROL_ACTIONS.APP_MANAGE)
 }
 
 /** Unknown access reads as usable; see `ConsoleCaller`. */
@@ -87,7 +71,7 @@ function control(caller: ConsoleCaller, holds: (access: ConsoleAccessDto) => boo
 
 /** Each page's rule is what its loader asks for, so a page shown in the navigation loads. */
 export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
-	const { APP_MANAGE, NAMESPACE_MANAGE, DEPLOY_READ, ACCESS_APPROVE, SOURCE_CONNECTION_MANAGE, OPERATIONS_READ } = CONSOLE_ACTIONS
+	const { APP_MANAGE, NAMESPACE_MANAGE, DEPLOY_READ, ACCESS_APPROVE, SOURCE_CONNECTION_MANAGE } = CONTROL_ACTIONS
 	switch (page) {
 		case 'index':
 			return control(caller, (access) => [APP_MANAGE, NAMESPACE_MANAGE, DEPLOY_READ].every((action) => holdsGlobally(access, action)))
@@ -112,7 +96,7 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 		case 'operations/sources':
 		case 'operations/releases':
 		case 'operations/health':
-			return control(caller, (access) => holdsAnywhere(access, OPERATIONS_READ))
+			return control(caller, (access) => holdsAnywhere(access, OPERATIONS_ACTIONS.READ))
 		case 'people':
 			return caller.administersPeople !== false
 	}

@@ -1,5 +1,6 @@
 import { createPage } from '@buzola/router'
-import { CONSOLE_ACTIONS, mayDo } from '../../../lib/console-access'
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
+import { mayDo } from '../../../lib/console-access'
 import { consoleSession } from '../../../lib/session'
 import { operationsClient } from '../../../operations/client'
 import { PageHead } from '../../../operations/components/PageHead'
@@ -12,7 +13,7 @@ export default createPage()
 			operationsClient.sources(),
 			consoleSession(),
 		])
-		return { issues, sources: sources.items, triages: mayDo(access, CONSOLE_ACTIONS.OPERATIONS_TRIAGE) }
+		return { issues, sources: sources.items, triages: mayDo(access, OPERATIONS_ACTIONS.TRIAGE) }
 	})
 	.route('/operations/errors')
 	.render(({ data, invalidate }) => (

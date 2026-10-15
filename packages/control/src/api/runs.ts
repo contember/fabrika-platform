@@ -1,5 +1,6 @@
 import type { AuthContext } from '@fabrika/auth'
 import {
+	CONTROL_ACTIONS,
 	type CursorList,
 	type RunDto,
 	type RunListInput,
@@ -10,7 +11,6 @@ import {
 	type TriggerDeployRequest,
 } from '@fabrika/control-contract'
 import { type BlobStore, type JobQueue, uuidv7 } from '@fabrika/platform'
-import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { appScope, envScope } from '../iam'
 import { isRefPattern } from '../ref-match'
@@ -82,7 +82,7 @@ export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput
 }
 
 export async function getRunUseCase(c: RunReadContext, id: string): Promise<RunDto> {
-	const row = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
+	const row = await requireVisibleRun(c, id, CONTROL_ACTIONS.DEPLOY_READ)
 	return toRunDto(row)
 }
 
@@ -92,7 +92,7 @@ export async function getRunUseCase(c: RunReadContext, id: string): Promise<RunD
  * The use case resolves the run before its scoped ACL check and hides denied rows as not found.
  */
 export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
-	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_TRIGGER)
+	const run = await requireVisibleRun(c, id, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	if (run.status !== 'pending' && run.status !== 'running' && run.status !== 'awaiting_approval') {
 		fail(409, 'run already finished')
 	}
@@ -113,7 +113,7 @@ export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promi
  * the dashboard renders them without re-parsing NDJSON. 404 when the run / its log doesn't exist yet.
  */
 export async function getRunLogUseCase(c: RunReadContext, id: string): Promise<RunLogResponse> {
-	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
+	const run = await requireVisibleRun(c, id, CONTROL_ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	if (!object) {
 		return { lines: [] }
@@ -129,7 +129,7 @@ export async function getRunLogUseCase(c: RunReadContext, id: string): Promise<R
  * slice of lines past the cursor the dashboard already has. Returns the new lines + the next cursor.
  */
 export async function tailRunLogUseCase(c: RunsUseCaseContext, id: string, after: number): Promise<RunTailResponse> {
-	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
+	const run = await requireVisibleRun(c, id, CONTROL_ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	const all = object ? parseNdjsonLogs(await object.text()) : []
 	const lines = all.slice(after)
@@ -177,7 +177,7 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
 	if (!appEnv) {
 		fail(404, 'app env not found')
 	}
-	if (!canAtCoordinates(c.auth, ACTIONS.DEPLOY_TRIGGER, appId, env)) fail(404, 'app env not found')
+	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_TRIGGER, appId, env)) fail(404, 'app env not found')
 	// Explicit ref wins; else the env's trigger_ref when it's a concrete ref; else the app's default
 	// branch. A GLOB trigger_ref (e.g. `refs/tags/v*`) is never a deployable ref, so it falls through to
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.
@@ -235,12 +235,12 @@ function authorizeList(auth: AuthContext, input: RunListInput): void {
 	const env = input.env
 	const allowed = appId !== undefined && appId !== ''
 		? env !== undefined && env !== ''
-			? auth.can(ACTIONS.DEPLOY_READ, appScope(appId)) || auth.can(ACTIONS.DEPLOY_READ, envScope(env))
-			: auth.can(ACTIONS.DEPLOY_READ, appScope(appId))
+			? auth.can(CONTROL_ACTIONS.DEPLOY_READ, appScope(appId)) || auth.can(CONTROL_ACTIONS.DEPLOY_READ, envScope(env))
+			: auth.can(CONTROL_ACTIONS.DEPLOY_READ, appScope(appId))
 		: env !== undefined && env !== ''
-		? auth.can(ACTIONS.DEPLOY_READ, envScope(env))
-		: auth.can(ACTIONS.DEPLOY_READ)
-	if (!allowed) fail(403, `not authorized: ${ACTIONS.DEPLOY_READ}`)
+		? auth.can(CONTROL_ACTIONS.DEPLOY_READ, envScope(env))
+		: auth.can(CONTROL_ACTIONS.DEPLOY_READ)
+	if (!allowed) fail(403, `not authorized: ${CONTROL_ACTIONS.DEPLOY_READ}`)
 }
 
 export function canAtCoordinates(auth: AuthContext, action: string, appId: string, env: string): boolean {

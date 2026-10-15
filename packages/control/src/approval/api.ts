@@ -3,8 +3,8 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import type { AppEnvDto, ApprovalDto, CompleteApprovalRequest, ListResponse, SetEnvironmentProtectionRequest } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
-import { ACTIONS } from '../actions'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
 import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
@@ -65,7 +65,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 		await lease.release()
 	}
 	await c.auth.audit({
-		action: ACTIONS.ACCESS_APPROVE,
+		action: CONTROL_ACTIONS.ACCESS_APPROVE,
 		resourceType: 'run',
 		resourceId: run.id,
 		metadata: {
@@ -83,7 +83,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 /** Set an environment's `protected` flag: the same human rule as approving, and audited (ADR-0050 §4). */
 export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
 	requireHumanApprover(c.auth, c)
-	if (!canAtCoordinates(c.auth, ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
+	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
 	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
 	if (before === null) fail(404, 'app env not found')
 	// A job started under the old flag would still apply what it allowed, so the change waits for the deployment.
@@ -109,7 +109,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 }
 
 function mayApprove(auth: AuthContext, run: RunRow): boolean {
-	return canAtCoordinates(auth, ACTIONS.ACCESS_APPROVE, run.app_id, run.env)
+	return canAtCoordinates(auth, CONTROL_ACTIONS.ACCESS_APPROVE, run.app_id, run.env)
 }
 
 async function requireClassifiedRun(c: ApprovalUseCaseContext, runId: string): Promise<RunRow> {

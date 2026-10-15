@@ -19,7 +19,7 @@ import {
 	type Scope,
 } from '@fabrika/auth'
 import { parseJsonStringArray } from '@fabrika/auth-core'
-import { SCOPES, VOZKA_APP_ID } from './actions'
+import { CONTROL_APP_ID, CONTROL_SCOPES } from '@fabrika/control-contract'
 import { error } from './http'
 
 /** The bindings + vars the IAM factory needs (a subset of the Worker `Env`). */
@@ -92,7 +92,7 @@ export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<strin
  * `docs/reference/human-authentication.md`.
  */
 export function controlAuthenticator(env: IamEnv): (request: Request) => Promise<ControlAuthentication> {
-	const iam = createAppIam(env, { appId: VOZKA_APP_ID })
+	const iam = createAppIam(env, { appId: CONTROL_APP_ID })
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
 
 	return async (request) => {
@@ -163,10 +163,10 @@ class BootstrapAdminAuthContext implements AuthContext {
 	}
 }
 
-/** Scope builders for the two fabrika dimensions (src/actions.ts). */
+/** Scope builders for the two fabrika dimensions (`CONTROL_SCOPES`). */
 export function appScope(appId: string): Scope {
-	return { type: SCOPES.APP, value: appId }
+	return { type: CONTROL_SCOPES.APP, value: appId }
 }
 export function envScope(env: string): Scope {
-	return { type: SCOPES.ENVIRONMENT, value: env }
+	return { type: CONTROL_SCOPES.ENVIRONMENT, value: env }
 }

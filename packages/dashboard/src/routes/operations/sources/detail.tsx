@@ -1,7 +1,8 @@
 import { createPage, Link } from '@buzola/router'
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsHealthCheckUpsertRequestDto } from '@fabrika/operations-contract/operator-api'
 import { useState } from 'react'
-import { CONSOLE_ACTIONS, mayDo } from '../../../lib/console-access'
+import { mayDo } from '../../../lib/console-access'
 import { fmtDate } from '../../../lib/format'
 import { consoleSession } from '../../../lib/session'
 import { operationsClient } from '../../../operations/client'
@@ -25,7 +26,7 @@ export default createPage()
 			operationsClient.sourceHealth({ sourceId: params.sourceId }),
 			consoleSession(),
 		])
-		const manages = mayDo(access, CONSOLE_ACTIONS.OPERATIONS_MANAGE, { app: source.source.appId, env: source.source.environment })
+		const manages = mayDo(access, OPERATIONS_ACTIONS.MANAGE, { app: source.source.appId, env: source.source.environment })
 		return { source: source.source, health, manages }
 	})
 	.route('/operations/sources/:sourceId')

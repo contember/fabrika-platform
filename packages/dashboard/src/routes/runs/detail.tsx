@@ -1,10 +1,11 @@
 import { createPage, Link } from '@buzola/router'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { LogView } from '../../components/LogView'
 import { Chip, RunStatus } from '../../components/Status'
 import { api, ApiError } from '../../lib/api'
-import { CONSOLE_ACTIONS, mayDo, opensApplications } from '../../lib/console-access'
+import { mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 
@@ -50,7 +51,7 @@ export default createPage()
 						</div>
 						<div className="row-actions">
 							<RunStatus status={run.status} />
-							{inFlight && mayDo(access, CONSOLE_ACTIONS.DEPLOY_TRIGGER, at) && <CancelButton runId={run.id} onDone={invalidate} />}
+							{inFlight && mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, at) && <CancelButton runId={run.id} onDone={invalidate} />}
 						</div>
 					</div>
 				</div>

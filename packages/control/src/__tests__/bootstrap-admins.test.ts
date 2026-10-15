@@ -1,6 +1,6 @@
 import { type AuthContext, type IamRpc, PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
-import { ACTIONS } from '../actions'
 import { controlAuthenticator, parseBootstrapAdmins } from '../iam'
 
 /** What a credentialed row's handler gets: the caller, or the response it answers instead of running. */
@@ -128,12 +128,12 @@ describe('controlAuthenticator bootstrap semantics', () => {
 
 		expect(listed.nextCalled).toBe(true)
 		expect(listed.auth?.principal?.type).toBe('user')
-		for (const action of Object.values(ACTIONS)) {
+		for (const action of Object.values(CONTROL_ACTIONS)) {
 			expect(listed.auth?.can(action)).toBe(true)
 		}
 		expect(notListed.nextCalled).toBe(true)
-		expect(notListed.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
-		expect(notListed.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
+		expect(notListed.auth?.can(CONTROL_ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(notListed.auth?.can(CONTROL_ACTIONS.APP_MANAGE)).toBe(false)
 	})
 
 	test('bootstrap elevation does not apply to a service caller, however it is listed', async () => {
@@ -145,8 +145,8 @@ describe('controlAuthenticator bootstrap semantics', () => {
 
 		expect(service.nextCalled).toBe(true)
 		expect(service.auth?.principal?.type).toBe('service')
-		expect(service.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
-		expect(service.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
+		expect(service.auth?.can(CONTROL_ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(service.auth?.can(CONTROL_ACTIONS.APP_MANAGE)).toBe(false)
 	})
 
 	test('elevation keys on the VERIFIED label, so a listed email nobody presented elevates nobody', async () => {
@@ -158,8 +158,8 @@ describe('controlAuthenticator bootstrap semantics', () => {
 		)
 
 		expect(result.nextCalled).toBe(true)
-		expect(result.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
-		expect(result.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
+		expect(result.auth?.can(CONTROL_ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(result.auth?.can(CONTROL_ACTIONS.APP_MANAGE)).toBe(false)
 	})
 
 	test('an /api/* request with no proxy-injected token is refused', async () => {

@@ -1,7 +1,8 @@
 import { useNavigate } from '@buzola/router'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type PutAppEnvRequest, type TriggerDeployRequest } from '../../lib/api'
-import { CONSOLE_ACTIONS, mayDo } from '../../lib/console-access'
+import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { shortRef } from '../../lib/format'
 import { cloudflareArtifactWithConfigPath, cloudflareConfigPath } from '../../lib/manifest-editor'
@@ -82,7 +83,7 @@ function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
 		}
 	}
 
-	if (!mayDo(access, CONSOLE_ACTIONS.DEPLOY_TRIGGER, { app: appId, env: env.env })) return null
+	if (!mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, { app: appId, env: env.env })) return null
 
 	return (
 		<>

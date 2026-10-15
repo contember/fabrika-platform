@@ -1,7 +1,7 @@
 import { type AuthContext, PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { DeviceAuthorizationCaller, DeviceAuthorizationFailure, DeviceAuthorizationRequest, IamRpc } from '@fabrika/auth-core'
 import type { BuilderPairingProofRequest, ListOwnBuilderPairingsRequest, RevokeBuilderPairingRequest } from '@fabrika/control-contract'
-import { ACTIONS, VOZKA_APP_ID } from '../actions'
+import { CONTROL_ACTIONS, CONTROL_APP_ID } from '@fabrika/control-contract'
 import type { ControlRepositories } from '../db'
 import { appScope } from '../iam'
 import { fail } from './domain'
@@ -23,7 +23,7 @@ export function builderPairingCaller(c: BuilderPairingContext): DeviceAuthorizat
 	// Forward the same credential Control verified, never a second bearer or a provisioning fallback.
 	const credential = c.request.headers.get(PROXY_TOKEN_HEADER)?.trim()
 	if (!credential) fail(401, 'authenticated human credential required')
-	return { app: VOZKA_APP_ID, credential, requestId: crypto.randomUUID() }
+	return { app: CONTROL_APP_ID, credential, requestId: crypto.randomUUID() }
 }
 
 export async function inspectBuilderPairing(c: BuilderPairingContext, input: BuilderPairingProofRequest) {
@@ -61,10 +61,10 @@ export function revokeBuilderPairing(c: BuilderPairingContext, input: RevokeBuil
 }
 
 function assertBuilderRequest(request: DeviceAuthorizationRequest, attemptId: string): void {
-	const actions = [ACTIONS.APP_MANAGE, ACTIONS.DEPLOY_TRIGGER, ACTIONS.DEPLOY_READ]
+	const actions = [CONTROL_ACTIONS.APP_MANAGE, CONTROL_ACTIONS.DEPLOY_TRIGGER, CONTROL_ACTIONS.DEPLOY_READ]
 	const now = Math.floor(Date.now() / 1000)
 	if (
-		request.attemptId !== attemptId || request.app !== VOZKA_APP_ID || request.keyLifetimeSeconds !== 30 * 24 * 60 * 60
+		request.attemptId !== attemptId || request.app !== CONTROL_APP_ID || request.keyLifetimeSeconds !== 30 * 24 * 60 * 60
 		|| request.permissions.length !== actions.length || !actions.every((action) => request.permissions.includes(action))
 		|| !Number.isSafeInteger(request.expiresAt) || request.expiresAt <= now || request.expiresAt > now + 600
 	) fail(409, 'device authorization does not match the builder protocol')

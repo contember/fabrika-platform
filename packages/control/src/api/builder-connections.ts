@@ -1,5 +1,5 @@
 import type { BuilderConnectionEnvironmentDto, BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest } from '@fabrika/control-contract'
-import { ACTIONS } from '../actions'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { StoredBuilderConnectionReceipt } from '../db/builder-connections'
 import { appScope } from '../iam'
 import { type BuilderPairingContext, requireBuilderPairingProof } from './builder-pairing'
@@ -11,7 +11,7 @@ import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin } from './
 
 export async function getBuilderConnectionReceipt(c: RegistryUseCaseContext, attemptId: string): Promise<BuilderConnectionReceiptDto> {
 	const receipt = await c.repositories.builderConnections.get(attemptId)
-	if (receipt === null || !c.auth.can(ACTIONS.APP_MANAGE, appScope(receipt.app.id))) fail(404, 'builder connection receipt not found')
+	if (receipt === null || !c.auth.can(CONTROL_ACTIONS.APP_MANAGE, appScope(receipt.app.id))) fail(404, 'builder connection receipt not found')
 	return receipt
 }
 
@@ -21,7 +21,7 @@ export async function createBuilderConnectionReceipt(
 	input: CreateBuilderConnectionReceiptRequest,
 ): Promise<BuilderConnectionReceiptDto> {
 	if (c.auth.principal?.type !== 'user') fail(403, 'builder connection approval requires a human')
-	if (!c.auth.can(ACTIONS.APP_MANAGE, appScope(input.appId))) fail(403, 'not authorized: app.manage')
+	if (!c.auth.can(CONTROL_ACTIONS.APP_MANAGE, appScope(input.appId))) fail(403, 'not authorized: app.manage')
 	const creatorId = await requireBuilderPairingProof(pairing, { attemptId: input.attemptId, approvalVerifier: input.approvalVerifier })
 	const requestKey = receiptRequestKey(input)
 	const previous = await c.repositories.builderConnections.find(input.attemptId)
@@ -44,7 +44,7 @@ export async function createBuilderConnectionReceipt(
 			|| existing.public_origin !== environment.publicOrigin || existing.trigger_ref !== environment.triggerRef
 		) fail(409, 'existing environment does not match the selected placement')
 	} else {
-		if (!c.auth.can(ACTIONS.NAMESPACE_MANAGE)) fail(403, 'not authorized: namespace.manage')
+		if (!c.auth.can(CONTROL_ACTIONS.NAMESPACE_MANAGE)) fail(403, 'not authorized: namespace.manage')
 		await resolveRegistrationNamespace(c, environment.namespaceId, input.appId, environment.env, null)
 	}
 	const stored = await c.repositories.builderConnections.create(

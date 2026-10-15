@@ -1,13 +1,13 @@
+import { CONTROL_ACTIONS, CONTROL_APP_ID, CONTROL_SCOPES } from '@fabrika/control-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { buildControlWorker as BuildControlWorker } from '../../fabrika.config'
-import { ACTIONS, SCOPES, VOZKA_APP_ID } from '../actions'
 
 // fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
 // tests prove: defineApp accepts fabrika's config, the resource graph materializes with fabrika's full
 // binding set, the Access carve-out is PUBLIC for ONLY the webhook route, and the authz schema's
-// actions/scopes match src/actions.ts exactly (no drift between declaration and enforcement).
+// actions/scopes match `@fabrika/control-contract` exactly (no drift between declaration and enforcement).
 
 // fabrika.config materializes its resource graph from FABRIKA_CONTROL_DOMAIN. Set a real
 // unset — it must NOT throw, since the local-dev oblaka shim imports it without a domain). Set a real
@@ -35,7 +35,7 @@ function application(worker: Worker): Worker {
 
 describe('defineApp(vozka config)', () => {
 	test('exports a valid AppConfig with id `vozka` and a resources builder', () => {
-		expect(config.id).toBe(VOZKA_APP_ID)
+		expect(config.id).toBe(CONTROL_APP_ID)
 		expect(config.id).toBe('vozka')
 		expect(typeof config.resources).toBe('function')
 	})
@@ -118,16 +118,16 @@ describe('defineApp(vozka config)', () => {
 // The proxy owns the public route and decides the endpoint table. The app keeps the IAM middleware as
 // defence in depth for the shared Worker runtime.
 
-describe('Schema actions/scopes match src/actions.ts (no drift)', () => {
-	test('the schema action catalog is exactly the ACTIONS constants', () => {
+describe('Schema actions/scopes match the contract (no drift)', () => {
+	test('the schema action catalog is exactly the action constants', () => {
 		const declared = (config.schema?.actions ?? []).map((a) => a.action).sort()
-		const fromActions = [...Object.values(ACTIONS), ...Object.values(OPERATIONS_ACTIONS)].sort()
+		const fromActions = [...Object.values(CONTROL_ACTIONS), ...Object.values(OPERATIONS_ACTIONS)].sort()
 		expect(declared).toEqual(fromActions)
 	})
 
-	test('the scope dimensions are exactly the SCOPES constants', () => {
+	test('the scope dimensions are exactly the CONTROL_SCOPES constants', () => {
 		const declared = (config.schema?.scopes ?? []).map((s) => s.type).sort()
-		expect(declared).toEqual([SCOPES.APP, SCOPES.ENVIRONMENT].sort())
+		expect(declared).toEqual([CONTROL_SCOPES.APP, CONTROL_SCOPES.ENVIRONMENT].sort())
 	})
 
 	test('roles: operator → deploy.* + operations.*, admin → *', () => {

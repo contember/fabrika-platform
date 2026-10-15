@@ -4,7 +4,8 @@ The control plane: registry + queue + encrypted vault, driving a deploy from a G
 trigger, or a repo poll. It runs on **two** targets — a Cloudflare `WorkerEntrypoint` and a long-running
 Bun process — from one shared body of code. Assumes the root CLAUDE.md.
 
-The public `ControlRpcContract`, its DTOs, and `RunLogLine` live in `@fabrika/control-contract`.
+The public `ControlRpcContract`, its DTOs, `RunLogLine`, and the console vocabulary (`CONTROL_APP_ID`,
+`CONTROL_ACTIONS`, `CONTROL_SCOPES`) live in `@fabrika/control-contract`.
 Keep browser and runner consumers on that package instead of importing this
 runtime package.
 
@@ -94,7 +95,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 - **Administrative operations use `/api/rpc` only.** `controlApp` authenticates once in `controlAuthenticator`
   (`src/iam.ts`); `src/control-rpc.ts` applies `.require()` with the action/scope. Run/deploy use cases
   resolve coordinates before checking permissions and hide denied resources as 404. Actions/scopes
-  live in `src/actions.ts`. Keep webhook, health, and GitHub browser protocols as HTTP routes.
+  live in `@fabrika/control-contract` (`src/access.ts`). Keep webhook, health, and GitHub browser protocols as
+  HTTP routes.
   `runs.tail` is cursor-based RPC polling, not a separate streaming endpoint.
 - **`consoleAccess` is information, not a decision** (`src/console-access.ts`). It answers any caller the console
   vocabulary it holds — global actions and actions per `app` or `environment` value, in the caller document's shape
@@ -117,8 +119,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   publishes it through `serviceProxyTable`, and `createControlApp` (`src/app.ts`) serves every row by id with
   `serveService`: a `service` row the proxy did not name in `X-Fabrika-Endpoint` answers 503. Its `*-root` rows
   and the reserved `/webhooks` and `/mcp` keep every path the service answers 404 away from the SPA; with
-  `mcp: false`, `/mcp` is a session-only 404 row. The module stays free of the provider and of `src/` beyond
-  `src/actions.ts`, so `@fabrika/local-stack` imports it into a strict program.
+  `mcp: false`, `/mcp` is a session-only 404 row. The module stays free of the provider and of `src/`, so
+  `@fabrika/local-stack` imports it into a strict program.
 - **ONE MCP switch: the digest of the table the proxy publishes.** The composition writes
   `FABRIKA_SERVICE_TABLE_DIGEST` (`installationTableDigest`) beside the Zerops process from the same manifest
   the proxy gets; `createRuntime` reads it through `controlMcpSwitch` and refuses to start when it is missing or

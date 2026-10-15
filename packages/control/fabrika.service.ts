@@ -6,7 +6,7 @@
 
 import { defineServiceContract } from '@fabrika/app/service'
 import { type BodyAdmission, FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
-import { VOZKA_APP_ID } from './src/actions'
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 
 /** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for. */
 export const CONTROL_MCP_PATH = '/mcp'
@@ -36,7 +36,7 @@ export type ControlEndpointId = ReturnType<typeof controlServiceContract>['endpo
  * neither they nor `/mcp` reach the SPA. With MCP off, `/mcp` is such a row for a session.
  */
 export function controlServiceContract(options: ControlServiceOptions) {
-	return defineServiceContract(VOZKA_APP_ID, (s) => ({
+	return defineServiceContract(CONTROL_APP_ID, (s) => ({
 		endpoints: {
 			'health': s.health('*', '/healthz'),
 			'api-health': s.health('*', '/api/health'),

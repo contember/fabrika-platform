@@ -1,6 +1,7 @@
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { z } from 'zod'
 
+export * from './access.js'
 export * from './builder-bootstrap.js'
 export * from './builder-connections.js'
 export * from './builder-pairing.js'

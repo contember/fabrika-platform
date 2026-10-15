@@ -2,7 +2,7 @@
 // These checks are authorization; the proxy's session admission keeps another site's page out (ADR-0022).
 
 import type { AuthContext } from '@fabrika/auth'
-import { ACTIONS } from '../actions'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { fail } from '../api/domain'
 import { canAtCoordinates } from '../api/runs'
 import type { AppEnvRow } from '../db'
@@ -35,7 +35,7 @@ export function requireHumanForProtectedDelete(auth: AuthContext, admission: Con
 	if (protectedEnvs.length === 0) return
 	requireHumanApprover(auth, admission)
 	for (const row of protectedEnvs) {
-		if (!canAtCoordinates(auth, ACTIONS.ACCESS_APPROVE, row.app_id, row.env)) {
+		if (!canAtCoordinates(auth, CONTROL_ACTIONS.ACCESS_APPROVE, row.app_id, row.env)) {
 			fail(403, `environment \`${row.env}\` is protected; deleting it takes \`access.approve\``)
 		}
 	}

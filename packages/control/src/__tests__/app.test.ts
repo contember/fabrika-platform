@@ -1,7 +1,6 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
-import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
 import type { Env } from '../env'
 import { githubWebhookSecretLabel } from '../github/connections/secrets'
@@ -215,7 +214,7 @@ describe('controlApp', () => {
 
 	test('keeps manifest and callback paths human-only and returns a browser-safe unavailable status', async () => {
 		const fetch = application({ FABRIKA_CONTROL_DOMAIN: 'https://control.test' })
-		const service = await testToken({ label: 'automation', type: 'service', actions: [ACTIONS.SOURCE_CONNECTION_MANAGE] })
+		const service = await testToken({ label: 'automation', type: 'service', actions: [CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE] })
 		const list = await fetch(rpcRequest('sourceConnection.list', {}, adminToken))
 		expect(list.status).toBe(200)
 		const listBody: unknown = await list.json()

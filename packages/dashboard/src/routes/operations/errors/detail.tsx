@@ -1,6 +1,7 @@
 import { createPage, Link } from '@buzola/router'
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { ApiError } from '../../../lib/api'
-import { CONSOLE_ACTIONS, mayDo } from '../../../lib/console-access'
+import { mayDo } from '../../../lib/console-access'
 import { consoleSession } from '../../../lib/session'
 import { operationsClient } from '../../../operations/client'
 import { ErrorDetailView } from '../../../operations/views/ErrorDetail'
@@ -10,7 +11,7 @@ export default createPage()
 	.loader(async ({ params }) => {
 		const [detail, { access }] = await Promise.all([operationsClient.issue({ issueId: params.issueId }), consoleSession()])
 		const source = detail.issue.source
-		const triages = mayDo(access, CONSOLE_ACTIONS.OPERATIONS_TRIAGE, { app: source.appId, env: source.environment })
+		const triages = mayDo(access, OPERATIONS_ACTIONS.TRIAGE, { app: source.appId, env: source.environment })
 		const [event, assignees, releases] = await Promise.all([
 			operationsClient.latestEvent({ issueId: params.issueId }).catch((error) => {
 				if (error instanceof ApiError && error.httpStatus === 404) return null

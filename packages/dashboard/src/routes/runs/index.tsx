@@ -1,10 +1,11 @@
 import { createPage, Link } from '@buzola/router'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError, type RunDto } from '../../lib/api'
-import { CONSOLE_ACTIONS, holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
+import { holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
 import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 import { consoleSession } from '../../lib/session'
 
@@ -17,7 +18,7 @@ const PAGE_SIZE = 50
 export default createPage()
 	.loader(async () => {
 		const { access } = await consoleSession()
-		const readsAll = access === null || holdsGlobally(access, CONSOLE_ACTIONS.DEPLOY_READ)
+		const readsAll = access === null || holdsGlobally(access, CONTROL_ACTIONS.DEPLOY_READ)
 		const scoped = access === null ? { apps: [], environments: [] } : scopedRunReads(access)
 		const initialFilter = readsAll || scoped.apps.length > 0
 			? { app: readsAll ? '' : (scoped.apps[0] ?? ''), env: '' }

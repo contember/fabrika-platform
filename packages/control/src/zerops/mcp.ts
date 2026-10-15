@@ -1,6 +1,6 @@
 import { createIam, type Iam } from '@fabrika/auth'
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
-import { VOZKA_APP_ID } from '../actions'
 import type { McpRoute } from '../app'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
@@ -18,7 +18,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort): McpRoute
 	let iam: Iam | undefined
 	return createControlMcpHandler({
 		authenticate: (request) => {
-			iam ??= createIam(env, { appId: VOZKA_APP_ID, tokenAudience: { kind: 'resource', app: VOZKA_APP_ID, resource } })
+			iam ??= createIam(env, { appId: CONTROL_APP_ID, tokenAudience: { kind: 'resource', app: CONTROL_APP_ID, resource } })
 			return iam.authenticate(request)
 		},
 		resourceMetadata: controlMcpResourceMetadata(publicOrigin),

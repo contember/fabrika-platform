@@ -1,7 +1,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { ConsoleAccessDto, ConsoleScopedActionsDto } from '@fabrika/control-contract'
+import { CONTROL_SCOPES } from '@fabrika/control-contract'
 import { controlSchema } from '../fabrika.schema'
-import { SCOPES } from './actions'
 
 const CONSOLE_ACTIONS: readonly string[] = controlSchema.actions.map((declared) => declared.action)
 
@@ -17,7 +17,7 @@ export function consoleAccess(auth: AuthContext): ConsoleAccessDto {
 			global.push(action)
 			continue
 		}
-		for (const dimension of Object.values(SCOPES)) {
+		for (const dimension of Object.values(CONTROL_SCOPES)) {
 			for (const value of auth.scopedTo(action, dimension) ?? []) {
 				const key = JSON.stringify([dimension, value])
 				const entry = scoped.get(key) ?? { type: dimension, value, actions: [] }

@@ -6,9 +6,9 @@
 import type { AuthContext } from '@fabrika/auth'
 import { CONTRACT_FILE } from '@fabrika/check/contract'
 import type { RunDto, RunLogLine } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { uuidv7 } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
-import { ACTIONS } from '../actions'
 import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
 import { parseGitHubRepo } from '../github/triggers/push-event'
@@ -98,7 +98,7 @@ interface OwnedWorkspace extends AuthoringTarget {
 export async function listTargetsUseCase(c: WorkspaceUseCaseContext): Promise<{ items: AuthoringTargetDto[] }> {
 	const items: AuthoringTargetDto[] = []
 	for (const appEnv of await c.repositories.registry.listAuthoringAppEnvs()) {
-		const target = await findAuthoringTarget(c, appEnv.app_id, appEnv.env, ACTIONS.SOURCE_WORKSPACE_READ)
+		const target = await findAuthoringTarget(c, appEnv.app_id, appEnv.env, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
 		if (target === null) continue
 		items.push({
 			appId: target.app.id,
@@ -116,7 +116,7 @@ export async function createWorkspaceUseCase(
 	input: { appId: string; env: string; title: string },
 ): Promise<WorkspaceDto> {
 	const ownerId = requireOwner(c.auth)
-	const target = await findAuthoringTarget(c, input.appId, input.env, ACTIONS.SOURCE_WORKSPACE_WRITE)
+	const target = await findAuthoringTarget(c, input.appId, input.env, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
 	if (target === null) fail(404, 'authoring target not found')
 	const baseSha = await sourceCall(() => c.source.readBranch({ target: target.source, branch: target.app.default_branch, signal: c.signal }))
 	if (baseSha === null) fail(409, 'the default branch does not exist')
@@ -158,21 +158,21 @@ export async function listWorkspacesUseCase(
 	})
 	const items: WorkspaceSummaryDto[] = []
 	for (const workspace of rows) {
-		const target = await findAuthoringTarget(c, workspace.app_id, workspace.env, ACTIONS.SOURCE_WORKSPACE_READ)
+		const target = await findAuthoringTarget(c, workspace.app_id, workspace.env, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
 		if (target !== null) items.push(toWorkspaceSummaryDto(workspace))
 	}
 	return { items }
 }
 
 export async function getWorkspaceUseCase(c: WorkspaceUseCaseContext, input: { workspaceId: string }): Promise<WorkspaceDto> {
-	return describeWorkspace(c, await requireWorkspace(c, input.workspaceId, ACTIONS.SOURCE_WORKSPACE_READ))
+	return describeWorkspace(c, await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ))
 }
 
 export async function listFilesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; directory?: string; commitSha?: string },
 ) {
-	const owned = await requireWorkspace(c, input.workspaceId, ACTIONS.SOURCE_WORKSPACE_READ)
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
 	const commitSha = input.commitSha ?? await requireHead(c, owned)
 	return sourceCall(() =>
 		c.source.listTree({
@@ -188,7 +188,7 @@ export async function readFilesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; paths: readonly string[]; commitSha?: string },
 ) {
-	const owned = await requireWorkspace(c, input.workspaceId, ACTIONS.SOURCE_WORKSPACE_READ)
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_READ)
 	const commitSha = input.commitSha ?? await requireHead(c, owned)
 	return sourceCall(() => c.source.readFiles({ target: owned.source, commitSha, paths: input.paths, signal: c.signal }))
 }
@@ -198,7 +198,7 @@ export async function applyChangesUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; expectedHeadSha: string; message: string; changes: readonly WorkspaceFileChange[] },
 ): Promise<{ commitSha: string }> {
-	const owned = await requireWorkspace(c, input.workspaceId, ACTIONS.SOURCE_WORKSPACE_WRITE)
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE)
 	const protectedPaths = input.changes.map((change) => change.path).filter(isProtectedPath)
 	if (protectedPaths.length > 0) {
 		fail(403, `protected paths cannot be changed through a workspace: ${protectedPaths.join(', ')}`)
@@ -238,7 +238,7 @@ export async function applyChangesUseCase(
 
 /** Deploy the live head of the workspace branch, pinned, to the authoring environment as an ordinary manual run. */
 export async function deployStageUseCase(c: WorkspaceUseCaseContext, input: { workspaceId: string }): Promise<RunDto> {
-	const owned = await requireWorkspace(c, input.workspaceId, ACTIONS.DEPLOY_TRIGGER)
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.DEPLOY_TRIGGER)
 	const commitSha = await requireHead(c, owned)
 	return createManualRun(c, {
 		appId: owned.workspace.app_id,
@@ -256,7 +256,7 @@ export async function getDeploymentUseCase(c: WorkspaceUseCaseContext, input: { 
 	const workspace = branch === null ? null : await c.repositories.workspaces.getWorkspaceByBranch(branch)
 	if (
 		row === null || workspace === null || workspace.owner_id !== ownerId || workspace.app_id !== row.app_id || workspace.env !== row.env
-		|| await findAuthoringTarget(c, workspace.app_id, workspace.env, ACTIONS.DEPLOY_READ) === null
+		|| await findAuthoringTarget(c, workspace.app_id, workspace.env, CONTROL_ACTIONS.DEPLOY_READ) === null
 	) fail(404, 'run not found')
 	const run = await getRunUseCase(c, input.runId)
 	const log = await getRunLogUseCase(c, input.runId)
@@ -275,7 +275,7 @@ export async function createPullRequestUseCase(
 	c: WorkspaceUseCaseContext,
 	input: { workspaceId: string; title: string; body: string },
 ): Promise<{ number: number; url: string; created: boolean }> {
-	const owned = await requireWorkspace(c, input.workspaceId, ACTIONS.SOURCE_PULL_REQUEST_CREATE)
+	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.SOURCE_PULL_REQUEST_CREATE)
 	const pullRequest = await sourceCall(() =>
 		c.source.openPullRequest({
 			target: owned.source,

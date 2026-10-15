@@ -1,7 +1,7 @@
 // fabrika's OWN authorization vocabulary, declared in code and reconciled into IAM.
 //
 // Kept in sync with the runtime by importing the SAME constants the control plane enforces against
-// (`src/actions.ts`) — the action strings and scope dimensions here are exactly what
+// (`@fabrika/control-contract`) — the action strings and scope dimensions here are exactly what
 // `auth.can(action, scope)` checks.
 //
 // Roles (`origin='app'`), each a preset for a grant in any scope:
@@ -17,28 +17,28 @@
 // origin has to be registered before a browser can be handed a session on it).
 
 import type { AppSchema } from '@fabrika/auth-core'
+import { CONTROL_ACTIONS, CONTROL_SCOPES } from '@fabrika/control-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
-import { ACTIONS, SCOPES } from './src/actions'
 
 export const controlSchema: AppSchema = {
 	displayName: 'Console',
-	// The two scope dimensions fabrika authorizes within (flat + independent — see src/actions.ts).
+	// The two scope dimensions fabrika authorizes within (flat + independent — see `CONTROL_SCOPES`).
 	scopes: [
-		{ type: SCOPES.APP, label: 'App' },
-		{ type: SCOPES.ENVIRONMENT, label: 'Environment' },
+		{ type: CONTROL_SCOPES.APP, label: 'App' },
+		{ type: CONTROL_SCOPES.ENVIRONMENT, label: 'Environment' },
 	],
-	// The concrete actions fabrika enforces — imported from src/actions.ts so there is no drift.
+	// The concrete actions fabrika enforces — imported from `@fabrika/control-contract` so there is no drift.
 	actions: [
-		{ action: ACTIONS.DEPLOY_TRIGGER, description: 'Trigger a deploy run' },
-		{ action: ACTIONS.DEPLOY_READ, description: 'Read deploy runs + their logs' },
-		{ action: ACTIONS.APP_MANAGE, description: 'Manage the app registry (apps + app_envs)' },
-		{ action: ACTIONS.NAMESPACE_MANAGE, description: 'Manage deployment namespaces' },
-		{ action: ACTIONS.SECRET_MANAGE, description: 'Manage secret values + their references' },
-		{ action: ACTIONS.SOURCE_CONNECTION_MANAGE, description: 'Manage the platform GitHub source connection' },
-		{ action: ACTIONS.SOURCE_WORKSPACE_READ, description: 'Read own Git workspaces on an authoring target' },
-		{ action: ACTIONS.SOURCE_WORKSPACE_WRITE, description: 'Create and commit to own Git workspaces on an authoring target' },
-		{ action: ACTIONS.SOURCE_PULL_REQUEST_CREATE, description: 'Open a pull request from an own Git workspace' },
-		{ action: ACTIONS.ACCESS_APPROVE, description: 'Approve an access change and protect an environment (a person in the console only)' },
+		{ action: CONTROL_ACTIONS.DEPLOY_TRIGGER, description: 'Trigger a deploy run' },
+		{ action: CONTROL_ACTIONS.DEPLOY_READ, description: 'Read deploy runs + their logs' },
+		{ action: CONTROL_ACTIONS.APP_MANAGE, description: 'Manage the app registry (apps + app_envs)' },
+		{ action: CONTROL_ACTIONS.NAMESPACE_MANAGE, description: 'Manage deployment namespaces' },
+		{ action: CONTROL_ACTIONS.SECRET_MANAGE, description: 'Manage secret values + their references' },
+		{ action: CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE, description: 'Manage the platform GitHub source connection' },
+		{ action: CONTROL_ACTIONS.SOURCE_WORKSPACE_READ, description: 'Read own Git workspaces on an authoring target' },
+		{ action: CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE, description: 'Create and commit to own Git workspaces on an authoring target' },
+		{ action: CONTROL_ACTIONS.SOURCE_PULL_REQUEST_CREATE, description: 'Open a pull request from an own Git workspace' },
+		{ action: CONTROL_ACTIONS.ACCESS_APPROVE, description: 'Approve an access change and protect an environment (a person in the console only)' },
 		{ action: OPERATIONS_ACTIONS.READ, description: 'Read Operations errors and activity' },
 		{ action: OPERATIONS_ACTIONS.TRIAGE, description: 'Triage Operations errors' },
 		{ action: OPERATIONS_ACTIONS.MANAGE, description: 'Manage Operations sources, alerts, and retention' },
