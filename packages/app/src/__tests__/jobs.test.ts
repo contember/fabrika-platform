@@ -11,6 +11,8 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { defineContract } from '../contract/define'
 import { implement } from '../implement/implement'
+import { reportEnvelope } from '../jobs/report'
+import { secretScrubber } from '../jobs/scrub'
 import {
 	bootApp,
 	environment,
@@ -401,24 +403,29 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 		expect(kinds(reports)).toEqual([['JobFailed', 'capability_refused']])
 	})
 
-	test('an application error dressed as a framework error reaches no log, result or report', async () => {
+	test('an application error dressed as a framework error reaches no log or result; the report sends it scrubbed', async () => {
 		const secret = 'postgres://notes:hunter2@db/notes'
 		for (const name of ['LeaseLostError', 'CapabilityRefusedError', 'CapabilityLimitError', 'JobError', 'BootError', 'NotFoundError']) {
 			const { clock } = testClock()
 			const { reports, reporter } = recorder()
+			const error = new Error(secret)
+			error.name = name
 			const app = boot({
 				...passing,
 				flaky: async () => {
-					const error = new Error(secret)
-					error.name = name
 					throw error
 				},
 			})
 			const { result, lines } = await logged(() => app.jobs.run('flaky', { clock, reporter }))
 			expect(result).toEqual({ status: 'failed', attempts: 2, code: 'handler_failed' })
-			const everything = JSON.stringify([result, lines, reports])
-			expect(everything).not.toContain('hunter2')
-			expect(everything).not.toContain(name)
+			const logs = JSON.stringify([result, lines])
+			expect(logs).not.toContain('hunter2')
+			expect(logs).not.toContain(name)
+			expect(reports).toEqual([expect.objectContaining({ type: 'JobFailed', tags: { job: 'flaky', code: 'handler_failed' }, error })])
+			const [report] = reports
+			if (report === undefined) throw new Error('no report')
+			const sent = reportEnvelope(report, { release: null, environment: null, source: 'fabrika.jobs', scrubber: secretScrubber([]) }, new Date())
+			expect(sent).not.toContain('hunter2')
 		}
 	})
 

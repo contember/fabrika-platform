@@ -1,6 +1,8 @@
-// A request that answered 5xx: one server log line and, with an Operations DSN, one error event. Both carry fixed codes
-// and bounded identifiers only, never an error's name or message: application code, drivers and even the framework's
-// own refusals can put request data there. A framework failure adds its reason and the reason's catalog text.
+// A request that answered 5xx: one server log line and, with an Operations DSN, one error event. The log line carries
+// fixed codes and bounded identifiers only, never an error's name or message: application code, drivers and even the
+// framework's own refusals can put request data there. The event adds what was thrown as its cause chain, scrubbed of
+// the environment's secrets and of credential patterns, a framework failure's message replaced by its catalog text
+// (ADR-0059).
 
 import { CAPABILITY_ERRORS, CapabilityError, QUERY_REFUSALS, QueryRefusedError } from '@fabrika/db/framework'
 import { isStructuralError } from '../errors'
@@ -69,16 +71,37 @@ export interface RequestFailure {
 	readonly error: unknown
 }
 
-export class FailureReports {
-	readonly #reporter: OperationsReporter | null
+/** At most `limit` admissions per minute of `now`; the next minute starts again. */
+export class MinuteBudget {
+	readonly #limit: number
 	readonly #now: () => number
 	#window = -1
-	#reported = 0
+	#admitted = 0
+
+	constructor(limit: number, now: () => number = Date.now) {
+		this.#limit = limit
+		this.#now = now
+	}
+
+	admit(): boolean {
+		const window = Math.floor(this.#now() / MINUTE_MS)
+		if (window !== this.#window) {
+			this.#window = window
+			this.#admitted = 0
+		}
+		this.#admitted++
+		return this.#admitted <= this.#limit
+	}
+}
+
+export class FailureReports {
+	readonly #reporter: OperationsReporter | null
+	readonly #budget: MinuteBudget
 
 	/** `reporter` is `null` without an Operations DSN: the log line is then the only record. */
 	constructor(reporter: OperationsReporter | null, now: () => number = Date.now) {
 		this.#reporter = reporter
-		this.#now = now
+		this.#budget = new MinuteBudget(MAX_FAILURE_REPORTS_PER_MINUTE, now)
 	}
 
 	/** Never rejects. The returned delivery may outlive the response; a runtime with `waitUntil` keeps it alive. */
@@ -86,7 +109,7 @@ export class FailureReports {
 		const code = failureCode(failure.error)
 		const why = failureReason(failure.error)
 		console.error(`fabrika: ${failure.endpoint}: ${code}${why === null ? '' : `: ${why.reason}: ${why.text}`}`)
-		if (this.#reporter === null || !this.#admit()) {
+		if (this.#reporter === null || !this.#budget.admit()) {
 			return Promise.resolve()
 		}
 		const tags: Record<string, string> = { endpoint: failure.endpoint, code, status: String(failure.status) }
@@ -101,16 +124,7 @@ export class FailureReports {
 			type: 'RequestFailed',
 			message: `endpoint '${failure.endpoint}' answered ${failure.status}: ${code}`,
 			tags,
+			error: failure.error,
 		})
-	}
-
-	#admit(): boolean {
-		const window = Math.floor(this.#now() / MINUTE_MS)
-		if (window !== this.#window) {
-			this.#window = window
-			this.#reported = 0
-		}
-		this.#reported++
-		return this.#reported <= MAX_FAILURE_REPORTS_PER_MINUTE
 	}
 }

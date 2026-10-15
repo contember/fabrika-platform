@@ -6,6 +6,7 @@ import { parseJwks } from '@fabrika/jwks'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { boot, type ContractApp, type IamKeySource } from './implement/boot.js'
 import { CONNECT_BINDING_PREFIX, type ConnectFetch } from './implement/connect.js'
+import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from './implement/crashes.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
 import type { ContractImplementation } from './implement/implement.js'
@@ -146,32 +147,70 @@ function connectBindings(env: Readonly<Record<string, unknown>>): Record<string,
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
+export interface ContractWorkerOptions {
+	/** Where the isolate hears of an unhandled rejection; the global `unhandledrejection` event by default. */
+	readonly rejections?: CrashEvents
+	/** What posts a report to Operations' ingest; `fetch` by default. */
+	readonly operationsFetch?: (request: Request) => Promise<Response>
+}
+
+/** The isolate's `unhandledrejection` event. Listening leaves the runtime's own handling, its log line, in place. */
+function globalRejectionEvents(): CrashEvents {
+	return {
+		listen(listener) {
+			const rejection = (event: Event) => listener('unhandled_rejection', Reflect.get(event, 'reason'))
+			globalThis.addEventListener('unhandledrejection', rejection)
+			return () => globalThis.removeEventListener('unhandledrejection', rejection)
+		},
+	}
+}
+
 /**
  * A Worker module for a contract application, called only by the generated entrypoint. A Worker receives its
  * environment with the first request, so the framework captures it, scrubs the process environment and only then
- * imports the application and boots it, once per environment object.
+ * imports the application and boots it, once per environment object. With an Operations DSN, the first failed boot
+ * of an isolate is reported, and once one booted, every unhandled rejection of the isolate is, within a budget.
  */
-export function createContractWorker(load: ImplementationLoader): {
+export function createContractWorker(load: ImplementationLoader, options: ContractWorkerOptions = {}): {
 	fetch(request: Request, env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<Response>
 } {
 	const booted = new WeakMap<object, Promise<ContractApp>>()
-	const bootFor = async (env: Readonly<Record<string, unknown>>): Promise<ContractApp> => {
+	let bootFailureReported = false
+	let watchingRejections = false
+	const bootFor = async (env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<ContractApp> => {
 		const variables = Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name)))
 		const environment = captureEnvironment(variables)
-		const { default: app } = await load()
-		return boot(app, {
-			environment,
-			iam: bindingKeySource(env['IAM']),
-			assets: bindingAssets(env['ASSETS']),
-			membership: bindingMembership(env['IAM']),
-			connectBindings: connectBindings(env),
-		})
+		const crashes = environmentCrashReporter(environment, options.operationsFetch)
+		let contractApp: ContractApp
+		try {
+			const { default: app } = await load()
+			contractApp = boot(app, {
+				environment,
+				iam: bindingKeySource(env['IAM']),
+				assets: bindingAssets(env['ASSETS']),
+				membership: bindingMembership(env['IAM']),
+				connectBindings: connectBindings(env),
+				...(options.operationsFetch === undefined ? {} : { operationsFetch: options.operationsFetch }),
+			})
+		} catch (error) {
+			// Every request of a failed isolate boots again; one report says it.
+			if (crashes !== null && !bootFailureReported) {
+				bootFailureReported = true
+				exec.waitUntil(crashes.report('boot_failed', error))
+			}
+			throw error
+		}
+		if (crashes !== null && !watchingRejections) {
+			watchingRejections = true
+			reportSurvivedCrashes(options.rejections ?? globalRejectionEvents(), crashes)
+		}
+		return contractApp
 	}
 	return {
 		async fetch(request, env, exec) {
 			let contractApp = booted.get(env)
 			if (contractApp === undefined) {
-				contractApp = bootFor(env)
+				contractApp = bootFor(env, exec)
 				booted.set(env, contractApp)
 				// A failed boot is not cached: the next request boots again and fails with the same problems.
 				contractApp.catch(() => booted.delete(env))

@@ -50,7 +50,7 @@ const UNIT_MS: Readonly<Record<string, number>> = { s: 1_000, m: 60_000, h: 3_60
 
 /**
  * Why a run failed. Fixed codes only: an application error's name and message may carry a secret, so neither is
- * ever logged, returned or reported.
+ * ever logged or returned. Only the report to Operations carries them, scrubbed (ADR-0059).
  */
 export type JobFailureCode =
 	| 'timeout'
@@ -516,6 +516,8 @@ async function runLeased(
 interface JobFailure {
 	readonly code: JobFailureCode
 	readonly why: FailureReason | null
+	/** What the attempt threw, which only the report carries, scrubbed (ADR-0059); never a log line or the result. */
+	readonly thrown?: unknown
 }
 
 const failure = (code: JobFailureCode): JobFailure => ({ code, why: null })
@@ -531,7 +533,13 @@ async function failed(job: { readonly name: string }, attempts: number, outcome:
 	if (why !== null) {
 		tags['reason'] = why.reason
 	}
-	await reporter.report({ fingerprint: ['fabrika-job-failed', job.name], type: 'JobFailed', message, tags })
+	await reporter.report({
+		fingerprint: ['fabrika-job-failed', job.name],
+		type: 'JobFailed',
+		message,
+		tags,
+		...('thrown' in outcome ? { error: outcome.thrown } : {}),
+	})
 	return why === null ? { status: 'failed', attempts, code } : { status: 'failed', attempts, code, reason: why.reason }
 }
 
@@ -630,7 +638,9 @@ function failureOf(error: unknown): JobFailure {
 		return failure('lease_lost')
 	}
 	const code = failureCode(error)
-	return code === 'query_refused' || code === 'capability_refused' ? { code, why: failureReason(error) } : failure('handler_failed')
+	return code === 'query_refused' || code === 'capability_refused'
+		? { code, why: failureReason(error), thrown: error }
+		: { code: 'handler_failed', why: null, thrown: error }
 }
 
 function jobContext(

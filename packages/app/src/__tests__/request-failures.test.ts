@@ -1,5 +1,6 @@
-// A request that answers 5xx: one server log line and, with an Operations DSN, one error event. Both carry a fixed
-// failure code and bounded identifiers only: an error's name and message, the input and the headers never leave.
+// A request that answers 5xx: one server log line and, with an Operations DSN, one error event. The log line carries a
+// fixed failure code and bounded identifiers only. The event adds what was thrown, scrubbed (ADR-0059); the input and
+// the headers never leave.
 
 import { HttpError } from '@fabrika/app'
 import { boot } from '@fabrika/app/implement'
@@ -51,7 +52,10 @@ function throwing(error: unknown) {
 }
 
 /** An error whose name and message both hold the secret, as an application or a driver may write them. */
-const leaking = (): Error => Object.assign(new Error(`connect failed for postgres://notes:${SECRET}@db/notes`), { name: `Driver${SECRET}` })
+const leaking = (): Error => Object.assign(new Error(`connect failed for postgres://notes:${SECRET}@db/notes`), { name: `Driver ${SECRET}` })
+
+/** The service key the platform hands the environment; a message that quotes it reaches Operations without it. */
+const SERVICE_KEY = 'px_service-key-of-the-environment-0123'
 
 interface Run {
 	readonly status: number
@@ -94,17 +98,45 @@ function eventOf(envelope: string | undefined): Record<string, unknown> {
 }
 
 describe('a request that answers 5xx', () => {
-	test('a throwing handler sends one envelope: endpoint, request id, code and release, no name, message or input', async () => {
+	test('a throwing handler sends one envelope: the scrubbed error, then the endpoint, request id, code and release', async () => {
 		const { status, envelopes, logged } = await run(leaking())
 		expect(status).toBe(500)
 		expect(envelopes).toHaveLength(1)
 		expect(envelopes.join('\n')).not.toContain(SECRET)
+		expect(envelopes.join('\n')).not.toContain('X-Custom')
 		const event = eventOf(envelopes[0])
 		expect(event['logger']).toBe('fabrika.requests')
 		expect(event['release']).toBe('r1')
 		expect(event['fingerprint']).toEqual(['fabrika-request-failed', 'api.me', 'handler_failed'])
 		expect(event['tags']).toEqual({ endpoint: 'api.me', code: 'handler_failed', status: '500', request: REQUEST_ID })
-		expect(event['exception']).toEqual({ values: [{ type: 'RequestFailed', value: "endpoint 'api.me' answered 500: handler_failed" }] })
+		expect(event['exception']).toEqual({
+			values: [
+				{
+					type: 'Error',
+					value: 'connect failed for postgres://[redacted]@db/notes',
+					stacktrace: { frames: expect.arrayContaining([expect.objectContaining({ function: 'leaking', in_app: true })]) },
+				},
+				{ type: 'RequestFailed', value: "endpoint 'api.me' answered 500: handler_failed" },
+			],
+		})
+		expect(logged).toEqual(['fabrika: api.me: handler_failed'])
+	})
+
+	test('a secret of the environment in the message or a cause is scrubbed, and the cause chain is sent', async () => {
+		const cause = new Error(`IAM refused ${SERVICE_KEY}`)
+		const { envelopes, logged } = await run(new TypeError('the note could not be loaded', { cause }), {
+			FABRIKA_OPERATIONS_DSN: DSN,
+			FABRIKA_SERVICE_KEY: SERVICE_KEY,
+		})
+		expect(envelopes.join('\n')).not.toContain(SERVICE_KEY)
+		const values = eventOf(envelopes[0])['exception']
+		expect(values).toMatchObject({
+			values: [
+				{ type: 'Error', value: 'IAM refused [redacted]' },
+				{ type: 'TypeError', value: 'the note could not be loaded' },
+				{ type: 'RequestFailed' },
+			],
+		})
 		expect(logged).toEqual(['fabrika: api.me: handler_failed'])
 	})
 

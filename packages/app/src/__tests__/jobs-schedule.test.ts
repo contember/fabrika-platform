@@ -4,6 +4,7 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { operationsReporter, operationsTarget, reportEnvelope } from '../jobs/report'
 import { parseCron, periodAt, previousDue } from '../jobs/schedule'
+import { secretScrubber } from '../jobs/scrub'
 
 const utc = (text: string): Date => new Date(`${text}Z`)
 
@@ -67,6 +68,7 @@ describe('cron schedules', () => {
 
 describe('job reports to Operations', () => {
 	const dsn = 'https://0123456789abcdef0123456789abcdef@operations.test/42'
+	const scrubber = secretScrubber([])
 
 	test('the DSN names the envelope endpoint and the public key; anything else is no target', () => {
 		expect(operationsTarget(dsn)).toEqual({ envelopeUrl: 'https://operations.test/api/42/envelope/', publicKey: '0123456789abcdef0123456789abcdef' })
@@ -80,7 +82,7 @@ describe('job reports to Operations', () => {
 	test('a report is one error event with the fingerprint, the tags, the release and the environment', () => {
 		const text = reportEnvelope(
 			{ fingerprint: ['fabrika-job-failed', 'purge'], type: 'JobFailed', message: "job 'purge' failed", tags: { job: 'purge' } },
-			{ release: 'v1', environment: 'prod', source: 'fabrika.jobs' },
+			{ release: 'v1', environment: 'prod', source: 'fabrika.jobs', scrubber },
 			new Date('2026-10-09T03:00:00Z'),
 		)
 		const [header, item, payload, rest] = text.split('\n')
@@ -112,6 +114,7 @@ describe('job reports to Operations', () => {
 			release: null,
 			environment: null,
 			source: 'fabrika.jobs',
+			scrubber,
 			fetch: (request) => Promise.resolve(void sent.push(request)).then(() => new Response(null, { status: 202 })),
 		}).report(report)
 		expect(sent.map((request) => [request.url, request.headers.get('x-sentry-auth'), request.headers.get('content-type')])).toEqual([
@@ -128,6 +131,7 @@ describe('job reports to Operations', () => {
 				release: null,
 				environment: null,
 				source: 'fabrika.jobs',
+				scrubber,
 				fetch: () => Promise.reject(new Error(`refused ${dsn}`)),
 			})
 				.report(report)

@@ -885,7 +885,8 @@ process first — and runs one job:
    request's 5xx is, with the refusal's catalog reason in the result, the log line and the
    report's `reason` tag), `driver_failed`, `crashed`, `unauthorized` (IAM refused the
    job's key), `iam_unavailable` (IAM could not be asked for its token), and `boot_failed`
-   from the CLI. An application error's name and message are never logged or reported.
+   from the CLI. An application error's name and message are never logged; the report
+   carries them scrubbed (below).
 5. A run that failed after its retries, and a run that crashed (its lease expired
    before it finished), is a `JobFailed` error event in Operations. A job that has not
    succeeded within twice its period is `JobMissed`, at most once per period. The
@@ -1495,11 +1496,22 @@ Operations for the release the page reports
 
 A request that answers 5xx is one error event too (`RequestFailed`, logger
 `fabrika.requests`): the endpoint id, the proxy's request id, a fixed failure code and the
-release, at most `MAX_FAILURE_REPORTS_PER_MINUTE` (30) per process and minute. It never
-carries the input, a header, row data, or the error's name or message. A framework refusal adds
+release, at most `MAX_FAILURE_REPORTS_PER_MINUTE` (30) per process and minute. A framework refusal adds
 its reason from a closed catalog — `@fabrika/db`'s `QUERY_REFUSALS` and `CAPABILITY_ERRORS`,
 the runtime's `CAPABILITY_REFUSALS` and `SERVER_FAULTS` — and the log line adds that reason's
-fixed text.
+fixed text. The log line never carries the error's name or message.
+
+A request's and a job's event also carries what was thrown, before the framework's own
+exception: its type, its message, its stack frames and its causes
+([ADR-0059](../decisions/0059-application-server-errors-carry-their-stack-and-message.md)).
+A framework refusal sends its reason and catalog text instead of its message. Every text is
+scrubbed in the process first (`jobs/scrub.ts`): the values of the secret `FABRIKA_*`
+variables and of application variables named as secrets, JWTs, authorization schemes,
+credential headers, URL userinfo and credential query parameters. The event never carries the
+input, a header or row data. With a DSN, a Bun process also reports a startup that throws, and
+once it serves, its first uncaught exception or unhandled rejection, then fails as Bun does; a
+Worker reports an isolate's first failed boot and its unhandled rejections. Operations' side of
+these events: [operations errors](operations-errors.md#application-server-reports).
 
 The tested compatibility profile is deliberately narrow. Fabrika accepts the
 envelope authentication query and an `event` item for a captured browser

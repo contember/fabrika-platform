@@ -46,6 +46,7 @@ import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, fileCollect
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runner'
+import { environmentScrubber } from '../jobs/scrub'
 import { browserConfigs } from './browser-config'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import { type ChallengeFetch, type ChallengeVerifier, turnstileVerifier } from './challenge'
@@ -589,10 +590,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
 	const operations = operationsSettings(options.environment.framework, problems)
+	const scrubber = environmentScrubber(options.environment)
 	const reporterFor = (source: ReportSource): OperationsReporter | null =>
 		operations === null
 			? null
-			: operationsReporter({ ...operations, source, ...(options.operationsFetch === undefined ? {} : { fetch: options.operationsFetch }) })
+			: operationsReporter({ ...operations, source, scrubber, ...(options.operationsFetch === undefined ? {} : { fetch: options.operationsFetch }) })
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	// A file collection's dimension is located through its own table and its owner's.
 	for (const name of Object.keys(artifact.files)) {

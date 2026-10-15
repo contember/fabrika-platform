@@ -12,8 +12,9 @@ export {
 	type ScanObject,
 	type ScanVerdict,
 } from '../files/scan'
-export type { OperationsReport, OperationsReporter } from '../jobs/report'
+export { crashEnvelope, type OperationsReport, type OperationsReporter, reportEnvelope } from '../jobs/report'
 export { type ContractJobs, type JobClock, JobError, type JobFailureCode, type JobRunOptions, type JobRunResult } from '../jobs/runner'
+export { secretScrubber } from '../jobs/scrub'
 export type { JobContext, JobHandler, JobHandlersOf, JobPrincipal } from '../jobs/types'
 export { LINK_BOOTSTRAP_SCRIPT } from './anonymous'
 export { boot, BootError, type BootOptions, type ContractApp, type IamKeySource } from './boot'

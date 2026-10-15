@@ -15,7 +15,8 @@ import { diskAssets } from './disk-assets.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { clamscanScanner } from './files/clamscan.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
-import { captureEnvironment } from './implement/environment.js'
+import { type CrashEvents, environmentCrashReporter, type ProcessCrashKind, reportFatalCrashes, reportWithin } from './implement/crashes.js'
+import { type CapturedEnvironment, captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
 import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
 import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
@@ -253,17 +254,84 @@ function workloadTokensOf(framework: Readonly<Record<string, string>>): Workload
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
+export interface ContractServerOptions {
+	/** Where the process hears of an uncaught exception or an unhandled rejection; `process` by default. */
+	readonly crashes?: CrashEvents
+	/** What posts a report to Operations' ingest; `fetch` by default. */
+	readonly operationsFetch?: (request: Request) => Promise<Response>
+}
+
+/** The process's own crash events: listening suppresses Bun's default, so `failAsBefore` restores it. */
+function processCrashEvents(): CrashEvents {
+	return {
+		listen(listener) {
+			const exception = (error: unknown) => listener('uncaught_exception', error)
+			const rejection = (reason: unknown) => listener('unhandled_rejection', reason)
+			process.on('uncaughtException', exception)
+			process.on('unhandledRejection', rejection)
+			return () => {
+				process.off('uncaughtException', exception)
+				process.off('unhandledRejection', rejection)
+			}
+		},
+	}
+}
+
+/** Raised again with no listener left: Bun prints it and exits with 1, exactly as without a report. */
+function failAsBefore(kind: ProcessCrashKind, error: unknown): void {
+	if (kind === 'unhandled_rejection') {
+		void Promise.reject(error)
+		return
+	}
+	setTimeout(() => {
+		throw error
+	})
+}
+
 /**
  * Captures the framework's variables and scrubs them from the process, then imports the application, boots it and
  * serves it on `PORT` (default 3000), on every interface: the project's private network is how the proxy reaches
  * it. Called only by the generated entrypoint, with `process.env`. SIGTERM drains. Given the provisioning credential,
  * it is the launcher instead: it never loads the application and re-runs the entrypoint as the runtime role.
+ * With an Operations DSN, a startup that throws is reported before it is rethrown, and so is a crash once it serves.
  */
-export async function serveContract(load: ImplementationLoader, env: Readonly<Record<string, string | undefined>>): Promise<ContractServer> {
+export async function serveContract(
+	load: ImplementationLoader,
+	env: Readonly<Record<string, string | undefined>>,
+	options: ContractServerOptions = {},
+): Promise<ContractServer> {
 	if (holdsProvisioningCredential(env)) {
 		return relaunchAsRuntime(env)
 	}
 	const environment = captureEnvironment(env)
+	const crashes = environmentCrashReporter(environment, options.operationsFetch)
+	let server: ContractServer
+	try {
+		server = await startContractServer(load, environment, options.operationsFetch)
+	} catch (error) {
+		if (crashes !== null) {
+			await reportWithin(crashes, 'boot_failed', error)
+		}
+		throw error
+	}
+	if (crashes === null) {
+		return server
+	}
+	const stopListening = reportFatalCrashes({ events: options.crashes ?? processCrashEvents(), reporter: crashes, fail: failAsBefore })
+	return {
+		port: server.port,
+		stop: () => {
+			stopListening()
+			return server.stop()
+		},
+	}
+}
+
+async function startContractServer(
+	load: ImplementationLoader,
+	environment: CapturedEnvironment,
+	operationsFetch: ContractServerOptions['operationsFetch'],
+): Promise<ContractServer> {
 	const port = Number.parseInt(environment.application['PORT'] === undefined ? '3000' : String(environment.application['PORT']), 10)
 	if (!Number.isInteger(port) || port < 0 || port > 65535) {
 		throw new Error('PORT must be an integer between 0 and 65535')
@@ -285,6 +353,7 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 		membership,
 		workloadTokens,
 		requireProxySecret: true,
+		...(operationsFetch === undefined ? {} : { operationsFetch }),
 	})
 	// The work a request leaves running (a failure's report, a job a form kicked) is drained before the database closes.
 	const handler = createBunHandler({ fetch: (request, _env: undefined, exec) => served.fetch(request, exec) }, undefined, {

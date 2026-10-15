@@ -46,6 +46,7 @@ bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honey
 bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
 bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
 bun test src/__tests__/intake.test.ts           # the intake recipe's job: each stop, bad records, batches, locks, keys (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handler: a cancelled request, the budget
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
@@ -148,6 +149,7 @@ src/
     webhook.ts        the generated binding endpoints and a delivery's principal
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
+    crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
     principal.ts      caller kinds and principals from a verified token
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
@@ -168,7 +170,9 @@ src/
     types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
     runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports, a form's kick; the framework's own jobs
     schedule.ts       five-field cron in UTC: the due minutes and the period
-    report.ts         the Operations reporter: job runs and request failures as error events to its ingest
+    report.ts         the Operations reporter: job runs, request failures and crashes as error events to its ingest
+    exception.ts      a thrown value as Sentry exception values: type, message, parsed frames, cause chain, bounded
+    scrub.ts          the scrubber: the environment's secret values and credential patterns out of a report
 ```
 
 ## Invariants
@@ -562,9 +566,26 @@ vocabulary (`packages/db/CLAUDE.md`).
   failed (`object_delete_failed` …), a job its failure code; none interpolates an error, its name or message, or a
   request value. With an Operations DSN it is also one `RequestFailed` event (logger `fabrika.requests`): fingerprint
   `fabrika-request-failed`/endpoint/code, tags endpoint, code, reason, status and the proxy's request id when it is a bounded
-  token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the error's name or message, the
-  input, a header or a row: an application or a driver writes those. The delivery is not awaited; the Worker adapter
-  hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).
+  token, at most `MAX_FAILURE_REPORTS_PER_MINUTE` per process and minute. Never the input, a header or a row. The
+  delivery is not awaited; the Worker adapter hands it to `waitUntil` (`ContractApp.fetch(request, exec)`).
+- **A report carries what was thrown, scrubbed; a log line never does** (ADR-0059). `OperationsReport.error` is sent
+  before the framework's own exception, which stays last so the fingerprint and the title do not change
+  (`jobs/exception.ts`): the type (an identifier `name`, else `Error`), the message, frames parsed from Bun's and V8's
+  `stack`, causes. A framework failure (`failureReason` is not `null`) sends its reason and catalog text, never its
+  message. Every text passes `environmentScrubber` (`jobs/scrub.ts`) first: every `FABRIKA_*` value except the
+  public ones in `PUBLIC_FRAMEWORK_VARIABLES`, application variables whose name matches `SECRET_NAME`, URL
+  credentials of either, and the credential patterns. Caps: `MAX_MESSAGE_LENGTH`, `MAX_FRAMES`, `MAX_CAUSE_DEPTH`,
+  `MAX_EXCEPTION_BYTES` (Operations refuses an ingest message above 120 KiB). A new credential the platform hands the
+  application is a `FABRIKA_*` variable and is scrubbed by default; keep `PUBLIC_FRAMEWORK_VARIABLES` to values a
+  browser may see.
+- **A crash is reported only with a DSN, once, and fails as before** (`implement/crashes.ts`). `serveContract` reports a
+  startup that throws, then rethrows; once it serves it listens (`ContractServerOptions.crashes`, `process` by
+  default), reports the first uncaught exception or unhandled rejection, waits at most `CRASH_FLUSH_MS`, removes its
+  listeners and raises the value again so Bun prints it and exits with 1. `createContractWorker` reports an isolate's
+  first failed boot and, once booted, each unhandled rejection (`ContractWorkerOptions.rejections`, the global event
+  by default), within the per-minute budget. Listeners start only after a successful boot, so a boot failure is not
+  reported twice; a request's and a job's failures are caught before any listener. Tests inject the event source:
+  never let a test install a listener on the real `process`.
 - **`boot` refuses to start rather than answer nothing**: a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
   form field that is not a column of its inbox (its honeypot and `challengeToken` excepted), a form whose challenge
@@ -951,7 +972,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `boot_failed` in the CLI. The code is chosen by `instanceof` against the framework's own classes (`LeaseLostError`,
   then `failureCode`, so a refusal is named as a request names it), never by `name`. A refusal also carries its catalog
   `reason`: in the result, in each log line with its fixed text, and as the report's `reason` tag. An application error's
-  name and message are never logged, returned or reported: either may carry a secret.
+  name and message are never logged or returned: either may carry a secret. The report carries them scrubbed.
 - **Reports go through the ingest every application has** (`FABRIKA_OPERATIONS_DSN`): a run that failed after its
   retries, or crashed (its lease expired before it finished, found by the next run or the check), is one `JobFailed`
   error event; a job that has not succeeded within twice its period (from its first-seen time when it never did) is
