@@ -72,5 +72,9 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.
 - [176](176-the-runtime-does-not-know-the-declared-secret-names.md) — An error report scrubs an application secret only when its variable name says it is one; the platform does not hand the runtime the declared names.
 - [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
+- [178](178-an-http-mail-relay-protocol-and-a-relay-adapter.md) — An installation transport can use only a built-in provider; a relay protocol and a `relay` adapter reach any adapter and add idempotency over a provider without it.
+- [179](179-build-a-platform-distribution-that-bundles-extra-email-adapters.md) — Build IAM and Control with extra email adapters as composition inputs; needs another build source, a version lock, and IAM's local-only `EMAIL_SENDER` guard kept.
+- [180](180-verify-the-smartemailing-adapter-on-a-live-account.md) — The SmartEmailing adapter is verified only against a stubbed `fetch`; six points of its mapping wait for a live account.
+- [181](181-send-email-in-batches.md) — Every adapter sends one message per call (`maxBatch: 1`); `sendBatch` would cut requests and rate-limit use for bulk sends.
 - [185](185-no-release-is-accepted-on-a-live-zerops-account.md) — Run a fresh-install acceptance (namespace, app with a database, one authenticated request, teardown) on a dedicated Zerops account per release.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

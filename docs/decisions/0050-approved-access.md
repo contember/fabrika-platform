@@ -158,8 +158,8 @@ covers:
 - a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
 - a form's admission (its rate, honeypot and challenge): any change is shown and widens;
-- a form's `then` (the job a submission kicks): shown, and it widens nothing, because it reaches only a job of the same
-  approved contract, which runs under its own declared actions;
+- a form's or a mutation's `then` (the job a submission or a committed mutation kicks): shown, and it widens nothing,
+  because it reaches only a job of the same approved contract, which runs under its own declared actions;
 - CSP extensions, `script-src`, `frame-src`, `style-src` and `font-src` included;
 - each public variable a page reads from its browser config (an SPA mount's `public` list, a form challenge's
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;

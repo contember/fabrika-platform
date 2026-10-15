@@ -24,7 +24,9 @@ a commit message suffices.
 - **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
   handlers beside their endpoints on a paved road, and every step off it (raw SQL, `unscoped`, connectors, link
   issuing, database code) declared; [0017](0017-service-owned-postgres-migrations.md) for migrations and the
-  application's database roles, the privilege boundary under raw SQL.
+  application's database roles, the privilege boundary under raw SQL;
+  [0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md) for a mutation that kicks a job, and
+  [0019](0019-portable-outbound-email.md) for e-mail sent through `ctx.mail`.
 - **Zerops delivery:** [0003](0003-no-deploy-runner-on-zerops.md) (Control drives Zerops over HTTP),
   [0029](0029-github-app-sources.md) (GitHub App sources, multiple connections),
   [0044](0044-zerops-delivery-ownership-and-recovery.md) (release binding, recovery, one lease).
@@ -50,7 +52,7 @@ a commit message suffices.
 | [0015](0015-repository-operations-are-the-sql-portability-seam.md)      | Make repository operations the SQL portability seam                                      |
 | [0016](0016-independent-operations-plane.md)                            | Add an independent Operations plane                                                      |
 | [0017](0017-service-owned-postgres-migrations.md)                       | Make Postgres migrations service-owned and bundle-qualified                              |
-| [0019](0019-portable-outbound-email.md)                                 | Keep outbound email behind one portable service contract                                 |
+| [0019](0019-portable-outbound-email.md)                                 | Keep outbound email behind one public transport contract, for IAM and for applications   |
 | [0020](0020-compose-human-authentication-methods.md)                    | Compose OIDC and password as independent human authentication methods                    |
 | [0022](0022-the-proxy-is-the-only-enforcement-point.md)                 | The proxy is the only enforcement point                                                  |
 | [0023](0023-one-session-per-host.md)                                    | One session per host, bound to the browser that started the login                        |
@@ -76,3 +78,4 @@ a commit message suffices.
 | [0052](0052-react-and-an-own-component-kit-for-application-spas.md)     | Build application SPAs with React, hooks over the typed client, and an own component kit |
 | [0058](0058-user-administration-is-grantable-on-its-own.md)             | User administration is grantable on its own, and stops at the installation               |
 | [0059](0059-application-server-errors-carry-their-stack-and-message.md) | Application server errors carry their stack and message, scrubbed                        |
+| [0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)            | A mutation kicks a cron job after its commit; the outbox row stays the record            |

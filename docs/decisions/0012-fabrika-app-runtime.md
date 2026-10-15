@@ -269,12 +269,13 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   no per-table `sql` declaration, so a write without a fragment is the declared deviation, not a checked one.
 - **Every step off the road is declared in the shell**, as a plain literal the contract digest covers:
 
-  | Field                                      | On                     | What exists only there                                       |
-  | ------------------------------------------ | ---------------------- | ------------------------------------------------------------ |
-  | `sql: 'read' \| 'write'`                   | endpoint, job, webhook | `ctx.sql` (`tx.sql` in a job), in that mode                  |
-  | `unscoped: { <table>: 'read' \| 'write' }` | endpoint, job, webhook | `ctx.db.unscoped.<table>`: no scope predicate, still guarded |
-  | `connect: ['<import>']`                    | endpoint               | `ctx.connect.<import>`                                       |
-  | `issues: '<mount>'`                        | endpoint, job          | `ctx.links.issue` and `revoke`                               |
+  | Field                                      | On                           | What exists only there                                       |
+  | ------------------------------------------ | ---------------------------- | ------------------------------------------------------------ |
+  | `sql: 'read' \| 'write'`                   | endpoint, job, webhook       | `ctx.sql` (`tx.sql` in a job), in that mode                  |
+  | `unscoped: { <table>: 'read' \| 'write' }` | endpoint, job, webhook       | `ctx.db.unscoped.<table>`: no scope predicate, still guarded |
+  | `connect: ['<import>']`                    | endpoint                     | `ctx.connect.<import>`                                       |
+  | `issues: '<mount>'`                        | endpoint, job                | `ctx.links.issue` and `revoke`                               |
+  | `mailer: 'installation' \| 'own'`          | cron job (kit contract only) | `ctx.mail` ([ADR-0019](0019-portable-outbound-email.md))     |
 
   The runtime builds each handle only for the declaring site and enforces its mode. It takes the declaration from
   the approved artifact (`ContractArtifact.declared`), not from the handler module, and refuses to boot a site whose
