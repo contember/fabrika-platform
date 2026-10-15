@@ -19,7 +19,8 @@ label the envelope a registration carries.
   called through the same `createRpcClient` the console uses. A procedure is
   reachable from both clients or neither.
 - Output contract, as in `zops`: stdout carries DATA ONLY, progress and errors go
-  to stderr, `--json` prints the result verbatim.
+  to stderr, `--json` prints the result verbatim. An empty list prints no row and says
+  so on stderr.
 - Credentials come from the ENVIRONMENT ONLY and have no flag, so they cannot
   reach a CI log or a process listing. The origin is not a credential and takes both.
 - `control key issue` is the bootstrap: a fresh installation's provisioning key is

@@ -114,6 +114,26 @@ describe('control output contract', () => {
 		expect(out).toBe('building\ndone')
 	})
 
+	test('an empty list says so on stderr and prints no data; --json still prints the result', async () => {
+		const lists: [string, string[], string][] = [
+			['apps', ['list'], 'no applications registered yet'],
+			['apps', ['environments', 'list', '--app=notes'], 'app notes has no environments'],
+			['apps', ['variables', 'list', '--app=notes'], 'app notes has no variables'],
+			['runs', ['list'], 'no runs'],
+			['namespaces', ['list'], 'no deployment namespaces yet'],
+		]
+		for (const [command, argv, message] of lists) {
+			captureFetch({ result: { items: [] } })
+			let out = ''
+			const err = await captureStderr(async () => {
+				out = await captureStdout(() => runControlCli(command, argv, undefined, CONTROL_ENV))
+			})
+			expect({ command: [command, ...argv], out, err }).toEqual({ command: [command, ...argv], out: '', err: message })
+			const json = await captureStdout(() => runControlCli(command, [...argv, '--json'], undefined, CONTROL_ENV))
+			expect(JSON.parse(json)).toEqual({ items: [] })
+		}
+	})
+
 	test('an RPC denial keeps its type so a caller can tell it from an outage', async () => {
 		globalThis.fetch = asFetch(async () =>
 			new Response(JSON.stringify({ error: { type: 'forbidden', message: 'deploy.trigger required' } }), {

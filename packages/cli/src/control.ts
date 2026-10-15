@@ -248,6 +248,15 @@ const emit = (flags: Flags, result: unknown, render: () => string): void => {
 	console.info(flags.json ? JSON.stringify(result, null, 2) : render())
 }
 
+/** A list prints one row per item; an empty one says so on stderr, so stdout stays data and a human still gets an answer. */
+const emitList = <Item>(flags: Flags, result: { readonly items: readonly Item[] }, row: (item: Item) => string, empty: string): void => {
+	if (!flags.json && result.items.length === 0) {
+		console.warn(empty)
+		return
+	}
+	emit(flags, result, () => result.items.map(row).join('\n'))
+}
+
 /** `fabrika app build` writes `manifestVersion`; it is the version the provider's artifact codec accepts. */
 const manifestVersion = (manifest: JsonValue, path: string): number => {
 	const result = manifestHeaderSchema.safeParse(manifest)
@@ -466,8 +475,9 @@ const runEnvironments = async (
 ): Promise<void> => {
 	const client = controlClient(flags, env)
 	if (verb === 'list') {
-		const result = await client.apps.environments.list({ appId: required(flags, 'app') })
-		emit(flags, result, () => result.items.map((item) => `${item.appId}\t${item.env}\t${item.provider}\t${item.domain ?? '-'}`).join('\n'))
+		const appId = required(flags, 'app')
+		const result = await client.apps.environments.list({ appId })
+		emitList(flags, result, (item) => `${item.appId}\t${item.env}\t${item.provider}\t${item.domain ?? '-'}`, `app ${appId} has no environments`)
 		return
 	}
 	if (verb === 'put') {
@@ -508,7 +518,7 @@ const runVariables = async (verb: string | undefined, flags: Flags, env: Readonl
 	const scope = optional(flags, 'env')
 	if (verb === 'list') {
 		const result = await client.apps.variables.list({ appId })
-		emit(flags, result, () => result.items.map((item) => `${item.env ?? '*'}\t${item.name}\t${item.value}`).join('\n'))
+		emitList(flags, result, (item) => `${item.env ?? '*'}\t${item.name}\t${item.value}`, `app ${appId} has no variables`)
 		return
 	}
 	if (verb === 'put') {
@@ -546,7 +556,7 @@ const runApps = async (
 	const client = controlClient(flags, env)
 	if (verb === 'list') {
 		const result = await client.apps.list()
-		emit(flags, result, () => result.items.map(appLine).join('\n'))
+		emitList(flags, result, appLine, 'no applications registered yet')
 		return
 	}
 	if (verb === 'get') {
@@ -568,7 +578,7 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 			...(environment === undefined ? {} : { env: environment }),
 			...(limit === undefined ? {} : { limit: positiveInteger(limit, 'limit') }),
 		})
-		emit(flags, result, () => result.items.map(runLine).join('\n'))
+		emitList(flags, result, runLine, 'no runs')
 		return
 	}
 	if (verb === 'get') {
@@ -655,7 +665,7 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 	const client = controlClient(flags, env)
 	if (verb === 'list') {
 		const result = await client.namespaces.list()
-		emit(flags, result, () => result.items.map(namespaceLine).join('\n'))
+		emitList(flags, result, namespaceLine, 'no deployment namespaces yet')
 		return
 	}
 	if (verb === 'get') {
