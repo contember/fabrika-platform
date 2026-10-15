@@ -10,9 +10,11 @@ import { type RegistryUseCaseContext } from '../api/registry/context'
 import { deleteAppEnvUseCase, putAppEnvUseCase } from '../api/registry/environments'
 import { registerAppUseCase } from '../api/registry/registration'
 import { normalizeRegistration } from '../api/registry/registration'
+import type { AnonymousReadability, CommitSource } from '../github/source/commit-files'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { parseVaultRef, Vault } from '../vault'
+import { memoryCommits } from './helpers/commits'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureRuns, makeFakeLock } from './helpers/lock'
@@ -484,6 +486,48 @@ describe('onboarding + registry CRUD', () => {
 			githubConnectionId: null,
 			githubInstallationId: null,
 		})
+	})
+
+	test('an anonymous source GitHub hides is refused before anything is created; a connected one is not probed', async () => {
+		const { deps, sqlite } = makeDeps({ provider: zeropsProvider })
+		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 101)
+		const context = (commits: CommitSource): RegistryUseCaseContext => ({
+			repositories: deps.repositories,
+			provider: deps.provider,
+			auth: deps.auth,
+			signal: new AbortController().signal,
+			commits,
+		})
+		const anonymous = (id: string, readability: AnonymousReadability) =>
+			registerAppUseCase(context(memoryCommits({}, readability)), {
+				id,
+				repoUrl: `https://github.com/gamma/${id}`,
+				env: 'prod',
+				githubInstallationId: null,
+				...zeropsRegistrationEnvelopes(),
+			})
+
+		await expect(anonymous('hidden', 'unreadable')).rejects.toMatchObject({
+			httpStatus: 409,
+			message: expect.stringContaining('github.com/gamma/hidden is not publicly readable — connect the GitHub App in the console'),
+		})
+		expect(await deps.repositories.registry.getApp('hidden')).toBeNull()
+		expect((await anonymous('visible', 'readable')).app.id).toBe('visible')
+		// A probe that could not answer leaves the verdict to the deploy rather than refusing a working source.
+		expect((await anonymous('unanswered', 'unknown')).app.id).toBe('unanswered')
+
+		const unprobed: CommitSource = {
+			...memoryCommits(),
+			anonymousReadability: () => Promise.reject(new Error('a connected source must not be probed anonymously')),
+		}
+		const connected = await registerAppUseCase(context(unprobed), {
+			id: 'connected',
+			repoUrl: 'https://github.com/acme/private-app',
+			env: 'prod',
+			resolveInstallationId: true,
+			...zeropsRegistrationEnvelopes(),
+		})
+		expect(connected.app.githubConnectionId).toBe('connection-acme')
 	})
 
 	test('registerApp rejects a missing field (400) and a duplicate id (409)', async () => {

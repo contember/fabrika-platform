@@ -25,8 +25,16 @@ export interface CommitFiles {
 	read(path: string, maxBytes: number): Promise<string>
 }
 
+/** What one anonymous read of a repository answered: GitHub hides a private repository as a 404, as it does a missing one. */
+export type AnonymousReadability = 'readable' | 'unreadable' | 'unknown'
+
 export interface CommitSource {
 	open(input: CommitFilesInput): Promise<CommitFiles>
+	/**
+	 * Whether a caller without a token can read the repository: one resolution of its `HEAD`, the request a public
+	 * deploy's source resolution makes first. Only a 404 is `unreadable`; any other failure is `unknown`, not a verdict.
+	 */
+	anonymousReadability(input: { readonly repoUrl: string; readonly signal: AbortSignal }): Promise<AnonymousReadability>
 }
 
 /** A commit's files through one connection's repository token, minted once per opened commit. */
@@ -54,6 +62,14 @@ export function gitHubCommitSource(metadata: GitHubMetadataClient, credentials: 
 						throw new SourceFailure('archive_rejected', 'resolve')
 					}
 				},
+			}
+		},
+		async anonymousReadability(input) {
+			try {
+				await metadata.commit(repositoryOf(input.repoUrl), 'HEAD', undefined, input.signal, 'resolve')
+				return 'readable'
+			} catch (error) {
+				return error instanceof SourceFailure && error.code === 'ref_not_found' ? 'unreadable' : 'unknown'
 			}
 		},
 	}

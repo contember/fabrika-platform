@@ -157,6 +157,7 @@ function deps(w: World): RunDeps {
 			},
 		},
 		commits: {
+			...memoryCommits(),
 			open: (input) => {
 				const source = w.sources.get(input.repoUrl)
 				return memoryCommits(source === undefined ? {} : { 'fabrika.contract.ts': source }).open(input)

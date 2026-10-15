@@ -67,7 +67,7 @@ function deps(w: World): RunDeps {
 		lock: makeFakeLock(w.db),
 		queue: { send: () => Promise.resolve() },
 		logs,
-		commits: { open: (input) => memoryCommits(w.files).open(input) },
+		commits: { ...memoryCommits(), open: (input) => memoryCommits(w.files).open(input) },
 	}
 }
 

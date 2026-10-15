@@ -1,11 +1,15 @@
-import type { CommitFilesInput, CommitSource } from '../../github/source/commit-files'
+import type { AnonymousReadability, CommitFilesInput, CommitSource } from '../../github/source/commit-files'
 import { healthOnly } from './contracts'
 
 /** A commit source over one in-memory tree (repository path → text); the default tree has no contract. */
-export function memoryCommits(tree: Readonly<Record<string, string>> = {}): CommitSource & { readonly opened: CommitFilesInput[] } {
+export function memoryCommits(
+	tree: Readonly<Record<string, string>> = {},
+	readability: AnonymousReadability = 'readable',
+): CommitSource & { readonly opened: CommitFilesInput[] } {
 	const opened: CommitFilesInput[] = []
 	return {
 		opened,
+		anonymousReadability: () => Promise.resolve(readability),
 		open: (input) => {
 			opened.push(input)
 			return Promise.resolve({

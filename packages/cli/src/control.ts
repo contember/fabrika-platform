@@ -82,7 +82,8 @@ proxy. A manifest with no proxy target needs no domain.
 
 \`--installation-id\` has three states: omitted resolves the installation from the organization's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
-installation outright.
+installation outright. With \`none\`, control reads the repository once without a token and refuses one
+GitHub hides: a private repository needs the GitHub App connected in the console first.
 
 Namespace placement options, each defaulting to what the preset would choose:
 

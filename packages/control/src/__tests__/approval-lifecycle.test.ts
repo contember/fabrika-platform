@@ -107,6 +107,7 @@ function deps(w: World): RunDeps {
 		queue: { send: (message) => Promise.resolve(void w.queued.push(message)) },
 		logs,
 		commits: {
+			...memoryCommits(),
 			open: (input) => memoryCommits({ ...w.files, ...(w.contract === null ? {} : { 'fabrika.contract.ts': w.contract }) }).open(input),
 		},
 	}

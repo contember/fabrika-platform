@@ -7,6 +7,7 @@ import type { DeployQueue, LogReader } from './api/runs'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { GitHubConnectionWebhookSecretProvider } from './github/connections/webhook-secret'
+import type { CommitSource } from './github/source/commit-files'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
 import { iamMembershipKeyIssuer, type MembershipTransportPort, VaultMembershipTransport } from './membership-transport'
 import {
@@ -149,6 +150,8 @@ export interface ControlRpcDeps {
 	vault?: () => Promise<Vault>
 	catalogChanged?: () => void
 	namespaceProxyChanged?: NamespaceProxyChanged
+	/** GitHub as a deploy reads it; `register` probes an anonymous source with it. */
+	commits?: CommitSource
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
@@ -163,6 +166,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),
 		catalogChanged: () => scheduleOperationsCatalogChange(env),
+		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		...(provider.namespaces?.republish === undefined
 			? {}
 			: {

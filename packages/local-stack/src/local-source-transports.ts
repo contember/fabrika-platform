@@ -68,7 +68,8 @@ export function createFixtureTransports(
 				const prefix = `https://api.github.com/repos/${repository.owner}/${repository.name}`
 				if (!url.startsWith(`${prefix}/`) || !readable(source, authorization)) continue
 				const head = options.branchHead?.(repository)
-				const branchRefs = head === undefined || head === fixture.commitSha ? [FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`] : []
+				// GitHub resolves `HEAD` to the default branch, which is the fixture branch.
+				const branchRefs = head === undefined || head === fixture.commitSha ? [FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`, 'HEAD'] : []
 				const commitRefs = [fixture.commitSha, ...branchRefs].map(encodeURIComponent)
 				if (commitRefs.some((ref) => url === `${prefix}/commits/${ref}`)) {
 					return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })

@@ -19,6 +19,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	assertProxyDomain(input.domain)
 	const normalized = normalizeRepoUrl(repoUrl)
 	const sourceBinding = await sourceBindingFields(c, input, normalized)
+	if ((sourceBinding.githubConnectionId ?? null) === null) await assertAnonymouslyReadable(c, normalized)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, null)
 	const providerApp: ProviderApp = {
 		id,
@@ -108,6 +109,20 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	})
 	notifyCatalogChanged(c)
 	return { app: toAppDto(app), env: toAppEnvDto(appEnv) }
+}
+
+/**
+ * An app without a GitHub connection is deployed from an anonymous source, which a private repository is not. The
+ * deploy would only fail later as `ref_not_found`, so a repository GitHub hides from an anonymous caller is refused
+ * here. A probe that could not answer leaves the registration to the deploy.
+ */
+async function assertAnonymouslyReadable(c: RegistryUseCaseContext, repoUrl: string): Promise<void> {
+	if (c.commits === undefined) return
+	if ((await c.commits.anonymousReadability({ repoUrl, signal: c.signal })) !== 'unreadable') return
+	fail(
+		409,
+		`${repoUrl} is not publicly readable — connect the GitHub App in the console (Settings → Source) and register it through that connection, or make the repository public`,
+	)
 }
 
 /**

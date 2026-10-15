@@ -2,6 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ConsoleAdmission } from '../../approval/human'
 import { type ControlRepositories } from '../../db'
+import type { CommitSource } from '../../github/source/commit-files'
 import { type NamespaceProxyChanged } from '../namespaces'
 
 export interface RegistryUseCaseContext {
@@ -13,6 +14,8 @@ export interface RegistryUseCaseContext {
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
 	/** How the call arrived; deleting a protected environment needs a human in the console. Absent refuses it. */
 	readonly admission?: ConsoleAdmission
+	/** Reads GitHub as a deploy does; `register` probes an anonymous source with it. Absent skips the probe. */
+	readonly commits?: CommitSource
 }
 
 export function notifyCatalogChanged(c: RegistryUseCaseContext): void {
