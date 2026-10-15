@@ -24,6 +24,7 @@ import {
 	type ZeropsCollaborators,
 	type ZeropsDeployRun,
 	type ZeropsRuntimeTarget,
+	type ZeropsServiceEnv,
 	type ZeropsSourcePort,
 } from '@fabrika/provider-zerops'
 import { assertOnlyPublicService, assertZeropsHostnames, validateYaml } from '@fabrika/provider-zerops/installation/topology'
@@ -81,6 +82,8 @@ const fresh = (): Recorded => ({
 /** Statuses handed back by successive polls; the last one repeats. */
 const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi => {
 	let poll = 0
+	// The deploy service's variables persist across the run's steps, so a later read sees an earlier write.
+	const serviceEnv: ZeropsServiceEnv[] = []
 	const record = <T>(name: string, value: T): T => {
 		rec.calls.push(name)
 		return value
@@ -135,10 +138,13 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		listProjects: () => Promise.resolve(record('listProjects', [])),
 		findProjects: () => Promise.resolve(record('findProjects', [])),
 		listProjectServices: () => Promise.resolve(record('listProjectServices', [])),
-		listServiceEnv: () => Promise.resolve(record('listServiceEnv', [])),
+		listServiceEnv: () => Promise.resolve(record('listServiceEnv', [...serviceEnv])),
 		createServiceEnv: () => Promise.resolve(record('createServiceEnv', undefined)),
-		putServiceEnv: ({ key }) => {
+		putServiceEnv: ({ key, value, sensitive }) => {
 			rec.envWrites.push(key)
+			const written: ZeropsServiceEnv = sensitive ? { id: `env-${key}`, key, sensitive } : { id: `env-${key}`, key, sensitive, content: value }
+			const index = serviceEnv.findIndex((entry) => entry.key === key)
+			serviceEnv.splice(index === -1 ? serviceEnv.length : index, index === -1 ? 0 : 1, written)
 			return Promise.resolve(record('putServiceEnv', undefined))
 		},
 		deleteServiceEnv: () => Promise.resolve(record('deleteServiceEnv', undefined)),
@@ -446,17 +452,19 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		expect(rec.calls).toEqual([
 			// 1. bind the requested source to one immutable commit and descriptor digest.
 			'sourceResolve',
-			// 2. apply the import (`override: true` makes re-applying safe), and wait for the bucket it creates.
+			// 2. apply the import (`override: true` makes re-applying safe), wait for the bucket it creates, and record
+			// it in the provenance marker before any later step can fail.
 			'importServices',
 			'getProcess',
+			'listServiceEnv',
+			'putServiceEnv',
 			// 3. read back that no service has a subdomain before any version exists, and the bucket's provenance.
 			'listServiceEnv',
 			'findService',
 			'findService',
 			'findService',
-			// 4. write the managed service variables, read once: the provenance marker and the proxy secret.
+			// 4. write the managed service variables, read once: the proxy secret; the marker already holds the bucket.
 			'listServiceEnv',
-			'putServiceEnv',
 			'putServiceEnv',
 			// 5. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
 			'createAppVersion',
