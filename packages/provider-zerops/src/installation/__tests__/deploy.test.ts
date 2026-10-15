@@ -89,6 +89,7 @@ const harness = (proxyEnv: Readonly<Record<string, string>> = {}): Harness => {
 		run: (overrides = {}) =>
 			deployPlatform(input(overrides), {
 				...fakeSourceCollaborators,
+				uploadFetch: zerops.uploadFetch,
 				api: zerops.api,
 				reconcileSchema: async (call) => void reconciled.push(call),
 				sleep: async () => {},
@@ -98,7 +99,8 @@ const harness = (proxyEnv: Readonly<Record<string, string>> = {}): Harness => {
 	}
 }
 
-const manifestOf = (zerops: FakeZerops): string => zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? ''
+/** The manifest the proxy serves: the data file of the archive its ACTIVE version was built from. */
+const manifestOf = async (zerops: FakeZerops): Promise<string> => (await zerops.servedFile('proxy', 'proxy.manifest.json')) ?? ''
 
 /** How many polls a build that will SUCCEED is held at `BUILDING` once every build has been triggered. */
 const SLOW_BUILD_POLLS = 5
@@ -285,10 +287,14 @@ describe('the order', () => {
 describe('fail closed', () => {
 	test('a manifest that cannot be applied never lets new code reach the previous manifest', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
-		fixture.zerops.failWrite('proxy', FABRIKA_PROXY_MANIFEST_JSON)
-		await expect(fixture.run()).rejects.toThrow()
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual([])
-		expect(manifestOf(fixture.zerops)).toBe(liveManifest)
+		await fixture.run()
+		const previous = await manifestOf(fixture.zerops)
+		fixture.zerops.calls.length = 0
+		fixture.zerops.env('proxy').set(FABRIKA_PROXY_MANIFEST_JSON, JSON.stringify({ apps: [] }))
+		fixture.zerops.failDeploy('proxy')
+		await expect(fixture.run()).rejects.toThrow('finished as DEPLOY_FAILED')
+		expect(fixture.zerops.calls).not.toContain('deploy:control')
+		expect(await manifestOf(fixture.zerops)).toBe(previous)
 	})
 
 	test('a failed deploy stops the sequence, so control never lands behind an unbuilt proxy', async () => {
@@ -327,14 +333,14 @@ describe('idempotence', () => {
 	test('a second run writes nothing, publishes nothing, and leaves the manifest byte-identical', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
-		const afterFirst = manifestOf(fixture.zerops)
+		const afterFirst = await manifestOf(fixture.zerops)
 		expect(fixture.zerops.calls.some((call) => call.startsWith('env:'))).toBe(true)
 
 		fixture.zerops.calls.length = 0
 		await fixture.run()
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([])
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('subdomain:'))).toEqual([])
-		expect(manifestOf(fixture.zerops)).toBe(afterFirst)
+		expect(await manifestOf(fixture.zerops)).toBe(afterFirst)
 		// Deploying IS what a re-run does; it is the configuration that must not move.
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toHaveLength(4)
 	})
@@ -366,8 +372,11 @@ describe('what it writes', () => {
 	test('the merged manifest keeps the application entry and adopts the platform tables', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
-		const manifest = parseProxyManifestJson(manifestOf(fixture.zerops))
+		const manifest = parseProxyManifestJson(await manifestOf(fixture.zerops))
 		expect(manifest?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations', 'notes'])
+		// The archive carries it; the variable stays the operator's list of carried entries.
+		expect(fixture.zerops.calls).not.toContain(`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(liveManifest)
 		// The drift backlog 58 exists for: the live console was one `public` rule.
 		expect(tableAppOf(manifest, 'vozka')?.endpoints.length).toBeGreaterThan(1)
 		expect(manifest?.apps.find((app) => app.id === 'notes')?.upstream).toBe('notesapi:3000')
@@ -491,13 +500,14 @@ describe('--dry-run', () => {
 		await fixture.run({ dryRun: true, iamAdminKey: '' })
 		expect(fixture.zerops.calls).toEqual([])
 		expect(fixture.reconciled).toEqual([])
-		expect(manifestOf(fixture.zerops)).toBe(liveManifest)
+		expect(await manifestOf(fixture.zerops)).toBe('')
+		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(liveManifest)
 		expect(fixture.log.lines.some((line) => line.includes('would write'))).toBe(true)
 	})
 })
 
-describe('a manifest over the Zerops variable limit', () => {
-	/** A light-tier live manifest: the platform plus enough application entries to pass 32,000 bytes once merged. */
+describe('a manifest past the Zerops variable limit', () => {
+	/** A light-tier installation: the platform plus enough application entries to pass 32,000 bytes once merged. */
 	const crowdedManifest = JSON.stringify({
 		apps: Array.from({ length: 8 }, (_, index) => ({
 			id: `notes${index}`,
@@ -508,18 +518,18 @@ describe('a manifest over the Zerops variable limit', () => {
 		})),
 	})
 
-	test('a dry run reports it, naming the variable', async () => {
+	test('travels in the proxy archive and is served whole, with nothing written to the environment', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: crowdedManifest })
-		await expect(fixture.run({ dryRun: true, iamAdminKey: '' })).rejects.toThrow(`service variable \`${FABRIKA_PROXY_MANIFEST_JSON}\` is`)
-		expect(fixture.zerops.calls).toEqual([])
-	})
-
-	test('a real run refuses it before the proxy manifest is written or anything deploys', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: crowdedManifest })
-		await expect(fixture.run()).rejects.toThrow('over the 32000-byte limit of a Zerops service variable')
+		await fixture.run()
+		const served = await manifestOf(fixture.zerops)
+		expect(new TextEncoder().encode(served).byteLength).toBeGreaterThan(32_000)
+		expect(parseProxyManifestJson(served)?.apps.map((app) => app.id)).toEqual([
+			'iam',
+			'vozka',
+			'operations',
+			...Array.from({ length: 8 }, (_, index) => `notes${index}`),
+		])
 		expect(fixture.zerops.calls).not.toContain(`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
-		expect(fixture.zerops.calls.some((call) => call.startsWith('deploy:'))).toBe(false)
-		expect(manifestOf(fixture.zerops)).toBe(crowdedManifest)
 	})
 })
 
@@ -534,7 +544,7 @@ describe('MCP authoring', () => {
 	test('enabled: the console admits OAuth bearers on `/mcp` and registers the resource IAM issues for', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
-		const console_ = tableAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
+		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
 		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toEqual([['/mcp', ['authoring']]])
 		expect(console_?.oauthResources).toEqual([{
 			resource: MCP_RESOURCE,
@@ -579,7 +589,7 @@ describe('MCP authoring', () => {
 		for (const overrides of [{ mcpClients: [CLAUDE] }, {}]) {
 			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 			await fixture.run(overrides)
-			const console_ = tableAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
+			const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
 			if (console_ === undefined) throw new Error('the console has no table')
 			const digest = fixture.zerops.env('control').get(FABRIKA_SERVICE_TABLE_DIGEST)
 			expect(digest).toBe(installationTableDigest(console_))
@@ -592,7 +602,7 @@ describe('MCP authoring', () => {
 	test('off: no OAuth row, no registered resource, and no IAM OAuth config written', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
-		const console_ = tableAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
+		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
 		expect(console_).toBeDefined()
 		expect(oauthRows(console_)).toEqual([])
 		expect(console_?.oauthResources).toBeUndefined()
@@ -649,6 +659,7 @@ describe('MCP authoring', () => {
 		)
 		await deployPlatform(parsed, {
 			...fakeSourceCollaborators,
+			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
 			sleep: async () => {},
@@ -659,7 +670,7 @@ describe('MCP authoring', () => {
 		const controlOrigin = new URL(`https://${zerops.env('control').get('FABRIKA_CONTROL_DOMAIN') ?? ''}`).origin
 		const expected = `${controlOrigin}/mcp`
 		expect(expected).toBe('https://console.example.com/mcp')
-		const console_ = tableAppOf(parseProxyManifestJson(zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? ''), 'vozka')
+		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(zerops)), 'vozka')
 		expect(console_?.oauthResources?.map((entry) => entry.resource)).toEqual([expected])
 		expect(console_?.oauthResources?.[0]?.authorizationServers).toEqual(['https://iam.example.com'])
 		expect(JSON.parse(zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')).toMatchObject({ resources: [{ resource: expected }] })

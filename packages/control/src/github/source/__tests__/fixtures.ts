@@ -6,7 +6,7 @@ import type { GitHubSourceCredentials } from '../../connections/credentials'
 import type { SourceBytes } from '../archive'
 import { GitHubMetadataClient } from '../metadata'
 import { type RepositoryArchive, type RepositoryArchiveInput, type SourceDownloadFetch, TarballRepositorySource } from '../repository'
-import type { SourceArchiveKind } from '../types'
+import type { SourceArchiveKind, SourceDataFile } from '../types'
 
 export const DESCRIPTOR = { path: 'zerops.yaml', maxBytes: 256 * 1024 }
 export const descriptor = 'zerops:\n  - setup: app\n'
@@ -264,13 +264,13 @@ export function link(path: string, target: string): SourceBytes {
 	return entry({ name: `${handPrefix}${path}`, type: '2', linkname: target })
 }
 
-export function platformArchive(parts: SourceBytes[]): Promise<ArchiveRun> {
+export function platformArchive(parts: SourceBytes[], dataFile?: SourceDataFile): Promise<ArchiveRun> {
 	return runArchive(handSource(handTarball(parts)), {
 		repository,
 		commitSha: handCommitSha,
 		descriptorSha256,
 		signal: new AbortController().signal,
-		archive: { kind: 'platform' },
+		archive: dataFile === undefined ? { kind: 'platform' } : { kind: 'platform', dataFile },
 	})
 }
 

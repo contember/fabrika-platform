@@ -1,4 +1,4 @@
-import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
+import { encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import type { ZeropsNamespaceProxySource } from '../index'
 import type { PlatformDeployService, ResolvedService } from './deploy'
 import { type PlatformHosts, platformOrigin } from './hosts'
@@ -36,20 +36,21 @@ const OPERATIONS_DATA: Readonly<Record<PlatformTier, { readonly database: string
 }
 
 /**
- * The four variables pass 1 writes on the proxy, and nothing else.
+ * The three variables pass 1 writes on the proxy, and nothing else.
  *
- * The manifest is EMPTY on purpose: it is the only legal document that can be written before the hosts
- * exist, and the build bakes whatever is here (`src/topology/setups.ts`). `FABRIKA_IAM_ISSUER` is the private
- * address rather than the public issuer for the same reason — the public one is not known yet — and
- * `deployPlatform` corrects it in pass 2, before the manifest it belongs to is applied.
+ * `FABRIKA_IAM_ISSUER` is the private address rather than the public issuer because the public one is not known
+ * yet; `deployPlatform` corrects it in pass 2, before the manifest it belongs to is applied. The pass-1 manifest is
+ * `PASS_ONE_PROXY_MANIFEST`, which the proxy's archive carries.
  */
 export const passOneProxyEnv = (secrets: InstallationSecrets): ReadonlyMap<string, string> =>
 	new Map([
-		[FABRIKA_PROXY_MANIFEST_JSON, encodeProxyManifestJson({ apps: [] })],
 		['FABRIKA_IAM_ISSUER', PRIVATE_IAM_URL],
 		['FABRIKA_IAM_KEY', secrets.proxyKey],
 		['FABRIKA_PROXY_SESSION_OWNER_JSON', 'null'],
 	])
+
+/** EMPTY on purpose: the only legal document before the hosts exist. The proxy comes up answering 404. */
+export const PASS_ONE_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
 
 /** What `installationServiceEnv` needs. Everything in it is settled before the first write. */
 export interface InstallationEnvInput {

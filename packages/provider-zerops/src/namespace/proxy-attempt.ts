@@ -3,6 +3,7 @@ import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifes
 import { readableContent, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, ZeropsApiError, type ZeropsAppVersion } from '../api'
 import type { Sleeper } from '../collaborators'
 import { prepareZeropsDescriptor } from '../descriptor'
+import { ZEROPS_PROXY_MANIFEST_PATH, type ZeropsProxyManifestCarrier, zeropsProxyManifestCarrier } from '../proxy-manifest-carrier'
 import { isZeropsUploadDestination } from '../source'
 import type { ZeropsSourcePort } from '../source/port'
 import { deleteVersion } from '../version-attempt'
@@ -12,7 +13,13 @@ import type { ZeropsNamespaceProxyBuild, ZeropsNamespaceTarget } from './types'
 
 export type ZeropsProxyApi = Pick<
 	ZeropsApi,
-	'listServiceEnv' | 'putServiceEnv' | 'createAppVersion' | 'deleteAppVersion' | 'buildAndDeployAppVersion' | 'getAppVersion'
+	| 'listServiceEnv'
+	| 'putServiceEnv'
+	| 'deleteServiceEnv'
+	| 'createAppVersion'
+	| 'deleteAppVersion'
+	| 'buildAndDeployAppVersion'
+	| 'getAppVersion'
 >
 
 export interface ZeropsProxyRepublishInput {
@@ -46,9 +53,14 @@ const digest = async (text: string): Promise<string> =>
 		'',
 	)
 
-const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string): Promise<void> => {
+const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string, carrier: ZeropsProxyManifestCarrier): Promise<void> => {
 	const { api, signal } = input
 	const variables = await api.listServiceEnv({ serviceId, signal })
+	// The archive carries the manifest now; a copy left in the environment would describe nothing the proxy serves.
+	const stale = variables.find(variable => variable.key === FABRIKA_PROXY_MANIFEST_JSON)
+	if (carrier === 'archive' && stale !== undefined) {
+		await api.deleteServiceEnv({ envId: stale.id, signal })
+	}
 	if (readableContent(variables.find(variable => variable.key === SESSION_OWNER_VARIABLE)) !== 'null') {
 		await api.putServiceEnv({ serviceId, key: SESSION_OWNER_VARIABLE, value: 'null', sensitive: false, signal })
 	}
@@ -76,6 +88,8 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 	const serviceId = input.target.proxyServiceId
 	if (serviceId === undefined) throw new Error('Zerops namespace has no proxy service id')
 	await verifyZeropsNamespaceProxySource(pin)
+	// The pinned descriptor decides: a namespace kept on an older proxy revision still lifts the variable (ADR-0045).
+	const carrier = zeropsProxyManifestCarrier(pin.descriptor.contents)
 	const manifest = encodeProxyManifestJson(input.manifest)
 	// The attempt's identity covers the IAM configuration and the proxy secrets too, so rotating any forces a rebuild.
 	const proxySecrets = input.proxySecrets ?? new Map<string, string>()
@@ -162,8 +176,10 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 		throw new Error('Proxy source resolution identity mismatch')
 	}
 	await input.boundary()
-	await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, sensitive: false, signal: input.signal })
-	await writeProxyIam(input, serviceId)
+	if (carrier === 'environment') {
+		await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, sensitive: false, signal: input.signal })
+	}
+	await writeProxyIam(input, serviceId, carrier)
 	input.signal.throwIfAborted()
 	const reserved = await input.api.createAppVersion({ serviceId, name: runId, signal: input.signal })
 	let build: ZeropsNamespaceProxyBuild = { appVersionId: reserved.id, triggered: false, manifestSha256 }
@@ -176,11 +192,17 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 			repository: pin.repository,
 			commitSha: pin.commitSha,
 			descriptorSha256: pin.descriptor.sha256,
-			archive: { kind: 'platform' },
+			archive: carrier === 'archive'
+				? { kind: 'platform', dataFile: { path: ZEROPS_PROXY_MANIFEST_PATH, contents: manifest } }
+				: { kind: 'platform' },
 			uploadUrl: reserved.uploadUrl,
 			signal: input.signal,
 		})
-		if (uploaded.commitSha !== pin.commitSha || uploaded.descriptorSha256 !== pin.descriptor.sha256) {
+		const expectedDataFile = carrier === 'archive' ? await digest(manifest) : undefined
+		if (
+			uploaded.commitSha !== pin.commitSha || uploaded.descriptorSha256 !== pin.descriptor.sha256
+			|| uploaded.dataFileSha256 !== expectedDataFile
+		) {
 			throw new Error('Proxy source upload identity mismatch')
 		}
 		const descriptor = prepareZeropsDescriptor(pin.descriptor.contents, 'proxy')

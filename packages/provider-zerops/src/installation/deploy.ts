@@ -52,6 +52,7 @@ import {
 	type ZeropsService,
 	type ZeropsServiceEnv,
 } from '../index'
+import { ZEROPS_PROXY_MANIFEST_PATH } from '../proxy-manifest-carrier'
 import { assertCheckerPublished, type CheckerPublication } from './checker-release'
 import type { PlatformDeployInput } from './deploy-options'
 import { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
@@ -68,6 +69,7 @@ import {
 import type { DeployLog } from './log'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
 import { type IamOAuthConfig, platformIamOAuthConfig } from './mcp'
+import { archiveWithDataFile } from './platform-archive'
 import type { PreparedPlatformSource } from './platform-source'
 import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-upload'
 import { platformProxyAppFor, type PlatformProxyComposition, platformServiceTableDigest, resolvePlatformProxyManifest } from './proxy-manifest'
@@ -152,6 +154,16 @@ export interface PlatformDeployCollaborators extends PlatformServiceDeployCollab
 export interface PlatformServiceDeployInput {
 	readonly source: PreparedPlatformSource
 	readonly dryRun: boolean
+	/** The proxy's manifest, which its archive carries as the one data file (ADR-0045); the proxy is refused without it. */
+	readonly proxyManifest?: string
+}
+
+/** The archive one service builds from: the snapshot, and for the proxy the snapshot plus its manifest. */
+const serviceArchive = async (service: ResolvedService, input: PlatformServiceDeployInput): Promise<Blob> => {
+	const snapshot = Bun.file(input.source.archivePath)
+	if (service.hostname !== PLATFORM_PROXY_SERVICE) return snapshot
+	if (input.proxyManifest === undefined) throw new Error('the proxy is built only with the manifest its archive carries')
+	return new Blob([archiveWithDataFile(await snapshot.bytes(), { path: ZEROPS_PROXY_MANIFEST_PATH, contents: input.proxyManifest })])
 }
 
 /** One resolved platform service. */
@@ -290,7 +302,6 @@ const IAM_OAUTH_CONFIG = 'FABRIKA_IAM_OAUTH_CONFIG'
 const desiredServiceEnv = (
 	environment: string,
 	placement: PlatformPlacement,
-	manifestJson: string,
 	proxySource: ZeropsNamespaceProxySource,
 	oauthConfig: IamOAuthConfig | undefined,
 	controlTableDigest: string,
@@ -323,7 +334,6 @@ const desiredServiceEnv = (
 				// Compared byte-for-byte against a token's `iss`, so this is the PUBLIC issuer and not the
 				// private `iam:3000` the manifest dials — `readProxyEnv` canonicalizes it to an origin.
 				['FABRIKA_IAM_ISSUER', iamOrigin],
-				[FABRIKA_PROXY_MANIFEST_JSON, manifestJson],
 				['FABRIKA_PROXY_SESSION_OWNER_JSON', JSON.stringify({ issuer: iamOrigin, upstream: PRIVATE_IAM_UPSTREAM })],
 			]),
 		],
@@ -450,11 +460,12 @@ export const deployPlatformService = async (
 		return
 	}
 	prepareZeropsDescriptor(input.source.descriptor.contents, service.hostname)
+	const archive = await serviceArchive(service, input)
 	const reserved = await api.createAppVersion({ serviceId: service.id, name: input.source.commitSha, signal })
 	const appVersionId = reserved.id
 	log.info(`${service.hostname}: app-version ${appVersionId}, commit ${input.source.commitSha}, setup ${service.hostname}`)
 	try {
-		await uploadPlatformArchive(reserved.uploadUrl, input.source.archivePath, signal, collaborators.uploadFetch)
+		await uploadPlatformArchive(reserved.uploadUrl, archive, signal, collaborators.uploadFetch)
 		assertRunning(signal)
 	} catch {
 		await cleanupReservation(service, appVersionId, collaborators)
@@ -635,6 +646,7 @@ export const deployPreparedPlatform = async (
 			? 'MCP authoring: off'
 			: `MCP authoring: on, ${oauthConfig.clients.length} client(s), resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
 	)
+	// The variable is the application entries the platform proxy carries, held by the operator; nothing here writes it.
 	const merged = mergePlatformProxyManifest(platformManifest, readLiveProxyManifest(proxyEnv.get(FABRIKA_PROXY_MANIFEST_JSON)))
 	log.info(`${merged.manifest.apps.length} app(s): ${merged.manifest.apps.map((app) => app.id).join(', ')}`)
 	if (merged.carried.length > 0) {
@@ -649,7 +661,7 @@ export const deployPreparedPlatform = async (
 
 	log.step('Write the service environment')
 	const controlTableDigest = platformServiceTableDigest(platformManifest, platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id)
-	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest), proxySource, oauthConfig, controlTableDigest)
+	const desired = desiredServiceEnv(environment, placement, proxySource, oauthConfig, controlTableDigest)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)
@@ -667,11 +679,12 @@ export const deployPreparedPlatform = async (
 		)
 	}
 
-	// EVERY deploy is after EVERY write. That is what makes the sequence fail closed: a manifest this
-	// command could not apply leaves the previous manifest in front of the previous code, never in front
-	// of new code — and `ENVIRONMENT` is in place before any service that refuses `local` restarts.
+	// EVERY deploy is after EVERY write, and the manifest rides in the proxy's own archive. That is what makes
+	// the sequence fail closed: a proxy build that does not go ACTIVE leaves the previous manifest in front of
+	// the previous code, because control builds only after it — and `ENVIRONMENT` is in place before any
+	// service that refuses `local` restarts.
 	log.step(`Deploy ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')}`)
-	const buildInput = { source, dryRun: input.dryRun }
+	const buildInput = { source, dryRun: input.dryRun, proxyManifest: encodeProxyManifestJson(merged.manifest) }
 	await deployConcurrently(services, buildInput, collaborators)
 	for (const hostname of PLATFORM_SEQUENTIAL_DEPLOY) {
 		await deployPlatformService(serviceOf(services, hostname), buildInput, collaborators)

@@ -744,7 +744,7 @@ class ZeropsEmulator {
 		if (this.uploading.has(grant.appVersionId)) return error(409, 'LOCAL_UPLOAD_IN_PROGRESS', 'local upload already in progress')
 		this.uploading.add(grant.appVersionId)
 		try {
-			const { receipt, descriptorSha256 } = await readUploadedSource(request)
+			const { receipt, descriptorSha256, proxyManifest } = await readUploadedSource(request)
 			if (
 				grant.receipt !== undefined
 				&& (grant.receipt.compressedBytes !== receipt.compressedBytes || grant.receipt.compressedSha256 !== receipt.compressedSha256)
@@ -756,6 +756,9 @@ class ZeropsEmulator {
 				const version = this.version(grant.appVersionId)
 				if (grant.receipt === undefined && version !== undefined && descriptorSha256 !== undefined) {
 					version.uploadedDescriptorSha256 = descriptorSha256
+				}
+				if (grant.receipt === undefined && version !== undefined && proxyManifest !== undefined) {
+					version.uploadedProxyManifest = proxyManifest
 				}
 				grant.receipt ??= receipt
 				await this.persist()

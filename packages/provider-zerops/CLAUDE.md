@@ -164,10 +164,16 @@ bun test
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
   refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with
-  `wait: 'started'` a running build of the same manifest is answer enough. A fresh attempt writes the
-  manifest (compiled from the members core passes, `src/namespace/manifest.ts`) and the IAM variables,
-  records the version untriggered, uploads, records `triggered`, then sends the build on a signal that only
-  a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for `reconcile`.
+  `wait: 'started'` a running build of the same manifest is answer enough. A fresh attempt writes the IAM
+  variables, records the version untriggered, uploads the archive, records `triggered`, then sends the build on
+  a signal that only a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for
+  `reconcile`.
+- **The proxy manifest is the build archive's one data file, never a variable (ADR-0045).** The manifest (compiled
+  from the members core passes, `src/namespace/manifest.ts`) rides as `proxy.manifest.json` beside the exact commit,
+  and the upload must report its sha256 or the attempt fails. `zeropsProxyManifestCarrier` reads the PINNED
+  descriptor: one whose proxy build still lifts `FABRIKA_PROXY_MANIFEST_JSON` gets the variable as before, bound by
+  the client's ~32 KB check; any other gets the file, and a stale variable is deleted. Never lift the variable in the
+  generated proxy setup again: every pin of that commit would be handed it.
 - **A contract application gets the proxy secret on both sides, or nothing deploys** (ADR-0022 rule 5).
   `namespaceProxySecrets` (`src/namespace/proxy-secrets.ts`) maps each contract member of the manifest to
   `proxySecretVariable(id)` and refuses a member Control handed no `proxySecret`; the attempt writes each
@@ -247,8 +253,8 @@ Invariants:
   writes all of them to `--secrets-file` (new, outside the checkout, `0600`) BEFORE placing the first one.
 - **No code reads a secret back from Zerops.** A sensitive value reads `REDACTED` outside sudo mode, so the
   client drops its `content` (`api/service-env-response.ts`) and every `putServiceEnv` states `sensitive`.
-  A credential is written `true` and never compared; anything compared or merged later (the proxy manifest,
-  origins, the provenance marker) is written `false`.
+  A credential is written `true` and never compared; anything compared or merged later (origins, the
+  provenance marker) is written `false`.
 - **`install` refuses a non-terminal stdin unless `--yes` is passed** (`installPrompts`, before anything is
   contacted). Every confirmation defaults to yes, so a pipe of blank lines would consent to everything.
   `--yes` has no environment variable.
@@ -277,9 +283,11 @@ Invariants:
   `oauthResource` is generated from `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`; `platform-artifacts`'
   `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp })`.
 - **There is no `source` service (ADR-0029).** A leftover one is ignored with one warning and never deleted.
-- **`platform deploy` MERGES the proxy manifest, never replaces it.** An application on the light tier
-  shares the platform proxy's `FABRIKA_PROXY_MANIFEST_JSON`; an entry on a platform host is superseded and
-  reported.
+- **`platform deploy` MERGES the proxy manifest, never replaces it, and ships it in the proxy's archive.** An
+  application on the light tier shares the platform proxy; its entry is held by the operator in the proxy's
+  `FABRIKA_PROXY_MANIFEST_JSON`, which `platform deploy` reads and never writes. An entry on a platform host is
+  superseded and reported. `install` pass 1 and `deploy` append the manifest to the snapshot archive
+  (`platform-archive.ts`); only the proxy's archive carries one.
 - **`platform deploy` writes no credential and reads every credential from the environment.** No `--token`,
   no `--admin-key`; an unknown flag is an error.
 - **`platform init` keeps deployment credentials off disk and writes nothing to Zerops.** It reads

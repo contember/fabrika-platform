@@ -2,6 +2,7 @@
 // The generated repository-root file owns fabrika's setups. The example app authors only its build base, and the
 // platform renders the rest (`example-app.test.ts` validates what it renders).
 
+import { zeropsProxyManifestCarrier } from '@fabrika/provider-zerops'
 import { compileTopology, fabrikaTopologies, generatedArtifacts, parseYaml, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'
 import notesConfig from 'fabrika-example-zerops/fabrika.config'
@@ -90,19 +91,14 @@ describe('one root file, several named setups — the merged-file decision, chec
 		expect(read('zerops.yaml')).toContain('--listen :8080,:8082,:8083,:8084,:8085,:8086')
 	})
 
-	test('the proxy build lifts its manifest out of the runtime store — a build sees nothing else', () => {
-		// Verified live: a build container reads its service env-API variables as the EMPTY STRING, with no
-		// error. Without this bridge the manifest file would be empty, `generate-config.ts` would exit
-		// non-zero, and the proxy would be undeployable on Zerops. `${RUNTIME_x}` is the only channel that
-		// works, and it resolves nested references too.
-		const document = parseYaml(read('zerops.yaml'))
-		if (typeof document !== 'object' || document === null || !('zerops' in document) || !Array.isArray(document.zerops)) {
-			throw new Error('zerops.yaml has no setups')
-		}
-		const proxy = document.zerops.find((entry) => typeof entry === 'object' && entry !== null && 'setup' in entry && entry.setup === 'proxy')
-		expect(proxy).toMatchObject({
-			build: { envVariables: { FABRIKA_PROXY_MANIFEST_JSON: '${RUNTIME_FABRIKA_PROXY_MANIFEST_JSON}' } },
-		})
+	test('the proxy build reads its manifest from the archive and lifts none from the environment', () => {
+		// The manifest is the build archive's one data file (ADR-0045). A lifted variable would be written over
+		// it, and a namespace pinned to this commit would then be handed the variable, whose values Zerops caps
+		// at ~32 KB (`zeropsProxyManifestCarrier`).
+		const contents = read('zerops.yaml')
+		expect(zeropsProxyManifestCarrier(contents)).toBe('archive')
+		expect(contents).not.toContain('RUNTIME_FABRIKA_PROXY_MANIFEST_JSON')
+		expect(contents).toContain('generate-config.ts ./proxy.manifest.json ./caddy.json')
 	})
 
 	test('Operations maintenance runs every minute to preserve its one-minute spike threshold', () => {

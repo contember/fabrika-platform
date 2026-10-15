@@ -190,7 +190,16 @@ function zeropsProvider(zerops: FakeZerops): ControlProvider {
 			proxySource: PIN,
 			source: {
 				resolve: async (input) => ({ commitSha: input.requestedRef, descriptorSha256: input.descriptorSha256 }),
-				upload: async (input) => ({ commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 }),
+				// Control's source reports the digest of the manifest the proxy archive carries (ADR-0045).
+				upload: async (input) => ({
+					commitSha: input.commitSha,
+					descriptorSha256: input.descriptorSha256,
+					...(input.archive.kind === 'platform' && input.archive.dataFile !== undefined
+						? { dataFileSha256: new Bun.CryptoHasher('sha256').update(input.archive.dataFile.contents).digest('hex') }
+						: {}),
+					entryCount: 1,
+					expandedBytes: 1,
+				}),
 			},
 			clientId: 'client-1',
 			iamUrl: 'https://iam.example.test',

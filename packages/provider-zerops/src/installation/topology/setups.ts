@@ -89,7 +89,6 @@
 // resolves nested references (a `RUNTIME_` lift of a variable that is itself `${db_connectionString}`
 // arrives fully resolved). Only the proxy needs this, and it declares it explicitly below.
 
-import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import type { ZeropsHealthCheckSpec, ZeropsReadinessCheckSpec, ZeropsYamlSetupSpec, ZeropsYamlSpec } from '../../index'
 
 // ── Readiness and liveness: two mechanisms, two questions ──────────────────────────────────────────
@@ -324,37 +323,28 @@ const operations: ZeropsYamlSetupSpec = {
  *
  * Per-service variables (env API): `FABRIKA_IAM_ISSUER` — `http://iam:3000` in the platform project, the
  * IAM service's PUBLIC origin in an apps project, because there is no private network between projects
- * (ADR-0006). And `FABRIKA_PROXY_MANIFEST_JSON`; see below.
+ * (ADR-0006). The manifest is not a variable; see below.
  *
  * Secret (`envSecrets`): `FABRIKA_IAM_KEY` — the value IAM knows as `FABRIKA_IAM_PROXY_KEY`.
  *
- * ── How the manifest reaches the build, and what is unverified about it ───────────────────────────
+ * ── How the manifest reaches the build ───────────────────────────────────────────────────────────
  *
  * `proxy.manifest.json` tells the proxy which apps it fronts, at which upstream, under which endpoint table. It
  * is baked into the artifact at BUILD time, which is what `docs/backlog/08` chose ("redeploy") over
- * pushing to Caddy's admin API. But on Zerops fabrika has no filesystem in the deploy path — a Zerops
- * deploy is five HTTP calls (ADR-0003) — so the driver cannot write a file into the build the way the
- * Cloudflare path can. The only write channel it has is the service-level env API, the same one it uses
- * for secrets, so the manifest travels as a service variable and the build materializes it to a file.
+ * pushing to Caddy's admin API. It arrives as the one generated data file of the uploaded build archive
+ * (ADR-0045), beside the exact public commit, at a path the commit does not hold: Control streams it into a
+ * namespace proxy's archive (`republishProxy`, `packages/provider-zerops/src/namespace/proxy-attempt.ts`), and
+ * `platform install` / `platform deploy` append it to the platform proxy's (`installation/platform-archive.ts`).
+ * It never travels through the service environment, whose values Zerops caps at ~32 KB.
  *
- * The control plane writes `FABRIKA_PROXY_MANIFEST_JSON` through the service-level env API and rolls
- * this service before each app deploy (`republishProxy`, `packages/provider-zerops/src/namespace/proxy-attempt.ts`).
+ * Releases before this one lifted `FABRIKA_PROXY_MANIFEST_JSON` from the env API into the build instead.
+ * A namespace pinned to such a release keeps that descriptor, and Control keeps writing the variable for it
+ * (`zeropsProxyManifestCarrier`): never add the lift back, or a pin of this release would get the variable.
  *
- * That live-account fact is now settled, and the answer was the bad one: **a build container sees none
- * of its service's env-API variables.** Read directly, `${FABRIKA_PROXY_MANIFEST_JSON}` in a build
- * command is the empty string — no error, no warning. Left uncorrected, every proxy build would have
- * written an empty manifest, failed `generate-config.ts`, and made this service undeployable on Zerops.
- *
- * The fix is the `build.envVariables` declaration below rather than the move into `run.initCommands`
- * this header used to anticipate: `${RUNTIME_x}` lifts a service's own runtime variable into its build
- * context, and it resolves nested references too. The delivery channel and the fail-closed parser are
- * unchanged, which is what that contingency promised.
- *
- * What IS structural: missing or malformed JSON makes `generate-config.ts` exit non-zero, so the
+ * What IS structural: a missing or malformed file makes `generate-config.ts` exit non-zero, so the
  * pipeline fails and the previous version keeps serving. A valid empty app list generates only the
  * terminal 404 route, and the auth service denies every forwarded request.
  */
-const proxyManifestReference = `\${${FABRIKA_PROXY_MANIFEST_JSON}}`
 
 /**
  * The proxy's public listeners.
@@ -395,19 +385,17 @@ const proxy: ZeropsYamlSetupSpec = {
 		// database, a stronger supply-chain guarantee than a release tarball with a hand-copied hash — and
 		// the toolchain floats. If a future Go release breaks the build, this is the line that moved.
 		base: ['alpine/go@latest', 'alpine/bun@1.3'],
-		// Runtime values reach the build only through the explicit RUNTIME_ bridge.
+		// Runtime values reach the build only through the explicit RUNTIME_ bridge. The manifest is not one:
+		// it is the archive's data file (see the header).
 		envVariables: {
-			[FABRIKA_PROXY_MANIFEST_JSON]: `\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}`,
 			FABRIKA_PROXY_SESSION_OWNER_JSON: '${RUNTIME_FABRIKA_PROXY_SESSION_OWNER_JSON}',
 		},
 		// CGO off makes the binary static, which is what lets it run on Alpine/musl.
 		prepareCommands: ['CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2'],
 		buildCommands: [
 			'bun install --frozen-lockfile',
-			// See the header: the manifest arrives as a service variable because the driver has no
-			// filesystem. `printf` rather than `echo` so a leading `-` or a backslash survives intact.
-			`printf %s "${proxyManifestReference}" > ./proxy.manifest.json`,
-			// Missing/malformed JSON fails the build; an empty app list emits only deny/404 routes.
+			// The archive's data file (see the header). Missing/malformed JSON fails the build; an empty app list
+			// emits only deny/404 routes.
 			`bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000 --listen ${
 				PROXY_PUBLIC_PORTS.map((port) => `:${port}`).join(',')
 			}`,

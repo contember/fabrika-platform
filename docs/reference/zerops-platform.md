@@ -780,8 +780,10 @@ with multi-byte characters. The platform reports it as an internal error, not as
 reads as an outage. The client refuses a value over `ZEROPS_SERVICE_ENV_VALUE_MAX_BYTES` (32,000 UTF-8 bytes,
 `api/service-env-limit.ts`) before it sends the write, with an error that names the variable, its size and the
 limit, never the value; a namespace lifecycle classifies it `serviceEnvValueTooLarge`, not retryable. The
-variable it hits first is the proxy's `FABRIKA_PROXY_MANIFEST_JSON`, which carries every endpoint table the
-proxy fronts.
+proxy manifest, which carries every endpoint table a proxy fronts, therefore travels as a file in the proxy's
+build archive ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)); only a
+namespace pinned to a release whose proxy build lifts `FABRIKA_PROXY_MANIFEST_JSON` still gets the variable,
+and the limit.
 
 ### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — a missing service by name is a 400
 

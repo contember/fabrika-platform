@@ -20,10 +20,16 @@ export interface ZeropsSourceResolution {
 	readonly descriptorSha256: string
 }
 
+/** ADR-0045: the one generated data file a platform archive carries beside the exact commit, at a path the commit lacks. */
+export interface ZeropsSourceDataFile {
+	readonly path: string
+	readonly contents: string
+}
+
 /** ADR-0045: platform archives are anonymous, tree-prechecked, keep relative symlinks. */
 export type ZeropsSourceArchive =
 	| { readonly kind: 'application'; readonly privateBinding?: ZeropsSourcePrivateBinding }
-	| { readonly kind: 'platform' }
+	| { readonly kind: 'platform'; readonly dataFile?: ZeropsSourceDataFile }
 
 export interface ZeropsSourceUploadInput {
 	readonly repository: ZeropsSourceRepository
@@ -38,6 +44,8 @@ export interface ZeropsSourceUploadInput {
 export interface ZeropsSourceUploadResult {
 	readonly commitSha: string
 	readonly descriptorSha256: string
+	/** The sha256 of the data file the archive carried; absent without one. */
+	readonly dataFileSha256?: string
 	readonly entryCount: number
 	readonly expandedBytes: number
 }

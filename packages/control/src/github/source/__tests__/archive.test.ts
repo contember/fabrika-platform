@@ -94,6 +94,42 @@ describe('the archive rewrite', () => {
 		expect(archived.collected.ok).toBe(false)
 	})
 
+	test('a platform archive carries its data file after every entry of the commit, and reports its digest', async () => {
+		const manifest = JSON.stringify({ apps: [], padding: 'x'.repeat(1024 * 1024) })
+		const parts = [file(`${handPrefix}zerops.yaml`, descriptor), file(`${handPrefix}src/a.ts`, 'a')]
+		const plain = await platformArchive(parts)
+		const archived = await platformArchive(parts, { path: 'proxy.manifest.json', contents: manifest })
+
+		expect(archived.failure).toBeUndefined()
+		expect(entries(archived).map((part) => part.path)).toEqual([...entries(plain).map((part) => part.path), 'proxy.manifest.json'])
+		expect(text(archived, 'proxy.manifest.json')).toBe(manifest)
+		expect(archived.summary?.dataFileSha256).toBe(new Bun.CryptoHasher('sha256').update(manifest).digest('hex'))
+		expect(archived.summary?.entryCount).toBe((plain.summary?.entryCount ?? 0) + 1)
+		// Every byte of the commit is what it was without the data file.
+		expect(archived.collected.bytes.subarray(0, plain.collected.bytes.byteLength - 1024)).toEqual(
+			plain.collected.bytes.subarray(0, plain.collected.bytes.byteLength - 1024),
+		)
+		expect(plain.summary?.dataFileSha256).toBeUndefined()
+	})
+
+	test.each([
+		{ name: 'a file', parts: [file(`${handPrefix}proxy.manifest.json`, '{"apps":[]}')] },
+		{ name: 'a directory', parts: [file(`${handPrefix}proxy.manifest.json/inner`, 'x')] },
+		{ name: 'a link', parts: [link('proxy.manifest.json', 'zerops.yaml')] },
+	])('refuses a data file the commit already holds as $name', async ({ parts }) => {
+		const archived = await platformArchive([...parts, file(`${handPrefix}zerops.yaml`, descriptor)], {
+			path: 'proxy.manifest.json',
+			contents: '{"apps":[]}',
+		})
+		expect(archived.failure).toMatchObject({ code: 'archive_rejected', stage: 'archive' })
+	})
+
+	test('refuses a data file on an application archive', () => {
+		expect(() =>
+			createTarRewrite({ commitSha: handCommitSha, descriptor: DESCRIPTOR, descriptorSha256, dataFile: { path: 'proxy.manifest.json', contents: '{}' } })
+		).toThrow()
+	})
+
 	test('streams the tarball into an archive of regular files with fixed modes, each parent directory written once before its first file', async () => {
 		const fixture = await gitFixture()
 		const archived = await runArchive(sourceFor(fixture), {

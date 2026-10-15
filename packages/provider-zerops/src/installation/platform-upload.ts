@@ -10,13 +10,13 @@ export const validatePlatformUploadUrl = (value: string): void => {
 
 export const uploadPlatformArchive = async (
 	url: string,
-	archivePath: string,
+	archive: Blob,
 	signal: AbortSignal,
 	uploadFetch: PlatformUploadFetch,
 ): Promise<void> => {
 	validatePlatformUploadUrl(url)
 	const uploadSignal = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
-	const body = Bun.file(archivePath).stream()
+	const body = archive.stream()
 	try {
 		const response = await uploadFetch(url, {
 			method: 'PUT',

@@ -1,7 +1,7 @@
 import { createHash, type Hash } from 'node:crypto'
 import { SourceFailure } from './failure'
 import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './tree'
-import type { SourceDescriptorRule } from './types'
+import type { SourceDataFile, SourceDescriptorRule } from './types'
 
 export const SOURCE_MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 /** The tar-only application path detects submodules by this marker; platform mode also checks the native Git tree. */
@@ -19,6 +19,7 @@ export type SourceBytes = Uint8Array<ArrayBuffer>
 export interface ArchiveSummary {
 	commitSha: string
 	descriptorSha256: string
+	dataFileSha256?: string
 	entryCount: number
 	expandedBytes: number
 }
@@ -29,6 +30,8 @@ export interface TarRewriteInput {
 	commitSha: string
 	descriptor: SourceDescriptorRule
 	descriptorSha256: string
+	/** Appended after the commit's entries; platform archives only. */
+	dataFile?: SourceDataFile
 }
 
 export interface TarRewrite {
@@ -48,6 +51,7 @@ export function createTarRewrite(input: TarRewriteInput): TarRewrite {
 	if (!SHA256_PATTERN.test(input.descriptorSha256)) {
 		throw new SourceFailure('descriptor_mismatch', 'archive')
 	}
+	if (input.dataFile !== undefined && input.archiveKind !== 'platform') throw archiveRejected()
 	const outcome = Promise.withResolvers<ArchiveSummary>()
 	// The caller reads this only after the PUT settles; keep an early rejection from looking unhandled.
 	outcome.promise.catch(() => {})
@@ -197,13 +201,37 @@ class TarRewriter {
 		if (descriptorSha256 === undefined) {
 			throw new SourceFailure('descriptor_missing', 'archive')
 		}
+		const dataFile = this.input.dataFile
+		const dataFileSha256 = dataFile === undefined ? undefined : this.appendDataFile(dataFile, controller)
 		controller.enqueue(new Uint8Array(BLOCK_BYTES * END_OF_ARCHIVE_BLOCKS))
 		return {
 			commitSha: this.input.commitSha,
 			descriptorSha256,
+			...(dataFileSha256 === undefined ? {} : { dataFileSha256 }),
 			entryCount: this.entryCount,
 			expandedBytes: this.expandedBytes,
 		}
+	}
+
+	/**
+	 * Write the generated data file after every entry of the commit. It is registered like a tree entry, so a path the
+	 * commit already holds — a file, a directory, a link, or a link on the way to it — refuses the archive instead of
+	 * being shadowed or overridden: every byte of the commit stays what it is, and the file is the only addition.
+	 */
+	private appendDataFile(file: SourceDataFile, controller: TransformStreamDefaultController<SourceBytes>): string {
+		const content = new TextEncoder().encode(file.contents)
+		this.registerPath(file.path, { kind: 'file' })
+		this.entryCount++
+		this.expandedBytes += content.byteLength
+		if (this.entryCount > SOURCE_MAX_TREE_ENTRIES || this.expandedBytes > SOURCE_MAX_EXPANDED_BYTES) {
+			throw new SourceFailure('archive_rejected', 'archive')
+		}
+		this.writeParentDirectories(file.path, controller)
+		this.writeHeader(file.path, 0o644, content.byteLength, '0', controller)
+		if (content.byteLength > 0) controller.enqueue(content)
+		const padding = paddingFor(content.byteLength)
+		if (padding > 0) controller.enqueue(new Uint8Array(padding))
+		return createHash('sha256').update(content).digest('hex')
 	}
 
 	private handleBlock(

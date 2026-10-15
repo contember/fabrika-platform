@@ -353,7 +353,8 @@ describe('reserved version lifecycle', () => {
 	})
 
 	test('upload destination policy rejects before opening the archive or issuing PUT with a fixed error', async () => {
-		const file = spyOn(Bun, 'file')
+		const archive = new Blob(['archive'])
+		const file = spyOn(archive, 'stream')
 		let puts = 0
 		try {
 			for (
@@ -378,7 +379,7 @@ describe('reserved version lifecycle', () => {
 				}
 				expect(failure).toBeInstanceOf(Error)
 				expect(failure).toMatchObject({ name: 'Error', message: 'Zerops archive upload destination rejected' })
-				await expect(uploadPlatformArchive(url, '/missing-archive', new AbortController().signal, async () => {
+				await expect(uploadPlatformArchive(url, archive, new AbortController().signal, async () => {
 					puts++
 					return new Response(null)
 				})).rejects.toThrow('Zerops archive upload destination rejected')
@@ -402,7 +403,7 @@ describe('reserved version lifecycle', () => {
 		const signal = new AbortController().signal
 		const url = `https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?${query}`
 		let responseCancelled = false
-		await uploadPlatformArchive(url, '/dev/null', signal, async (destination, init) => {
+		await uploadPlatformArchive(url, Bun.file('/dev/null'), signal, async (destination, init) => {
 			expect(destination).toBe(url)
 			expect(init.method).toBe('PUT')
 			expect(init.redirect).toBe('error')

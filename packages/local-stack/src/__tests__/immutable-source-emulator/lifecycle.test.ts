@@ -132,6 +132,19 @@ test('records the uploaded descriptor digest and the build setup a version was b
 	expect((await f.state()).appVersions.find((version) => version.id === opaque.id)?.uploadedDescriptorSha256).toBeUndefined()
 })
 
+test("keeps the proxy manifest a version's archive carries, a megabyte included, past a restart", async () => {
+	const path = await stateFile()
+	const f = await fixture({ stateFile: path })
+	const manifest = JSON.stringify({ apps: [], padding: 'x'.repeat(1024 * 1024) })
+	const archive = Bun.gzipSync(
+		new Uint8Array([...tarEntry('zerops.yaml', descriptor), ...tarEntry('proxy.manifest.json', manifest), ...new Uint8Array(1024)]),
+	)
+	const reservation = await f.api.createAppVersion({ serviceId: f.serviceId, signal: signal() })
+	expect((await f.upload(reservation.uploadUrl, archive)).status).toBe(200)
+	const restarted = await client({ stateFile: path })
+	expect((await restarted.state()).appVersions.find((version) => version.id === reservation.id)?.uploadedProxyManifest).toBe(manifest)
+})
+
 test('real client reserves exactly one version, persists a hash-only grant and receipt, and activates it after restart', async () => {
 	const path = await stateFile()
 	let now = 100

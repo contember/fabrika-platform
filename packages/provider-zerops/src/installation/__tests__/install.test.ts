@@ -80,6 +80,7 @@ const harness = (options: {
 	const stored: string[] = []
 	const collaborators: InstallCollaborators = {
 		...fakeSourceCollaborators,
+		uploadFetch: zerops.uploadFetch,
 		api: zerops.api,
 		storeSecrets: async (text) => void stored.push(text),
 		reconcileSchema: async (call) => void reconciled.push(call),
@@ -198,14 +199,13 @@ describe('the sequence', () => {
 })
 
 describe('pass 1', () => {
-	test('writes exactly four variables on the proxy and nothing anywhere else, before the build', async () => {
+	test('writes exactly three variables on the proxy and nothing anywhere else, before the build', async () => {
 		const fixture = harness()
 
 		await fixture.run()
 
 		const untilBuild = fixture.zerops.calls.slice(0, fixture.zerops.calls.indexOf('deploy:proxy'))
 		expect(untilBuild.filter((call) => call.startsWith('env:'))).toEqual([
-			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
 			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
 			'env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON',
@@ -220,13 +220,14 @@ describe('pass 1', () => {
 		const traced = {
 			...api,
 			buildAndDeployAppVersion: async (call: Parameters<typeof api.buildAndDeployAppVersion>[0]) => {
-				seen.push(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? '')
+				if (call.zeropsYamlSetup === 'proxy') seen.push((await fixture.zerops.uploadedFile(call.appVersionId, 'proxy.manifest.json')) ?? '')
 				if (call.zeropsYamlSetup === 'proxy') owners.push(fixture.zerops.env('proxy').get('FABRIKA_PROXY_SESSION_OWNER_JSON'))
 				return api.buildAndDeployAppVersion(call)
 			},
 		}
 		await runInstall(input(), {
 			...fakeSourceCollaborators,
+			uploadFetch: fixture.zerops.uploadFetch,
 			api: traced,
 			reconcileSchema: async () => {},
 			sleep: async () => {},
@@ -238,8 +239,10 @@ describe('pass 1', () => {
 
 		expect(seen[0]).toBe('{"apps":[]}')
 		expect(owners).toEqual(['null', JSON.stringify({ issuer: `https://${IAM_HOST}`, upstream: 'iam:3000' })])
-		const final = parseProxyManifestJson(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? '')
+		const final = parseProxyManifestJson((await fixture.zerops.servedFile('proxy', 'proxy.manifest.json')) ?? '')
 		expect(final?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations'])
+		expect(seen.at(-1)).toBe(JSON.stringify(final))
+		expect(fixture.zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
 	})
 
 	test('a proxy that published no subdomain stops the install rather than composing a hostname', async () => {
@@ -497,14 +500,13 @@ describe('the hand-off', () => {
 
 		await fixture.run()
 
-		// The ONLY things pass 2 has left to write are the manifest it composes and the console table digest
-		// read from it — every origin the deploy derives was written from the same hosts one step earlier, the
-		// last of them the access token.
+		// The ONLY thing pass 2 has left to write is the console table digest of the manifest it composes, which
+		// the proxy's archive carries — every origin the deploy derives was written from the same hosts one step
+		// earlier, the last of them the access token.
 		const afterPassOne = fixture.zerops.calls.slice(fixture.zerops.calls.indexOf('deploy:proxy') + 1)
-		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 3)
+		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 2)
 		expect(passTwoWrites.filter((call) => call.startsWith('env:'))).toEqual([
 			'env:control:FABRIKA_ZEROPS_ACCESS_TOKEN',
-			`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`,
 			`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`,
 		])
 
@@ -543,7 +545,7 @@ describe('the hand-off', () => {
 		for (const [hostname, keys] of GENERATED_SECRET_KEYS) {
 			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual([...keys].sort())
 		}
-		expect(fixture.zerops.sensitive('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+		expect(fixture.zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
 	})
 
 	test('points the hand-off at the secrets file, ready to run', async () => {
@@ -687,11 +689,11 @@ describe('a project that already has the services', () => {
 
 describe('every outward step is confirmed', () => {
 	test('declining before pass-one writes still permits a fresh bring-up', async () => {
-		const confirms = { [`Write 4 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`]: false }
+		const confirms = { [`Write 3 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`]: false }
 		const fixture = harness({ confirms })
 		await expect(fixture.run()).rejects.toThrow('no variable was written, and re-running the install is safe')
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([])
-		confirms[`Write 4 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`] = true
+		confirms[`Write 3 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`] = true
 		await fixture.run()
 		expect(fixture.zerops.imports).toHaveLength(1)
 		expect(fixture.zerops.calls).toContain('deploy:control')
@@ -703,7 +705,6 @@ describe('every outward step is confirmed', () => {
 		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
 		expect(key).toBeDefined()
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([
-			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
 			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
 			'env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON',
@@ -719,7 +720,6 @@ describe('every outward step is confirmed', () => {
 		fixture.zerops.failWrite('operations', 'FABRIKA_OPERATIONS_BLOB_ENDPOINT')
 		await expect(fixture.run()).rejects.toThrow('create service env failed')
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([
-			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
 			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
 			'env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON',

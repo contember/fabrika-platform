@@ -49,6 +49,7 @@ const versionSchema = z.object({
 	name: z.string().optional(),
 	hasHttpPorts: z.boolean().optional(),
 	uploadedDescriptorSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+	uploadedProxyManifest: z.string().optional(),
 	buildSetup: z.string().optional(),
 	runEnvVariables: z.record(z.string()).optional(),
 	syntheticFailure: z.literal('LOCAL_MISSING_UPLOAD').optional(),

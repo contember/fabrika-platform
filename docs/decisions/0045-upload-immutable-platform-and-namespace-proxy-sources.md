@@ -46,7 +46,13 @@ identity, not a new default from an upgraded Control process.
 Control streams the exact public commit to the reserved proxy version through the same in-process
 tarball path as application sources ([ADR-0029](0029-github-app-sources.md)). Its platform-archive
 mode supports validated safe relative symlinks; this does not relax the application-archive
-contract. Recovery and ownership of a proxy rebuild follow
+contract. A proxy archive carries the commit plus exactly one generated data file, the proxy manifest
+at `proxy.manifest.json`: data the build reads, never code, appended after every entry of the commit and
+identified by its sha256, which the upload reports and the provider checks. The code is still the
+pinned commit byte for byte; a commit that holds that path, as a file, a directory or a link, is
+refused rather than overridden. A pinned descriptor whose proxy build still lifts
+`FABRIKA_PROXY_MANIFEST_JSON` gets the variable instead (`zeropsProxyManifestCarrier`), bound by the
+Zerops value limit. Recovery and ownership of a proxy rebuild follow
 [ADR-0044](0044-zerops-delivery-ownership-and-recovery.md). Registry-triggered rebuild requests may
 wait for a bounded archive upload before reporting that the build started. Ordinary reconciliation
 never backfills current HEAD or replaces a stored namespace pin.

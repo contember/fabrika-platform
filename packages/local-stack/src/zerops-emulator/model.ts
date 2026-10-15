@@ -41,6 +41,8 @@ export interface AppVersionRecord {
 	hasHttpPorts?: boolean
 	/** The sha256 of the root `zerops.yaml` in this version's uploaded tarball, when it was one. */
 	uploadedDescriptorSha256?: string
+	/** The proxy manifest its uploaded tarball carried as its data file (ADR-0045), when it carried one. */
+	uploadedProxyManifest?: string
 	/** The `zeropsYamlSetup` its build request selected. */
 	buildSetup?: string
 	/** The selected setup's literal `run.envVariables`, applied as `ENV` records when the version activates. */

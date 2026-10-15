@@ -2,14 +2,18 @@
 //
 // ── Why this is a MERGE and not a write ───────────────────────────────────────────────────────────
 //
-// On the `light` tier an application shares the platform's project and therefore the platform proxy's
-// single `FABRIKA_PROXY_MANIFEST_JSON`. The live document on `fabrika-test` carries a fourth app —
-// `notes` → `notesapi:3000` on listener 8084 — beside the three platform ones. `platformProxyManifest`
-// deliberately emits only the platform apps (it is generated from the platform's own service contracts and
-// knows nothing about applications), so writing it alone would DELETE every application entry and take
-// the deployed applications offline at the next proxy build.
+// On the `light` tier an application can share the platform's project and therefore the platform proxy.
+// Its entry is held by the operator in the proxy's `FABRIKA_PROXY_MANIFEST_JSON` variable — on `fabrika-test`
+// a fourth app, `notes` → `notesapi:3000` on listener 8084, beside the three platform ones. The variable is
+// no longer the carrier: the manifest travels as the data file of the proxy's build archive (ADR-0045), and
+// nothing in fabrika writes the variable any more; releases before that wrote the whole composed document
+// into it, which is why it may still hold platform entries. `platformProxyManifest` deliberately emits only
+// the platform apps (it is generated from the platform's own service contracts and knows nothing about
+// applications), so building it alone would DELETE every application entry and take the deployed
+// applications offline.
 //
-// So: read the live value, compose, write. That composition is this command's job and nothing else's.
+// So: read the variable, compose, and ship the result in the archive. That composition is this command's
+// job and nothing else's.
 //
 // ── What happens to an entry the platform does not know about ─────────────────────────────────────
 //
@@ -77,9 +81,9 @@ export const mergePlatformProxyManifest = (platform: ProxyManifest, live: ProxyM
 }
 
 /**
- * The live manifest a proxy service currently carries.
+ * The application entries the operator holds in the platform proxy's variable, as a manifest.
  *
- * Absent means "no manifest yet". Present-but-unparseable throws: see `mergePlatformProxyManifest`. So
+ * Absent means "none". Present-but-unparseable throws: see `mergePlatformProxyManifest`. So
  * does a SENSITIVE record, which an older release wrote: Zerops will not hand its value back.
  */
 export const readLiveProxyManifest = (record: ZeropsServiceEnv | undefined): ProxyManifest | null => {

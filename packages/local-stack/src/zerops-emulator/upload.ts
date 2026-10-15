@@ -1,3 +1,4 @@
+import { ZEROPS_PROXY_MANIFEST_PATH } from '@fabrika/provider-zerops'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import {
 	LOCAL_SOURCE_MAX_COMPRESSED_BYTES,
@@ -6,10 +7,19 @@ import {
 	type LocalSourceUploadReceipt,
 } from '../local-source-contract'
 
-/** What one completed upload carried: its transport receipt and, when it is a source tarball, its descriptor digest. */
+/**
+ * What one completed upload carried: its transport receipt and, when it is a source tarball, its descriptor digest and
+ * the proxy manifest it carries as its data file (ADR-0045), which the composition serves when it follows a deploy.
+ */
 export interface UploadedSource {
 	receipt: LocalSourceUploadReceipt
 	descriptorSha256?: string
+	proxyManifest?: string
+}
+
+interface ArchiveReading {
+	descriptorSha256?: string
+	proxyManifest?: string
 }
 
 const TAR_BLOCK = 512
@@ -22,32 +32,37 @@ const tarText = (block: Uint8Array, start: number, length: number): string => {
 }
 
 /**
- * The sha256 of the root `zerops.yaml` in an uploaded gzip tarball, or undefined when the bytes are not
- * one. Synthetic test uploads are opaque bytes, so this never refuses an upload.
+ * The sha256 of the root `zerops.yaml` in an uploaded gzip tarball and its root proxy manifest, each undefined when
+ * the bytes hold none. Synthetic test uploads are opaque bytes, so this never refuses an upload.
  */
-export function uploadedDescriptorDigest(compressed: Uint8Array<ArrayBuffer>): string | undefined {
+export function readUploadedArchive(compressed: Uint8Array<ArrayBuffer>): ArchiveReading {
 	let tar: Uint8Array
 	try {
 		tar = Bun.gunzipSync(compressed)
 	} catch {
-		return undefined
+		return {}
 	}
-	if (tar.byteLength > LOCAL_SOURCE_MAX_EXPANDED_BYTES * 2) return undefined
+	if (tar.byteLength > LOCAL_SOURCE_MAX_EXPANDED_BYTES * 2) return {}
+	const reading: ArchiveReading = {}
 	for (let offset = 0; offset + TAR_BLOCK <= tar.byteLength;) {
 		const header = tar.subarray(offset, offset + TAR_BLOCK)
-		if (header.every((byte) => byte === 0)) return undefined
+		if (header.every((byte) => byte === 0)) break
 		const size = Number.parseInt(tarText(header, 124, 12).trim() || '0', 8)
-		if (!Number.isSafeInteger(size) || size < 0) return undefined
+		if (!Number.isSafeInteger(size) || size < 0) return {}
 		const prefix = tarText(header, 345, 155)
 		const name = tarText(header, 0, 100)
 		const path = prefix === '' ? name : `${prefix}/${name}`
 		const contentStart = offset + TAR_BLOCK
+		const content = tar.subarray(contentStart, contentStart + size)
 		if (path === DESCRIPTOR_PATH && tarText(header, 156, 1) === '0') {
-			return createHash('sha256').update(tar.subarray(contentStart, contentStart + size)).digest('hex')
+			reading.descriptorSha256 = createHash('sha256').update(content).digest('hex')
+		}
+		if (path === ZEROPS_PROXY_MANIFEST_PATH && tarText(header, 156, 1) === '0') {
+			reading.proxyManifest = new TextDecoder().decode(content)
 		}
 		offset = contentStart + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK
 	}
-	return undefined
+	return reading
 }
 
 export const capabilityDigest = (capability: string): string => createHash('sha256').update(capability).digest('hex')
@@ -79,8 +94,12 @@ export async function readUploadedSource(request: Request): Promise<UploadedSour
 		}
 		if (compressedBytes === 0) throw new Error('empty upload')
 		const receipt = { compressedBytes, compressedSha256: hash.digest('hex') }
-		const descriptorSha256 = uploadedDescriptorDigest(new Uint8Array(Buffer.concat(chunks)))
-		return descriptorSha256 === undefined ? { receipt } : { receipt, descriptorSha256 }
+		const { descriptorSha256, proxyManifest } = readUploadedArchive(new Uint8Array(Buffer.concat(chunks)))
+		return {
+			receipt,
+			...(descriptorSha256 === undefined ? {} : { descriptorSha256 }),
+			...(proxyManifest === undefined ? {} : { proxyManifest }),
+		}
 	} catch {
 		void reader.cancel().catch(() => {})
 		throw new Error('incomplete local source upload')

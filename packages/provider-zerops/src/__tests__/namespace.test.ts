@@ -69,6 +69,8 @@ interface FakeState {
 	env: Map<string, Map<string, StoredServiceEnv>>
 	versions: Map<string, ZeropsAppVersion[]>
 	calls: string[]
+	/** The data file of every proxy archive uploaded, in order: the manifest each build was given. */
+	uploadedManifests: string[]
 	importProjectCount: number
 	triggerCount: number
 	uploadSequence: number
@@ -98,6 +100,7 @@ const freshState = (): FakeState => ({
 	env: new Map(),
 	versions: new Map(),
 	calls: [],
+	uploadedManifests: [],
 	importProjectCount: 0,
 	triggerCount: 0,
 	uploadSequence: 0,
@@ -369,7 +372,12 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 			sensitive,
 		})
 	},
-	deleteServiceEnv: async () => {},
+	deleteServiceEnv: async ({ envId }) => {
+		state.calls.push(`unset:${envId}`)
+		for (const variables of state.env.values()) {
+			for (const [key, record] of variables) if (record.id === envId) variables.delete(key)
+		}
+	},
 	getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', sensitive: false, content: 'value' }),
 	getLogAccess: async () => {
 		throw new Error('not used')
@@ -379,12 +387,23 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 
 const uploadedVersion = (uploadUrl: string): string | null => new URL(uploadUrl).searchParams.get('version')
 
-const uploaded = (input: ZeropsSourceUploadInput) => ({
-	commitSha: input.commitSha,
-	descriptorSha256: input.descriptorSha256,
-	entryCount: 1,
-	expandedBytes: 1,
-})
+/** What Control's source reports: the commit, its descriptor, and the digest of the manifest the archive carried. */
+const uploaded = (input: ZeropsSourceUploadInput) => {
+	const dataFile = input.archive.kind === 'platform' ? input.archive.dataFile : undefined
+	return {
+		commitSha: input.commitSha,
+		descriptorSha256: input.descriptorSha256,
+		...(dataFile === undefined ? {} : { dataFileSha256: new Bun.CryptoHasher('sha256').update(dataFile.contents).digest('hex') }),
+		entryCount: 1,
+		expandedBytes: 1,
+	}
+}
+
+/** ADR-0045: a namespace proxy archive is the anonymous public commit plus its manifest. */
+const expectProxyArchive = (state: FakeState, input: ZeropsSourceUploadInput): void => {
+	expect(input.archive).toEqual({ kind: 'platform', dataFile: { path: 'proxy.manifest.json', contents: expect.any(String) } })
+	if (input.archive.kind === 'platform' && input.archive.dataFile !== undefined) state.uploadedManifests.push(input.archive.dataFile.contents)
+}
 
 const options = (state: FakeState): ZeropsNamespaceOptions => ({
 	proxySource: PIN,
@@ -392,7 +411,7 @@ const options = (state: FakeState): ZeropsNamespaceOptions => ({
 		resolve: async (input) => ({ commitSha: input.requestedRef, descriptorSha256: input.descriptorSha256 }),
 		upload: async (input) => {
 			state.calls.push(`upload:${uploadedVersion(input.uploadUrl)}`)
-			expect(input.archive).toEqual({ kind: 'platform' })
+			expectProxyArchive(state, input)
 			return uploaded(input)
 		},
 	},
@@ -511,7 +530,7 @@ describe('immutable namespace proxy sources', () => {
 				},
 				upload: async (input) => {
 					expect(input.commitSha).toBe(PIN.commitSha)
-					expect(input.archive).toEqual({ kind: 'platform' })
+					expectProxyArchive(state, input)
 					state.calls.push(`upload:${uploadedVersion(input.uploadUrl)}`)
 					return uploaded(input)
 				},
@@ -546,7 +565,8 @@ describe('immutable namespace proxy sources', () => {
 		state.versions.get(proxyId)?.push({ id: 'unrelated', status: 'ACTIVE', sequence: 999 })
 		await run(capabilities, saved, [])
 		expect(state.calls.indexOf('deleteAppVersion:uploaded-version-1')).toBeLessThan(state.calls.indexOf(`createAppVersion:${proxyId}`))
-		expect(state.calls).toContain(`put:${proxyId}:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(state.calls).toContain('upload:uploaded-version-2')
+		expect(state.calls).not.toContain(`put:${proxyId}:${FABRIKA_PROXY_MANIFEST_JSON}`)
 		expect(state.calls).not.toContain('buildAndDeployAppVersion:uploaded-version-1')
 		expect(state.calls).not.toContain('buildAndDeployAppVersion:unrelated')
 	})
@@ -1066,8 +1086,9 @@ describe('Zerops namespace lifecycle', () => {
 		})
 		expect(state.importProjectCount).toBe(1)
 		expect(state.triggerCount).toBe(1)
-		expect(state.calls.indexOf(`wait:import-${proxyId}`)).toBeLessThan(state.calls.indexOf(`put:${proxyId}:${FABRIKA_PROXY_MANIFEST_JSON}`))
-		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[]}')
+		expect(state.calls.indexOf(`wait:import-${proxyId}`)).toBeLessThan(state.calls.indexOf(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`))
+		expect(state.uploadedManifests).toEqual(['{"apps":[]}'])
+		expect(state.env.get(proxyId)?.has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
 		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)?.content).toBe('https://iam.example.test')
 		expect(state.env.get(proxyId)?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')?.content).toBe('null')
 		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_KEY_VARIABLE)?.sensitive).toBe(true)
@@ -1297,7 +1318,9 @@ describe('Zerops namespace lifecycle', () => {
 		})
 
 		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
-		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe(manifest)
+		expect(state.uploadedManifests.at(-1)).toBe(manifest)
+		// The manifest an earlier release left in the environment is gone: the archive is the one carrier.
+		expect(state.env.get(proxyId)?.has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
 		expect(state.env.get(proxyId)?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')?.content).toBe('null')
 		expect(state.calls.indexOf(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`)).toBeLessThan(
 			state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'),
@@ -1360,7 +1383,7 @@ describe('Zerops namespace lifecycle', () => {
 		const variable = proxySecretVariable('notes@prod')
 		expect(state.env.get(proxyId)?.get(variable)).toMatchObject({ content: 'notes-proxy-secret', sensitive: true })
 		expect(state.calls.indexOf(`put:${proxyId}:${variable}`)).toBeLessThan(state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'))
-		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).not.toContain('notes-proxy-secret')
+		expect(state.uploadedManifests.join('\n')).not.toContain('notes-proxy-secret')
 	})
 
 	// The import cannot establish a `.zerops.app` subdomain — the platform accepts `enableSubdomainAccess`

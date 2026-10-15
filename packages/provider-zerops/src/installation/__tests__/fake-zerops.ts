@@ -18,6 +18,8 @@ import {
 	type ZeropsServiceStatus,
 } from '../../index'
 
+import type { PlatformUploadFetch } from '../platform-upload'
+
 /** The platform answers a value of 32,768 bytes or more with a bare 500 (issue #3); the client refuses it first. */
 const refusedBySize = (value: string): boolean => new TextEncoder().encode(value).byteLength >= 32_768
 
@@ -59,6 +61,12 @@ export interface FakeProjectCreation {
 
 export interface FakeZerops {
 	readonly api: ZeropsApi
+	/** Keeps every archive uploaded to a reservation, by app-version id. */
+	readonly uploadFetch: PlatformUploadFetch
+	/** A file of the archive uploaded to one reservation. */
+	uploadedFile(appVersionId: string, path: string): Promise<string | undefined>
+	/** A file of the archive the service's ACTIVE version was built from: what the proxy serves is its manifest. */
+	servedFile(service: string, path: string): Promise<string | undefined>
 	/** Every effect, in the order it happened: `env:<service>:<KEY>`, `deploy:<service>`, … */
 	readonly calls: string[]
 	/**
@@ -117,6 +125,9 @@ export const fakeZerops = (options: {
 	const sequence = new Map(live.map((service) => [service.name, service.sequence ?? 0]))
 	const failedWrites = new Set<string>()
 	const failedDeploys = new Set<string>()
+	const uploads = new Map<string, Uint8Array<ArrayBuffer>>()
+	/** The app-version each service last saw go ACTIVE. */
+	const served = new Map<string, string>()
 	const blockedTriggers = new Map<string, number>()
 	const processes = new Map<string, string>()
 
@@ -186,7 +197,10 @@ export const fakeZerops = (options: {
 			const name = nameOf(serviceId)
 			const next = (sequence.get(name) ?? 0) + 1
 			sequence.set(name, next)
-			return { id: `${name}-v${next}`, uploadUrl: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test' }
+			return {
+				id: `${name}-v${next}`,
+				uploadUrl: `https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?version=${name}-v${next}&signature=test`,
+			}
 		},
 		deleteAppVersion: async ({ appVersionId }) => {
 			effect(`delete:${appVersionId}`)
@@ -384,7 +398,9 @@ export const fakeZerops = (options: {
 
 		getAppVersion: async ({ appVersionId }) => {
 			const name = appVersionId.slice(0, appVersionId.lastIndexOf('-v'))
-			return { id: appVersionId, status: failedDeploys.has(name) ? 'DEPLOY_FAILED' : 'ACTIVE' }
+			if (failedDeploys.has(name)) return { id: appVersionId, status: 'DEPLOY_FAILED' }
+			served.set(name, appVersionId)
+			return { id: appVersionId, status: 'ACTIVE' }
 		},
 
 		enableSubdomainAccess: async ({ serviceId }) => {
@@ -394,8 +410,23 @@ export const fakeZerops = (options: {
 		},
 	}
 
+	const uploadFetch: PlatformUploadFetch = async (url, init) => {
+		const version = new URL(url).searchParams.get('version') ?? ''
+		uploads.set(version, new Uint8Array(await new Response(init.body).arrayBuffer()))
+		return new Response(null, { status: 200 })
+	}
+
+	const uploadedFile = async (appVersionId: string, path: string): Promise<string | undefined> => {
+		const archive = uploads.get(appVersionId)
+		if (archive === undefined) return undefined
+		return (await new Bun.Archive(archive).files(path)).get(path)?.text()
+	}
+
 	return {
 		api,
+		uploadFetch,
+		uploadedFile,
+		servedFile: (service, path) => uploadedFile(served.get(service) ?? '', path),
 		calls,
 		timeline,
 		importedProcesses,

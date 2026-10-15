@@ -16,22 +16,32 @@ import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE
 import { asNamespaceError } from '../namespace/errors'
 import { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from '../namespace/proxy-attempt'
 import type { ZeropsNamespaceTarget } from '../namespace/types'
-import type { ZeropsSourcePort } from '../source/port'
+import type { ZeropsSourceArchive, ZeropsSourcePort } from '../source/port'
 
 const pin = {
 	repository: { owner: 'example', name: 'platform' },
 	commitSha: 'a'.repeat(40),
 	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
 }
+/** A namespace kept on a release whose proxy build still lifts the manifest variable (ADR-0045). */
+const legacyPin = {
+	...pin,
+	commitSha: 'b'.repeat(40),
+	descriptor: await createZeropsArtifactSourceDescriptor(
+		`zerops:\n  - setup: proxy\n    build:\n      envVariables:\n        ${FABRIKA_PROXY_MANIFEST_JSON}: "\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}"\n`,
+	),
+}
+const sha256 = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex')
 const EMPTY: ProxyManifest = { apps: [] }
 const CHANGED: ProxyManifest = {
 	apps: [{ id: 'app', hosts: ['app.example.test'], upstream: 'app:3000', scheme: 'https', ...contractProxyTable(notesArtifact) }],
 }
 
-function fixture() {
+function fixture(proxySource = pin) {
 	const calls: string[] = []
 	const sensitivity = new Map<string, boolean>()
-	let target: ZeropsNamespaceTarget = { proxyServiceId: 'proxy', projectId: 'project', proxySource: pin, ready: true }
+	const uploadedArchives: ZeropsSourceArchive[] = []
+	let target: ZeropsNamespaceTarget = { proxyServiceId: 'proxy', projectId: 'project', proxySource, ready: true }
 	let status: ZeropsAppVersionStatus = 'ACTIVE'
 	let sequence = 0
 	const deleted = new Set<string>()
@@ -40,6 +50,9 @@ function fixture() {
 		putServiceEnv: async input => {
 			calls.push(`env:${input.key}`)
 			sensitivity.set(input.key, input.sensitive)
+		},
+		deleteServiceEnv: async input => {
+			calls.push(`unset:${input.envId}`)
 		},
 		createAppVersion: async () => {
 			sequence++
@@ -65,16 +78,24 @@ function fixture() {
 	const source: ZeropsSourcePort = {
 		resolve: async input => {
 			calls.push('resolve')
-			expect(input.requestedRef).toBe(pin.commitSha)
-			expect(input.expectedCommitSha).toBe(pin.commitSha)
+			expect(input.requestedRef).toBe(proxySource.commitSha)
+			expect(input.expectedCommitSha).toBe(proxySource.commitSha)
 			expect(input.privateBinding).toBeUndefined()
-			return { commitSha: pin.commitSha, descriptorSha256: pin.descriptor.sha256 }
+			return { commitSha: proxySource.commitSha, descriptorSha256: proxySource.descriptor.sha256 }
 		},
 		upload: async input => {
 			calls.push(`upload:${new URL(input.uploadUrl).searchParams.get('version')}`)
-			// ADR-0045: a platform archive is anonymous; it names no connection.
-			expect(input.archive).toEqual({ kind: 'platform' })
-			return { commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 }
+			// ADR-0045: a platform archive is anonymous; it names no connection, and carries at most the manifest.
+			if (input.archive.kind !== 'platform') throw new Error('expected a platform archive')
+			uploadedArchives.push(input.archive)
+			const dataFile = input.archive.dataFile
+			return {
+				commitSha: input.commitSha,
+				descriptorSha256: input.descriptorSha256,
+				...(dataFile === undefined ? {} : { dataFileSha256: sha256(dataFile.contents) }),
+				entryCount: 1,
+				expandedBytes: 1,
+			}
 		},
 	}
 	const controller = new AbortController()
@@ -98,6 +119,7 @@ function fixture() {
 	return {
 		calls,
 		sensitivity,
+		uploadedArchives,
 		api,
 		source,
 		controller,
@@ -115,7 +137,6 @@ test('started publishes routing and IAM before the build and returns once the bu
 	const f = fixture()
 	const result = await republishProxy(f.input())
 	expect(effects(f.calls)).toEqual([
-		`env:${FABRIKA_PROXY_MANIFEST_JSON}`,
 		'env:FABRIKA_PROXY_SESSION_OWNER_JSON',
 		`env:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`,
 		`env:${ZEROPS_NAMESPACE_IAM_KEY_VARIABLE}`,
@@ -146,7 +167,7 @@ test('an inherited untriggered attempt is deleted, never built, and replaced by 
 	const f = fixture()
 	await f.input().checkpoint({ ...f.target(), proxyBuild: { appVersionId: 'v0', triggered: false } })
 	const result = await republishProxy(f.input())
-	expect(effects(f.calls).slice(0, 2)).toEqual(['delete:v0', `env:${FABRIKA_PROXY_MANIFEST_JSON}`])
+	expect(effects(f.calls).slice(0, 2)).toEqual(['delete:v0', 'env:FABRIKA_PROXY_SESSION_OWNER_JSON'])
 	expect(f.calls).not.toContain('build:v0')
 	expect(result.proxyBuild?.appVersionId).toBe('v1')
 })
@@ -223,7 +244,6 @@ test('writes routing and the issuer readable and every credential sensitive', as
 	const f = fixture()
 	await republishProxy({ ...f.input(), proxySecrets: new Map([['FABRIKA_PROXY_SECRET_A', 'secret-one']]) })
 	expect(Object.fromEntries(f.sensitivity)).toEqual({
-		[FABRIKA_PROXY_MANIFEST_JSON]: false,
 		FABRIKA_PROXY_SESSION_OWNER_JSON: false,
 		[ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE]: false,
 		[ZEROPS_NAMESPACE_IAM_KEY_VARIABLE]: true,
@@ -363,8 +383,58 @@ test('resolution failure, an invalid descriptor digest and an unpinned target ca
 	expect(effects(f.calls)).toEqual([])
 })
 
-test('a manifest over the service variable limit is refused before anything is written, and no retry can pass', async () => {
+test("the manifest travels as the archive's data file and never through the environment", async () => {
 	const f = fixture()
+	await republishProxy({ ...f.input(), manifest: CHANGED })
+	expect(f.uploadedArchives).toEqual([{ kind: 'platform', dataFile: { path: 'proxy.manifest.json', contents: JSON.stringify(CHANGED) } }])
+	expect(f.calls).not.toContain(`env:${FABRIKA_PROXY_MANIFEST_JSON}`)
+})
+
+test('a 1 MB manifest reaches the build through the archive', async () => {
+	const f = fixture()
+	const large: ProxyManifest = {
+		apps: Array.from({ length: 220 }, (_, index) => ({
+			id: `app${index}@prod`,
+			hosts: [`app${index}.example.test`],
+			upstream: `app${index}:3000`,
+			scheme: 'https',
+			...contractProxyTable(notesArtifact),
+		})),
+	}
+	const result = await republishProxy({ ...f.input(), manifest: large })
+	const contents = f.uploadedArchives[0]?.kind === 'platform' ? f.uploadedArchives[0].dataFile?.contents ?? '' : ''
+	expect(new TextEncoder().encode(contents).byteLength).toBeGreaterThan(1024 * 1024)
+	expect(contents).toBe(JSON.stringify(large))
+	expect(f.calls).toContain('build:v1')
+	expect(result.proxyBuild?.triggered).toBe(true)
+})
+
+test('a manifest left in the environment by an earlier release is removed', async () => {
+	const f = fixture()
+	const listed = await f.api.listServiceEnv({ serviceId: 'proxy', signal: new AbortController().signal })
+	f.api.listServiceEnv = async () => [...listed, { id: 'stale-manifest', key: FABRIKA_PROXY_MANIFEST_JSON, sensitive: false, content: '{"apps":[]}' }]
+	await republishProxy(f.input())
+	expect(f.calls.indexOf('unset:stale-manifest')).toBeGreaterThan(-1)
+	expect(f.calls.indexOf('unset:stale-manifest')).toBeLessThan(f.calls.indexOf('reserve:v1'))
+})
+
+test('an upload that does not report the manifest it carried is an identity mismatch, never built', async () => {
+	const f = fixture()
+	f.source.upload = async input => ({ commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 })
+	await expect(republishProxy(f.input())).rejects.toThrow('Proxy source upload identity mismatch')
+	expect(f.calls.some(call => call.startsWith('build:'))).toBe(false)
+})
+
+test('a namespace pinned to a release that lifts the variable gets the variable and an archive without a data file', async () => {
+	const f = fixture(legacyPin)
+	await republishProxy({ ...f.input(), manifest: CHANGED })
+	expect(effects(f.calls).slice(0, 2)).toEqual([`env:${FABRIKA_PROXY_MANIFEST_JSON}`, 'env:FABRIKA_PROXY_SESSION_OWNER_JSON'])
+	expect(f.uploadedArchives).toEqual([{ kind: 'platform' }])
+	expect(f.sensitivity.get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+})
+
+test('on a pin that lifts the variable, a manifest over its limit is refused before anything is written, and no retry can pass', async () => {
+	const f = fixture(legacyPin)
 	const requests: string[] = []
 	// The real client's write, over a platform that answers a bare 500 from 32,768 bytes (issue #3).
 	const platform = createZeropsApi({

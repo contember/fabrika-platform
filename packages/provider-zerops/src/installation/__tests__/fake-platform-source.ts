@@ -1,3 +1,6 @@
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { PreparedPlatformSource } from '../platform-source'
 import type { PlatformUploadFetch } from '../platform-upload'
 
@@ -7,6 +10,10 @@ const contents = 'zerops:\n'
 		`  - setup: ${setup}\n` + (setup === 'proxy' ? `    build:\n      envVariables:\n        PROBE: ${JSON.stringify(interpolation)}\n` : '')
 	).join('')
 
+/** An empty tar archive: the proxy's archive is this plus its manifest, so it must be a real one. */
+const archivePath = join(await mkdtemp(join(tmpdir(), 'fabrika-fake-platform-source-')), 'source.tar.gz')
+await Bun.write(archivePath, Bun.gzipSync(new Uint8Array(1024)))
+
 export const fakePlatformSource = (): PreparedPlatformSource => ({
 	commitSha: 'a'.repeat(40),
 	descriptor: {
@@ -14,7 +21,7 @@ export const fakePlatformSource = (): PreparedPlatformSource => ({
 		sha256: new Bun.CryptoHasher('sha256').update(contents).digest('hex'),
 		contents,
 	},
-	archivePath: '/dev/null',
+	archivePath,
 	dispose: async () => {},
 })
 

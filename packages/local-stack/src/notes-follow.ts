@@ -6,7 +6,7 @@
 
 import { FABRIKA_CONTRACT_DIGEST } from '@fabrika/auth-core'
 import { ZEROPS_NAMESPACE_PROXY_HOSTNAME } from '@fabrika/provider-zerops'
-import { FABRIKA_PROXY_MANIFEST_JSON, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { cp, rm, symlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { compose, type ComposeOptions } from './compose'
@@ -72,7 +72,10 @@ export async function followNotesDeploy(options: Pick<ComposeOptions, 'browser'>
 		candidate.projectId === version.projectId && candidate.name === ZEROPS_NAMESPACE_PROXY_HOSTNAME
 	)
 	if (proxies.length !== 1 || proxies[0] === undefined) throw new Error('the Notes project holds no single namespace proxy')
-	const published = parseProxyManifestJson(soleVariable(snapshot, proxies[0].id, FABRIKA_PROXY_MANIFEST_JSON))
+	// What the namespace proxy serves is the manifest its active version's archive carried (ADR-0045).
+	const proxy = proxies[0]
+	const served = snapshot.appVersions.find((candidate) => candidate.id === proxy.activeAppVersionId)?.uploadedProxyManifest
+	const published = served === undefined ? null : parseProxyManifestJson(served)
 	const entry = published?.apps.find((app) => app.id === LOCAL_NOTES_IAM_APP_ID)
 	if (entry === undefined || !isApplicationEntry(entry) || entry.snapshot !== digest) {
 		throw new Error('the namespace proxy does not serve the endpoint table of the active Notes contract')

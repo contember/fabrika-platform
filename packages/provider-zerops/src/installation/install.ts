@@ -27,7 +27,7 @@ import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-man
 import { derivePlatformHosts, type PlatformHosts, platformOrigin, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { checkedEnvironmentName } from './init-options'
 import { assertRunning, type InstallCollaborators, type InstallPrompts } from './install-collaborators'
-import { installationServiceEnv, passOneProxyEnv, writeServiceEnv } from './install-environment'
+import { installationServiceEnv, PASS_ONE_PROXY_MANIFEST, passOneProxyEnv, writeServiceEnv } from './install-environment'
 import type { PlatformInstallInput } from './install-options'
 import { resolveInstallationProject } from './install-project'
 import {
@@ -64,11 +64,11 @@ const passOne = async (
 	const { log, prompts } = collaborators
 	log.step('Pass 1 — build the proxy so the installation has public hostnames')
 	log.info('An empty manifest is a legal one: the proxy comes up answering 404 and publishes one hostname per HTTP port.')
-	if (!(await prompts.confirm(`Write 4 variables on \`proxy\` and build commit ${source.commitSha}? (about 4 minutes)`, true))) {
+	if (!(await prompts.confirm(`Write 3 variables on \`proxy\` and build commit ${source.commitSha}? (about 4 minutes)`, true))) {
 		throw new Error('declined: no variable was written, and re-running the install is safe')
 	}
 	await writeServiceEnv(proxy, passOneProxyEnv(secrets), collaborators)
-	await deployPlatformService(proxy, { source, dryRun: false }, collaborators)
+	await deployPlatformService(proxy, { source, dryRun: false, proxyManifest: PASS_ONE_PROXY_MANIFEST }, collaborators)
 
 	const proxyEnv = await readServiceEnv(proxy.id, collaborators)
 	const subdomains = readableContent(proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE))

@@ -138,6 +138,7 @@ export class SourceTransport {
 			return {
 				commitSha: summary.commitSha,
 				descriptorSha256: summary.descriptorSha256,
+				...(summary.dataFileSha256 === undefined ? {} : { dataFileSha256: summary.dataFileSha256 }),
 				entryCount: summary.entryCount,
 				expandedBytes: summary.expandedBytes,
 			}

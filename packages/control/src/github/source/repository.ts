@@ -105,6 +105,7 @@ export class TarballRepositorySource {
 			throw new SourceFailure('descriptor_mismatch', 'archive')
 		}
 		const platform = input.archive.kind === 'platform'
+		const dataFile = input.archive.kind === 'platform' ? input.archive.dataFile : undefined
 		const binding = input.archive.kind === 'application' ? input.archive.privateBinding : undefined
 		const token = await this.token(input.repository, binding, input.signal, 'archive')
 		if (platform) await this.metadata.validatePlatformTree(input.repository, input.commitSha, input.signal)
@@ -122,6 +123,7 @@ export class TarballRepositorySource {
 				commitSha: input.commitSha,
 				descriptor: this.options.descriptor,
 				descriptorSha256: input.descriptorSha256,
+				...(dataFile === undefined ? {} : { dataFile }),
 			})
 			const inflated: ReadableStream<SourceBytes> = pullThrough(tarball, new DecompressionStream('gzip'))
 			return {
