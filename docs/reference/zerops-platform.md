@@ -783,7 +783,7 @@ limit, never the value; a namespace lifecycle classifies it `serviceEnvValueTooL
 proxy manifest, which carries every endpoint table a proxy fronts, therefore travels as a file in the proxy's
 build archive ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)); only a
 namespace pinned to a release whose proxy build lifts `FABRIKA_PROXY_MANIFEST_JSON` still gets the variable,
-and the limit.
+and the limit, until it is re-pinned with `fabrika control namespaces update --proxy-source=current`.
 
 ### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — a missing service by name is a 400
 

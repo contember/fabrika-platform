@@ -293,7 +293,17 @@ fabrika platform upgrade --provider=zerops --to=<newer tag> --sidecar=<sidecar c
 ```
 
 It commits the tag to the sidecar's `fabrika.ref`, pushes, and follows the workflow run it triggers. It
-needs only the `gh` login. Existing namespaces keep their proxy version.
+needs only the `gh` login. Existing namespaces keep their proxy version. To move one to the proxy of the
+new release, after the run succeeded:
+
+```bash
+fabrika control namespaces update --namespace=<id> --proxy-source=current
+```
+
+It re-pins the namespace and queues the reconcile that rebuilds its proxy; poll `namespaces get` until it is
+`ready`. A namespace pinned to a release before the proxy manifest moved into the build archive carries it in a
+service variable, which Zerops caps at about 32 KB: when a deploy fails with `serviceEnvValueTooLarge`, this is
+the fix, and it also accepts a namespace in `failed`.
 
 ## When something fails
 

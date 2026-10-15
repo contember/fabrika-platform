@@ -181,13 +181,13 @@ function fakeZerops(): FakeZerops {
 	return { api, calls, services, faults }
 }
 
-function zeropsProvider(zerops: FakeZerops): ControlProvider {
+function zeropsProvider(zerops: FakeZerops, proxySource = PIN): ControlProvider {
 	return {
 		id: 'zerops',
 		normalizeRegistration: (input) => input,
 		deploy: () => Promise.resolve({ state: 'succeeded' }),
 		namespaces: createZeropsNamespaceCapabilities({
-			proxySource: PIN,
+			proxySource,
 			source: {
 				resolve: async (input) => ({ commitSha: input.requestedRef, descriptorSha256: input.descriptorSha256 }),
 				// Control's source reports the digest of the manifest the proxy archive carries (ADR-0045).
@@ -795,5 +795,69 @@ describe('an update payload is checked strictly', () => {
 		expect(await errorOf(nested)).toContain('field postgres.maxContainers is not a namespace target field')
 		expect(autoscalingCalls(zerops)).toEqual([])
 		expect(await storedRow(harness)).toEqual(before)
+	})
+})
+
+describe('re-pinning a namespace proxy source (ADR-0045)', () => {
+	/** A namespace planned before the installation's default moved: an upgrade leaves it on this pin. */
+	const OLDER: ZeropsNamespaceOptions['proxySource'] = { ...PIN, commitSha: 'c'.repeat(40) }
+
+	/** The provider of an installation whose default pin moved from OLDER to PIN after the namespace was planned. */
+	const upgradedInstallation = (zerops: FakeZerops) => {
+		let current = zeropsProvider(zerops, OLDER)
+		const provider: ControlProvider = {
+			id: 'zerops',
+			normalizeRegistration: (input) => input,
+			deploy: () => Promise.resolve({ state: 'succeeded' }),
+			get namespaces() {
+				return current.namespaces
+			},
+		}
+		return { provider, upgrade: () => void (current = zeropsProvider(zerops, PIN)) }
+	}
+
+	const pinOf = async (harness: Harness): Promise<unknown> =>
+		objectField(payloadOf(JSON.parse((await storedRow(harness)).provider_target_json))['proxySource'], 'commitSha')
+
+	test('moves a FAILED namespace to the installation default and queues the reconcile that rebuilds its proxy', async () => {
+		const zerops = fakeZerops()
+		const installation = upgradedInstallation(zerops)
+		const harness = makeHarness(installation.provider)
+		await createDefaultNamespace(harness)
+		const list = zerops.api.listProjectServices
+		zerops.api.listProjectServices = async () => {
+			throw new Error('zerops: the namespace project cannot be read')
+		}
+		await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'apps-prod' }), harness.deps)
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'failed' }])
+		zerops.api.listProjectServices = list
+		installation.upgrade()
+		expect(await pinOf(harness)).toBe(OLDER.commitSha)
+		// Failed, it accepts the re-pin and nothing else.
+		const profile = await rpcResult(updateRequest(), harness.deps)
+		expect(profile.status).toBe(409)
+		expect(await errorOf(profile)).toContain('a failed one can re-pin its proxy source')
+
+		const updated = await rpcResult(updateRequest({ proxySource: 'current' }), harness.deps)
+
+		expect(updated.status).toBe(200)
+		expect((await readNamespace(updated)).state).toBe('pending')
+		expect(await pinOf(harness)).toBe(PIN.commitSha)
+		expect(harness.audits.at(-1)).toEqual(expect.objectContaining({
+			action: 'namespace.update',
+			metadata: expect.objectContaining({ field: 'proxySource', from: OLDER.commitSha, to: PIN.commitSha }),
+		}))
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+	})
+
+	test('a namespace already on the installation default needs no re-pin', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		await createDefaultNamespace(harness)
+
+		const noop = await rpcResult(updateRequest({ proxySource: 'current' }), harness.deps)
+		expect(noop.status).toBe(200)
+		expect((await readNamespace(noop)).state).toBe('ready')
+		expect(harness.audits.some((audit) => audit.action === 'namespace.update')).toBe(false)
 	})
 })

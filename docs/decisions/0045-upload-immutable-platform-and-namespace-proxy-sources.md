@@ -41,7 +41,10 @@ An ambiguous build response cannot justify deleting the version or submitting an
 Each namespace stores its own immutable proxy source identity: public repository coordinates, full
 commit SHA, and the descriptor identity needed to verify and submit the build. Namespace planning
 copies the installation owner's selected default. Every subsequent proxy rebuild uses the persisted
-identity, not a new default from an upgraded Control process.
+identity, not a new default from an upgraded Control process. Only an explicit operator update moves a
+pin, and only to the installation's current default (`namespaces.update` with `proxySource: "current"`,
+`fabrika control namespaces update --proxy-source=current`); it also accepts a `failed` namespace, and it
+queues the reconcile that rebuilds the proxy from the new pin.
 
 Control streams the exact public commit to the reserved proxy version through the same in-process
 tarball path as application sources ([ADR-0029](0029-github-app-sources.md)). Its platform-archive

@@ -1,6 +1,14 @@
 import { followLeaseLoss, isLeaseLoss, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
-import { readableContent, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, ZeropsApiError, type ZeropsAppVersion } from '../api'
+import {
+	readableContent,
+	ZEROPS_ACTIVE,
+	ZEROPS_TERMINAL,
+	type ZeropsApi,
+	ZeropsApiError,
+	type ZeropsAppVersion,
+	ZeropsServiceEnvValueTooLargeError,
+} from '../api'
 import type { Sleeper } from '../collaborators'
 import { prepareZeropsDescriptor } from '../descriptor'
 import { ZEROPS_PROXY_MANIFEST_PATH, type ZeropsProxyManifestCarrier, zeropsProxyManifestCarrier } from '../proxy-manifest-carrier'
@@ -23,6 +31,8 @@ export type ZeropsProxyApi = Pick<
 >
 
 export interface ZeropsProxyRepublishInput {
+	/** The namespace's id, named in the one refusal an operator acts on: re-pin it. */
+	readonly namespaceId: string
 	readonly target: ZeropsNamespaceTarget
 	readonly manifest: ProxyManifest
 	readonly source?: ZeropsSourcePort
@@ -177,7 +187,17 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 	}
 	await input.boundary()
 	if (carrier === 'environment') {
-		await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, sensitive: false, signal: input.signal })
+		try {
+			await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, sensitive: false, signal: input.signal })
+		} catch (cause) {
+			if (!(cause instanceof ZeropsServiceEnvValueTooLargeError)) throw cause
+			throw new ProviderNamespaceError(
+				`${cause.message}. The namespace's proxy source predates the manifest file in the build archive; re-pin it with `
+					+ `\`fabrika control namespaces update --namespace=${input.namespaceId} --proxy-source=current\``,
+				cause.code,
+				false,
+			)
+		}
 	}
 	await writeProxyIam(input, serviceId, carrier)
 	input.signal.throwIfAborted()

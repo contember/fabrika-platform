@@ -51,7 +51,10 @@ bun test
   checks the requested payload STRICTLY (`namespaceUpdatePayloadSchema`: the target schema strips unknown
   keys, which would make a misspelt field a silent no-op), lays its top-level fields over the stored target,
   and refuses every other change, the PostgreSQL type included, as `PROVIDER_NAMESPACE_IMMUTABLE`
-  (`FIXED_FIELDS` lists every target field, so a new one fails to compile until it is classified). `apply`
+  (`FIXED_FIELDS` lists every target field, so a new one fails to compile until it is classified). The one other
+  move is a re-pin: `proxySource: "current"` sets the installation's default pin and nothing else, touches no
+  platform resource, and is refused while a proxy build is in flight; Control stores it `pending` and queues the
+  reconcile that rebuilds the proxy (ADR-0045). `apply`
   calls `configureAutoscaling` and decides by reading `autoscalingProfileId` back, within ~90 s. A platform
   4xx on the PUT is a definite failure; anything once the PUT is sent is
   `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED`, and a retry must converge: `validateService`

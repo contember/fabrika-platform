@@ -64,6 +64,7 @@ Usage:
   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control namespaces reconcile --namespace=<id>
+  fabrika control namespaces update --namespace=<id> --proxy-source=current
   fabrika control namespaces remove --namespace=<id>
   fabrika control deploy --app=<id> --env=<name> [--ref=<ref>]
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
@@ -100,7 +101,9 @@ same two steps the console's form takes — and returns as soon as the placement
 runs behind the control queue and takes minutes, so the state comes back \`pending\`. Follow it with
 \`namespaces get\` or \`namespaces list\`; nothing needs to stay connected. \`namespaces remove\` frees the id
 of a placement no application is registered in. It deletes nothing at the provider and prints, on stderr,
-the provider resources it stopped tracking.
+the provider resources it stopped tracking. \`namespaces update --proxy-source=current\` re-pins a placement's
+proxy to the source this control plane deploys new placements from — a placement keeps the one it was created
+with until you do — and queues the reconcile that rebuilds the proxy from it; a \`failed\` placement accepts it.
 
 Every command accepts --json, which prints the procedure's result verbatim.
 
@@ -702,6 +705,21 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 			console.warn(`retained\t${fact.label}\t${fact.value}`)
 		}
 		emit(flags, result, () => namespaceLine(result.removed))
+		return
+	}
+	if (verb === 'update') {
+		const namespaceId = required(flags, 'namespace')
+		if (required(flags, 'proxy-source') !== 'current') {
+			throw new Error('--proxy-source takes only `current`: the source this control plane deploys new placements from')
+		}
+		// The envelope names the provider and codec the stored target already has; the provider merges the field over it.
+		const { target } = await client.namespaces.get({ namespaceId })
+		const result = await client.namespaces.update({
+			namespaceId,
+			namespace: { target: { provider: target.provider, version: target.version, payload: { proxySource: 'current' } } },
+		})
+		warnNamespaceFailure(result)
+		emit(flags, result, () => namespaceLine(result))
 		return
 	}
 	if (verb === 'create') {

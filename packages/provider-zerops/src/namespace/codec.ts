@@ -10,6 +10,9 @@ import { commitShaSchema, identifierSchema, rejectExplicitUndefined, repositoryS
 import { namespaceProxySourceSchema } from './proxy-source'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource, ZeropsNamespaceTarget } from './types'
 
+/** The one value an update may give `proxySource`: re-pin the namespace's proxy to the installation's default. */
+export const ZEROPS_PROXY_SOURCE_CURRENT = 'current'
+
 const encodeSource = (source: ZeropsNamespaceProxySource): JsonValue => ({
 	repository: { ...source.repository },
 	commitSha: source.commitSha,
@@ -73,10 +76,12 @@ const namespaceTargetSchema = namespaceTargetShape.transform((target) => {
 /**
  * What an update request's payload may name: any target field, each optional, and no field the target
  * does not have — at the top level or inside `postgres`. The target schema STRIPS an unknown key, which
- * would turn a misspelt field into a silent no-op.
+ * would turn a misspelt field into a silent no-op. `proxySource` also takes `current`, the installation's
+ * default pin; the plan refuses any other pin than that one (ADR-0045).
  */
 export const namespaceUpdatePayloadSchema = namespaceTargetShape.partial().extend({
 	postgres: z.discriminatedUnion('type', [haPostgresSchema.strict(), singlePostgresSchema.strict()]).optional(),
+	proxySource: z.union([z.literal(ZEROPS_PROXY_SOURCE_CURRENT), namespaceProxySourceSchema]).optional(),
 }).strict()
 
 export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = {

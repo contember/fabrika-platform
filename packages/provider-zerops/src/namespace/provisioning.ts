@@ -226,6 +226,7 @@ const deployProxy = async (
 	let currentNamespace = namespace
 	const manifest = compileNamespaceProxyManifest(namespace.id, input.members)
 	const result = await republishProxy({
+		namespaceId: namespace.id,
 		target,
 		manifest,
 		proxySecrets: namespaceProxySecrets(manifest, input.members),

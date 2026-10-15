@@ -483,6 +483,24 @@ describe('control namespaces', () => {
 		expect(out).toBe('notes-prod\tprod\tready\t-')
 	})
 
+	test('update --proxy-source=current re-pins the placement through namespaces.update, in its own target envelope', async () => {
+		const target = { provider: 'zerops', version: 1, payload: {} }
+		const captured = captureFetch({ result: { id: 'notes-prod', env: 'prod', state: 'pending', exclusiveAppId: null, target } })
+		const out = await captureStdout(() =>
+			runControlCli('namespaces', ['update', '--namespace=notes-prod', '--proxy-source=current'], undefined, CONTROL_ENV)
+		)
+		expect(captured.calls.map((call) => call.body)).toEqual([
+			{ method: 'namespaces.get', input: { namespaceId: 'notes-prod' } },
+			{
+				method: 'namespaces.update',
+				input: { namespaceId: 'notes-prod', namespace: { target: { provider: 'zerops', version: 1, payload: { proxySource: 'current' } } } },
+			},
+		])
+		expect(out).toBe('notes-prod\tprod\tpending\t-')
+		await expect(runControlCli('namespaces', ['update', '--namespace=notes-prod', '--proxy-source=abc'], undefined, CONTROL_ENV)).rejects
+			.toThrow('--proxy-source takes only `current`')
+	})
+
 	test('get reports the failure class on stderr and leaves the data columns alone', async () => {
 		const captured = captureFetch({
 			result: {

@@ -47,6 +47,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from '../namespace'
+import { envelope } from '../namespace/codec'
 import { decodeZeropsNamespaceProxySource } from '../namespace/proxy-source'
 import type { ZeropsNamespaceProxySource } from '../namespace/types'
 import type { ZeropsSourceUploadInput } from '../source/port'
@@ -1845,6 +1846,62 @@ describe('Zerops namespace update', () => {
 	}
 
 	const autoscalingCalls = (state: FakeState): string[] => state.calls.filter((call) => call.startsWith('autoscaling:'))
+
+	describe('re-pinning the proxy source', () => {
+		const LEGACY: ZeropsNamespaceProxySource = { ...PIN, commitSha: 'c'.repeat(40) }
+		const pinnedTo = (current: ProviderDeploymentNamespace, source: ZeropsNamespaceProxySource): ProviderDeploymentNamespace => ({
+			...current,
+			target: envelope({ ...zeropsNamespaceTargetCodec.decode(current.target.payload), proxySource: source }),
+		})
+		const toCurrent = requested({ proxySource: 'current' })
+
+		test('moves the pin to the installation default, touching no platform resource', async () => {
+			const state = freshState()
+			const legacy = pinnedTo(await provisioned(state), LEGACY)
+			state.calls.length = 0
+
+			const plan = updates(state).plan(legacy, toCurrent)
+			const result = await updates(state).apply({ namespace: legacy, next: plan.namespace, signal: new AbortController().signal })
+
+			expect(plan.change).toEqual({ field: 'proxySource', from: LEGACY.commitSha, to: PIN.commitSha })
+			expect(zeropsNamespaceTargetCodec.decode(result.target.payload)).toEqual({
+				...zeropsNamespaceTargetCodec.decode(legacy.target.payload),
+				proxySource: PIN,
+			})
+			expect(state.calls).toEqual([])
+		})
+
+		test('is a no-op on a namespace already pinned to the default', async () => {
+			const state = freshState()
+			expect(updates(state).plan(await provisioned(state), toCurrent).change).toBeNull()
+		})
+
+		test('refuses any pin but the installation default, and a pin together with a profile', async () => {
+			const state = freshState()
+			const legacy = pinnedTo(await provisioned(state), LEGACY)
+			const other = { ...PIN, commitSha: 'd'.repeat(40) }
+			const otherPayload = { repository: { ...other.repository }, commitSha: other.commitSha, descriptor: { ...other.descriptor } }
+			expect(() => updates(state).plan(legacy, requested({ proxySource: otherPayload }))).toThrow("only to the installation's default")
+			expect(() =>
+				updates(state).plan(legacy, requested({ proxySource: 'current', postgres: { type: 'postgresql:single@18', profile: 'oltp-production' } }))
+			)
+				.toThrow('separate updates')
+		})
+
+		test('refuses while a proxy build is in flight', async () => {
+			const state = freshState()
+			const current = await provisioned(state)
+			const building = {
+				...current,
+				target: envelope({
+					...zeropsNamespaceTargetCodec.decode(current.target.payload),
+					proxySource: LEGACY,
+					proxyBuild: { appVersionId: 'v9', triggered: true },
+				}),
+			}
+			expect(() => updates(state).plan(building, toCurrent)).toThrow('proxy build in flight')
+		})
+	})
 
 	test('plans a partial target by merging it over the stored one', async () => {
 		const state = freshState()

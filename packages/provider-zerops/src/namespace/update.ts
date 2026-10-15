@@ -9,8 +9,9 @@ import {
 } from '@fabrika/provider-contract'
 import { waitForProcess, ZeropsApiError, type ZeropsProcess } from '../api'
 import { defaultSleep } from '../collaborators'
-import { envelope, namespaceUpdatePayloadSchema, normalizeTarget, zeropsNamespaceTargetCodec } from './codec'
+import { envelope, namespaceUpdatePayloadSchema, normalizeTarget, ZEROPS_PROXY_SOURCE_CURRENT, zeropsNamespaceTargetCodec } from './codec'
 import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED } from './errors'
+import { verifyZeropsNamespaceProxySource } from './proxy-source'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespacePostgres, ZeropsNamespaceTarget } from './types'
 import { validateService } from './validation'
 
@@ -21,11 +22,16 @@ const READBACK_INTERVAL_MS = 3_000
 /** UNVERIFIED: how soon `autoscalingProfileId` reads the new profile after the PUT and its process finish. */
 const READBACK_ATTEMPTS = 10
 
-type FixedField = Exclude<keyof ZeropsNamespaceTarget, 'postgres'>
+/** The plan field of a re-pin, which moves only the stored target; the reconcile core queues rebuilds the proxy. */
+export const ZEROPS_PROXY_SOURCE_FIELD = 'proxySource'
 
-/** Every target field but `postgres`, whose profile is the one thing an update may move. A new field fails to compile until listed. */
+type FixedField = Exclude<keyof ZeropsNamespaceTarget, 'postgres' | 'proxySource'>
+
+/**
+ * Every target field but the two an update may move: the PostgreSQL profile, and the proxy source pin, which only an
+ * explicit re-pin to the installation's default moves (ADR-0045). A new field fails to compile until listed.
+ */
 const FIXED_FIELDS: { readonly [K in FixedField]: (target: ZeropsNamespaceTarget) => ZeropsNamespaceTarget[K] } = {
-	proxySource: (target) => target.proxySource,
 	proxyBuild: (target) => target.proxyBuild,
 	proxyDeployment: (target) => target.proxyDeployment,
 	projectName: (target) => target.projectName,
@@ -69,10 +75,17 @@ const mergedTarget = (
 	if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) {
 		throw new Error('Zerops namespace target did not encode to an object')
 	}
-	return normalizeTarget({ ...namespace, target: { ...requested, payload: { ...stored, ...payload } } }, options)
+	if (checked.data.proxySource !== ZEROPS_PROXY_SOURCE_CURRENT) {
+		return normalizeTarget({ ...namespace, target: { ...requested, payload: { ...stored, ...payload } } }, options)
+	}
+	const fields = Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'proxySource'))
+	return {
+		...normalizeTarget({ ...namespace, target: { ...requested, payload: { ...stored, ...fields } } }, options),
+		proxySource: options.proxySource,
+	}
 }
 
-/** Refuse every difference except the PostgreSQL profile, naming the fields. */
+/** Refuse every difference except the PostgreSQL profile and a re-pin of the proxy source, naming the fields. */
 const planUpdate = (
 	namespace: ProviderDeploymentNamespace,
 	requested: ProviderEnvelope,
@@ -84,8 +97,32 @@ const planUpdate = (
 		.filter(([, read]) => JSON.stringify(read(current)) !== JSON.stringify(read(merged)))
 		.map(([field]) => field)
 	if (changed.length > 0) {
-		throw immutable(`Zerops namespace ${namespace.id} cannot change ${changed.join(', ')} in place; only the PostgreSQL profile can`)
+		throw immutable(
+			`Zerops namespace ${namespace.id} cannot change ${changed.join(', ')} in place; only the PostgreSQL profile and the proxy source can`,
+		)
 	}
+	if (JSON.stringify(current.proxySource) === JSON.stringify(merged.proxySource)) return planProfile(namespace, current, merged)
+	if (JSON.stringify(merged.proxySource) !== JSON.stringify(options.proxySource)) {
+		throw new Error(`Zerops namespace ${namespace.id} can re-pin its proxy source only to the installation's default: proxySource "current"`)
+	}
+	if (JSON.stringify(current.postgres) !== JSON.stringify(merged.postgres)) {
+		throw new Error(`Zerops namespace ${namespace.id}: re-pin the proxy source and change the PostgreSQL profile in separate updates`)
+	}
+	// Rebuilding under a new pin settles an attempt first, and would record that attempt's version as the new pin's.
+	if (current.proxyBuild !== undefined) {
+		throw new Error(`Zerops namespace ${namespace.id} has a proxy build in flight; reconcile it before re-pinning the proxy source`)
+	}
+	return {
+		namespace: { ...namespace, target: envelope(merged) },
+		change: { field: ZEROPS_PROXY_SOURCE_FIELD, from: current.proxySource.commitSha, to: merged.proxySource.commitSha },
+	}
+}
+
+const planProfile = (
+	namespace: ProviderDeploymentNamespace,
+	current: NormalizedZeropsNamespaceTarget,
+	merged: NormalizedZeropsNamespaceTarget,
+): ProviderNamespaceUpdatePlan => {
 	const was = current.postgres
 	const wanted = merged.postgres
 	const unchanged: ProviderNamespaceUpdatePlan = { namespace: { ...namespace, target: envelope(current) }, change: null }
@@ -186,10 +223,15 @@ const applyProfile = async (
 
 const applyUpdate = async (input: ProviderNamespaceUpdateInput, options: ZeropsNamespaceOptions): Promise<ProviderDeploymentNamespace> => {
 	const current = normalizeTarget(input.namespace, options)
+	const plan = planUpdate(input.namespace, input.next.target, options)
+	// A re-pin touches no platform resource: it stores the pin, and the reconcile core queues builds from it.
+	if (plan.change?.field === ZEROPS_PROXY_SOURCE_FIELD) {
+		await verifyZeropsNamespaceProxySource(normalizeTarget(plan.namespace, options).proxySource)
+		return plan.namespace
+	}
 	if (!current.ready) {
 		throw new Error(`Zerops namespace ${input.namespace.id} is not ready`)
 	}
-	const plan = planUpdate(input.namespace, input.next.target, options)
 	const wanted = normalizeTarget(plan.namespace, options).postgres
 	// Checked even with no planned change: after an unconfirmed update, confirming the live service is
 	// what lets core return the namespace to ready.

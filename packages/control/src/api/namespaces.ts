@@ -745,6 +745,19 @@ function isUpdatable(row: DeploymentNamespaceRow): boolean {
 	return row.state === 'ready' || isUnconfirmedNamespaceUpdate(row)
 }
 
+/**
+ * The plan field of a proxy source re-pin (ADR-0045): an explicit operator action, never reconciliation's. It moves only
+ * the stored target, so it is also how a namespace FAILED by its old pin gets out — the reconcile it queues rebuilds the
+ * proxy from the new one.
+ */
+const PROXY_SOURCE_CHANGE = 'proxySource'
+
+const isRepin = (plan: ProviderNamespaceUpdatePlan): boolean => plan.change?.field === PROXY_SOURCE_CHANGE
+
+function mayUpdate(row: DeploymentNamespaceRow, plan: ProviderNamespaceUpdatePlan): boolean {
+	return isUpdatable(row) || (row.state === 'failed' && isRepin(plan))
+}
+
 /** The row moved after the update marked it; what the live service holds is unknown to this request. */
 function rowMovedUnderUpdate(id: string): never {
 	console.error(`namespace update for ${id}: the row changed under the update's lease`)
@@ -801,10 +814,11 @@ export async function updateNamespaceUseCase(
 	if (capabilities === undefined) fail(409, `provider ${c.provider.id} does not support deployment namespaces`)
 	const updates = capabilities.updates
 	if (updates === undefined) fail(409, `provider ${c.provider.id} does not support namespace updates`)
-	if (!isUpdatable(row)) {
-		fail(409, `deployment namespace is ${row.state}; only a ready namespace, or one whose last update is unconfirmed, can be updated`)
-	}
+	const refusal = `deployment namespace is ${row.state}; only a ready namespace, or one whose last update is unconfirmed, can be updated`
+		+ ' — a failed one can re-pin its proxy source'
+	if (!isUpdatable(row) && row.state !== 'failed') fail(409, refusal)
 	const plan = planNamespaceUpdate(c, updates, toProviderNamespace(row), input)
+	if (!mayUpdate(row, plan)) fail(409, refusal)
 	if (plan.change === null && row.state === 'ready') return toNamespaceDetail(c, row)
 
 	const lease = await acquireLease(c.repositories.registry.namespaceLocks(), namespaceLeaseKey(row.id))
@@ -830,7 +844,7 @@ async function updateUnderLease(
 	// Re-read UNDER the lease: the plan was made from a read that raced whoever held it.
 	const before = await registry.getDeploymentNamespace(read.id)
 	lease.assertHeld()
-	if (before === null || !isUpdatable(before) || before.provider_target_json !== read.provider_target_json) {
+	if (before === null || !mayUpdate(before, plan) || before.provider_target_json !== read.provider_target_json) {
 		fail(409, `deployment namespace ${read.id} changed while it was being updated; read it and retry`)
 	}
 	const transition = (
@@ -894,8 +908,9 @@ async function updateUnderLease(
 	}
 	// The live change is made; a result for other coordinates leaves the mark in place.
 	if (!sameCoordinates(updated, current, c.provider.id)) fail(502, `provider returned a namespace for different coordinates — ${RETRY_UPDATE_ADVICE}`)
+	// A re-pin is stored, not built: `pending` queues the reconcile that rebuilds the proxy from the new pin.
 	const stored = await transition(claimed, {
-		state: 'ready',
+		state: isRepin(plan) ? 'pending' : 'ready',
 		providerTargetJson: JSON.stringify(updated.target),
 		lastError: null,
 		updateTargetJson: null,

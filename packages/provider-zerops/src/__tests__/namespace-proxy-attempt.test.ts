@@ -1,14 +1,8 @@
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { ProviderInvocationAbort, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import {
-	createZeropsApi,
-	ZEROPS_SERVICE_ENV_VALUE_TOO_LARGE,
-	ZeropsApiError,
-	type ZeropsAppVersionStatus,
-	ZeropsServiceEnvValueTooLargeError,
-} from '../api'
+import { createZeropsApi, ZEROPS_SERVICE_ENV_VALUE_TOO_LARGE, ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
 import { createZeropsArtifactSourceDescriptor } from '../manifest'
 import { createZeropsNamespaceCapabilities } from '../namespace'
 import { zeropsNamespaceTargetCodec } from '../namespace/codec'
@@ -100,6 +94,7 @@ function fixture(proxySource = pin) {
 	}
 	const controller = new AbortController()
 	const input = (): ZeropsProxyRepublishInput => ({
+		namespaceId: 'apps-prod',
 		target,
 		manifest: EMPTY,
 		source,
@@ -460,7 +455,8 @@ test('on a pin that lifts the variable, a manifest over its limit is refused bef
 		(cause: unknown) => cause,
 	)
 
-	expect(error).toBeInstanceOf(ZeropsServiceEnvValueTooLargeError)
+	expect(error).toBeInstanceOf(ProviderNamespaceError)
+	expect(String(error)).toContain('fabrika control namespaces update --namespace=apps-prod --proxy-source=current')
 	expect(requests).toEqual([])
 	expect(effects(f.calls)).toEqual([])
 	expect(f.target().proxyBuild).toBeUndefined()
