@@ -134,6 +134,10 @@ Read this before moving a service onto this driver.
   its own schema first on the path. Service plans are not checked: a service is trusted platform code.
 - **Checksums are verified before anything is applied.** An applied file that changed fails the run with
   nothing applied; a ledger row with no file (a rollback) is tolerated.
+- **Only a refused connection is waited out** (`connection-capacity.ts`): `withConnectionCapacity` retries on
+  SQLSTATE 53300 alone, with jittered exponential backoff, and throws `ConnectionCapacityError`
+  (`CONNECTION_CAPACITY_MESSAGE`) once its wait ran out. Its attempt releases what it opened before it throws, so a
+  waiting caller holds no slot another needs.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**
 
 ## Patterns

@@ -35,6 +35,15 @@ export type { ApplicationDatabaseRoles } from './application-postgres-roles'
 export { applicationDatabaseSchema } from './application-schema'
 export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asset-server-fs'
 export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
+export {
+	CONNECTION_CAPACITY_MESSAGE,
+	ConnectionCapacityError,
+	type ConnectionCapacityWait,
+	DEFAULT_CONNECTION_WAIT_MS,
+	isConnectionCapacityError,
+	TOO_MANY_CONNECTIONS,
+	withConnectionCapacity,
+} from './connection-capacity'
 export { databaseCodeQuery } from './database-code'
 export {
 	decodeJob,
