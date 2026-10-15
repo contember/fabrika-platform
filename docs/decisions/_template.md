@@ -19,7 +19,9 @@ What a future reader needs to understand the decision. Cite code/specs if useful
 ## Consequences
 
 <What becomes easier and what becomes harder. Follow-on work, new constraints,
-things that now must hold. Both positive and negative.>
+things that now must hold. Both positive and negative. If the decision changes
+generated installation files, environment variables or provider state: how an
+existing installation converges on `fabrika platform upgrade`.>
 
 ## Alternatives considered
 

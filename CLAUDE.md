@@ -63,6 +63,17 @@ names the source version: installations run the git checkout of their tag, not t
 
 Per-package dev/build commands live in each package's own CLAUDE.md.
 
+## Parallel work
+
+- **One git worktree per agent.** An agent that works while another agent works in this repository uses its own
+  worktree on its own branch (`git worktree add <path> -b <branch> origin/main`). Two agents in one checkout break
+  each other's typecheck, test runs and commits. The lead integrates the branches.
+- **Never switch the branch of a checkout that another agent uses.** A hotfix is cut with `release:hotfix`, which
+  works in a temporary worktree of its own ([`release-process.md`](./docs/reference/release-process.md#cutting-a-hotfix)).
+- Run `bun install` in each new worktree; `node_modules` is not shared.
+- The local Docker stack has a fixed compose project name, `fabrika-local`: one worktree at a time runs `local:*` or
+  `browser:*`.
+
 ## Project Structure
 
 Runtime ports and the provider contract are independent axes. A composition root binds one runtime
@@ -146,6 +157,24 @@ needed only when there is no app config. Platform commands load the provider's
 - **The deploy EXECUTOR is a separate worker** reached via a service binding, because a deploy's final
   step runs `wrangler deploy` inside a container — a container hosted in the control plane would reset
   itself mid-deploy. It is deployed out-of-band.
+
+## The rollout path of an existing installation
+
+A fresh install and `fabrika platform upgrade` take different code paths. A change that alters generated
+installation files, environment variables or provider state states, in its commit message, how an EXISTING
+installation converges on upgrade. Answer each question that applies:
+
+1. **Generated files.** Does `upgrade` rewrite the changed file (the sidecar workflow, `zerops.yaml`, an import
+   YAML), or does only `init` write it?
+2. **Environment variables.** Does a deploy write the new value on an existing service, and remove or rename the old
+   one? A sensitive variable cannot be read back, so the code cannot compare it.
+3. **Provider state.** Does a resource that an older version created (a service, a bucket, its provenance) still pass
+   the new code's checks?
+4. **Floating pins.** Does a version that floats (a toolchain, an image tag) resolve the same on an upgraded
+   installation as on a fresh one?
+
+If no upgrade step converges an existing installation, add that step, or document the operator step in
+`docs/reference/`. Test the upgrade path where a test can reach it.
 
 ## Module-Specific Context
 

@@ -119,6 +119,12 @@ renumbered; gaps are fine. After deleting an ADR, repoint every reference to it
 alternative, or (c) someone will later ask "why did we do it this way?". Otherwise
 a commit message is enough — don't manufacture ADRs.
 
+**Name the rollout path.** When a decision changes generated installation files,
+environment variables or provider state, its Consequences state how an EXISTING
+installation converges on `fabrika platform upgrade`, not only what a fresh install
+does. The root `CLAUDE.md` ("The rollout path of an existing installation") lists
+the questions to answer.
+
 ## Backlog items
 
 A backlog item is a self-contained file: `backlog/NN-<slug>.md` (copy
