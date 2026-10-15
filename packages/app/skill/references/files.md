@@ -10,7 +10,7 @@ import { members } from './src/members/endpoints'
 import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
-import { digest } from './src/tasks/digest'
+import { archive } from './src/tasks/archive'
 import { tasks } from './src/tasks/endpoints'
 import { erase } from './src/tasks/erase'
 
@@ -34,7 +34,7 @@ export const contract = app.contract((c) => ({
 			maxPerOwner: 20,
 		}),
 	},
-	jobs: { digest, erase },
+	jobs: { archive, erase },
 	health: c.health('/healthz'),
 }))
 ```
@@ -108,21 +108,22 @@ Every call needs the collection's `read`, so a write capability alone sees no fi
 document is declared with an action that is the collection's `read` too, or the check runs where the caller holds
 `read`: never mint or widen a capability to list.
 
-A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to attach it to an e-mail of `deps`:
+A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to hand it to an archive service of
+`deps`. `ctx.mail` carries no attachments, so a file leaves through a service of the application's own:
 
-```ts src/tasks/digest.ts
+```ts src/tasks/archive.ts
 import { app } from '../app-kit'
-import { mailer } from '../mail'
+import { archiver } from '../archive'
 
-/** The largest report one e-mail carries: the collection's maxBytes. */
+/** The largest report the archive takes in one call: the collection's maxBytes. */
 const REPORT_MAX_BYTES = 5242880
 
-export const digest = app.cron('0 6 * * *', {
+export const archive = app.cron('0 6 * * *', {
 	actions: ['tasks.read'],
 	scope: 'app',
 })
 	.handle(async ({ ctx }) => {
-		const mail = mailer.get()
+		const store = archiver.get()
 		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
 		const done = await tasks.list({ where: [['status', '=', 'done']], limit: 50 })
 		for (const task of done.items) {
@@ -136,12 +137,12 @@ export const digest = app.cron('0 6 * * *', {
 				)
 			}
 			ctx.signal.throwIfAborted()
-			await mail.sendReports(task.title, reports, ctx.signal)
+			await store.putReports(task.id, reports, ctx.signal)
 		}
 	})
 ```
 
-```ts src/mail.ts
+```ts src/archive.ts
 import { defineDeps } from '@fabrika/app/implement'
 
 export interface Report {
@@ -150,10 +151,10 @@ export interface Report {
 	readonly bytes: Uint8Array
 }
 
-export interface Mailer {
-	/** Sends the reports of one task; throws when the provider refuses, and gives up once `signal` aborts. */
-	sendReports(
-		title: string,
+export interface Archiver {
+	/** Stores the reports of one task under its id; throws when the service refuses, and gives up once `signal` aborts. */
+	putReports(
+		taskId: string,
 		reports: readonly Report[],
 		signal: AbortSignal,
 	): Promise<void>
@@ -167,27 +168,28 @@ const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	return value
 }
 
-export const mailer = defineDeps((env): Mailer => ({
-	async sendReports(title, reports, signal) {
-		const response = await fetch(variable(env, 'MAIL_API_URL'), {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
-				'Content-Type': 'application/json',
+export const archiver = defineDeps((env): Archiver => ({
+	async putReports(taskId, reports, signal) {
+		const response = await fetch(
+			`${variable(env, 'ARCHIVE_URL')}/tasks/${taskId}`,
+			{
+				method: 'PUT',
+				headers: {
+					Authorization: `Bearer ${variable(env, 'ARCHIVE_KEY')}`,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					files: reports.map((file) => ({
+						filename: file.name ?? 'report',
+						contentType: file.type,
+						content: Buffer.from(file.bytes).toString('base64'),
+					})),
+				}),
+				signal,
 			},
-			body: JSON.stringify({
-				to: variable(env, 'REPORTS_TO'),
-				subject: `Reports of ${title}`,
-				attachments: reports.map((file) => ({
-					filename: file.name ?? 'report',
-					contentType: file.type,
-					content: Buffer.from(file.bytes).toString('base64'),
-				})),
-			}),
-			signal,
-		})
+		)
 		if (!response.ok) {
-			throw new Error(`the mail provider answered ${response.status}`)
+			throw new Error(`the archive answered ${response.status}`)
 		}
 	},
 }))
@@ -197,11 +199,13 @@ export const mailer = defineDeps((env): Mailer => ({
 import { serve } from '@fabrika/app/implement'
 import { scoped } from '@fabrika/db'
 import { contract } from '../fabrika.contract'
+import { archiver } from './archive'
 import { tables } from './db/tables'
-import { mailer } from './mail'
 
-export default serve(contract, { database: scoped(tables), deps: mailer })
+export default serve(contract, { database: scoped(tables), deps: archiver })
 ```
+
+The `PUT` under the task's id makes a repeated run replace the same object, so a retried attempt stores nothing twice.
 
 `removeAll` runs in a mutation and in a job's `tx.files`, in the same transaction as the handler's writes: an erasure
 that blanks a record and removes its files keeps both or neither. A query and a job's `ctx.files` only read. The

@@ -67,8 +67,9 @@ name, the subject, the body and the idempotency key before any provider I/O.
 
 A composition hands the package a provider registry, a name-to-factory map. The
 registry is open: a composition can add its own provider. `@fabrika/email/providers`
-exports `builtinEmailProviders` (`resend`, `smartemailing`). Memory and Directory
-are never selected by a variable; they are composition inputs.
+exports `builtinEmailProviders` (`resend`, `smartemailing`). Memory is never
+selected by a variable. Directory is a composition input of IAM, and a `directory`
+provider that only a local composition registers (below).
 
 `readEmailTransportConfig(env, registry)` parses the variables and
 `emailSenderFromEnv(env, registry)` builds the sender, or answers `null` when no
@@ -129,6 +130,13 @@ ID; a different message under the key is `idempotency_conflict`.
 sender name. It exists for a local composition and its tests; the files hold the
 bodies and their one-time links.
 
+`directoryEmailProvider` (same module) selects it with `FABRIKA_EMAIL_PROVIDER=directory`
+and `FABRIKA_EMAIL_DIRECTORY`, an absolute path. `FABRIKA_EMAIL_FROM` is required as for every provider, but the capture does not record it.
+It is not in `builtinEmailProviders`. The local stack's Control server registers it,
+and `@fabrika/app/bun` passes it to an application's boot as a local-only provider,
+which boot adds only under a loopback `FABRIKA_IAM_ISSUER`. Anywhere else the name is
+an unknown provider.
+
 ## Memory stand-in
 
 `MemoryEmailSender` (`@fabrika/email/memory`, runtime-neutral) keeps what it
@@ -188,6 +196,54 @@ behavior. An installation without a sender uses an explicit manual action-link
 flow; it does not silently drop an email. Operations still owns its notification
 targets, outbox, retry schedule, and operator interface when email alert delivery
 is added.
+
+## The installation's transport
+
+An installation configures at most one transport, for IAM and for the applications
+whose jobs declare `mailer: 'installation'`.
+
+- **Zerops.** `fabrika platform install` takes `--email-provider` (`none` by
+  default), `--email-from` and `--email-from-name`, or the variables beside them,
+  and each variable of the selected provider from the environment only
+  (`readInstallationEmail`, `@fabrika/installation-init`). It validates the set and
+  writes it on the `iam` and `control` services, service-level, the credentials
+  sensitive; it does not copy them into the secrets file. IAM and Control each read
+  it at boot and refuse to start on an invalid one. To set or rotate it later, the
+  operator writes both services, restarts them and redeploys the environments that
+  use it (`platform guide --provider=zerops`, "Set or rotate the mail transport").
+- **Cloudflare.** `fabrika platform init` requires `--email-provider` (`none` or a
+  built-in provider). It writes the provider's secret variables as GitHub Environment
+  secrets and the rest as variables, and the workflow passes every built-in
+  provider's variables to IAM; an unset one arrives empty and counts as absent. A
+  re-run writes the values it is given and deletes none, so an old provider's
+  variables, a display name or a tag stay until the operator deletes them. Control
+  on Cloudflare holds no transport: Cloudflare runs no jobs.
+
+## Applications
+
+An application sends from a cron job that declares `mailer`, through `ctx.mail`
+([application runtime](application-runtime.md#e-mail-from-a-job)); an endpoint
+never sends. `mailer: 'own'` takes the application's own `EmailSender` from
+`serve(contract, { mail })`. `mailer: 'installation'` takes the installation's:
+
+- Control reads its transport from its own `FABRIKA_EMAIL_*` at boot
+  (`readInstallationMailTransport`, `packages/control/src/mail-transport.ts`).
+- A deploy whose approved contract has such a job hands the application the whole
+  set (`installationMailEnvironment`), its credentials among the values the run's
+  logs redact. Zerops writes every name service-level and sensitive, and removes them
+  once a deploy hands none. A Cloudflare deploy refuses any `FABRIKA_EMAIL_*`, so a
+  credential never lands in a plain Worker variable.
+- Without a transport, Control refuses that deploy before any effect, naming the
+  jobs. It does not refuse the approval: the transport can change after it.
+- `FABRIKA_EMAIL_` is a framework-only family (`isEmailTransportVariable`,
+  `@fabrika/auth-core`): an application's own variable or secret under it is refused.
+- A changed transport reaches IAM and Control when they restart, and an application
+  at its next deploy.
+
+`ctx.mail` puts a prefix of the installation and the application environment in
+front of each key, so applications on one provider account never share one. Over a
+transport that is not idempotent, an outbox never resends a message whose outcome
+is `unknown`.
 
 See [ADR-0019](../decisions/0019-portable-outbound-email.md) for the package
 boundary and rejected alternatives.

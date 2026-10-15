@@ -60,10 +60,12 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
 - **An endpoint the generated tests cover calls no outside service.** They boot without your variables, so a handler
   that calls one answers 500 in each case, and a request cannot undo the call when its transaction rolls back. Such an
-  endpoint records an outbox row in its transaction, and a job sends it with an attempt count and an idempotency key
-  (`references/jobs.md`). A call that is the request's whole purpose, such as a test e-mail to the caller, lives in a
-  `{ member: true }` endpoint, which they do not cover (`references/public-intake.md`). The framework's own calls (IAM,
-  the file store, `ctx.connect`) are not outside.
+  endpoint records an outbox row in its transaction, and a job makes the call with an attempt count and an idempotency
+  key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which
+  they do not cover. The framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
+- **An endpoint never sends e-mail**, covered or not: it has no `ctx.mail`. It records the message in an outbox row
+  and declares `then: '<job>'` on the mutation, so the job that declares `mailer` sends it within seconds of the
+  commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`). Only a mutation declares `then`.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a

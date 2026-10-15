@@ -71,7 +71,8 @@ src/
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
-  bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
+  bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
+                      mail provider, which boot honours only under a loopback issuer
   disk-assets.ts      diskAssets: the SPA mounts from their build directories, as the Bun deploy and the test kit serve them
   service/            @fabrika/app/service — the installation services' own tables and dispatcher
     define.ts         defineServiceContract: an endpoint table with the installation forms
@@ -110,7 +111,8 @@ src/
                       accepts an invitation, seeds the invitations and links a generated case cancels or revokes, and
                       resolves the key of a link it issued; it lists the invitations it sent (the dev mail view)
     dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract;
-                      DEV_OUTBOX_ORIGIN and the DevOutside the seed reads the dev outbox through
+                      DEV_OUTBOX_ORIGIN, the DevMail of devKit's mails(), and the DevOutside the seed reads the dev
+                      outbox (outbox()) and the jobs' mail (mails()) through
     challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default;
                       TURNSTILE_TEST_TOKEN, the test widget's token devKit admits at every submission
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests

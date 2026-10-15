@@ -11,10 +11,11 @@ through a preview sees a state production never shows. Effort: S–M.
 
 ## Problem
 
-- **No cron job runs on its schedule.** `app dev` runs a job only when the seed calls `dev.runJob`
-  (`packages/app/skill/references/dev.md:54`, `:90`); `packages/cli/src/app-dev.ts` has no scheduler. A row an
-  outbox job sends, queued from the browser, stays queued: the page says the e-mail is on its way, and the dev outbox
-  stays empty.
+- **No cron job runs on its schedule.** `app dev` runs a job only when the seed calls `dev.runJob`, or when a form's
+  or a mutation's `then` kicks it (`packages/app/skill/references/dev.md:54`, `:98`); `packages/cli/src/app-dev.ts`
+  has no scheduler. A job nothing kicks (a nightly sweep) never runs from the browser, and a row a kicked run left
+  behind (a send that failed and waits for its `next_attempt_at`) stays queued: the page says the e-mail is on its
+  way, and the mail view never shows it.
 - **The stand-in IAM's `listMembers` answers `invitations: []`**
   (`packages/app/src/testing/membership.ts:294`), though the kit keeps every invitation it opened
   (`membership.ts:442`) and IAM answers the open invitations of the value to a `members.manage` holder

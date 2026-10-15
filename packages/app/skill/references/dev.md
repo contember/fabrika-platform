@@ -64,27 +64,36 @@ export default seed
   does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
   key `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
   submission; a deployed application records it like any other, so there it passes once.
-- Point an outside provider at the dev outbox: `app dev` captures every request the process sends to
-  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. The mail view
-  lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
-- The seed's second argument reads the outbox: `outside.outbox()` is every captured request, oldest first
-  (`{ id, method, path, contentType, body }`), so the seed can open a link the application mailed.
+- A job's e-mail goes to the kit's mail stand-in (`dev.mail`, as `kit.mail` in a test): nothing is delivered, and no
+  mail variable is needed. The mail view lists each message, newest first, beside IAM's invitations: the recipient,
+  the subject, the key the job passed, the time and the transport's answer. It opens to every field, the text, and the
+  HTML in a sandboxed frame that runs no script and loads nothing. `dev.mail.refuse('provider_rejected')` in the seed
+  previews a refused one; `dev.mail.heal()` ends it.
+- The seed's second argument reads what left the application: `outside.mails()` is every message a job handed to the
+  stand-in, oldest first (`{ id, at, to, subject, text, html, key, transportKey, answer, outcome, delivered, … }`), so
+  the seed can open a link the application mailed. Run the job first (`dev.runJob('<job>')`), or let a mutation's
+  `then` kick it and `await dev.drain()`.
+- Point another outside service at the dev outbox: `app dev` captures every request the process sends to
+  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. A section of
+  its own lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
+  `outside.outbox()` is every captured request, oldest first (`{ id, method, path, contentType, body }`).
 
 ```text dev/dev.env
 # Stand-in values for fabrika app dev.
 TURNSTILE_SECRET=dev
 TURNSTILE_SITE_KEY=1x00000000000000000000AA
-MAIL_API_URL=https://outbox.invalid/mail
-MAIL_API_KEY=dev
+ARCHIVE_URL=https://outbox.invalid/archive
+ARCHIVE_KEY=dev
 ```
 
 ## In the browser
 
 - `/__fabrika/dev` is the picker: the personas, another role of the vocabulary (a membership role with a scope value),
-  anonymous, the link pages, and the mail: what IAM sent and what reached the dev outbox. It speaks the vocabulary's `locale` and shows its `displayName`.
+  anonymous, the link pages, the mail IAM and the application's jobs sent, and the dev outbox. It speaks the vocabulary's `locale` and shows its `displayName`.
 - Every SPA page carries a toolbar in the bottom corner: who you are, the personas to switch to (the page reloads as
-  that caller), the picker, the link pages, and the mail. An invitation's link accepts it; the browser is the invited
-  person from then on.
+  that caller), the picker, the link pages, the mail and the dev outbox. An invitation's link accepts it; the browser
+  is the invited person from then on. A job's message opens at `/__fabrika/dev/mail/<id>`.
 - The choice stays in a cookie the application never sees. The data is gone when the command stops.
 - It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
-  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`.
+  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A form's or a
+  mutation's `then` still starts its job, as deployed.

@@ -284,6 +284,15 @@ if (postgres !== null) {
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`. A job's `ctx.links`
   reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
   plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
+- A form or a mutation that declares `then` starts its job in the background of the call. `kit.drain()` waits for
+  those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
+  run may start at once, so arm a fault before the call, never between the call and the run.
+- `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
+  needs no mail variable. `kit.mail.accepted` is what reached the inbox, once per key, and `kit.mail.handoffs` every
+  send with its `answer`. `refuse(code?)`, `unavailable()`, `unreachable()`, `loseAnswers(n)` and `during(hook)`
+  inject a failure until `heal()`. A message carries the key the transport got, `transportMailKey(kit.mailKeyScope,
+  key)`. Model a transport that does not deduplicate with `testKit(app, { mail: new MemoryEmailSender({ capabilities:
+  { idempotent: false, confirmation: 'queued' } }) })`. The test e-mail in `references/public-intake.md` is an example.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
   `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`
@@ -294,7 +303,7 @@ if (postgres !== null) {
   a stand-in of your own receives the check (`hostname`, `action`) a passing answer must confirm as its second argument.
 - `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
-  that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).
+  that URL only and passes every other request on to the real `fetch`.
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
   where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
   generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).

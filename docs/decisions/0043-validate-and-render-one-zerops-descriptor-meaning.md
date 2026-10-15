@@ -154,9 +154,11 @@ The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).
 
 **Framework-only variable names are one list.** It reserves the names of the database, storage,
-proxy-secret, job and connector credentials. Control's `assertUnmanagedName` and the provider's
-`MANAGED_KEYS` both use that list. Both refuse an authored variable or a secret under one of those
-names. The framework reads these variables and removes them from `process.env`.
+proxy-secret, job and connector credentials, and the `FABRIKA_EMAIL_` family of the installation's mail
+transport ([ADR-0019](0019-portable-outbound-email.md)), which only Control hands an application. Control's
+`assertUnmanagedName` and the provider's `MANAGED_KEYS` both use that list. Both refuse an authored variable or
+a secret under one of those names, and a deploy removes a family variable it no longer hands, one set by hand
+included. The framework reads these variables and removes them from `process.env`.
 
 The generated `run` section does not depend on two platform facts: that an exec readiness check gates
 a Zerops deploy, and that a failed `initCommands` stops activation. Both are verified live

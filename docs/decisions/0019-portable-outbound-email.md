@@ -12,10 +12,10 @@ date: 2026-10-15
 IAM needs email for password enrollment and recovery. Operations also needs email notification targets, but that work was deferred because the imported Poplach implementation used a Cloudflare Email Routing binding that has no Bun/Zerops equivalent. Implementing delivery inside either domain would create two provider integrations, two retry classifications, and two places where credentials or message bodies might leak.
 
 Applications send email too. An application writes an outbox row from an endpoint and sends it from a cron job
-([ADR-0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)). Until now each application built its own
-transport: a `fetch` to a provider URL from its own variables, its own error classification, its own idempotency
-handling and its own test stand-in. Each one held its own provider key, and nothing refused a deploy that could not
-send.
+([ADR-0060](0060-a-mutation-kicks-a-cron-job-after-its-commit.md)). Without a shared transport, each application
+builds its own transport: a `fetch` to a provider URL from its own variables, its own error classification, its own
+idempotency handling and its own test stand-in. Each one holds its own provider key, and nothing refuses a deploy that
+cannot send.
 
 `@fabrika/platform` is not the right owner. Its package boundary explicitly forbids opening sockets or performing its own I/O; it contains runtime ports and implementations written only over those ports. Outbound email is already an external service integration. It needs configuration, network I/O, provider error interpretation, and idempotency behavior.
 
@@ -33,8 +33,8 @@ The facts that shape the extension to applications:
   interface an adapter implements is therefore public, and so is the test that proves an adapter follows it.
 - **A Worker is one bundle.** A Worker cannot load an adapter by package name at runtime. An adapter reaches a
   service through its composition, at build time.
-- **Secrets stay service-level** ([ADR-0004](0004-secrets-live-in-the-platform.md)). Until now only IAM's service
-  held the installation's email configuration, and Control did not know it.
+- **Secrets stay service-level** ([ADR-0004](0004-secrets-live-in-the-platform.md)): each service that sends holds the
+  configuration itself.
 
 ## Decision
 
@@ -72,44 +72,71 @@ that declares a mailer has no such flow, so it does not start without a sender (
   idempotent and synchronous. SmartEmailing is neither: it is built from the official API v3 document and has not yet
   been verified against a live account ([backlog 180](../backlog/180-verify-the-smartemailing-adapter-on-a-live-account.md)).
 - Two more senders deliver nothing: **Directory** writes each message to a directory for a local composition, and
-  **Memory** keeps them in memory for tests and `fabrika app dev`, with controls that inject each kind of failure. No
-  environment variable selects either; a local composition passes one as an input. IAM accepts one only with
-  `ENVIRONMENT=local`.
+  **Memory** keeps them in memory for tests and `fabrika app dev`, with controls that inject each kind of failure.
+  No variable selects Memory: the test kit and `fabrika app dev` pass it as a boot option (§3). IAM takes a Directory
+  sender only as a composition input, and only with `ENVIRONMENT=local`.
+- The local stack's Control and applications run their production entrypoints, which take only their environment,
+  so they select Directory with `FABRIKA_EMAIL_PROVIDER=directory` and `FABRIKA_EMAIL_DIRECTORY`. Three layers keep
+  that local. `directory` is not a built-in provider: only the local compositions register it, the local stack's
+  Control server and the Bun adapter's local-only providers of an application. Only Control writes `FABRIKA_EMAIL_*`
+  into an application (§4). An application's boot adds its local-only providers only under a loopback
+  `FABRIKA_IAM_ISSUER` (§3). Anywhere else the name is an unknown provider, and the boot refuses it.
 - A **conformance kit** (`@fabrika/email/conformance`) is the public test every adapter passes, built in or not: the
   message fields reach the provider, invalid messages do no I/O, an abort answers `aborted`, each provider answer maps
   to its code, and no secret, response body or message text appears in an error or in a log line.
 
 ### 3. Applications send from a declared job, through `ctx.mail`
 
-- A cron job declares `mailer: 'installation' | 'own'`. Only then does its context have `ctx.mail`, an `EmailSender`
-  bound to the declared transport. An endpoint never gets `ctx.mail`: an endpoint writes an outbox row, and a job
-  sends it ([ADR-0012](0012-fabrika-app-runtime.md) §7: the external call comes after the data work). Only a kit
-  contract declares it; `defineContract` has no `mailer`.
+- A cron job declares `mailer: 'installation' | 'own'`. Only then does its context have `ctx.mail`: `send`, the
+  transport's capabilities and `mayRetry`, bound to the declared transport and to the attempt, so a send outside a live
+  attempt is refused. An endpoint never gets `ctx.mail`: an endpoint writes an outbox row, and a job sends it
+  ([ADR-0012](0012-fabrika-app-runtime.md) §7: the external call comes after the data work). Only a kit contract
+  declares it; `defineContract` has no `mailer`.
+- A send error the handler does not catch fails the attempt with the fixed code `mail_failed` and the error's code as
+  its reason. The runner retries that attempt only where the one retry rule allows it.
 - `mailer` is declared reach in the artifact, so the approver sees it ([ADR-0050](0050-approved-access.md) §3: each
   site's declared reach is shown). Control's approval diff classifies it.
-- `ctx.mail` prefixes every idempotency key with the application's id and environment, so two applications on one
-  transport never share a key.
+- `ctx.mail` prefixes every idempotency key with a digest of the installation's IAM origin and the application
+  environment (`FABRIKA_IAM_ISSUER` and `FABRIKA_IAM_APP_ID`), so two applications, or one application in two
+  installations, on one provider account never share a key. An application key is 1 to 200 visible ASCII characters;
+  with the 41-character prefix it stays within the contract's 256.
 - An application sets `replyTo` and `fromName` per message. The sending address is the transport's.
 - **Fail closed.** A contract with a job that declares `installation` refuses to boot without an installation
-  transport, and one that declares `own` refuses without its own. The one exception is a local composition: the test
-  kit, `fabrika app dev` and the local stack pass a local sender as a boot input. `FABRIKA_ENVIRONMENT` is a free
-  label, so its value never relaxes the check.
+  transport, and one that declares `own` refuses without its own. An invalid configuration refuses the boot
+  everywhere. The one exception is a local installation, one whose `FABRIKA_IAM_ISSUER` is a loopback origin: there a
+  missing transport makes each send fail with `invalid_configuration`, and the boot logs it once per job. A deployed
+  IAM never signs under a loopback issuer, so an application that took the exception would verify no token of a
+  deployed installation. `FABRIKA_ENVIRONMENT` is a free label, so its value never relaxes the check.
+- The test kit and `fabrika app dev` pass a Memory sender as a boot option for every mailer job; the boot then reads
+  neither the installation's variables nor the application's own transport.
 
 ### 4. The installation's transport
 
 - An installation has one provider configuration: the provider, its credentials, a `from` address and optionally a
-  display name. The installer takes it on Zerops and on Cloudflare.
-- Control is its single source. Control writes the managed `FABRIKA_EMAIL_*` variables, service-level only, into IAM
-  and into every application service whose contract declares `mailer: 'installation'`. The names are framework
-  variables ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), so no application sets them
-  itself.
-- Control refuses to deploy a contract that declares `installation` mail when the installation has none.
+  display name. The installer takes it once, from one input, on each cloud. The provider's own variables come from the
+  environment only, because an open registry cannot have a flag per variable and most of them are credentials.
+- On Zerops, `platform install` writes the same `FABRIKA_EMAIL_*` set on the `iam` and `control` services,
+  service-level, the credentials sensitive ([ADR-0004](0004-secrets-live-in-the-platform.md)). The installer writes
+  IAM's copy, not Control: Control does not deploy IAM, and a sensitive value cannot be read back, so Control could only
+  rewrite IAM and restart it blind. On Cloudflare the installation's GitHub Environment holds the set, and the workflow
+  passes it to IAM. Control on Cloudflare holds no transport, because Cloudflare runs no jobs.
+- Control is the source for applications. A deploy of an environment whose approved contract has a job that declares
+  `mailer: 'installation'` hands it the set, service-level and always sensitive; once the contract stops declaring it,
+  the deploy hands nothing and Zerops removes the stale variables with the rest of the framework's families. The names
+  are framework variables ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), so no application
+  sets them itself.
+- Control refuses such a deploy, before any effect, when the installation has no transport. It refuses at deploy, not
+  at approval: the transport is installation state that can be added or removed after a contract was approved.
+- IAM and Control read the transport when they start. An application gets a changed transport at its next deploy;
+  nothing fans a change out yet ([backlog 182](../backlog/182-set-or-rotate-the-installation-mail-transport.md)).
 
 ### 5. An application's own transport
 
-An application that brings its own provider passes an `EmailSender` to `serve(app, { mail })`. It can be a built-in
-adapter with the application's own secrets, or an adapter from another package. The installation's configuration is
-not involved.
+An application that brings its own provider passes `serve(app, { mail: (env) => sender })`: a function of its own
+variables, called once at boot, that answers an `EmailSender` or `null` when the variables configure none. The sender
+can be a built-in adapter with the application's own secrets, or an adapter from another package. The installation's
+configuration is not involved, and the application's variables never take a `FABRIKA_EMAIL_` name. A `mail` that no
+job declaring `mailer: 'own'` uses refuses the boot.
 
 ### 6. Local development and tests
 
@@ -117,7 +144,8 @@ not involved.
   accepted and what was handed off, and injects refusals, outages and lost answers.
 - `fabrika app dev` shows one structured mail view for IAM's and the application's messages: recipient, subject,
   text, the HTML body in a sandboxed frame, the key and the outcome. A seed reads the same list.
-- The local stack gives applications a Directory sender, as it gives IAM. There is no SMTP catcher.
+- The local stack captures the applications' mail in the same directory as IAM's. Its Control holds a `directory`
+  transport and hands it to an application like any installation transport. There is no SMTP catcher.
 
 ### 7. Applications word IAM's e-mails
 
@@ -145,6 +173,16 @@ origin is registered is sent in IAM's own wording.
   HTTP relay would keep the credential in one service ([backlog 178](../backlog/178-an-http-mail-relay-protocol-and-a-relay-adapter.md)).
 - An installation transport can use only a built-in provider. Another provider needs the relay or a platform
   distribution that bundles it ([backlog 179](../backlog/179-build-a-platform-distribution-that-bundles-extra-email-adapters.md)).
+- A changed installation transport reaches an application only at its next deploy. Until then the application sends
+  with the old one, and a provider key that was revoked fails its mail with `provider_unauthorized`
+  ([backlog 182](../backlog/182-set-or-rotate-the-installation-mail-transport.md)).
+- On Zerops, every `FABRIKA_EMAIL_*` an application gets is sensitive, its provider name and address too, so the
+  console cannot show them; the provider contract has no way to mark only some of a family secret.
+- Renaming the installation's IAM origin changes the key prefix of every application. A message whose send was in
+  doubt across the rename goes out again under a new key, and the provider can deliver it twice.
+- A Cloudflare installation cannot drop a mail setting by re-running `platform init`: it writes the values it is given
+  and deletes none, so an old provider's variables, a display name or a tag stay in the GitHub Environment until the
+  operator deletes them.
 - **SmartEmailing's limits.** It has no idempotency, so an unknown outcome is never retried automatically and needs a
   person. It confirms only that it queued a request. The status codes for a forbidden request, a server error and
   disabled sending, a text-only body, the format of `tag` and the wording of a daily-limit 429 are not verified.
@@ -174,8 +212,8 @@ instead.
 
 ### Each application keeps its own transport
 
-This was the state before: every application implements the provider call, the error classification, the
-idempotency handling and a test stand-in, and holds its own key. Each copy drifts, and none fails closed. An
+Every application would implement the provider call, the error classification, the
+idempotency handling and a test stand-in, and hold its own key. Each copy would drift, and none would fail closed. An
 application that wants its own provider still has one, through `serve(app, { mail })`.
 
 ### `ctx.mail` on endpoints

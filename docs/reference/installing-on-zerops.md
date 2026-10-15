@@ -74,6 +74,14 @@ No value is printed. Before the first one is placed, all of them and the integra
 Fresh install always leaves GitHub source anonymous: it writes no App private key or webhook secret.
 Public repositories therefore deploy without another setup step.
 
+Mail is optional. Without `--email-provider` (or `FABRIKA_EMAIL_PROVIDER`) the installation has no mail transport. With one
+(`--email-provider`, `--email-from`, optionally `--email-from-name`, and the provider's own variables from
+the environment only), the command validates the set and writes it on `iam` and `control` alone, the
+credentials sensitive and not in the secrets file: the operator already holds them. IAM sends its own mail
+with it, and Control hands it to every application whose job declares `mailer: 'installation'`
+([outbound email](outbound-email.md#the-installations-transport)). Nothing writes it again later; changing
+it is the manual step in `platform guide` ([backlog 182](../backlog/182-set-or-rotate-the-installation-mail-transport.md)).
+
 Both passes and the integration-token mint have run live on a fresh account
 ([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).
 

@@ -253,14 +253,28 @@ identity is done in IAM, through the console's Access plane: `principals.invite`
 creates one, and `passwords.issueEnrollment` mails the enrolment link — that
 principal can then sign in with a password.
 
-IAM's mail is captured, not delivered. The composition starts IAM through
-`packages/local-stack/src/iam-server.ts`, the production server with a
-`DirectoryEmailSender` (`@fabrika/email/directory`) as a composition input: each message is
-a JSON file in `packages/local-stack/.state/mail/`, keyed by its idempotency key.
-`FABRIKA_EMAIL_PROVIDER` stays `none`, and IAM refuses such a sender outside
+Mail is captured, not delivered: each message is a JSON file in
+`packages/local-stack/.state/mail/`, keyed by its idempotency key. The composition starts IAM
+through `packages/local-stack/src/iam-server.ts`, the production server with a
+`DirectoryEmailSender` (`@fabrika/email/directory`) as a composition input;
+`FABRIKA_EMAIL_PROVIDER` stays `none` there, and IAM refuses such a sender outside
 `ENVIRONMENT=local`. So forgot-password, invitations and an administrator's enrollment
-and reset all work here, and `waitForMail` (`src/mail-capture.ts`) reads a mailbox's
-newest message back for the browser suites. The files hold one-time links; they live in
+and reset all work here.
+
+An application's mail lands in the same directory. Control holds the installation's
+transport as the `x-local-mail` set of `compose.yaml`: `FABRIKA_EMAIL_PROVIDER=directory`
+and `FABRIKA_EMAIL_DIRECTORY`. Control accepts that provider only because
+`src/control-server.ts` registers it (`LOCAL_CONTROL_EMAIL_PROVIDERS`), and it hands the set
+to an application whose job declares `mailer: 'installation'`, as a deployed Control does.
+The application runs the generated production entrypoint, which takes nothing but its
+environment; its boot accepts `directory` only under a loopback `FABRIKA_IAM_ISSUER`
+(`@fabrika/app/bun`'s local providers), and refuses it as an unknown provider anywhere
+else.
+
+`waitForMail` (`src/mail-capture.ts`) reads a mailbox's newest message back for the browser
+suites, from IAM or an application; `idempotencyKey` narrows it to one message by the key the
+transport got, for an application `transportMailKey({ issuer, appId: '<app>@<env>' }, key)` of
+`@fabrika/app/testing`. The files hold one-time links; they live in
 the disposable `.state/` and nothing prints them.
 
 That is the production round trip verbatim, including the handoff, because since

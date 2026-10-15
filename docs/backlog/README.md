@@ -64,11 +64,11 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [166](166-the-ui-kit-has-no-prop-or-token-for-common-layout-rules.md) — `DataTable`, `PageHeader` and `Checkbox` lack a prop, a wrapped column breaks inside words, and many layout rules read no token.
 - [167](167-a-mutations-mutate-is-new-every-render-and-the-screen-test-dom-empties-a-form.md) — `mutate` cannot drive an effect, there is no `useQueries`, and `installDom` makes `Form` submit an empty `FormData`.
 - [168](168-a-public-form-has-no-typed-client-and-the-error-union-drops-the-refusals-type.md) — A failed challenge reads as any 400, issue codes are dropped, and a public form posts through a plain `fetch`.
-- [169](169-app-dev-runs-no-cron-job-and-the-stand-in-iam-lists-no-invitation.md) — `app dev` runs cron jobs only from the seed, and the stand-in IAM lists no open invitation.
+- [169](169-app-dev-runs-no-cron-job-and-the-stand-in-iam-lists-no-invitation.md) — `app dev` runs cron jobs only from the seed or a `then` kick, and the stand-in IAM lists no open invitation.
 - [170](170-a-column-write-scoped-update-cannot-bump-the-version.md) — A raw UPDATE under a column's write action is refused when it also bumps `version`.
 - [171](171-an-application-table-cannot-own-a-file-collection.md) — Staff-only records cannot carry attachments, and nothing bounds one owner's total bytes.
 - [172](172-a-list-of-values-cannot-show-each-values-last-sign-in.md) — A last sign-in per value needs one call per row and `members.manage`; needs a privacy decision.
-- [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, the screen example renders outside `act`, and the test-mail recipe draws a checker hint.
+- [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, and the screen example renders outside `act`.
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.
 - [176](176-the-runtime-does-not-know-the-declared-secret-names.md) — An error report scrubs an application secret only when its variable name says it is one; the platform does not hand the runtime the declared names.
 - [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
@@ -76,5 +76,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [179](179-build-a-platform-distribution-that-bundles-extra-email-adapters.md) — Build IAM and Control with extra email adapters as composition inputs; needs another build source, a version lock, and IAM's local-only `EMAIL_SENDER` guard kept.
 - [180](180-verify-the-smartemailing-adapter-on-a-live-account.md) — The SmartEmailing adapter is verified only against a stubbed `fetch`; six points of its mapping wait for a live account.
 - [181](181-send-email-in-batches.md) — Every adapter sends one message per call (`maxBatch: 1`); `sendBatch` would cut requests and rate-limit use for bulk sends.
+- [182](182-set-or-rotate-the-installation-mail-transport.md) — `fabrika platform mail` sets or rotates the installation's mail transport on IAM and Control and redeploys the environments that use it; today an application gets a change only at its next deploy.
 - [185](185-no-release-is-accepted-on-a-live-zerops-account.md) — Run a fresh-install acceptance (namespace, app with a database, one authenticated request, teardown) on a dedicated Zerops account per release.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

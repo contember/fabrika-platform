@@ -451,8 +451,9 @@ or the request runs past `REQUEST_BUDGET_MS` (10 s, `Bun.serve`'s default `idleT
 connection anyway); its transaction then cannot commit (`request_cancelled`). An endpoint the generated tests cover
 calls no outside service: it records an outbox row in its transaction and a job makes the call, because the generated
 tests boot without the application's variables and a call does not roll back. A call that is the request's whole
-purpose (the recipe's test e-mail) lives in a `{ member: true }` endpoint, which they do not cover, and takes
-`ctx.signal`. A query
+purpose lives in a `{ member: true }` endpoint, which they do not cover, and takes `ctx.signal`. No endpoint sends
+e-mail: it has no `ctx.mail`, so it records the message and a mutation's `then` starts the job that sends it
+([Jobs](#jobs)). A query
 and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
 work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.
@@ -503,8 +504,10 @@ work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs
   dies between the record and the commit keeps the key and loses the delivery.
 - **A job reads outside its transaction and writes inside it.** `ctx.db` of a job attempt reads, each statement on its
   own; every write and `tx.sql` runs in `ctx.transaction((tx) => …)`, fenced by the attempt's lease. An attempt
-  retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: jobs are cron only, so work for later is a row
-  the next run picks up.
+  retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: work for later is a row a run picks up. A
+  mutation that declares `then` starts a run once it committed, and the schedule picks up the rest. The kick carries
+  no payload, so the row stays the only record of the work
+  ([ADR-0060](../decisions/0060-a-mutation-kicks-a-cron-job-after-its-commit.md)).
 - **Every handle is bound to its invocation.** A handle kept past its handler, called from another live request, from
   a request of another `boot`, or from an ended job attempt is refused (500, one log line) before it reads its
   arguments.
@@ -722,9 +725,12 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   answers a constant; the job drains the inbox into records, then delivers each record's
   link. It is the skill's outbox recipe: a run takes bounded batches (50, oldest first) and
   each record is its own work, in its own transactions. A record's failure adds one to its
-  `attempts`, keeps a fixed step code in `last_failure`, and the run goes on; a record that
-  failed five times is dead (a registration left in its inbox, a delivery `failed`), logged
-  once by id, and left to an operator; a resend revives a dead delivery. A failure after the
+  `attempts`, keeps a fixed step code in `last_failure`, and the run goes on; a delivery's
+  failure also sets `next_attempt_at` one minute ahead, doubled per attempt up to an hour, so
+  kicks seconds apart cannot spend its attempts during a short outage. A record that failed
+  five times is dead (a registration left in its inbox, a delivery `failed`), and so is a
+  delivery whose send `ctx.mail.mayRetry` refuses; it is logged once by id and left to an
+  operator, and a resend revives a dead delivery. A failure after the
   attempt ended is the attempt's, never the record's, so each e-mail has its own deadline
   inside the attempt's and a hanging one fails its record. Each record is claimed
   `for update skip locked` in the transaction that consumes it, so a row another session
@@ -741,18 +747,25 @@ request the schema cannot express); an IAM that cannot be asked is 503.
      seal. The next run finishes a stopped delivery: a link in state `issued` may have been
      e-mailed, so it is sent again from its seal, never replaced; a link issued but not
      recorded was never e-mailed (its key existed only in the job) and expires with its
-     `days`; IAM's `issue` takes no idempotency key, so that window stays.
+     `days`; IAM's `issue` takes no idempotency key, so that window stays. Before the
+     e-mail the row is `sending`: a run that finds it so (a crash, a lost answer) sends it
+     again only over a transport that deduplicates a key, and otherwise makes it dead,
+     because the e-mail may have arrived.
   3. **An effect starts only while the attempt is live**: `ctx.signal.throwIfAborted()`
-     before each revoke, issue and e-mail, and the e-mail transport takes `ctx.signal`. The
-     runner aborts the signal before a replacement attempt starts, and `ctx.links` of an
-     ended attempt asks IAM nothing, so no effect of a stale attempt follows its
+     before each revoke, issue and e-mail, and `ctx.mail.send` aborts with `ctx.signal`. The
+     runner aborts the signal before a replacement attempt starts, and `ctx.links` and
+     `ctx.mail` of an ended attempt call nothing, so no effect of a stale attempt follows its
      replacement's.
-  4. **The link is the delivery's identity**: the e-mail's `Idempotency-Key` is
-     `intake-link-<link id>`, and a retry sends the same message under it, so the provider
-     sends one e-mail per link even when its answer or the commit after it was lost.
+  4. **The link is the delivery's identity**: the e-mail's key is `intake-link-<link id>`,
+     behind the application environment's prefix, and a retry sends the same message under
+     it, so an idempotent transport sends one e-mail per link even when its answer or the
+     commit after it was lost.
 
   A resend (a second form, `{ email }`) marks an unverified record due while its budget has
-  an e-mail left; the job revokes the sent link before it issues the next. Verification is
+  an e-mail left; the job revokes the sent link before it issues the next. The recipe's test
+  e-mail is an outbox of its own: a mutation (`access: { action: 'mail.test', app: true }`,
+  `then: 'testMails'`) records a `test_mails` row for the caller's address, and the
+  `testMails` job sends it under the same rules. Verification is
   application state: a link mutation sets `verified_at` once under `getForUpdate`, and every
   later call answers the same; the link itself is not single use, and IAM's revocation is
   the stop, which a warm proxy cache honours for at most 270 s (the token's 300 s less the
@@ -807,9 +820,20 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   run is active and one is pending whatever the number of submissions and instances; after a failed
   run the flag waits for the schedule. A refused, honeypotted
   or challenge-failed submission kicks nothing. The schedule stays the recovery path: a kicked run
-  that dies before its commit leaves its rows to the next scheduled run (`form-kick.test.ts`). On
-  SIGTERM the server drains the runs in flight before it closes the database. A kick carries no
-  payload; it is not a queue.
+  that dies before its commit leaves its rows to the next scheduled run (`form-kick.test.ts`). A kick
+  carries no payload; it is not a queue. On SIGTERM a Bun server first aborts the kicked runs in
+  flight: a stopped run frees its lease as failed with the code `stopped`, logs that its schedule
+  runs it again, and reports nothing to Operations. It then stops accepting requests and waits at
+  most 10 s for the rest of its background work before it closes the database.
+- `then: '<job>'` on a mutation of an RPC or link mount kicks the job the same way once the
+  mutation's transaction committed, so a row it recorded leaves within seconds
+  (`mutation-kick.test.ts`, [ADR-0060](../decisions/0060-a-mutation-kicks-a-cron-job-after-its-commit.md)).
+  A thrown handler, a refused output, a cancelled request and a failed commit kick nothing; a
+  procedure without a transaction kicks once its answer is built. The build and the checker refuse
+  `then` on a query, on a read-only site, on an export procedure, on a webhook and on a job, and a
+  name that is no cron job of the contract (an unknown one with a suggestion). It is declared reach
+  (`ContractArtifact.declared[<endpoint>].then`), absent unless declared, so a contract without it
+  keeps its digest; the approval diff shows it, and it widens nothing. It gives the handler nothing.
 - `c.webhook` (GitHub) answers `POST <path>/:bindingId`. A holder of the bound
   dimension's `members.manage` creates a binding with the generated
   `POST /api/webhooks.<name>.bind` (`{ scope, account }`, where `account` is
@@ -869,7 +893,7 @@ process first — and runs one job:
 1. The run takes the job's lease in `fabrika_job_leases` (a framework table of
    `fabrika db migrate`). While another run holds it, this run does not start. Every
    lease time is the database's clock, so containers whose clocks disagree still agree.
-   A run clears the `fabrika_job_kicks.pending` flag a form's kick leaves when it starts,
+   A run clears the `fabrika_job_kicks.pending` flag a kick leaves when it starts,
    and runs once more when the flag is set again by the time it succeeded.
 2. Each attempt holds one generation of the lease and a deadline (its `timeout`,
    default 15 minutes). Every insert, update and delete of the data layer checks the
@@ -881,14 +905,18 @@ process first — and runs one job:
    write in it; its `ctx.db` outside reads only.
 3. An attempt that outlives its `timeout` is cancelled (`ctx.signal` aborts, its
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
-   times with jittered exponential backoff, under a new generation each time.
+   times with jittered exponential backoff, under a new generation each time, except an
+   attempt that failed with `mail_failed` the one retry rule refuses and a `stopped` one.
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
    `query_refused` and `capability_refused` (a framework refusal, chosen by class as a
    request's 5xx is, with the refusal's catalog reason in the result, the log line and the
-   report's `reason` tag), `driver_failed`, `crashed`, `unauthorized` (IAM refused the
-   job's key), `iam_unavailable` (IAM could not be asked for its token), and `boot_failed`
-   from the CLI. An application error's name and message are never logged; the report
-   carries them scrubbed (below).
+   report's `reason` tag), `mail_failed` (a send error the handler did not catch, with the
+   `EmailDeliveryError` code as its reason), `driver_failed`, `crashed`, `unauthorized` (IAM
+   refused the job's key), `iam_unavailable` (IAM could not be asked for its token),
+   `stopped` (a kicked run the process aborted while it shut down; not reported), and
+   `boot_failed` from the CLI. An application error's name and message are never logged;
+   the report carries them scrubbed (below). A `mail_failed` report carries no error, only
+   its code and reason.
 5. A run that failed after its retries, and a run that crashed (its lease expired
    before it finished), is a `JobFailed` error event in Operations. A job that has not
    succeeded within twice its period is `JobMissed`, at most once per period. The
@@ -921,6 +949,43 @@ is not a five-field cron expression, and a missing or undeclared job handler. A 
 has a key of principal kind `webhook` the same way (`FABRIKA_WEBHOOK_<NAME>_KEY`), one
 per webhook declaration: its `ctx.refs` exist only when the token carries every declared
 action. A Cloudflare deploy refuses a workload key, because a Worker runs neither.
+
+### E-mail from a job
+
+A cron job of a kit contract that declares `mailer: 'installation' | 'own'` gets `ctx.mail` (`AppMail`,
+`packages/app/src/jobs/mail.ts`); no other site does. On an endpoint, a link procedure, an export and a webhook
+`ctx.mail` is an `Unavailable` that names the outbox, and on a job without `mailer` one that names the declaration.
+`mailer` is declared reach (`ContractArtifact.declared['job:<name>'].mailer`), which the runtime reads from the approved
+artifact; the approval diff shows a new `installation` for closer review and a new `own` as a widening. A
+`defineContract` contract cannot declare it, and Cloudflare runs no job, so no application there sends mail.
+
+- `ctx.mail.send(message, signal?)` takes `{ to, subject, text, html?, idempotencyKey, replyTo?, fromName? }` and
+  answers `{ status: 'accepted', provider, messageId }`. It aborts with the attempt's `ctx.signal` and with `signal`,
+  and refuses once the attempt ended (`capability_refused`). The key is 1 to 200 visible ASCII characters, or the send
+  fails `invalid_message` before any I/O. The transport gets it behind `mailKeyPrefix`: `fabrika:`, the first 32 hex
+  characters of `sha256('<FABRIKA_IAM_ISSUER>\n<FABRIKA_IAM_APP_ID>')` and `:`, so two installations, applications or
+  environments on one provider account never share a key. Renaming IAM's origin changes every prefix once.
+  `transportMailKey(scope, key)` of `@fabrika/app/testing` computes the transport's key.
+- `ctx.mail.capabilities` are the transport's (`idempotent`, `confirmation`, `maxBatch`), and `ctx.mail.mayRetry(error)`
+  is `mayRetryDelivery` over them ([outbound email](outbound-email.md)). A send rejects with `EmailDeliveryError`; any
+  other rejection of an application's own transport becomes `provider_unavailable`, its message dropped unread.
+  `@fabrika/app/implement` re-exports `EmailDeliveryError`, `mayRetryDelivery` and the email types, so an application
+  needs no `@fabrika/email` dependency.
+- A send error the handler does not catch fails the attempt as `mail_failed`, with the error's code as its `reason`;
+  the runner retries the attempt only where `mayRetryDelivery` holds. Nothing logs or reports a message field, a key,
+  a transport's message, a credential or a `messageId`.
+- `boot` resolves each transport once (`resolveMailTransports`). `installation` reads the framework's `FABRIKA_EMAIL_*`,
+  which Control hands a deploy ([outbound email](outbound-email.md#applications)), against `BootOptions.emailProviders`
+  (the built-in providers by default). `own` calls `serve(contract, { mail: (env) => EmailSender | null })` once with
+  the application's variables. Boot refuses an `own` job without `mail`, a `mail` that no `own` job uses, an invalid
+  installation configuration (its message names variables, never values), a `mail` that throws `EmailDeliveryError` or
+  answers no `EmailSender`, and a declared transport that is missing.
+- A local installation, one whose `FABRIKA_IAM_ISSUER` is a loopback origin, boots without a transport: each send then
+  fails `invalid_configuration`, and boot logs it once per job. Only there does boot add `BootOptions.localEmailProviders`,
+  which `@fabrika/app/bun` sets to the `directory` provider (`FABRIKA_EMAIL_DIRECTORY`), the local stack's capture.
+  Anywhere else that name is an unknown provider.
+- `testKit` and `devKit` pass a `MemoryEmailSender` as `BootOptions.mailStandIn` (`TestKitOptions.mail`, a new one by
+  default) for every mailer job; boot then reads neither `FABRIKA_EMAIL_*` nor `mail` (below).
 
 ## Connectors
 
@@ -1042,6 +1107,7 @@ reviewed too (`diff.ts:292`).
 | A site's declared reach is the approved contract's, not the handler module's                                                                                                                                                                                                                                                  | boot                         | none                                                                                                  | `packages/app/src/implement/invocation.ts:137`                                                                                                                                    |
 | Another application is called only through a declared import                                                                                                                                                                                                                                                                  | types, runtime, review       | `connect: ['<import>']`                                                                               | `packages/app/src/contract/context.ts:310`; "calls connector `…`" `diff.ts:258`                                                                                                   |
 | A share link is issued only from a site that declares its mount                                                                                                                                                                                                                                                               | types, runtime, review       | `issues: '<link mount>'`                                                                              | `packages/app/src/contract/context.ts:297`; "issues share links of mount `…`" `diff.ts:262`                                                                                       |
+| An endpoint sends no e-mail; a job sends only through the transport it declares, under a key prefixed per installation and application environment                                                                                                                                                                            | types, boot, runtime, review | `mailer: 'installation' \| 'own'` (a cron job)                                                        | `packages/app/src/contract/context.ts:414`; `packages/app/src/jobs/runner.ts:747`, `mail.ts:37`; "sends e-mail through the installation's mail transport" `diff.ts:278`           |
 | A form writes only the declared columns of its inbox                                                                                                                                                                                                                                                                          | boot, runtime                | none                                                                                                  | `packages/app/src/implement/boot.ts:487`; `packages/db/src/store.ts:1559`                                                                                                         |
 | The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                 |
 | The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                 |
@@ -1070,7 +1136,8 @@ request behavior:
   responsible for draining the context. `serveContract()` boots a contract
   application on `PORT`, reads IAM's key set from the issuer's
   `/.well-known/jwks.json`, serves each SPA from its build directory and stops on
-  SIGTERM.
+  SIGTERM: it aborts the kicked runs, stops accepting requests, drains the rest of
+  its background work for at most 10 s, then closes the database.
 
 Provider authoring remains separate: an app's `fabrika.config.ts` imports its
 selected provider package. Portable request code imports `@fabrika/app`; only the
@@ -1173,7 +1240,15 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   accepts no invitation.
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
-  (`{ status: 'succeeded', attempts }`). It first waits for the runs a form's `then` kicked through `kit.fetch`.
+  (`{ status: 'succeeded', attempts }`). It first waits for the runs a form's or a mutation's `then` kicked through
+  `kit.fetch`. `kit.drain()` waits for them without running a job, and each method of the generated endpoint access
+  kit drains before it answers, so no test closes the database under a kicked run.
+- `kit.mail` is the stand-in transport of every job that declares `mailer` (a `MemoryEmailSender` of
+  `@fabrika/email/memory`, re-exported by `@fabrika/app/testing`; `TestKitOptions.mail` replaces it, for example with
+  `capabilities: { idempotent: false, confirmation: 'queued' }`). `accepted` is what reached the inbox, once per key,
+  and `handoffs` every send that passed validation, with its answer; `refuse`, `unavailable`, `unreachable`,
+  `loseAnswers`, `during` and `heal` inject and clear faults. Each message carries the transport's key,
+  `transportMailKey(kit.mailKeyScope, key)`.
 - An SPA mount whose built directory exists under `options.root` (the working directory when omitted) is served from
   it as the Bun deploy serves it (`diskAssets`): a file by its path, every other path of the mount by its
   `index.html`; a mount not built is an empty HTML document, and `options.assets` replaces both.
@@ -1181,19 +1256,24 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   its stand-in IAM) on a loopback port, to click through its screens: a throwaway schema of
   `FABRIKA_TEST_POSTGRES_URL` migrated from `db/migrations/` and dropped on exit, the SPAs from their built
   directories, file objects in memory, and the application's variables from `dev/dev.env` over the environment without
-  the `FABRIKA_*` names. A form's challenge passes (`passingChallenge`), and every request the process sends to
-  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox: point a mail provider's URL at it) is captured, answered
-  200 and listed in the mail view. What the seed or a job's handler throws is printed with its stack. A seed module
-  (`--seed`, or `dev/seed.ts`) default-exports a `DevSeed`: it gets the kit and the dev outbox, writes through the
-  endpoints, and answers personas (a person the kit made), link pages (a URL `ctx.links` answered) and labelled scope
+  the `FABRIKA_*` names. A form's challenge passes (`passingChallenge`). A job's mail goes to the kit's stand-in
+  (`kit.mail`), and the mail view lists it with the invitations the stand-in IAM sent, newest first, at most 200: the
+  recipient, the subject, the job's key, the time and the transport's answer. A job's message opens at
+  `/__fabrika/dev/mail/<id>` with every field, its text, and its HTML in a `sandbox=""` `srcdoc` frame under the page's
+  `default-src 'none'` policy, so it runs no script and loads nothing. Every request the process sends to
+  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox, for another outside service) is captured, answered
+  200 and listed in a section of its own. A form's or a mutation's `then` kicks its job; cron schedules do not run.
+  What the seed or a job's handler throws is printed with its stack. A seed module (`--seed`, or `dev/seed.ts`)
+  default-exports a `DevSeed`: it gets the kit and `DevOutside`, whose `outbox()` reads the dev outbox and `mails()`
+  the jobs' mail (`DevMail`, oldest first), writes through the endpoints, and answers personas (a person the kit made), link pages (a URL `ctx.links` answered) and labelled scope
   values. `/__fabrika/dev` picks the caller: a persona, a role of the vocabulary held app-wide or in one scope value,
   or anonymous; a cookie keeps the choice, which never reaches the application, and the kit's own session never leaves
   the process. A sign-in the proxy answers (a redirect to the kit's IAM, a 401's `loginUrl`) points to the picker.
   Every SPA page it serves gets a same-origin toolbar script (the kit's `script-src 'self'` admits it; `app dev`
   changes no policy): who the browser is, a persona switch, the link pages, the invitations the stand-in IAM sent, each
-  with a link that accepts it as IAM's onboarding does, and the dev outbox's messages. The stand-in IAM signs no password, so there is no reset
+  with a link that accepts it as IAM's onboarding does, the jobs' mail, and the dev outbox's messages. The stand-in IAM signs no password, so there is no reset
   mail. It listens on `127.0.0.1`, `::1` or `localhost` only, answers no request addressed to another host name, and
-  prints its address and nothing of the environment. Cron jobs do not run there.
+  prints its address and nothing of the environment.
 - The kit's stand-in IAM mints for the key of a share link it issued through `ctx.links`, as IAM resolves a link key:
   the mount's grants on the link's object, bound to its chain, until the link is revoked. A job's own key, and the
   tokens the kit signs for it, are its credential at the stand-in's link operations, as at IAM's: its declared actions
@@ -1420,6 +1500,11 @@ commits them nor sets them, and an application VARIABLE of the same name is refu
 | `FABRIKA_RELEASE`                                              | The deploy-scoped release name                                                  |
 | `FABRIKA_OPERATIONS_DSN`                                       | The browser-safe public ingest DSN for this application environment             |
 | `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY` | The ingest coordinates that DSN reports under                                   |
+
+A deploy of an approved contract with a job that declares `mailer: 'installation'` also writes the installation's
+mail transport, every `FABRIKA_EMAIL_*` name Control holds, sensitive on Zerops; without one, Control refuses that
+deploy before any effect. A deploy after the contract stops declaring it removes them. An application cannot set a
+`FABRIKA_EMAIL_*` variable of its own: the family is framework-only.
 
 A name whose value the installation cannot supply is REMOVED from the service rather than left stale —
 an app verifying against a previous installation's issuer is worse than one that fails to boot.

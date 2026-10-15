@@ -183,6 +183,7 @@
 			"enum_labels": [
 				"due",
 				"issued",
+				"sending",
 				"sent",
 				"failed"
 			]
@@ -243,6 +244,16 @@
 			"type_name": "int4",
 			"type_type": "b",
 			"type_category": "N",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "candidates",
+			"column_name": "next_attempt_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
 			"nullable": false,
 			"generated": "default",
 			"enum_labels": []
@@ -960,6 +971,86 @@
 		{
 			"table_name": "resend_requests",
 			"column_name": "received_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "id",
+			"type_name": "uuid",
+			"type_type": "b",
+			"type_category": "U",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "recipient",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "state",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "attempts",
+			"type_name": "int4",
+			"type_type": "b",
+			"type_category": "N",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "next_attempt_at",
+			"type_name": "timestamptz",
+			"type_type": "b",
+			"type_category": "D",
+			"nullable": false,
+			"generated": "default",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "last_failure",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": true,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "created_by",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "no",
+			"enum_labels": []
+		},
+		{
+			"table_name": "test_mails",
+			"column_name": "created_at",
 			"type_name": "timestamptz",
 			"type_type": "b",
 			"type_category": "D",

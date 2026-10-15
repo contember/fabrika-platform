@@ -218,6 +218,7 @@ the access check. `references/spa.md` shows the stack.
 | rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>`                          |
 | another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`                             |
 | a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
+| e-mail (a cron job only)       | `mailer: 'installation'`        | `ctx.mail.send`                                    |
 | a trigger, function or view    | its migration                   | —                                                  |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
@@ -234,8 +235,11 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 ## Rules
 
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
-  and connector calls do not. An endpoint the generated tests cover calls no outside service (an e-mail, a provider's
-  API): it records an outbox row, and a job sends it (`references/jobs.md`).
+  and connector calls do not. An endpoint the generated tests cover calls no outside service (a provider's API): it
+  records an outbox row, and a job makes the call (`references/jobs.md`).
+- An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row and declares `then: '<job>'`, which
+  starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
+  derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
@@ -288,7 +292,7 @@ change an uncommitted migration, migrate into a fresh schema with another `FABRI
 
 `bunx fabrika app dev` serves the application on a loopback port through its test kit, filled by `dev/seed.ts`
 through the endpoints. Pick a persona at `/__fabrika/dev`; the toolbar on every page switches it and lists the mail IAM
-sent. Write the seed and use it as `references/dev.md` says; it never replaces a test.
+and the application's jobs sent. Write the seed and use it as `references/dev.md` says; it never replaces a test.
 
 ## References
 
@@ -298,7 +302,7 @@ their errors, the caller, the components, routing, theming, screen tests), `tabl
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
-day), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+day, e-mail through `ctx.mail`, the outbox and `then`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
 this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's
 files, HR's review with its history.
@@ -306,7 +310,9 @@ files, HR's review with its history.
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `then` starts a run of its
+  job; it carries nothing. A list write is off the road (`sql`).
+- `ctx.mail` sends no attachments.
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
 
@@ -472,15 +478,16 @@ export default serve(contract, { database: scoped(tables) })
   per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
   once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
-  and never waits for it. Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
+  and never waits for it. A mutation declares the same `then` for the outbox row it records (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
   submit), so the job still drains its inbox in batches under its own budgets. Keep its schedule: it is the recovery
   path for a kicked run that died. A kick carries nothing; the job reads its inbox. `kit.runJob` first waits for the
   kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
-  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`). A handler of an endpoint the
+  the dependency is used, and fail there (`src/links.ts` in `references/public-intake.md`). A handler of an endpoint the
   generated tests cover records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
+  E-mail needs no dependency: a job that declares `mailer` sends through `ctx.mail` (`references/jobs.md`).
 
 ## The deploy surface (Zerops)
 
@@ -758,30 +765,39 @@ export default seed
   does: a token is single use. For the widget on a page, set the `siteKey` variable to Turnstile's always-passing test
   key `1x00000000000000000000AA`. Its token is the same every time, and `app dev` admits that one token again at each
   submission; a deployed application records it like any other, so there it passes once.
-- Point an outside provider at the dev outbox: `app dev` captures every request the process sends to
-  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. The mail view
-  lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
-- The seed's second argument reads the outbox: `outside.outbox()` is every captured request, oldest first
-  (`{ id, method, path, contentType, body }`), so the seed can open a link the application mailed.
+- A job's e-mail goes to the kit's mail stand-in (`dev.mail`, as `kit.mail` in a test): nothing is delivered, and no
+  mail variable is needed. The mail view lists each message, newest first, beside IAM's invitations: the recipient,
+  the subject, the key the job passed, the time and the transport's answer. It opens to every field, the text, and the
+  HTML in a sandboxed frame that runs no script and loads nothing. `dev.mail.refuse('provider_rejected')` in the seed
+  previews a refused one; `dev.mail.heal()` ends it.
+- The seed's second argument reads what left the application: `outside.mails()` is every message a job handed to the
+  stand-in, oldest first (`{ id, at, to, subject, text, html, key, transportKey, answer, outcome, delivered, … }`), so
+  the seed can open a link the application mailed. Run the job first (`dev.runJob('<job>')`), or let a mutation's
+  `then` kick it and `await dev.drain()`.
+- Point another outside service at the dev outbox: `app dev` captures every request the process sends to
+  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN` of `@fabrika/app/testing`) and answers `200 {"id": …}`. A section of
+  its own lists each one, by the `to` and `subject` of a JSON body, and opens its body; its headers are not kept.
+  `outside.outbox()` is every captured request, oldest first (`{ id, method, path, contentType, body }`).
 
 ```text dev/dev.env
 # Stand-in values for fabrika app dev.
 TURNSTILE_SECRET=dev
 TURNSTILE_SITE_KEY=1x00000000000000000000AA
-MAIL_API_URL=https://outbox.invalid/mail
-MAIL_API_KEY=dev
+ARCHIVE_URL=https://outbox.invalid/archive
+ARCHIVE_KEY=dev
 ```
 
 ## In the browser
 
 - `/__fabrika/dev` is the picker: the personas, another role of the vocabulary (a membership role with a scope value),
-  anonymous, the link pages, and the mail: what IAM sent and what reached the dev outbox. It speaks the vocabulary's `locale` and shows its `displayName`.
+  anonymous, the link pages, the mail IAM and the application's jobs sent, and the dev outbox. It speaks the vocabulary's `locale` and shows its `displayName`.
 - Every SPA page carries a toolbar in the bottom corner: who you are, the personas to switch to (the page reloads as
-  that caller), the picker, the link pages, and the mail. An invitation's link accepts it; the browser is the invited
-  person from then on.
+  that caller), the picker, the link pages, the mail and the dev outbox. An invitation's link accepts it; the browser
+  is the invited person from then on. A job's message opens at `/__fabrika/dev/mail/<id>`.
 - The choice stays in a cookie the application never sees. The data is gone when the command stops.
 - It serves this machine only (`--host` is a loopback address, `--port=0` picks a free port), answers no request
-  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`.
+  addressed to another host name, and runs no cron job on its schedule: the seed runs one with `dev.runJob`, a test with `kit.runJob`. A form's or a
+  mutation's `then` still starts its job, as deployed.
 
 ---
 
@@ -847,10 +863,12 @@ export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
   (`{ kind: 'service', id, label }`) has no address. `label` is for display: the address as the person spelled it.
 - **An endpoint the generated tests cover calls no outside service.** They boot without your variables, so a handler
   that calls one answers 500 in each case, and a request cannot undo the call when its transaction rolls back. Such an
-  endpoint records an outbox row in its transaction, and a job sends it with an attempt count and an idempotency key
-  (`references/jobs.md`). A call that is the request's whole purpose, such as a test e-mail to the caller, lives in a
-  `{ member: true }` endpoint, which they do not cover (`references/public-intake.md`). The framework's own calls (IAM,
-  the file store, `ctx.connect`) are not outside.
+  endpoint records an outbox row in its transaction, and a job makes the call with an attempt count and an idempotency
+  key (`references/jobs.md`). A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which
+  they do not cover. The framework's own calls (IAM, the file store, `ctx.connect`) are not outside.
+- **An endpoint never sends e-mail**, covered or not: it has no `ctx.mail`. It records the message in an outbox row
+  and declares `then: '<job>'` on the mutation, so the job that declares `mailer` sends it within seconds of the
+  commit (`references/jobs.md`; the test e-mail in `references/public-intake.md`). Only a mutation declares `then`.
 - `ctx.principal.label` is a `string`, never `null`: the label IAM holds for the person (the one its directory
   shows), or the id when the token carries none. When the caller owns what it writes (the creator of a deal, the
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
@@ -1566,7 +1584,7 @@ import { members } from './src/members/endpoints'
 import { priorities } from './src/priorities/endpoints'
 import { projects } from './src/projects/endpoints'
 import { reports } from './src/reports/endpoints'
-import { digest } from './src/tasks/digest'
+import { archive } from './src/tasks/archive'
 import { tasks } from './src/tasks/endpoints'
 import { erase } from './src/tasks/erase'
 
@@ -1590,7 +1608,7 @@ export const contract = app.contract((c) => ({
 			maxPerOwner: 20,
 		}),
 	},
-	jobs: { digest, erase },
+	jobs: { archive, erase },
 	health: c.health('/healthz'),
 }))
 ```
@@ -1664,21 +1682,22 @@ Every call needs the collection's `read`, so a write capability alone sees no fi
 document is declared with an action that is the collection's `read` too, or the check runs where the caller holds
 `read`: never mint or widen a capability to list.
 
-A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to attach it to an e-mail of `deps`:
+A job mints the owner's `Ref` with `ctx.ref` and opens each live file, here to hand it to an archive service of
+`deps`. `ctx.mail` carries no attachments, so a file leaves through a service of the application's own:
 
-```ts src/tasks/digest.ts
+```ts src/tasks/archive.ts
 import { app } from '../app-kit'
-import { mailer } from '../mail'
+import { archiver } from '../archive'
 
-/** The largest report one e-mail carries: the collection's maxBytes. */
+/** The largest report the archive takes in one call: the collection's maxBytes. */
 const REPORT_MAX_BYTES = 5242880
 
-export const digest = app.cron('0 6 * * *', {
+export const archive = app.cron('0 6 * * *', {
 	actions: ['tasks.read'],
 	scope: 'app',
 })
 	.handle(async ({ ctx }) => {
-		const mail = mailer.get()
+		const store = archiver.get()
 		const tasks = ctx.db.over(ctx.within('tasks.read', 'project')).tasks
 		const done = await tasks.list({ where: [['status', '=', 'done']], limit: 50 })
 		for (const task of done.items) {
@@ -1692,12 +1711,12 @@ export const digest = app.cron('0 6 * * *', {
 				)
 			}
 			ctx.signal.throwIfAborted()
-			await mail.sendReports(task.title, reports, ctx.signal)
+			await store.putReports(task.id, reports, ctx.signal)
 		}
 	})
 ```
 
-```ts src/mail.ts
+```ts src/archive.ts
 import { defineDeps } from '@fabrika/app/implement'
 
 export interface Report {
@@ -1706,10 +1725,10 @@ export interface Report {
 	readonly bytes: Uint8Array
 }
 
-export interface Mailer {
-	/** Sends the reports of one task; throws when the provider refuses, and gives up once `signal` aborts. */
-	sendReports(
-		title: string,
+export interface Archiver {
+	/** Stores the reports of one task under its id; throws when the service refuses, and gives up once `signal` aborts. */
+	putReports(
+		taskId: string,
 		reports: readonly Report[],
 		signal: AbortSignal,
 	): Promise<void>
@@ -1723,27 +1742,28 @@ const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	return value
 }
 
-export const mailer = defineDeps((env): Mailer => ({
-	async sendReports(title, reports, signal) {
-		const response = await fetch(variable(env, 'MAIL_API_URL'), {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
-				'Content-Type': 'application/json',
+export const archiver = defineDeps((env): Archiver => ({
+	async putReports(taskId, reports, signal) {
+		const response = await fetch(
+			`${variable(env, 'ARCHIVE_URL')}/tasks/${taskId}`,
+			{
+				method: 'PUT',
+				headers: {
+					Authorization: `Bearer ${variable(env, 'ARCHIVE_KEY')}`,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					files: reports.map((file) => ({
+						filename: file.name ?? 'report',
+						contentType: file.type,
+						content: Buffer.from(file.bytes).toString('base64'),
+					})),
+				}),
+				signal,
 			},
-			body: JSON.stringify({
-				to: variable(env, 'REPORTS_TO'),
-				subject: `Reports of ${title}`,
-				attachments: reports.map((file) => ({
-					filename: file.name ?? 'report',
-					contentType: file.type,
-					content: Buffer.from(file.bytes).toString('base64'),
-				})),
-			}),
-			signal,
-		})
+		)
 		if (!response.ok) {
-			throw new Error(`the mail provider answered ${response.status}`)
+			throw new Error(`the archive answered ${response.status}`)
 		}
 	},
 }))
@@ -1753,11 +1773,13 @@ export const mailer = defineDeps((env): Mailer => ({
 import { serve } from '@fabrika/app/implement'
 import { scoped } from '@fabrika/db'
 import { contract } from '../fabrika.contract'
+import { archiver } from './archive'
 import { tables } from './db/tables'
-import { mailer } from './mail'
 
-export default serve(contract, { database: scoped(tables), deps: mailer })
+export default serve(contract, { database: scoped(tables), deps: archiver })
 ```
+
+The `PUT` under the task's id makes a repeated run replace the same object, so a retried attempt stores nothing twice.
 
 `removeAll` runs in a mutation and in a job's `tx.files`, in the same transaction as the handler's writes: an erasure
 that blanks a record and removes its files keeps both or neither. A query and a job's `ctx.files` only read. The
@@ -1896,7 +1918,9 @@ A test that boots an application with files passes `files: new MemoryFileObjects
 
 Background work is a cron job: `app.cron(schedule, { actions, scope: 'app' })` with its `.handle(…)` in the
 `endpoints.ts` of the slice whose data it works on, mounted under `jobs` in the contract. There are no timers, loops,
-`setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that the next run picks up.
+`setInterval` or self-scheduled work, and no `ctx.jobs.enqueue`: work for later is a row that a run picks up. A
+mutation that declares `then: '<job>'` starts a run within seconds of its commit (the outbox below); the schedule
+picks up whatever that run leaves.
 
 ```ts src/overdue/endpoints.ts
 import { app } from '../app-kit'
@@ -2029,19 +2053,59 @@ export const contract = app.contract((c) => ({
   `ctx.links.issue(await ctx.ref('<issuedBy>', '<dimension>', id), { mount, days })`, and `ctx.links.revoke(id)` for
   a link it issued. It is a widening for closer review. `references/public-intake.md` is the whole recipe: a form's
   inbox, the record, the link and its e-mail, each step recorded before the next.
-- A job reads a file collection through `ctx.files('<collection>')` with a `Ref` it minted (`list`, `open` to attach a
-  file to an e-mail), and removes an owner's files only inside its transaction, `tx.files('<collection>').removeAll(ref)`
+- A job reads a file collection through `ctx.files('<collection>')` with a `Ref` it minted (`list`, `open` to hand a
+  file to another service), and removes an owner's files only inside its transaction, `tx.files('<collection>').removeAll(ref)`
   (`references/files.md`). The framework's own `fabrika-file-sweep` then deletes their objects; never write a sweep.
 - `ctx.signal` aborts when the attempt ends (its timeout, a lost lease). Call `ctx.signal.throwIfAborted()` before
   each external effect and pass the signal to `fetch`, so a stale attempt starts nothing after its replacement.
-- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, or a framework refusal
-  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`; `references/errors.md`).
+- A failed attempt names its failure in `kit.runJob`'s answer and the log: `handler_failed`, a framework refusal
+  with its reason (`query_refused: undeclared_reach`, `capability_refused: undeclared_action`; `references/errors.md`),
+  or `mail_failed` with the transport's code (`mail_failed: provider_rejected`).
+
+## E-mail: `mailer` and `ctx.mail`
+
+Only a cron job that declares `mailer` sends e-mail, through `ctx.mail`. An endpoint has no `ctx.mail` (a type error
+that says so): it records an outbox row and kicks the job (below). `references/public-intake.md` shows both jobs whole.
+
+- `mailer: 'installation'` sends through the installation's transport: the operator configures one provider, and
+  Control hands it to each application whose job declares it. The application holds no provider key and writes no
+  transport code. A contract with such a job does not deploy to an installation that has no transport.
+- `mailer: 'own'` sends through the application's own transport: `serve(contract, { database, mail: (env) => sender })`,
+  where `sender` is an `EmailSender` (`@fabrika/app/implement`) built from the application's own variables, or `null`
+  when they configure none. Never name a variable `FABRIKA_EMAIL_*`: those are the installation's.
+- `mailer` is reach the approver sees (`installation` for closer review). Declare it only after the human said yes.
+  Without it, `ctx.mail` is a type error that names the declaration. A boot without the declared transport fails and
+  says which job needs it; the test kit and `fabrika app dev` stand one in (`kit.mail`, `references/tests.md`).
+- `ctx.mail.send({ to, subject, text, html?, replyTo?, fromName?, idempotencyKey }, signal?)` hands one message to the
+  transport and answers `{ status: 'accepted', provider, messageId }`. It always aborts with the attempt's
+  `ctx.signal`; pass `AbortSignal.timeout(ms)` for a deadline of the message's own. The sending address is the
+  transport's; `fromName` and `replyTo` are the application's, per message. There are no attachments.
+- `idempotencyKey` is 1 to 200 visible ASCII characters, unique per message in the application environment, and
+  derived from the outbox row (`intake-link-<link id>`), never random. `ctx.mail` puts a prefix of the installation
+  and the environment in front of it, so no other application on the same provider account shares it.
+- A refused send throws `EmailDeliveryError` (`@fabrika/app/implement`): a fixed `code` and an `outcome`, `not_sent`
+  (the message did not leave) or `unknown` (it may have). `ctx.mail.mayRetry(error)` says whether the message may go
+  again: false for a refused message or configuration, and for an `unknown` outcome over a transport that does not
+  deduplicate a key (`ctx.mail.capabilities.idempotent` is false). Where it is false, never send again: the row is
+  dead, for a person.
+- A send error the handler does not catch fails the attempt as `mail_failed`, and the runner retries the attempt only
+  where `mayRetry` holds. Catch it per row instead, as the outbox below does.
+- Never log a message, its address or its key: log the row's id and the error's `code`.
 
 ## An outbox: what a request asks a job to do
 
-A request handler calls no outside service (`references/endpoint.md`). It records what to do in a row, in its own
-transaction: a form's inbox row, or a state of its record (`link_state = 'due'`). A job does the work and calls the
-service. `references/public-intake.md` is the whole recipe; its rules:
+A request handler calls no outside service and sends no e-mail (`references/endpoint.md`). It records what to do in a
+row, in its own transaction: a form's inbox row, an outbox row (`test_mails`), or a state of its record
+(`link_state = 'due'`). A job does the work and calls the service. `references/public-intake.md` is the whole recipe.
+
+**The kick.** A mutation that records such a row declares `then: '<job>'`: once its transaction committed, the job
+runs within seconds, under its own key, and the answer does not wait for it. A form's `then` does the same for its
+inbox. A thrown handler, a refused answer and a failed commit kick nothing. Kicks coalesce: at most one run is active
+and one pending, however many calls arrive. A kick carries nothing; the job reads its rows, and its schedule stays the
+recovery. `then` names one cron job of the contract, as a literal (`r.mutation({ …, then: 'testMails' })`); a query,
+an export, a webhook and a job declare none.
+
+The rules of the job:
 
 - **Bounded batches.** Each run takes at most a fixed number of records (`order by received_at, id limit 50`), oldest
   first; the next run takes the rest.
@@ -2051,13 +2115,26 @@ service. `references/public-intake.md` is the whole recipe; its rules:
   `attempts`, keeps a fixed step code in `last_failure` (never the error's message, which can quote a value), and the
   run goes on with the next record. Rethrow when `ctx.signal` aborted: that failure is the attempt's, and the next
   run meets the record as it is. So give each external call a deadline of its own inside the attempt's
-  (`AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)])`): a call that hangs then fails its record, not the run.
+  (`AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)])` for a `fetch`; `ctx.mail.send` adds `ctx.signal` itself,
+  so it takes only `AbortSignal.timeout(ms)`): a call that hangs then fails its record, not the run.
+- **A backoff per record.** A failure sets the record's `next_attempt_at` one minute ahead, doubled per attempt up to
+  an hour (`now() + least(interval '1 minute' * power(2, attempts), interval '1 hour')`), and a run takes only records
+  whose time has come (`where next_attempt_at <= now()`). Kicks start runs seconds apart: without the wait, a short
+  provider outage spends every attempt of a record at once. Set it, with the attempt, in the transaction that claims
+  the record before the call (the test e-mail), and a run that dies during the call waits too. A record a person
+  revives (a resend) is due at once again.
 - **A dead state.** A record that failed `MAX_ATTEMPTS` times is dead: the batch skips it, the job logs it once by its
   id (never an address), and an operator fixes or deletes it. Give the record a way back when the cause can go away
   (a resend revives a dead delivery).
-- **A key on every external call**, derived from the record: the e-mail's `Idempotency-Key`, a provider's request id.
-  The provider then acts once per key, however often the job hands the call over. A retry sends the same request
-  under the same key: keep what it needs in the row until the call is known done (sealed, when it holds a secret).
+- **A key on every external call**, derived from the record: the e-mail's `idempotencyKey`, a provider's request id.
+  A provider that deduplicates then acts once per key, however often the job hands the call over. A retry sends the
+  same request under the same key: keep what it needs in the row until the call is known done (sealed, when it holds a
+  secret).
+- **A retry only where the transport allows it.** Mark the record `sending` before the send. A run that finds it still
+  `sending` (a crash, a lost answer) sends it again only when `ctx.mail.capabilities.idempotent` holds, and otherwise
+  makes it dead: the e-mail may have arrived, and a second one cannot be taken back. A failed send goes again only
+  where `ctx.mail.mayRetry(error)` holds, and is dead at once otherwise; one whose `outcome` is `not_sent` returns to
+  the state it had before `sending`.
 - **Each step recorded before the next effect**, so the next run finishes a stopped one.
 - An inbox needs a row key for this: `id UUID NOT NULL DEFAULT gen_random_uuid()`, since a form writes only its input
   fields.
@@ -2068,7 +2145,7 @@ service. `references/public-intake.md` is the whole recipe; its rules:
 
 A visitor who has no account submits a form on a public page, confirms the e-mail address through a link, attaches
 files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code lists of
-open positions and of the reasons a decision records, HR exports every candidate with an audit row, and a member
+open positions and of the reasons a decision records, HR exports every candidate with an audit row, and an HR person
 checks the mail setup with a test e-mail to their own address. This file is an application of its own (`intake`); its
 `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
 
@@ -2079,10 +2156,11 @@ visitor do. The visitor never reaches a handler without a credential:
 2. **A form** appends one row to its inbox table and answers `{ result: { received: true } }`, for a new and a known
    address alike. It runs no handler: a handler would give every anonymous request a transaction, and a different
    answer for a known address would tell a stranger who registered.
-3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail.
-   Each form kicks it (`then: 'intake'`), so it runs within seconds of a submission; its schedule is the recovery.
-   It is the outbox recipe of `references/jobs.md`: bounded batches, each record its own work with an attempt count,
-   a dead state for a record that keeps failing, and an idempotency key on the e-mail.
+3. **A cron job** drains the inbox, creates the record, issues a link bound to it (`issues`), and sends the e-mail
+   through the installation's transport (`mailer: 'installation'`, `ctx.mail`). Each form kicks it (`then: 'intake'`),
+   so it runs within seconds of a submission; its schedule is the recovery. It is the outbox recipe of
+   `references/jobs.md`: bounded batches, each record its own work with an attempt count and a backoff, a dead state
+   for a record that keeps failing, an idempotency key on the e-mail, and a retry only where the transport allows it.
 4. **A link mount** serves the visitor's own record: `verify` and the record's files, under the link's key.
 5. **A second form** asks for a new link. The job revokes the old one and sends a new one, within a budget per address.
 
@@ -2108,6 +2186,8 @@ export const vocabulary = defineVocabulary({
 		'exports.read': 'Read the log of candidate exports',
 		'people.list': "List the application's people",
 		'people.manage': "Grant and revoke the application's roles",
+		'mail.test': 'Send yourself a test e-mail',
+		'mail.send': 'Send the test e-mails people asked for',
 	},
 	roles: {
 		hr: {
@@ -2116,6 +2196,7 @@ export const vocabulary = defineVocabulary({
 				'candidates.review',
 				'positions.read',
 				'people.list',
+				'mail.test',
 			],
 		},
 		hr_lead: {
@@ -2127,6 +2208,7 @@ export const vocabulary = defineVocabulary({
 				'reasons.manage',
 				'exports.read',
 				'people.list',
+				'mail.test',
 			],
 		},
 		hr_admin: {
@@ -2136,6 +2218,7 @@ export const vocabulary = defineVocabulary({
 				'positions.read',
 				'people.list',
 				'people.manage',
+				'mail.test',
 			],
 		},
 	},
@@ -2153,15 +2236,17 @@ export const vocabulary = defineVocabulary({
   application builds no role management of its own.
 - `directory: 'labels'` lets every `people.list` holder read each person's label, for naming the author of a change.
   A label spells a user's address, so the approver reviews it closely.
-- The link's holder and the job get their actions from the link mount and the job's `actions`, not from a role.
+- The link's holder and the jobs get their actions from the link mount and each job's `actions`, not from a role.
+  `mail.send` is no role's: only the job that sends the test e-mails holds it.
 
 ```sql db/migrations/20261013090000_intake.sql
 CREATE TYPE candidate_status AS ENUM ('new', 'screening', 'interview', 'hired', 'rejected');
-CREATE TYPE link_state AS ENUM ('due', 'issued', 'sent', 'failed');
+CREATE TYPE link_state AS ENUM ('due', 'issued', 'sending', 'sent', 'failed');
 
 -- The link delivery is the intake job's own state: each step is recorded here before the next effect starts.
--- attempts counts the failed attempts of the current delivery and last_failure names the step that failed;
--- a delivery that failed five times is 'failed', which an operator sees. link_seal holds the issued link's URL,
+-- attempts counts the failed attempts of the current delivery, last_failure names the step that failed, and
+-- next_attempt_at is when the job may try it again; a delivery that failed five times is 'failed', which an
+-- operator sees. 'sending' is a send whose outcome is not known yet. link_seal holds the issued link's URL,
 -- sealed, until the e-mail is known sent, so a retry sends the same link under the same idempotency key.
 CREATE TABLE candidates (
 	id UUID PRIMARY KEY,
@@ -2176,6 +2261,7 @@ CREATE TABLE candidates (
 	sends INTEGER NOT NULL DEFAULT 0,
 	window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	attempts INTEGER NOT NULL DEFAULT 0,
+	next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	last_failure TEXT,
 	created_by TEXT NOT NULL,
 	version INTEGER NOT NULL
@@ -2230,6 +2316,19 @@ CREATE TABLE reasons (
 CREATE TABLE candidate_exports (
 	id UUID PRIMARY KEY,
 	row_count INTEGER NOT NULL,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The outbox of the test e-mails: the endpoint records one, and the testMails job sends it. 'sending' is a send
+-- whose outcome is not known yet; next_attempt_at is when the job may try a failed one again.
+CREATE TABLE test_mails (
+	id UUID PRIMARY KEY,
+	recipient TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT 'due' CONSTRAINT test_mails_state CHECK (state IN ('due', 'sending', 'sent', 'failed')),
+	attempts INTEGER NOT NULL DEFAULT 0,
+	next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	last_failure TEXT,
 	created_by TEXT NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -2288,6 +2387,7 @@ export const tables = defineTables(vocabulary, columns)({
 			sends: { read: 'candidates.process' },
 			window_started_at: { read: 'candidates.process' },
 			attempts: { read: 'candidates.process' },
+			next_attempt_at: { read: 'candidates.process' },
 			last_failure: { read: 'candidates.process' },
 		},
 	},
@@ -2329,6 +2429,12 @@ export const tables = defineTables(vocabulary, columns)({
 		insert: ['row_count'],
 		createdBy: 'created_by',
 	},
+	test_mails: {
+		scope: { app: 'the test e-mails people asked for, until the job sends them' },
+		actions: { read: 'mail.send', insert: 'mail.test' },
+		insert: ['recipient'],
+		createdBy: 'created_by',
+	},
 })
 ```
 
@@ -2339,7 +2445,7 @@ export const tables = defineTables(vocabulary, columns)({
   endpoint `on`, `in` or `over` a candidate reads it, read-only and every row, where its action is the table's read
   action: `decide` reads `reasons` with `candidates.review`. A position or a reason is deactivated, never deleted, so
   neither table has a delete action. `candidate_exports` is appended with the export's own action, `candidates.export`,
-  and read with `exports.read`.
+  and read with `exports.read`. `test_mails` is appended with `mail.test` and read only by the job's `mail.send`.
 - The form writes each input field to the column of the same name: `full_name`, never `fullName`. tsc refuses another
   name at the form's `appendTo`, and the checker refuses it too. A `ctx.sql` row still reads it as `fullName`.
 - The form writes nothing else, so an inbox records the time of a submission only in a `DEFAULT now()` column
@@ -2382,7 +2488,7 @@ import { portal } from './src/portal/endpoints'
 import { positions } from './src/positions/endpoints'
 import { reasons } from './src/reasons/endpoints'
 import { Register, Resend } from './src/schemas'
-import { settings } from './src/settings/endpoints'
+import { settings, testMails } from './src/settings/endpoints'
 
 export const contract = app.contract((c) => ({
 	site: c.spa('/', { dir: 'dist/site', access: { public: true } }),
@@ -2423,7 +2529,7 @@ export const contract = app.contract((c) => ({
 			scan: true,
 		}),
 	},
-	jobs: { intake },
+	jobs: { intake, testMails },
 	health: c.health('/healthz'),
 }))
 ```
@@ -2462,33 +2568,18 @@ export const contract = app.contract((c) => ({
 
 ## The job: inbox → record → link → e-mail
 
-```ts src/mail.ts
+```ts src/links.ts
 import { defineDeps } from '@fabrika/app/implement'
 
-export interface Mail {
-	readonly to: string
-	readonly url: string
-	/** The provider sends one message per key, however often the job hands it over. */
-	readonly idempotencyKey: string
-}
-
-export interface Mailer {
-	/** Sends the link; throws when the provider refuses, and gives up once `signal` aborts. */
-	sendLink(mail: Mail, signal: AbortSignal): Promise<void>
-	/** Sends a fixed test message to `to`, the same way. */
-	sendTest(to: string, signal: AbortSignal): Promise<void>
+export interface Links {
+	/** The address a link's path (`/p/#<key>`) is opened at: the application's public origin before it. */
+	address(path: string): string
 	/** Seals a link's URL for the row that waits to e-mail it; `open` reads it back. */
 	seal(url: string): Promise<string>
 	open(sealed: string): Promise<string>
 }
 
-interface Message {
-	readonly to: string
-	readonly subject: string
-	readonly text: string
-}
-
-/** Read when a mail is sent: the generated tests boot the application without its variables. */
+/** Read when a link is used: the generated tests boot the application without its variables. */
 const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	const value = env[name]
 	if (typeof value !== 'string' || value === '') {
@@ -2497,7 +2588,7 @@ const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	return value
 }
 
-export const mailer = defineDeps((env): Mailer => {
+export const links = defineDeps((env): Links => {
 	// LINK_SEAL_KEY is 32 random bytes in base64: `openssl rand -base64 32`.
 	const sealKey = () =>
 		crypto.subtle.importKey(
@@ -2507,49 +2598,8 @@ export const mailer = defineDeps((env): Mailer => {
 			false,
 			['encrypt', 'decrypt'],
 		)
-	const send = async (
-		message: Message,
-		idempotencyKey: string | null,
-		signal: AbortSignal,
-	) => {
-		const response = await fetch(variable(env, 'MAIL_API_URL'), {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${variable(env, 'MAIL_API_KEY')}`,
-				'Content-Type': 'application/json',
-				...(idempotencyKey === null ? {} : { 'Idempotency-Key': idempotencyKey }),
-			},
-			body: JSON.stringify(message),
-			signal,
-		})
-		if (!response.ok) {
-			throw new Error(`the mail provider answered ${response.status}`)
-		}
-	}
 	return {
-		sendLink: (mail, signal) =>
-			send(
-				{
-					to: mail.to,
-					subject: 'Confirm your address',
-					text: `Open ${
-						variable(env, 'INTAKE_ORIGIN')
-					}${mail.url} to confirm your address.`,
-				},
-				mail.idempotencyKey,
-				signal,
-			),
-		// Each click is a new message: the test e-mail takes no key.
-		sendTest: (to, signal) =>
-			send(
-				{
-					to,
-					subject: 'A test e-mail from the intake',
-					text: 'The intake can send you e-mail.',
-				},
-				null,
-				signal,
-			),
+		address: (path) => `${variable(env, 'INTAKE_ORIGIN')}${path}`,
 		async seal(url) {
 			const iv = crypto.getRandomValues(new Uint8Array(12))
 			const sealed = await crypto.subtle.encrypt(
@@ -2579,15 +2629,16 @@ import { serve } from '@fabrika/app/implement'
 import { scoped } from '@fabrika/db'
 import { contract } from '../fabrika.contract'
 import { tables } from './db/tables'
-import { mailer } from './mail'
+import { links } from './links'
 
-export default serve(contract, { database: scoped(tables), deps: mailer })
+export default serve(contract, { database: scoped(tables), deps: links })
 ```
 
 ```ts src/intake/endpoints.ts
+import { EmailDeliveryError } from '@fabrika/app/implement'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { mailer } from '../mail'
+import { links } from '../links'
 
 const Queued = z.strictObject({
 	id: z.string(),
@@ -2601,7 +2652,7 @@ const State = z.strictObject({ linkState: z.string() })
 const Due = z.strictObject({
 	id: z.string(),
 	email: z.string(),
-	linkState: z.enum(['due', 'issued']),
+	linkState: z.enum(['due', 'issued', 'sending']),
 	linkId: z.nullable(z.string()),
 	linkSeal: z.nullable(z.string()),
 	revokeLinkId: z.nullable(z.string()),
@@ -2632,22 +2683,23 @@ export const intake = app.cron('* * * * *', {
 	retries: 0,
 	sql: 'write',
 	issues: 'portal',
+	mailer: 'installation',
 })
 	.handle(async ({ ctx }) => {
-		const mail = mailer.get()
+		const urls = links.get()
 		/**
 		 * One record's work. A failure is the record's (`failed` counts it) and the run goes on
 		 * with the next record, unless the attempt itself ended: the next run meets it as it is.
 		 */
 		const eachRecord = async (
 			work: () => Promise<void>,
-			failed: () => Promise<void>,
+			failed: (error: unknown) => Promise<void>,
 		): Promise<void> => {
 			try {
 				await work()
 			} catch (error) {
 				if (ctx.signal.aborted) throw error
-				await failed()
+				await failed(error)
 			}
 		}
 		// A registration becomes a candidate once; the form told the visitor nothing either way.
@@ -2696,29 +2748,45 @@ export const intake = app.cron('* * * * *', {
 				await tx.sql(Id)`
 					update candidates
 					set link_state = 'due', link_id = null, link_seal = null, attempts = 0,
-						revoke_link_id = coalesce(link_id, revoke_link_id)
+						next_attempt_at = now(), revoke_link_id = coalesce(link_id, revoke_link_id)
 					where email = ${ask.email} and verified_at is null
 						and link_state in ('sent', 'failed')
 						and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
 					returning id`
 			}
 		})
-		// Only a row whose budget has an e-mail left: spent rows would fill the batch and starve the rest.
+		// Only a row whose budget has an e-mail left and whose backoff has passed: the others would
+		// fill the batch and starve the rest.
 		const due = await ctx.transaction((tx) =>
 			tx.sql(Due)`
 				select id, email, link_state, link_id, link_seal, revoke_link_id
 				from candidates
-				where link_state in ('due', 'issued')
+				where link_state in ('due', 'issued', 'sending') and next_attempt_at <= now()
 					and (sends < ${SENDS_PER_DAY} or window_started_at < now() - interval '1 day')
 				order by id limit ${BATCH}`
 		)
 		for (const candidate of due) {
+			// A send whose outcome is unknown goes out again only over a transport that deduplicates its key.
+			if (candidate.linkState === 'sending' && !ctx.mail.capabilities.idempotent) {
+				await ctx.transaction((tx) =>
+					tx.sql(Id)`
+						update candidates set link_state = 'failed', link_seal = null, last_failure = 'send'
+						where id = ${candidate.id} and link_state = 'sending' returning id`
+				)
+				console.error(
+					`intake: the delivery to ${candidate.id} may have been sent; it is dead, and a resend gives a new link`,
+				)
+				continue
+			}
 			let step: Step = 'reserve'
 			await eachRecord(async () => {
-				// The e-mail is charged before any effect; a row other work holds waits for a later run.
+				// The e-mail and the wait are charged before any effect, so a run that dies mid-send waits too;
+				// a row other work holds waits for a later run.
 				const reserved = await ctx.transaction((tx) =>
 					tx.sql(Id)`
 						update candidates set
+							next_attempt_at = now()
+								+ least(interval '1 minute' * power(2, attempts), interval '1 hour'),
 							sends = case when window_started_at < now() - interval '1 day' then 1 else sends + 1 end,
 							window_started_at = case when window_started_at < now() - interval '1 day'
 								then now() else window_started_at end
@@ -2730,7 +2798,7 @@ export const intake = app.cron('* * * * *', {
 				)
 				if (reserved.length === 0) return
 				// An issued link may already have been e-mailed: it goes out again, never replaced.
-				const issuedBefore = candidate.linkState === 'issued'
+				const issuedBefore = candidate.linkState !== 'due'
 						&& candidate.linkId !== null && candidate.linkSeal !== null
 					? { id: candidate.linkId, seal: candidate.linkSeal }
 					: null
@@ -2748,7 +2816,7 @@ export const intake = app.cron('* * * * *', {
 				}
 				let link: { readonly id: string; readonly url: string }
 				if (issuedBefore !== null) {
-					link = { id: issuedBefore.id, url: await mail.open(issuedBefore.seal) }
+					link = { id: issuedBefore.id, url: await urls.open(issuedBefore.seal) }
 				} else {
 					step = 'issue'
 					ctx.signal.throwIfAborted()
@@ -2757,7 +2825,7 @@ export const intake = app.cron('* * * * *', {
 						mount: 'portal',
 						days: LINK_DAYS,
 					})
-					const sealed = await mail.seal(issued.url)
+					const sealed = await urls.seal(issued.url)
 					await ctx.transaction((tx) =>
 						tx.sql(Id)`
 							update candidates
@@ -2768,25 +2836,41 @@ export const intake = app.cron('* * * * *', {
 				}
 				step = 'send'
 				ctx.signal.throwIfAborted()
-				await mail.sendLink({
+				await ctx.transaction((tx) =>
+					tx.sql(Id)`
+						update candidates set link_state = 'sending'
+						where id = ${candidate.id} and link_id = ${link.id} returning id`
+				)
+				await ctx.mail.send({
 					to: candidate.email,
-					url: link.url,
+					subject: 'Confirm your address',
+					text: `Open ${urls.address(link.url)} to confirm your address.`,
 					idempotencyKey: `intake-link-${link.id}`,
-				}, AbortSignal.any([ctx.signal, AbortSignal.timeout(SEND_TIMEOUT_MS)]))
+				}, AbortSignal.timeout(SEND_TIMEOUT_MS))
 				await ctx.transaction((tx) =>
 					tx.sql(Id)`
 						update candidates
 						set link_state = 'sent', link_seal = null, attempts = 0, last_failure = null
 						where id = ${candidate.id} and link_id = ${link.id} returning id`
 				)
-			}, async () => {
+			}, async (error) => {
+				// The transport says whether a send may go again: a refused recipient, or an unknown outcome
+				// over a transport that does not deduplicate, ends the delivery now.
+				const final = error instanceof EmailDeliveryError
+					&& !ctx.mail.mayRetry(error)
+				const notSent = error instanceof EmailDeliveryError
+					&& error.outcome === 'not_sent'
 				const [counted] = await ctx.transaction((tx) =>
 					tx.sql(State)`
 						update candidates
 						set attempts = attempts + 1, last_failure = ${step},
-							link_state = case when attempts + 1 >= ${MAX_ATTEMPTS}
-								then 'failed' else link_state end,
-							link_seal = case when attempts + 1 >= ${MAX_ATTEMPTS}
+							next_attempt_at = now()
+								+ least(interval '1 minute' * power(2, attempts), interval '1 hour'),
+							link_state = case
+								when ${final} or attempts + 1 >= ${MAX_ATTEMPTS} then 'failed'
+								when link_state = 'sending' and ${notSent} then 'issued'
+								else link_state end,
+							link_seal = case when ${final} or attempts + 1 >= ${MAX_ATTEMPTS}
 								then null else link_seal end
 						where id = ${candidate.id} returning link_state`
 				)
@@ -2800,7 +2884,7 @@ export const intake = app.cron('* * * * *', {
 	})
 ```
 
-The job keeps six invariants. Keep them when you change it:
+The job keeps eight invariants. Keep them when you change it:
 
 - **Each record is its own work, in bounded batches.** A run takes at most 50 registrations, oldest first, and 50 due
   deliveries; the next run takes the rest. Each record's work runs in `eachRecord`: a failure (a row the insert refuses,
@@ -2809,30 +2893,42 @@ The job keeps six invariants. Keep them when you change it:
   dead: a registration stays in its inbox and the batch skips it, a delivery is `failed`; the job logs each once, by
   id, never by address. An operator decides: fix the row, or delete it. A resend revives a `failed` delivery, within
   the budget. A failure of an ended attempt (`ctx.signal` aborted) is the attempt's, not the record's: it is thrown,
-  and the next run meets the record as it is. So each e-mail gets its own deadline inside the attempt's
-  (`AbortSignal.any([ctx.signal, AbortSignal.timeout(SEND_TIMEOUT_MS)])`): a recipient whose e-mail hangs fails its
-  own attempt and reaches the dead state, and every later record of the run still goes.
+  and the next run meets the record as it is. So each e-mail gets its own deadline inside the attempt's: `ctx.mail.send`
+  always takes the attempt's `ctx.signal`, and the job adds `AbortSignal.timeout(SEND_TIMEOUT_MS)`. A recipient whose
+  e-mail hangs fails its own attempt and reaches the dead state, and every later record of the run still goes.
+- **A failed delivery waits before the next try.** Its failure sets `next_attempt_at` one minute ahead, doubled per
+  attempt up to an hour, and the batch takes only a row whose time has come. Kicks can start several runs within
+  seconds; without the wait, a short provider outage would spend every attempt of a delivery at once.
+- **The transport decides whether a send goes again.** `ctx.mail.mayRetry(error)` is false for a refused recipient
+  or configuration, and for an outcome that is unknown over a transport that does not deduplicate a key
+  (`ctx.mail.capabilities`): such a delivery is dead at once, and a resend gives it a new link. The row is `sending` while its e-mail is out: a run that finds a `sending` row (a crash, a
+  lost answer) sends it again only when `ctx.mail.capabilities.idempotent` holds, and otherwise leaves it dead for a
+  person, because the e-mail may have arrived. A failure the transport says did not send it (`outcome: 'not_sent'`)
+  returns the row to `issued`.
 - **A record is claimed where it is consumed.** Each registration is read again `for update skip locked` in the
   transaction that deletes it and inserts the candidate, the resend batch is `for update skip locked` in the delete that
   takes it, and the reservation skips a candidate row other work holds. A row someone else locks (an operator's
   session, an HR request) waits for a later run and blocks nothing behind it.
 - **The budget is charged first.** Each delivery reserves one e-mail of the address's daily budget, in its own
-  transaction, before any effect. A delivery that fails after the e-mail left is still counted, so a provider that
-  times out cannot make the job mail one address without end. Only a row with an e-mail left is selected for the batch
+  transaction, before any effect, and sets its `next_attempt_at` there too. A delivery that fails after the e-mail
+  left is still counted, so a provider that times out cannot make the job mail one address without end, and a run
+  that dies mid-send leaves a row that waits out its backoff instead of going again at the next kick. Only a row with an e-mail left is selected for the batch
   of 50, so spent rows never crowd out the others; the reservation checks the budget again in its own transaction.
 - **Each step is recorded before the next effect.** Revoke a superseded link, then record it; issue, then record the
-  link's id and its sealed URL (`issued`); send, then record `sent`. A run that stops anywhere (a crash, a refused
+  link's id and its sealed URL (`issued`); record `sending`, send, then record `sent`. A run that stops anywhere (a crash, a refused
   e-mail, IAM down) is finished by the next run its budget allows.
-- **The link is the delivery's identity.** Its e-mail carries `Idempotency-Key: intake-link-<link id>`. Until the
+- **The link is the delivery's identity.** Its e-mail's idempotency key is `intake-link-<link id>`; `ctx.mail` puts
+  the application environment's prefix before it, so no other application on the transport shares it. Until the
   e-mail is known sent, the row keeps the link's URL in `link_seal`, sealed with AES-GCM under `LINK_SEAL_KEY`, never
-  in plain text, and cleared once it is `sent` or dead. An `issued` row is sent again from it: the same message under
-  the same key, which the provider sends once, so an answer or a commit lost after the provider took the e-mail
-  sends no second one, and the link the visitor got still works. Only a resend replaces a link. IAM's `issue` takes
+  in plain text, and cleared once it is `sent` or dead. An `issued` or `sending` row is sent again from it: the same
+  message under the same key, which an idempotent transport sends once, so an answer or a commit lost after the
+  provider took the e-mail sends no second one, and the link the visitor got still works. Only a resend replaces a link. IAM's `issue` takes
   no key: a run that stops between the issue and its record leaves a link no row names, whose key only the job saw
   and which expires with its `days`.
 - **An effect starts only while the attempt is live.** `ctx.signal.throwIfAborted()` runs before each IAM call and the
-  e-mail, and the e-mail takes `ctx.signal`. The runner aborts a timed-out attempt before the next one starts, so no
-  effect of a stale attempt follows the next one's. `ctx.links` itself refuses to call IAM for an ended attempt.
+  e-mail, and `ctx.mail.send` aborts with `ctx.signal`. `ctx.mail`, like `ctx.links`, refuses to send for an ended
+  attempt. The runner aborts a timed-out attempt before the next one starts, so no
+  effect of a stale attempt follows the next one's.
 
 More on the job:
 
@@ -2850,10 +2946,13 @@ More on the job:
   retry. A failed run leaves a pending kick to the schedule too.
 - **A revoked link** still works until the token the proxy holds for it expires, at most 5 minutes. Revocation is the
   stop at IAM; it is not instant.
-- The e-mail goes through `deps` (`src/mail.ts`), built from application variables the human sets (`INTAKE_ORIGIN`,
-  `MAIL_API_URL`, `MAIL_API_KEY`, and `LINK_SEAL_KEY`: `openssl rand -base64 32`). A new `LINK_SEAL_KEY` makes the
-  rows waiting with a sealed link fail their `open` until they are dead; a resend gives each a new link. `link.url` is `/p/#<key>`: the key is in the fragment, which no server and no
-  `Referer` sees.
+- **`mailer: 'installation'`** gives the job `ctx.mail`, over the installation's mail transport: the application holds
+  no provider key and no transport code, and the approver sees the declaration marked "needs closer review". A contract
+  with such a job does not deploy to an installation that has no transport. An endpoint has no `ctx.mail`.
+- The link's address and its seal come from `deps` (`src/links.ts`), built from application variables the human sets
+  (`INTAKE_ORIGIN`, and `LINK_SEAL_KEY`: `openssl rand -base64 32`). A new `LINK_SEAL_KEY` makes the rows waiting with
+  a sealed link fail their `open` until they are dead; a resend gives each a new link. `link.url` is `/p/#<key>`: the
+  key is in the fragment, which no server and no `Referer` sees.
 
 ## The visitor's link: verify once, attach files
 
@@ -3402,38 +3501,151 @@ export const reasons = app.group({ callers: ['human'] }, (r) => ({
 ## A test e-mail to yourself
 
 ```ts src/settings/endpoints.ts
+import { EmailDeliveryError } from '@fabrika/app/implement'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
-import { mailer } from '../mail'
 
-const Sent = z.strictObject({ sentTo: z.string() })
+const Queued = z.strictObject({ queuedFor: z.string() })
+const Id = z.strictObject({ id: z.string() })
+const Claimed = z.strictObject({
+	recipient: z.string(),
+	state: z.string(),
+	attempts: z.number(),
+})
+
+/** The test e-mails a run takes; the next run takes the rest. */
+const BATCH = 50
+/** A test e-mail that failed this many attempts is dead: the job leaves it to an operator. */
+const MAX_ATTEMPTS = 5
+/** How long one e-mail may take: far inside the attempt's timeout. */
+const SEND_TIMEOUT_MS = 10000
 
 export const settings = app.group({ callers: ['human'] }, (r) => ({
-	testMail: r.mutation({ output: Sent, access: { member: true } })
+	/** Records a test e-mail to the caller; the job it kicks sends it within seconds. */
+	testMail: r.mutation({
+		output: Queued,
+		access: { action: 'mail.test', app: true },
+		then: 'testMails',
+	})
 		.handle(async ({ ctx }) => {
 			const to = ctx.principal.email
-			await mailer.get().sendTest(to, ctx.signal)
-			return { sentTo: to }
+			await ctx.db.app.test_mails.insert({ recipient: to })
+			return { queuedFor: to }
 		}),
 }))
+
+/** A failed send: dead, due again when it did not leave, or `sending` when it may have. */
+const stateAfter = (
+	failure: unknown,
+	mayRetry: boolean,
+	attempts: number,
+): 'due' | 'sending' | 'failed' => {
+	if (!mayRetry || attempts >= MAX_ATTEMPTS) return 'failed'
+	return failure instanceof EmailDeliveryError && failure.outcome === 'not_sent'
+		? 'due'
+		: 'sending'
+}
+
+export const testMails = app.cron('* * * * *', {
+	actions: ['mail.send'],
+	scope: 'app',
+	retries: 0,
+	sql: 'write',
+	mailer: 'installation',
+})
+	.handle(async ({ ctx }) => {
+		const due = await ctx.transaction((tx) =>
+			tx.sql(Id)`
+				select id from test_mails
+				where state in ('due', 'sending') and next_attempt_at <= now()
+				order by created_at, id limit ${BATCH}`
+		)
+		for (const { id } of due) {
+			// Claimed and charged before the send: a failure waits out its backoff, however many kicks arrive.
+			const mail = await ctx.transaction(async (tx) => {
+				const [row] = await tx.sql(Claimed)`
+					select recipient, state, attempts from test_mails
+					where id = ${id} and state in ('due', 'sending') and next_attempt_at <= now()
+					for update skip locked`
+				if (row === undefined) return null
+				// A send whose outcome is unknown goes out again only over a transport that deduplicates its key.
+				if (row.state === 'sending' && !ctx.mail.capabilities.idempotent) {
+					await tx.sql(Id)`
+						update test_mails set state = 'failed', last_failure = 'unknown'
+						where id = ${id} returning id`
+					console.error(
+						`intake: test e-mail ${id} may have been sent; an operator decides`,
+					)
+					return null
+				}
+				await tx.sql(Id)`
+					update test_mails set state = 'sending', attempts = attempts + 1,
+						next_attempt_at = now()
+							+ least(interval '1 minute' * power(2, attempts), interval '1 hour')
+					where id = ${id} returning id`
+				return { recipient: row.recipient, attempts: row.attempts + 1 }
+			})
+			if (mail === null) continue
+			let failure: unknown = null
+			try {
+				ctx.signal.throwIfAborted()
+				await ctx.mail.send({
+					to: mail.recipient,
+					subject: 'A test e-mail from the intake',
+					text: 'The intake can send you e-mail.',
+					idempotencyKey: `test-mail-${id}`,
+				}, AbortSignal.timeout(SEND_TIMEOUT_MS))
+			} catch (error) {
+				if (ctx.signal.aborted) throw error
+				failure = error
+			}
+			if (failure === null) {
+				await ctx.transaction((tx) =>
+					tx.sql(Id)`
+						update test_mails set state = 'sent', last_failure = null
+						where id = ${id} returning id`
+				)
+				continue
+			}
+			const state = stateAfter(failure, ctx.mail.mayRetry(failure), mail.attempts)
+			const code = failure instanceof EmailDeliveryError ? failure.code : 'send'
+			await ctx.transaction((tx) =>
+				tx.sql(Id)`
+					update test_mails set state = ${state}, last_failure = ${code}
+					where id = ${id} returning id`
+			)
+			if (state === 'failed') {
+				console.error(`intake: test e-mail ${id} is dead; an operator decides`)
+			}
+		}
+	})
 ```
 
 - **The address is the caller's, from the token.** `ctx.principal.email` is the mailbox IAM recorded for the person
   (lower-cased), so the input has no address field. IAM recorded it; how far it checked that the person controls it is
-  its login method's (an operator may accept an IdP's unverified address). An input that named one would let any member mail any address
-  past every consent the application asks for. Never take a recipient from the input for "send it to me".
-- `{ member: true }` admits any member of the application and reaches no data: the endpoint mails only the caller.
-  The generated tests give a `member` endpoint no case, so the test below is yours. That is also why it may call the
-  provider itself: the generated cases boot without the mail variables (`references/endpoint.md`). The call takes
-  `ctx.signal`, so it stops when the person leaves or the request runs past its 10 s.
-- The page shows the button only to someone signed in: its SPA reads `/hr/__fabrika-me.json` (`references/app-setup.md`).
+  its login method's (an operator may accept an IdP's unverified address). An input that named one would let anyone
+  who holds `mail.test` mail any address past every consent the application asks for. Never take a recipient from the
+  input for "send it to me".
+- **The endpoint sends nothing.** It has no `ctx.mail`: it records the e-mail in `test_mails` in its own transaction,
+  and `then: 'testMails'` kicks the job once that transaction committed. The person's answer does not wait for the
+  run; the e-mail leaves seconds later. The schedule (`* * * * *`) sends what a kicked run left behind. The generated
+  tests cover the endpoint like any `app` endpoint: a global holder of `mail.test` reaches it, a holder in one scope
+  gets 403.
+- **The job is the outbox recipe in small** (`references/jobs.md`): bounded batches; each row claimed
+  `for update skip locked` and charged (`attempts`, `next_attempt_at` one minute ahead, doubled per attempt up to an
+  hour) before the send, so kicks cannot spend its attempts within seconds; the key `test-mail-<id>`; `sending` while
+  the e-mail is out; and a retry only where `ctx.mail.mayRetry(error)` allows it. A row found `sending` (a crash, a
+  lost answer) goes out again only over a transport that deduplicates its key, and is otherwise dead, because the
+  e-mail may have arrived. `last_failure` keeps the transport's fixed code (`provider_rejected`), never its message.
+- The page shows the button only to someone who holds `mail.test`: its SPA reads `/hr/__fabrika-me.json`
+  (`references/app-setup.md`).
 
 ## Tests
 
 - The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
   link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
-  its action in one candidate only is 403, and a global holder reaches it. `positions`, `reasons` and
-  `candidate_exports` get a policy probe of their actions, held globally and in one scope, and of a scoped site that
+  its action in one candidate only is 403, and a global holder reaches it. `positions`, `reasons`,
+  `candidate_exports` and `test_mails` get a policy probe of their actions, held globally and in one scope, and of a scoped site that
   reads every row with the read action and none with another. The probe of `candidates` also lists every candidate
   from an `app` endpoint of `candidates.export`, its `appRead`. An endpoint that `issues` gets the cases of any `on`
   endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
@@ -3448,56 +3660,37 @@ export const settings = app.group({ callers: ['human'] }, (r) => ({
   TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
   `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step, an answer lost after the provider took the e-mail): the next run must leave exactly
-  one live, e-mailed link and the provider one message per key. Test a bad record beside good ones too: a registration
-  the insert refuses, a recipient the provider always refuses and one whose e-mail hangs end dead after `MAX_ATTEMPTS`
-  runs, while every other record is delivered and every run succeeds; a registration another session locks waits.
-- A test that submits a form kicks the job too, and the kicked run may start at once: arm a fault before the
-  submission, never between it and the run. `kit.runJob('intake')` first waits for the kicked runs, then runs once.
-- The e-mail provider is a stand-in too: `testKit(app, { env: { MAIL_API_URL, MAIL_API_KEY: 'test', INTAKE_ORIGIN:
-  'https://intake.test', LINK_SEAL_KEY } })` points the mailer at a test URL, which `standInMail()` answers, one
-  message per idempotency key as a provider does; a test's `LINK_SEAL_KEY` is `Buffer.alloc(32, 1).toString('base64')`.
-  Call its `restore()` in `afterEach`.
-- The test e-mail goes to the caller's own address: the test sends no address and reads the recipient from the stand-in.
-
-```ts src/__tests__/mail-stand-in.ts
-import { spyOn } from 'bun:test'
-
-/** The mail provider of a test; `env.MAIL_API_URL` points the mailer here. */
-export const MAIL_API_URL = 'https://mail.test/send'
-
-/**
- * Answers the mail provider's URL and keeps each mail with its idempotency key, sending one per key as the provider
- * does; every other request goes on to the real `fetch`.
- */
-export const standInMail = () => {
-	const sent: { readonly key: string | null; readonly body: string }[] = []
-	const passOn = globalThis.fetch
-	const answer = async (...args: Parameters<typeof fetch>) => {
-		const request = new Request(...args)
-		if (request.url !== MAIL_API_URL) return passOn(...args)
-		const key = request.headers.get('Idempotency-Key')
-		if (!sent.some((mail) => mail.key !== null && mail.key === key)) {
-			sent.push({ key, body: await request.text() })
-		}
-		return new Response(null, { status: 202 })
-	}
-	const spy = spyOn(globalThis, 'fetch').mockImplementation(
-		Object.assign(answer, { preconnect: passOn.preconnect }),
-	)
-	return { sent, restore: () => spy.mockRestore() }
-}
-```
+  one live, e-mailed link and the transport one message per key. Test a bad record beside good ones too: a
+  registration the insert refuses and a recipient whose e-mail hangs end dead after `MAX_ATTEMPTS` runs, a recipient
+  the transport refuses ends dead at once, and every other record is delivered and every run succeeds; a
+  registration another session locks waits. A failed delivery waits for its `next_attempt_at`: a test that runs the
+  job again moves that column into the past first, as an operator's repair would.
+- A test that submits a form, or calls a mutation that declares `then`, kicks the job too, and the kicked run may start
+  at once: arm a fault before the call, never between it and the run. `kit.drain()` waits for the kicked runs, and
+  `kit.runJob('intake')` first waits for them, then runs once.
+- The mail transport is the kit's stand-in: `kit.mail`, a `MemoryEmailSender` that takes every message a job sends
+  through `ctx.mail`, once per key as an idempotent provider does. `kit.mail.accepted` is what reached the inbox and
+  `kit.mail.handoffs` every send with its answer. `refuse(code?)`, `unavailable()`, `unreachable()`, `loseAnswers(n)`
+  and `during(hook)` inject a failure until `heal()`. A message carries the key the transport got,
+  `transportMailKey(kit.mailKeyScope, key)`. A transport that does not deduplicate is
+  `testKit(app, { mail: new MemoryEmailSender({ capabilities: { idempotent: false, confirmation: 'queued' } }) })`:
+  test there that a lost answer leaves a delivery dead, never sent twice.
+- `LINK_SEAL_KEY` and `INTAKE_ORIGIN` are application variables: a test of the job passes them in `testKit`'s `env`,
+  `LINK_SEAL_KEY` as `Buffer.alloc(32, 1).toString('base64')`.
+- The test e-mail goes to the caller's own address: the test sends no address and reads the recipient from `kit.mail`.
 
 ```ts src/__tests__/settings.test.ts
 import { createClient } from '@fabrika/app/client'
-import { type IamMembershipRpc, testKit } from '@fabrika/app/testing'
+import {
+	type IamMembershipRpc,
+	testKit,
+	transportMailKey,
+} from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
-import { z } from 'zod/v4'
 import { contract } from '../../fabrika.contract'
 import app from '../app'
-import { MAIL_API_URL, standInMail } from './mail-stand-in'
 
 const postgres = await testDatabase({
 	migrations: new URL('../../db/migrations/', import.meta.url),
@@ -3519,42 +3712,51 @@ const membership: IamMembershipRpc = {
 	revokeLink: refused,
 }
 
-const Mail = z.strictObject({
-	to: z.string(),
-	subject: z.string(),
-	text: z.string(),
-})
-
 if (postgres !== null) {
 	afterAll(() => postgres.close())
 	const kit = testKit(app, {
 		database: postgres.database,
 		files: new MemoryFileObjects(),
 		membership,
-		env: {
-			MAIL_API_URL,
-			MAIL_API_KEY: 'test',
-			INTAKE_ORIGIN: 'https://intake.test',
-			TURNSTILE_SECRET: 'test',
-			TURNSTILE_SITE_KEY: 'test-site-key',
-		},
+		env: { TURNSTILE_SECRET: 'test', TURNSTILE_SITE_KEY: 'test-site-key' },
 	})
-	let restore = () => {}
-	afterEach(() => restore())
+	afterEach(() => kit.mail.heal())
+	const sentTo = (address: string) =>
+		kit.mail.handoffs.filter((handoff) => handoff.message.to === address)
 
 	describe('the test e-mail', () => {
 		test("goes to the caller's own address, which the call does not name", async () => {
-			const mail = standInMail()
-			restore = mail.restore
 			const lead = kit.testCaller([{ role: 'hr_lead' }], {
 				email: 'Lead@Intake.test',
 			})
 			const api = createClient(contract, 'api', { fetch: kit.browser(lead) })
-			expect(await api.settings.testMail()).toEqual({ sentTo: 'lead@intake.test' })
-			expect(mail.sent.map((sent) => Mail.parse(JSON.parse(sent.body)).to))
-				.toEqual([
-					'lead@intake.test',
-				])
+			expect(await api.settings.testMail()).toEqual({
+				queuedFor: 'lead@intake.test',
+			})
+			// The mutation kicked the job: the e-mail leaves without a scheduled run.
+			await kit.drain()
+			const [sent] = sentTo('lead@intake.test')
+			expect(sent?.answer).toBe('accepted')
+			expect(sent?.message.idempotencyKey)
+				.toStartWith(transportMailKey(kit.mailKeyScope, 'test-mail-'))
+		})
+
+		test('one the transport refuses is dead: no later run sends it', async () => {
+			// Armed before the call: the kicked run may start at once.
+			kit.mail.refuse('provider_rejected')
+			const admin = kit.testCaller([{ role: 'hr_admin' }], {
+				email: 'admin@intake.test',
+			})
+			const api = createClient(contract, 'api', { fetch: kit.browser(admin) })
+			await api.settings.testMail()
+			await kit.drain()
+			kit.mail.heal()
+			expect(await kit.runJob('testMails')).toEqual({
+				status: 'succeeded',
+				attempts: 1,
+			})
+			expect(sentTo('admin@intake.test').map((handoff) => handoff.answer))
+				.toEqual(['provider_rejected'])
 		})
 	})
 }
@@ -5047,6 +5249,15 @@ if (postgres !== null) {
 - `kit.runJob('<job>')` runs a cron job once and answers `{ status: 'succeeded', attempts }`. A job's `ctx.links`
   reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
   plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
+- A form or a mutation that declares `then` starts its job in the background of the call. `kit.drain()` waits for
+  those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
+  run may start at once, so arm a fault before the call, never between the call and the run.
+- `kit.mail` is the stand-in for every job's mail transport (`MemoryEmailSender` of `@fabrika/app/testing`), so a test
+  needs no mail variable. `kit.mail.accepted` is what reached the inbox, once per key, and `kit.mail.handoffs` every
+  send with its `answer`. `refuse(code?)`, `unavailable()`, `unreachable()`, `loseAnswers(n)` and `during(hook)`
+  inject a failure until `heal()`. A message carries the key the transport got, `transportMailKey(kit.mailKeyScope,
+  key)`. Model a transport that does not deduplicate with `testKit(app, { mail: new MemoryEmailSender({ capabilities:
+  { idempotent: false, confirmation: 'queued' } }) })`. The test e-mail in `references/public-intake.md` is an example.
 - An application with files passes `files: new MemoryFileObjects()` (`@fabrika/platform/testing`) to `testKit`;
   without it the application does not boot. With `scan: true`, an upload stays `quarantined` until
   `kit.runJob(FILE_SCAN_JOB)` (`@fabrika/app/implement`) runs with a `scanner` passed to `testKit`: a `FileScanner`
@@ -5057,7 +5268,7 @@ if (postgres !== null) {
   a stand-in of your own receives the check (`hostname`, `action`) a passing answer must confirm as its second argument.
 - `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
-  that URL only and passes every other request on (`src/__tests__/mail-stand-in.ts` in `references/public-intake.md`).
+  that URL only and passes every other request on to the real `fetch`.
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
   where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
   generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).

@@ -158,15 +158,16 @@ export default serve(contract, { database: scoped(tables) })
   per-form limit: raise it, and use the challenge. `references/public-intake.md` builds a whole public intake on it.
 - `then: '<job>'` on `c.form` names a cron job of the same contract (`jobs`), which each accepted submission kicks
   once its row committed: a run starts within seconds, under the job's own key, and the answer stays the same constant
-  and never waits for it. Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
+  and never waits for it. A mutation declares the same `then` for the outbox row it records (`references/jobs.md`). Kicks coalesce on the job's lease (at most one run and one pending, however many visitors
   submit), so the job still drains its inbox in batches under its own budgets. Keep its schedule: it is the recovery
   path for a kicked run that died. A kick carries nothing; the job reads its inbox. `kit.runJob` first waits for the
   kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
   `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
-  the dependency is used, and fail there (`src/mail.ts` in `references/public-intake.md`). A handler of an endpoint the
+  the dependency is used, and fail there (`src/links.ts` in `references/public-intake.md`). A handler of an endpoint the
   generated tests cover records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
+  E-mail needs no dependency: a job that declares `mailer` sends through `ctx.mail` (`references/jobs.md`).
 
 ## The deploy surface (Zerops)
 

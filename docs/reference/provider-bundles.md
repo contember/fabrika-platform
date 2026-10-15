@@ -483,12 +483,12 @@ checkpointed lifecycle.
 `InstallationCli` from `@fabrika/provider-contract/installation`:
 
 ```text
-fabrika platform init --provider=cloudflare <account> --console-host=<host> --operations-host=<host> --iam-host=<host> --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend> [--yes]
+fabrika platform init --provider=cloudflare <account> --console-host=<host> --operations-host=<host> --iam-host=<host> --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend|smartemailing> [--email-from=<address>] [--email-from-name=<name>] [--yes]
 fabrika platform plan --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform deploy --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=<id> [--repo=<owner>/<name>] [--checkout=<dir>] [--yes]
 fabrika platform plan --provider=zerops
-fabrika platform install --provider=zerops --client-id=<id> --env=<name> [--project-id=<id> | --create-project [--project-name=<name>]]
+fabrika platform install --provider=zerops --client-id=<id> --env=<name> [--project-id=<id> | --create-project [--project-name=<name>]] [--email-provider=<none|resend|smartemailing> --email-from=<address> [--email-from-name=<name>]]
 fabrika platform deploy --provider=zerops [options]
 fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>]
 ```

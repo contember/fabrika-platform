@@ -226,6 +226,7 @@ the access check. `references/spa.md` shows the stack.
 | rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>`                          |
 | another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`                             |
 | a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
+| e-mail (a cron job only)       | `mailer: 'installation'`        | `ctx.mail.send`                                    |
 | a trigger, function or view    | its migration                   | —                                                  |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
@@ -242,8 +243,11 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 ## Rules
 
 - Data work first, external calls after. The invocation's one transaction rolls back on a throw; IAM, object storage
-  and connector calls do not. An endpoint the generated tests cover calls no outside service (an e-mail, a provider's
-  API): it records an outbox row, and a job sends it (`references/jobs.md`).
+  and connector calls do not. An endpoint the generated tests cover calls no outside service (a provider's API): it
+  records an outbox row, and a job makes the call (`references/jobs.md`).
+- An endpoint never sends e-mail; it has no `ctx.mail`. It records an outbox row and declares `then: '<job>'`, which
+  starts that job once its transaction committed. The job declares `mailer` and sends with `ctx.mail`, under a key
+  derived from the row, and sends again only where `ctx.mail.mayRetry(error)` allows it (`references/jobs.md`).
 - No `as` (except `as const`), `any`, `@ts-ignore`, `@ts-expect-error`, `process.env` or `Bun.env`.
 - Never log an error object, a request, headers or the environment.
 - Never edit a generated file (`src/db/schema.generated.ts`, the generated tests, `fabrika/entry.generated.ts`,
@@ -296,7 +300,7 @@ change an uncommitted migration, migrate into a fresh schema with another `FABRI
 
 `bunx fabrika app dev` serves the application on a loopback port through its test kit, filled by `dev/seed.ts`
 through the endpoints. Pick a persona at `/__fabrika/dev`; the toolbar on every page switches it and lists the mail IAM
-sent. Write the seed and use it as `references/dev.md` says; it never replaces a test.
+and the application's jobs sent. Write the seed and use it as `references/dev.md` says; it never replaces a test.
 
 ## References
 
@@ -306,7 +310,7 @@ their errors, the caller, the components, routing, theming, screen tests), `tabl
 (access forms, which `over`, the caller's scopes, handles, lists and aggregates, `fromRow`, `ctx.sql`, audited CSV
 downloads, members and labels), `tests.md` (generated tests, seeds, `testKit`, a reused scope, a caller's label, confirming a file ran),
 `errors.md` (checker findings, type errors, runtime answers), `dev.md` (the seed and the preview), `jobs.md` (which dimension `ctx.within` names, the UTC
-day), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
+day, e-mail through `ctx.mail`, the outbox and `then`), `files.md` and `webhooks-links-connectors.md`, all under `references/`. Two are applications of their own:
 `start.md`, a new application before its first table (its first test, adding the first table, installing and updating
 this skill), and `public-intake.md`, a public page, a form, a job that issues links and e-mails them, a link holder's
 files, HR's review with its history.
@@ -314,6 +318,8 @@ files, HR's review with its history.
 ## Not built yet
 
 - The data layer runs on Bun and Postgres only (Zerops). On Cloudflare an application has no tables, jobs or files.
-- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A list write is off the road (`sql`).
+- Jobs are cron only and app-wide: no `ctx.jobs.enqueue`, no job per scope. A mutation's `then` starts a run of its
+  job; it carries nothing. A list write is off the road (`sql`).
+- `ctx.mail` sends no attachments.
 - An MCP workspace has no shell, so `codegen` and `test-scaffold` cannot run there. Tell the human; never write a
   generated file by hand.
