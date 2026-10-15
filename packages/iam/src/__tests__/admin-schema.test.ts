@@ -188,6 +188,24 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 		expect('locale' in dropped || 'displayName' in dropped).toBe(false)
 	})
 
+	test('the app list carries each app display name, and null for an app that declares none', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, displayName: 'Opice' }))).status).toBe(200)
+		expect((await run(h, req('/admin/apps/bare/schema', 'PUT', token, SCHEMA))).status).toBe(200)
+		const apps = await result(
+			h,
+			token,
+			'apps.list',
+			null,
+			(value) => z.object({ items: z.array(z.object({ id: z.string(), displayName: z.string().nullable() }).strict()) }).parse(value).items,
+		)
+		expect(apps.filter((app) => app.id === 'opice' || app.id === 'bare')).toEqual([
+			{ id: 'bare', displayName: null },
+			{ id: 'opice', displayName: 'Opice' },
+		])
+	})
+
 	test('a locale IAM does not speak and a display name of two lines are refused, naming the field (400)', async () => {
 		const h = createHarness()
 		const token = await asAdmin(h)

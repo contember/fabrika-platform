@@ -145,6 +145,8 @@ export interface CreateGrantRequest {
 /** The set of app ids propustka knows about — the choices for a grant's `app`. */
 export interface AppDto {
 	id: string
+	/** The name the app's schema declares for people; null when it declares none. */
+	displayName: string | null
 }
 
 // ── Roles & policies (per-app, DB-backed) ─────────────────────────────────────

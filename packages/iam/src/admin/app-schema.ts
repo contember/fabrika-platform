@@ -19,9 +19,12 @@ import { type AdminContext, adminEvent, fail } from './context'
 import { dbRoleToDef, knownApps, rolePermissions } from './grant-support'
 import { error, json, readJson } from './http'
 
-/** The app ids a grant can be scoped to — the apps that have registered a vocabulary. */
+/** The app ids a grant can be scoped to — the apps that have registered a vocabulary — with their display names. */
 export async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
-	const items: AppDto[] = (await knownApps(c)).map((id) => ({ id }))
+	const items = await Promise.all((await knownApps(c)).map(async (id): Promise<AppDto> => {
+		const { displayName } = parsePresentation(await c.services.repositories.appSchema.getPresentation(id))
+		return { id, displayName }
+	}))
 	return { items }
 }
 
