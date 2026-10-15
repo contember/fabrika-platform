@@ -98,6 +98,7 @@ async function fixture() {
 		lease,
 		target: () => persisted,
 		input: () => ({
+			namespaceId: 'ns-test',
 			target: persisted,
 			api,
 			source,
