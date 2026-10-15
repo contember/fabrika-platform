@@ -997,6 +997,14 @@ const MANIFEST_VERSION_LINE = /^(\t"version": ")([^"]*)(",?)$/m
 /** One workspace manifest with its `version` set, or the text unchanged when it declares none. */
 export const bumpedManifest = (text: string, version: string): string => text.replace(MANIFEST_VERSION_LINE, `$1${version}$3`)
 
+/** A decision's `npm:` line, whose `@fabrika/*` entries name the range a generated application installs. */
+const DECISION_NPM_LINE = /^npm:/
+const DECISION_FABRIKA_PIN = /("@fabrika\/[A-Za-z0-9._-]+@)\^[^"]*"/g
+
+/** The builder's decision with every `@fabrika/*` range of its `npm:` line moved to `^<version>`. */
+export const bumpedDecision = (text: string, version: string): string =>
+	text.split('\n').map((line) => DECISION_NPM_LINE.test(line) ? line.replace(DECISION_FABRIKA_PIN, `$1^${version}"`) : line).join('\n')
+
 /** Refuse a bump that would not move the source forward: an older tag would republish a version npm already has. */
 export const assertBumpForward = (sourceVersion: string, version: string): void => {
 	if (compareVersions(version, sourceVersion, 'bump') > 0) return
@@ -1008,7 +1016,7 @@ const AGENTS_TEMPLATE = join(ROOT, 'examples', 'zerops-app')
 
 /**
  * Set the version the next tag publishes, in the source: every workspace package that declares one, the
- * examples' `@fabrika/*` ranges (which keep bun linking the workspace), the application skill and the template's
+ * examples' `@fabrika/*` ranges (which keep bun linking the workspace), the builder decisions' `npm:` ranges, the application skill and the template's
  * `AGENTS.md` rendered from it, then `bun install` for the lockfile and the local stack's source fixture pin.
  * Commits nothing.
  */
@@ -1024,6 +1032,13 @@ const bump = async (options: Options, packages: readonly PackageInfo[], sourceVe
 		const before = await readFile(path, 'utf8')
 		const rewrite = rewriteExamplePins(before, options.version)
 		if (rewrite.changed > 0) await writeFile(path, rewrite.text)
+	}
+	const decisions = join(ROOT, 'packages', 'builder', 'decisions', 'technologies')
+	for (const name of (await readdir(decisions)).filter((entry) => entry.endsWith('.md'))) {
+		const path = join(decisions, name)
+		const before = await readFile(path, 'utf8')
+		const after = bumpedDecision(before, options.version)
+		if (after !== before) await writeFile(path, after)
 	}
 	await writeAppSkill(join(ROOT, 'packages', 'app', 'skill'), options.version, options.version)
 	await run([

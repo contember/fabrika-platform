@@ -9,6 +9,7 @@ import {
 	assertStandaloneCheckout,
 	assertTagMatchesSource,
 	awaitRegistryTag,
+	bumpedDecision,
 	bumpedManifest,
 	entryImportSmoke,
 	LOCAL_INSTALL_FILE,
@@ -210,6 +211,13 @@ describe('the source version', () => {
 		expect(bumpedManifest(manifest, '0.4.3')).toBe(manifest.replace('\t"version": "0.0.4",', '\t"version": "0.4.3",'))
 		const unversioned = '{\n\t"name": "@fabrika/private",\n\t"private": true\n}\n'
 		expect(bumpedManifest(unversioned, '0.4.3')).toBe(unversioned)
+	})
+
+	test("a bump moves a builder decision's @fabrika ranges and leaves everything else", () => {
+		const decision = 'id: x\nnpm: ["@fabrika/app@^0.0.4", "@fabrika/db@^0.0.4", "zod@^3.25.76"]\nnotes: "@fabrika/app@^0.0.4"\n'
+		expect(bumpedDecision(decision, '0.4.3')).toBe(
+			'id: x\nnpm: ["@fabrika/app@^0.4.3", "@fabrika/db@^0.4.3", "zod@^3.25.76"]\nnotes: "@fabrika/app@^0.0.4"\n',
+		)
 	})
 
 	test('a bump only moves forward, so it cannot re-set a version npm already has', () => {
