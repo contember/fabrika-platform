@@ -135,8 +135,9 @@ const SECTION_UNPACKER = 'Verified live (2026-08-21) — the unpacker needs dire
 const SECTION_DELETE = 'Verified live (2026-08-21) — deleting a service, and what an absent id answers — docs/reference/zerops-platform.md:758'
 const SECTION_USER_DATA_PROCESS = 'Verified live (2026-08-19) — a user-data write is an asynchronous process — docs/reference/zerops-platform.md:817'
 const SECTION_POSTGRES_TLS = 'Verified live (2026-08-19) — PostgreSQL TLS is per service type — docs/reference/zerops-platform.md:837'
+const SECTION_POSTGRES_ROLES = "Verified live (2026-10-15) — the service's own user cannot create roles — docs/reference/zerops-platform.md:1226"
 const SECTION_UNVERIFIED_POSTGRES_ROLES =
-	"UNVERIFIED: the service's own user can create roles, and a new role connects through `portTls` — docs/reference/zerops-platform.md:1142"
+	"UNVERIFIED: the service's own user grants `CREATE` on its database, and a new role connects through `portTls` — docs/reference/zerops-platform.md:1255"
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_UNVERIFIED_AUTHORIZATION = 'UNVERIFIED: the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md:506'
@@ -1124,7 +1125,17 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double serves no database',
 	},
 	{
-		id: 'unverified-postgres-user-creates-roles',
+		id: 'postgres-service-user-cannot-create-roles',
+		section: SECTION_POSTGRES_ROLES,
+		request: { method: 'GET', path: '/service-stack/{serviceId}' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: "not an API fact: it needs a PostgreSQL service and a client inside the project's VXLAN",
+		emulator: false,
+		emulatorNote: 'the double serves no database',
+	},
+	{
+		id: 'unverified-postgres-user-grants-create-on-database',
 		section: SECTION_UNVERIFIED_POSTGRES_ROLES,
 		request: { method: 'GET', path: '/service-stack/{serviceId}' },
 		expect: { status: 200 },

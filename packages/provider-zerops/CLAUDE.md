@@ -134,8 +134,8 @@ bun test
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
   references, so no credential passes through this package. That database URL is the service user's and only the
   provisioning credential of the application's role family (ADR-0017): `fabrika db migrate` creates `app_<id>` and
-  `run_<id>` with it and the server and the jobs relaunch themselves as `run_<id>`; whether the `db` user may create roles is UNVERIFIED, and a
-  `db` that cannot stops the deploy with a message saying so. Never point it at the `superUser` variables; a second database or bucket is refused in
+  `run_<id>` with it and the server and the jobs relaunch themselves as `run_<id>`. The `db` user cannot create roles (measured
+  2026-10-15), so the first deploy stops there with a message saying so until `db` is granted `CREATEROLE`. Never point it at the `superUser` variables; a second database or bucket is refused in
   `parseFabrikaManifest`, and `verify-exposure` refuses a bucket without platform provenance before the build. Generated file lines go through
   `printf` single-quoted: they may hold no `'` and no `$`, which is why the app id must match
   `[a-z0-9][a-z0-9-]*` and the health path is a literal path.

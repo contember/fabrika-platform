@@ -445,9 +445,11 @@ migration file is a widening in the approval diff
   a trigger, alter a table or write the ledger. The catalog check stays the
   witness of what the migration role created.
 - Every application database needs a provisioning credential that can create
-  roles. One that cannot stops the deploy with a message saying so; on Zerops
-  whether the service's own user can is unverified
-  ([`zerops-platform.md`](../reference/zerops-platform.md)).
+  roles. One that cannot stops the deploy with a message saying so. On Zerops
+  the service's own user `db` cannot (measured on `postgresql:single@18`,
+  [`zerops-platform.md`](../reference/zerops-platform.md)), so an application
+  database there stops its first deploy until `db` is granted `CREATEROLE` by
+  the service's superuser.
 - A schema created before its roles existed is refused. Before 1.0 it is
   dropped and re-created by the next deploy (its rows are lost), or its owner
   and every object in it are moved to the migration role by hand.
