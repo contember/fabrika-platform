@@ -1222,7 +1222,8 @@ fabrika uses it only as the provisioning credential of the application's role fa
 ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)): `fabrika db migrate` creates `app_<id>` and
 `run_<id>` with it and applies the migrations as `app_<id>`, the server and the crontab's jobs relaunch themselves as
 `run_<id>` over the same host, port and options, and `fabrika db test-isolation` hands the generated tests a
-throwaway `CREATEROLE` provisioner instead, which it grants `CREATE` on the database and drops afterwards. The
+throwaway `CREATEROLE` provisioner instead, which it grants `CREATE` on the database and drops afterwards; the
+provisioner logs in for 15 minutes only, and the next run sweeps one that a killed run left behind. The
 superuser, because the service's own user `db` can neither create roles nor create a schema; the direct port, because
 pgBouncer on `portTls` refuses every role fabrika creates (both measured below). An application on a `cheap`
 namespace gets the same URL for the shared `postgres` service. The `useSharedPostgres()` binding's own

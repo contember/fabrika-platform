@@ -77,7 +77,8 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   output and no endpoint may lack its input fixture, then `bun --config=<empty> test
   --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them, as a throwaway provisioner
   `createTestProvisioner` makes from `FABRIKA_APP_DATABASE_URL` and drops afterwards (the tests load application code,
-  so they never get the provisioning credential itself), with
+  so they never get the provisioning credential itself; creating it sweeps the provisioners killed runs left behind,
+  and the command prints their names), with
   `FABRIKA_TEST_POSTGRES_REQUIRED=1` and no framework variable, and every case name the scaffold wrote must be
   reported as passed with an assertion (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never
   applies. **It prints none of the child's output**, only the counts and the failed case names, which come from the

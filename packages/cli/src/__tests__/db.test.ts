@@ -3,7 +3,13 @@
 
 import { checkApplication, formatFinding, generatedTestHeader } from '@fabrika/check'
 import { generateSchema } from '@fabrika/db/codegen'
-import { applicationDatabaseSchema, definePostgresApplicationMigrations, dropApplicationDatabase, PostgresDatabase } from '@fabrika/platform-node'
+import {
+	applicationDatabaseSchema,
+	createTestProvisioner,
+	definePostgresApplicationMigrations,
+	dropApplicationDatabase,
+	PostgresDatabase,
+} from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -359,11 +365,39 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	const testIsolation = (root: string, argv: readonly string[] = []) =>
 		run(root, 'test-isolation', argv, { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
 
+	/** The output without the line about provisioners an earlier run left behind, which a concurrent suite may have caused. */
+	const withoutSweep = (output: string): string => output.replace(/^dropped the test provisioners earlier runs left behind: [^\n]*\n/, '')
+
 	test('test-isolation runs every generated case of the fixture, whatever its bunfig.toml says', async () => {
 		const root = runnableIsolationApp()
 		writeFileSync(join(root, 'skip-everything.ts'), "import { mock, test } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: test.skip }))\n")
 		writeFileSync(join(root, 'bunfig.toml'), '[test]\npreload = ["./skip-everything.ts"]\nroot = "nowhere"\n')
-		expect(await testIsolation(root)).toBe('95 generated cases passed\n')
+		expect(withoutSweep(await testIsolation(root))).toBe('95 generated cases passed\n')
+	})
+
+	test('test-isolation first drops the provisioner a killed run left behind, with the roles and schemas it created', async () => {
+		const leftover = await createTestProvisioner(url)
+		const name = new URL(leftover.url).username
+		const family = definePostgresApplicationMigrations({ appId: `test-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`, directory: '/unused' })
+		await family.migrate(leftover.url, [{ name: '20261015120000_init.sql', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY)' }])
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			await sql.unsafe(`ALTER ROLE ${name} VALID UNTIL '2000-01-01'`)
+			const output = await testIsolation(runnableIsolationApp())
+			expect(output).toMatch(new RegExp(`^dropped the test provisioners earlier runs left behind: [^\\n]*\\b${name}\\b`))
+			expect(output).toEndWith('\n95 generated cases passed\n')
+			const left = await sql.unsafe(
+				'SELECT rolname FROM pg_roles WHERE rolname IN ($1, $2) UNION ALL SELECT nspname FROM pg_namespace WHERE nspname = $3',
+				[
+					name,
+					family.roles.runtime,
+					family.schema,
+				],
+			)
+			expect([...left]).toEqual([])
+		} finally {
+			await sql.close()
+		}
 	})
 
 	/**
@@ -420,7 +454,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			`import { readFileSync as readEnvironment, writeFileSync as writeEnvironment } from 'node:fs'\n${source}\nwriteEnvironment(${
 				JSON.stringify(seen)
 			}, JSON.stringify({ environ: readEnvironment('/proc/self/environ', 'latin1'), url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '' }))\n`
-		expect(await testIsolation(editedApplication(recording, false))).toBe('95 generated cases passed\n')
+		expect(withoutSweep(await testIsolation(editedApplication(recording, false)))).toBe('95 generated cases passed\n')
 		const recorded = z.object({ environ: z.string(), url: z.string() }).parse(JSON.parse(readFileSync(seen, 'utf8')))
 		const password = decodeURIComponent(new URL(url).password)
 		expect(recorded.environ).not.toContain(url)

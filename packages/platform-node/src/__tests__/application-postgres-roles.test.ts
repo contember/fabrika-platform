@@ -14,7 +14,7 @@ import {
 } from '../application-postgres-migrations.js'
 import { postgresRoleUrl } from '../application-postgres-roles.js'
 import type { PostgresMigration } from '../postgres-migrations.js'
-import { changeCreateOnDatabase, createTestProvisioner } from '../postgres-test-provisioner.js'
+import { changeCreateOnDatabase, createTestProvisioner, TEST_PROVISIONER_LIFETIME_MINUTES } from '../postgres-test-provisioner.js'
 import { PostgresDatabase } from '../sql-postgres.js'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
 
@@ -421,6 +421,92 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				]),
 		)
 		expect([...left]).toEqual([])
+	})
+
+	test('a provisioner logs in for a bounded time only', async () => {
+		const provisioner = await createTestProvisioner(superuserUrl)
+		try {
+			const validity = await as(superuserUrl, (sql) =>
+				sql.unsafe(
+					`SELECT rolvaliduntil > now() + interval '${TEST_PROVISIONER_LIFETIME_MINUTES - 1} minutes'
+						AND rolvaliduntil <= now() + interval '${TEST_PROVISIONER_LIFETIME_MINUTES} minutes' AS bounded FROM pg_roles WHERE rolname = $1`,
+					[new URL(provisioner.url).username],
+				))
+			expect([...validity]).toEqual([{ bounded: true }])
+		} finally {
+			await provisioner.drop()
+		}
+	})
+
+	// A run killed before `drop()` (a container's memory limit) leaves its provisioner and what it created behind.
+	test('the next provisioner sweeps what killed runs left behind, and keeps a provisioner still valid or still in use', async () => {
+		const leftover = await createTestProvisioner(superuserUrl)
+		const leftoverFamily = definePostgresApplicationMigrations({ appId: `test-${hex()}`, directory: '/unused' })
+		await leftoverFamily.migrate(leftover.url, NOTES)
+		const connected = await createTestProvisioner(superuserUrl)
+		const throughFamily = await createTestProvisioner(superuserUrl)
+		const throughFamilyApp = definePostgresApplicationMigrations({ appId: `test-${hex()}`, directory: '/unused' })
+		await throughFamilyApp.migrate(throughFamily.url, NOTES)
+		const concurrent = await createTestProvisioner(superuserUrl)
+		const connectedSession = new SQL({ url: connected.url, adapter: 'postgres', max: 1, prepare: false })
+		const familySession = new SQL({
+			url: postgresRoleUrl(throughFamily.url, throughFamilyApp.roles.runtime),
+			adapter: 'postgres',
+			max: 1,
+			prepare: false,
+		})
+		const previousRelease = `fabrika_tests_${hex()}${hex().slice(0, 4)}`
+		let next: Awaited<ReturnType<typeof createTestProvisioner>> | undefined
+		try {
+			await connectedSession.unsafe('SELECT 1')
+			await familySession.unsafe('SELECT 1')
+			// A release before VALID UNTIL created its provisioner without one.
+			await as(superuserUrl, (sql) => sql.unsafe(`CREATE ROLE ${previousRelease} LOGIN CREATEROLE NOINHERIT`))
+			await changeCreate('grant', previousRelease)
+			await as(superuserUrl, async (sql) => {
+				for (const provisioner of [leftover, connected, throughFamily]) {
+					await sql.unsafe(`ALTER ROLE ${new URL(provisioner.url).username} VALID UNTIL '2000-01-01'`)
+				}
+			})
+			next = await createTestProvisioner(superuserUrl)
+			const name = (provisioner: { readonly url: string }): string => new URL(provisioner.url).username
+			expect(next.swept).toContain(name(leftover))
+			expect(next.swept).toContain(previousRelease)
+			expect(next.swept).not.toContain(name(connected))
+			expect(next.swept).not.toContain(name(throughFamily))
+			expect(next.swept).not.toContain(name(concurrent))
+			const present = await as(superuserUrl, (sql) =>
+				sql.unsafe(
+					`SELECT 'role ' || rolname AS name FROM pg_roles WHERE rolname = ANY(string_to_array($1, ','))
+						UNION ALL SELECT 'schema ' || nspname FROM pg_namespace WHERE nspname = ANY(string_to_array($1, ',')) ORDER BY 1`,
+					[[
+						name(leftover),
+						leftoverFamily.roles.migration,
+						leftoverFamily.roles.runtime,
+						leftoverFamily.schema,
+						previousRelease,
+						name(connected),
+						name(throughFamily),
+						throughFamilyApp.roles.runtime,
+						throughFamilyApp.schema,
+						name(concurrent),
+					].join(',')],
+				))
+			expect([...present].map((row) => row.name)).toEqual(
+				[
+					`role ${name(connected)}`,
+					`role ${name(throughFamily)}`,
+					`role ${throughFamilyApp.roles.migration}`,
+					`role ${throughFamilyApp.roles.runtime}`,
+					`schema ${throughFamilyApp.schema}`,
+					`role ${name(concurrent)}`,
+				].sort(),
+			)
+		} finally {
+			await connectedSession.close()
+			await familySession.close()
+			for (const provisioner of [connected, throughFamily, concurrent, ...(next === undefined ? [] : [next])]) await provisioner.drop()
+		}
 	})
 
 	// A Zerops service's own user held CREATE without GRANT OPTION: Postgres warned and granted nothing.

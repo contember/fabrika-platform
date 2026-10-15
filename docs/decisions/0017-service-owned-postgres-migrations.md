@@ -347,7 +347,14 @@ forwarded, the exit code propagated). The application's environment, its
 code, with a throwaway provisioner instead: `fabrika_tests_<hex>`, with
 `CREATEROLE` and `CREATE` on the database and nothing of any application,
 dropped after the run with every role family it created. That needs Postgres 16
-or later, where a `CREATEROLE` role administers only the roles it created. The
+or later, where a `CREATEROLE` role administers only the roles it created. A run
+killed before it drops them (a container's memory limit) leaves a privileged role
+behind, so the provisioner logs in for 15 minutes only (`VALID UNTIL`), and each
+run first sweeps, as the provisioning credential, every expired provisioner (or
+one without a validity, from a release before it) that has no session, neither
+as itself nor as a role it created, with everything it administers. A concurrent
+run's provisioner is still valid, so it is never swept; the sweep holds an
+advisory lock it only tries, so two runs never sweep at once and none waits. The
 test kit migrates each throwaway schema as its own migration role and connects
 and seeds as its runtime role. Before it starts the application, the launcher
 makes itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`, Linux), so a process of

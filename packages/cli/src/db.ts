@@ -51,7 +51,8 @@ deletes a generated one the scaffold no longer writes, printing each path, or th
 one that is missing, edited or stale.
 \`test-isolation\` is the platform's run of them: with FABRIKA_APP_DATABASE_URL it creates a throwaway provisioner
 (CREATEROLE, CREATE on the database, nothing of any application) that the tests get instead, ignores the application's
-bunfig.toml, and checks the JUnit report against the case names the scaffold wrote.
+bunfig.toml, and checks the JUnit report against the case names the scaffold wrote. It first drops the provisioners
+that killed runs left behind: expired, and without a session of their own or of a role they created.
 `
 
 export interface DbCommandDependencies {
@@ -228,6 +229,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 	} catch (error) {
 		throw reportable(error)
 	}
+	if (provisioner.swept.length > 0) deps.write(`dropped the test provisioners earlier runs left behind: ${provisioner.swept.join(', ')}\n`)
 	const scratch = await mkdtemp(join(tmpdir(), 'fabrika-test-isolation-'))
 	try {
 		await writeFile(join(scratch, 'bunfig.toml'), '')

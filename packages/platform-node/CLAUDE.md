@@ -115,7 +115,10 @@ Read this before moving a service onto this driver.
   create roles, a schema the migration role does not own, and a widened role are refused. Passwords are HMAC-derived from the provisioning
   password and sent only as SCRAM verifiers; never put a derived password in SQL text. `apply(db)` grants nothing and
   exists for the runner's own tests. `dropApplicationDatabase` is for throwaway test databases; `createTestProvisioner` (Postgres 16+) makes the
-  credential code the platform did not write gets for them. Grant or revoke on the database only through
+  credential code the platform did not write gets for them. It logs in for `TEST_PROVISIONER_LIFETIME_MINUTES` only,
+  and creating one first sweeps the provisioners killed runs left behind: expired (or without a validity), administered
+  by the credential, and without a session of their own or of a role they created. Never drop on a weaker test: a
+  concurrent run's provisioner may have no session between its creation and the tests' first connection. Grant or revoke on the database only through
   `changeCreateOnDatabase`: it holds an advisory lock every run shares, since concurrent changes of the one `pg_database`
   row fail with `tuple concurrently updated`.
 - **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
