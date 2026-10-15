@@ -124,6 +124,7 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		latestAppVersion: () => Promise.resolve(record('latestAppVersion', { id: 'ver-1', sequence: 1 })),
 		cancelBuild: () => Promise.resolve(record('cancelBuild', undefined)),
 		getProcess: ({ processId }) => Promise.resolve(record('getProcess', { id: processId, status: 'FINISHED' })),
+		getUserInfo: () => Promise.reject(new Error('an application deploy must not read the token identity')),
 		createIntegrationToken: () => Promise.reject(new Error('an application deploy must not mint a Zerops token')),
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
 		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change autoscaling')),

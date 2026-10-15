@@ -202,6 +202,9 @@ const makeApi = (
 			actionName: processId === 'creation-1' ? 'stack.create' : 'stack.deploy',
 			...(processId === 'deployment-1' ? { appVersionId: 'bootstrap-1' } : {}),
 		}),
+		getUserInfo: async () => {
+			throw new Error('the control provider must not read the token identity')
+		},
 		createIntegrationToken: async () => {
 			throw new Error('the control provider must not mint a Zerops token')
 		},

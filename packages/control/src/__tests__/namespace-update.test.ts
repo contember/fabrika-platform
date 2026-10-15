@@ -170,6 +170,7 @@ function fakeZerops(): FakeZerops {
 		createServiceEnv: never('createServiceEnv'),
 		deleteServiceEnv: never('deleteServiceEnv'),
 		getProjectEnv: never('getProjectEnv'),
+		getUserInfo: never('getUserInfo'),
 		createIntegrationToken: never('createIntegrationToken'),
 		getLogAccess: never('getLogAccess'),
 		readBuildLog: never('readBuildLog'),

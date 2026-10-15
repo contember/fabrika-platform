@@ -30,6 +30,7 @@ export type {
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
 	ZeropsTokenProjectGrant,
+	ZeropsUserInfo,
 } from './api'
 export { defineApp, isZeropsAppConfig, useSharedPostgres, zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './authoring'
 export type { ZeropsAuthoredAppConfig } from './authoring'

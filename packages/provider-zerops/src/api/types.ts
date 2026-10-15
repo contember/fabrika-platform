@@ -232,6 +232,18 @@ export interface ZeropsIntegrationToken {
 }
 
 /**
+ * The identity a token authenticates as, narrowed to what fabrika reads. VERIFIED: `GET /user/info`,
+ * `ResponseUserAuthorize` — `id` and `email` are in its `required` list.
+ *
+ * Read with an integration token, `id` is the token's own id (measured live, 2026-08-21) and `email` is
+ * `token-<id>@zerops.io` (reported by an operator, not measured here).
+ */
+export interface ZeropsUserInfo {
+	id: string
+	email: string
+}
+
+/**
  * ONE service-level environment variable. VERIFIED: `OutDtoUserData`.
  *
  * UNVERIFIED BEHAVIOUR: whether `content` carries the real value for a variable Zerops stores as a
@@ -502,6 +514,11 @@ export interface ZeropsApi {
 	 * Read-only ON PURPOSE — see the note on this interface. Present so drift can be REPORTED.
 	 */
 	getProjectEnv(input: { projectEnvId: string; signal: AbortSignal }): Promise<ZeropsServiceEnv>
+
+	// ── user: who the token is ────────────────────────────────────────────────────
+
+	/** The identity this client's token authenticates as. VERIFIED: `GET /user/info` (`GetUserInfo`). */
+	getUserInfo(input: { signal: AbortSignal }): Promise<ZeropsUserInfo>
 
 	// ── client: minting a credential ──────────────────────────────────────────────
 

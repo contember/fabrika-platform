@@ -66,6 +66,7 @@ const harness = (
 		readonly statuses?: readonly ZeropsProjectStatus[]
 		readonly decline?: string
 		readonly wrap?: (api: ZeropsApi) => ZeropsApi
+		readonly identityEmail?: string
 	} = {},
 ): Harness => {
 	const zerops = fakeZerops({
@@ -74,6 +75,7 @@ const harness = (
 		services: [],
 		bootstrap: { clientId: CLIENT_ID, imported: importedLightServices() },
 		creates: { clientId: CLIENT_ID, statuses: options.statuses ?? SETTLING },
+		...(options.identityEmail === undefined ? {} : { identityEmail: options.identityEmail }),
 	})
 	const log = recordingInitLog()
 	const asked: string[] = []
@@ -273,6 +275,33 @@ describe('the confirmation', () => {
 		await expect(fixture.run()).rejects.toThrow('no project was created')
 		expect(fixture.zerops.calls).toEqual([])
 		expect(fixture.zerops.projectImports).toEqual([])
+	})
+})
+
+describe('an integration token', () => {
+	test('is refused before the project is created', async () => {
+		const fixture = harness({ identityEmail: 'token-abc123@zerops.io' })
+
+		await expect(fixture.run()).rejects.toThrow('is a Zerops integration token')
+		expect(fixture.zerops.timeline).toEqual(['user-info'])
+		expect(fixture.zerops.projectImports).toEqual([])
+	})
+
+	test("the mint's refusal of one names the fix and resumes into the created project", async () => {
+		const refusingMint = (api: ZeropsApi): ZeropsApi => ({
+			...api,
+			createIntegrationToken: async () => {
+				const code = 'notAllowedForIntegrationTokenWithoutDelegation'
+				throw new ZeropsApiError(`zerops: create integration token failed (403) — ${code}`, 403, code)
+			},
+		})
+		const fixture = harness({ wrap: refusingMint })
+
+		const failure = fixture.run()
+
+		await expect(failure).rejects.toThrow('is a Zerops integration token')
+		await expect(failure).rejects.toThrow(`--project-id=${PROJECT.projectId} instead of --create-project`)
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([])
 	})
 })
 

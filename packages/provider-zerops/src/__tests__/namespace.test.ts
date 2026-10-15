@@ -280,6 +280,9 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		}
 		return { id: processId, status: 'FINISHED' }
 	},
+	getUserInfo: async () => {
+		throw new Error('the namespace operator must not read the token identity')
+	},
 	createIntegrationToken: async () => {
 		throw new Error('the namespace operator must not mint a Zerops token')
 	},

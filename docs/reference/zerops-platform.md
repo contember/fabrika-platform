@@ -730,6 +730,11 @@ confined to its own record.
 The mint itself (`POST /client/{id}/integration-token`) was verified on 2026-08-07: the platform
 accepts client role `NO_ACCESS` beside a per-project `ADMIN` grant.
 
+Reported by an operator at `v0.4.2` (not measured here): authenticated with an integration token, that
+mint answers `403 notAllowedForIntegrationTokenWithoutDelegation`, and `GET /user/info` returns
+`email: token-<id>@zerops.io`. `platform install` therefore reads `/user/info` before it creates anything
+and refuses that identity (`packages/provider-zerops/src/installation/install-token.ts`).
+
 Also measured the same day: `zops env set … --sensitive` on an EXISTING sensitive variable is refused
 with `sensitive: field is required` (the CLI's update body omits it); the raw `PUT /user-data/{id}`
 (`UpdateUserDataById`) with `{ key, content, sensitive: true }` is accepted and returns a

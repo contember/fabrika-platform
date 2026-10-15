@@ -165,6 +165,9 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			processPoll++
 			return { id: processId, status }
 		},
+		getUserInfo: async () => {
+			throw new Error('the deploy driver must not read the token identity')
+		},
 		createIntegrationToken: async () => {
 			throw new Error('the deploy driver must not mint a Zerops token')
 		},

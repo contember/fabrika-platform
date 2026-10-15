@@ -18,7 +18,7 @@ message that names the flag or the variable to set. Read the message: it names t
 
 | What                                                                           | Needed at  |
 | ------------------------------------------------------------------------------ | ---------- |
-| A Zerops personal access token, generated in the Zerops GUI                    | step 1     |
+| A Zerops PERSONAL access token of a client OWNER, generated in the Zerops GUI  | step 1     |
 | A `gh` login allowed to create a repository in the organization that owns it   | step 3     |
 | The administrator's e-mail address, and the human to open the enrollment URL   | step 2     |
 | For a PRIVATE application repository: the GitHub App connected in the console  | step 5     |
@@ -54,10 +54,14 @@ checkout is refused, and a local commit is not on GitHub, so namespaces cannot f
 ```bash
 export FABRIKA_ZEROPS_ACCESS_TOKEN="$(cat <personal token file>)"
 curl -s -H "Authorization: Bearer $FABRIKA_ZEROPS_ACCESS_TOKEN" \
-  https://api.app-prg1.zerops.io/api/rest/public/user/info | jq '.clientUserList[] | {clientId, name: .client.accountName}'
+  https://api.app-prg1.zerops.io/api/rest/public/user/info | jq '{email, clients: [.clientUserList[] | {clientId, name: .client.accountName, role: .roleCode}]}'
 fabrika platform install --provider=zerops --create-project --client-id=<clientId> --env=<name> --source-dir=. --yes > install.log 2>&1
 ```
 
+- Check the token kind first. The `email` of a personal token is the person's address, and its `role` on the
+  client is `OWNER`. An `email` of `token-<id>@zerops.io` is an INTEGRATION token. The install refuses one before
+  it creates anything, because an integration token may not mint the token the control plane needs. Ask the
+  human for a personal token instead.
 - Run it from the clone root. It runs for many minutes: it imports six services, builds the proxy once to
   learn the public hosts, then deploys everything.
 - `--yes` is required when stdin is not a terminal.

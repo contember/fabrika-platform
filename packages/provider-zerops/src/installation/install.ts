@@ -38,6 +38,7 @@ import {
 	resolvePlatformServices,
 	serviceOf,
 } from './install-provisioning'
+import { explainMintFailure } from './install-token'
 import { prepareInstallationSource, prepareNamespaceProxySource, validateInstallationSetups } from './installation-source'
 import type { PreparedPlatformSource } from './platform-source'
 import { generateInstallationSecrets, type InstallationSecrets } from './secrets'
@@ -143,6 +144,8 @@ const installPreparedPlatform = async (
 		// application at all (ADR-0034). `NO_ACCESS` still keeps every project it did not create out of reach.
 		canCreateProjects: true,
 		signal,
+	}).catch((failure: unknown) => {
+		throw explainMintFailure(failure, project.id)
 	})
 	if (token.token === '') {
 		throw new Error('Zerops minted an integration token with no value — the control plane cannot deploy anything without one')

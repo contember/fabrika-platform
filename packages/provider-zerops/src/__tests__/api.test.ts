@@ -652,6 +652,20 @@ describe('Zerops subdomain access', () => {
 	})
 })
 
+describe('Zerops token identity', () => {
+	test('reads the id and e-mail the token authenticates as', async () => {
+		const urls: string[] = []
+		const fetchImpl: FetchLike = async (url) => {
+			urls.push(url)
+			return jsonResponse({ id: 'token-id-1', email: 'token-token-id-1@zerops.io', fullName: 'fabrika-stage', clientUserList: [] })
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.getUserInfo({ signal: signal() })).resolves.toEqual({ id: 'token-id-1', email: 'token-token-id-1@zerops.io' })
+		expect(urls).toEqual(['https://zerops.test/user/info'])
+	})
+})
+
 describe('Zerops integration tokens', () => {
 	test('mints a project-scoped token and states the client role even when it is the schema default', async () => {
 		const log: { method: string; url: string; body: unknown }[] = []

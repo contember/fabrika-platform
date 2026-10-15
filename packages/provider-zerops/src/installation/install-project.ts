@@ -2,6 +2,7 @@ import { ENV_ISOLATION, renderYaml, type ZeropsProjectMode, type ZeropsProjectSt
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import type { PlatformInstallInput } from './install-options'
 import { lightTopology } from './install-provisioning'
+import { assertPersonalAccessToken } from './install-token'
 
 /** The project compute tier each installable platform tier requires. `corePackage` is upgrade-only. */
 const REQUIRED_PROJECT_MODE: ZeropsProjectMode = 'LIGHT'
@@ -163,7 +164,7 @@ const resolveProject = async (
 /**
  * Settle which project this run installs into — the operator's, or one created here.
  *
- * ONE confirmation either way, and both cover the read that follows: a created project is read back
+ * ONE confirmation either way, and both cover the token check and the read that follows: a created project is read back
  * through the same `resolveProject` an operator-made one goes through, so the core package is checked on
  * the project that will actually be installed into rather than on the document that asked for it.
  */
@@ -183,19 +184,21 @@ export const resolveInstallationProject = async (
 		) {
 			throw new Error('declined: nothing was contacted, and re-running the install is safe')
 		}
+		await assertPersonalAccessToken(collaborators)
 		return resolveProject(input, source.projectId, collaborators)
 	}
 	log.step('Create the project this installation is brought up in')
 	log.info('`envIsolation` and `corePackage` are settable at project CREATION only, which is why the project is created from here.')
 	if (
 		!(await prompts.confirm(
-			`CREATE Zerops project \`${source.projectName}\` (core package ${REQUIRED_PROJECT_MODE}, envIsolation ${ENV_ISOLATION}) on client `
+			`Check the token, then CREATE Zerops project \`${source.projectName}\` (core package ${REQUIRED_PROJECT_MODE}, envIsolation ${ENV_ISOLATION}) on client `
 				+ `${input.clientId}, then read it back?`,
 			true,
 		))
 	) {
 		throw new Error('declined: no project was created, and re-running the install is safe')
 	}
+	await assertPersonalAccessToken(collaborators)
 	const projectId = await createProject(input, environment, source.projectName, collaborators)
 	return resolveProject(input, projectId, collaborators)
 }

@@ -14,6 +14,7 @@ import {
 	readResponse,
 	serviceEnvSchema,
 	serviceSchema,
+	userInfoSchema,
 } from './readers'
 import { parseServiceEnvResponse } from './service-env-response'
 import type { ZeropsApi, ZeropsApiOptions, ZeropsAppVersion, ZeropsLogLine } from './types'
@@ -459,6 +460,8 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		getProjectEnv: async ({ projectEnvId, signal }) =>
 			readResponse('get project env', serviceEnvSchema, await request('get project env', 'GET', `/project-env/${projectEnvId}`, { signal })),
+
+		getUserInfo: async ({ signal }) => readResponse('get user info', userInfoSchema, await request('get user info', 'GET', '/user/info', { signal })),
 
 		createIntegrationToken: async ({ clientId, name, projects, roleCode, canCreateProjects, signal }) =>
 			// `redactDetail`: unlike every other write here the SECRET is in the RESPONSE, not the request, so

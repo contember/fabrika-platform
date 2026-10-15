@@ -92,6 +92,8 @@ export const fakeZerops = (options: {
 	readonly bootstrap?: FakeBootstrap
 	/** When set, the project does not exist until `importProject` creates it. */
 	readonly creates?: FakeProjectCreation
+	/** What `/user/info` names the token. An integration token reads `token-<id>@zerops.io`. */
+	readonly identityEmail?: string
 }): FakeZerops => {
 	const calls: string[] = []
 	const timeline: string[] = []
@@ -178,6 +180,11 @@ export const fakeZerops = (options: {
 		readBuildLog: NEVER('readBuildLog'),
 		listProjects: NEVER('listProjects'),
 		findService: NEVER('findService'),
+
+		getUserInfo: async () => {
+			observe('user-info')
+			return { id: 'user-1', email: options.identityEmail ?? 'operator@example.com' }
+		},
 
 		/** `POST /client/{id}/project/import`. The project exists only after this, and only once. */
 		importProject: async ({ clientId, yaml }) => {

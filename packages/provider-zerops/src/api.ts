@@ -26,4 +26,5 @@ export {
 	type ZeropsServiceEnv,
 	type ZeropsServiceStatus,
 	type ZeropsTokenProjectGrant,
+	type ZeropsUserInfo,
 } from './api/types'

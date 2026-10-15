@@ -13,6 +13,7 @@ import type {
 	ZeropsService,
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
+	ZeropsUserInfo,
 } from './types'
 
 /** Zerops sends `null` for an absent optional field; nothing reads one of these as required, so a malformed one reads as absent. */
@@ -147,6 +148,11 @@ export const integrationTokenSchema = z.object({
 	projects: z.array(z.object({ projectId: idSchema, roleCode: optional(roleCodeSchema) })),
 	roleCode: optional(roleCodeSchema),
 }) satisfies z.ZodType<ZeropsIntegrationToken, z.ZodTypeDef, unknown>
+
+export const userInfoSchema = z.object({
+	id: idSchema,
+	email: z.string(),
+}) satisfies z.ZodType<ZeropsUserInfo, z.ZodTypeDef, unknown>
 
 export const serviceEnvSchema = z.object({
 	id: idSchema,

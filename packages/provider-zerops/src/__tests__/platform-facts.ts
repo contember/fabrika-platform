@@ -304,7 +304,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		expect: { status: 200, bodyShape: { id: { kind: 'nonEmptyString' } } },
 		live: 'fast',
 		emulator: false,
-		emulatorNote: 'nothing in fabrika reads `/user/info`, so the double would be inventing a shape to answer it',
+		emulatorNote: 'only `platform install` reads `/user/info`, and it never runs against the double',
 	},
 
 	// ── one import, and the services every later row uses ────────────────────────

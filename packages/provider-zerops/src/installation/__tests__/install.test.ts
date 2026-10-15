@@ -54,12 +54,14 @@ const harness = (options: {
 	readonly services?: readonly FakeServiceSpec[]
 	readonly projectMode?: 'LIGHT' | 'SERIOUS'
 	readonly confirms?: Record<string, boolean>
+	readonly identityEmail?: string
 } = {}): Harness => {
 	const zerops = fakeZerops({
 		...PROJECT,
 		projectMode: options.projectMode ?? 'LIGHT',
 		services: options.services ?? [],
 		bootstrap: { clientId: CLIENT_ID, imported: importedLightServices() },
+		...(options.identityEmail === undefined ? {} : { identityEmail: options.identityEmail }),
 	})
 	const reconciled: SchemaReconcileInput[] = []
 	const log = recordingInitLog()
@@ -526,6 +528,13 @@ describe('what it refuses', () => {
 
 		expect(log.lines.some((line) => line.startsWith('warn: ') && line.includes('mode'))).toBe(true)
 		expect(zerops.calls).toContain('import:proj-1')
+	})
+
+	test('an integration token, before it reads the project', async () => {
+		const fixture = harness({ identityEmail: 'token-abc123@zerops.io' })
+
+		await expect(fixture.run()).rejects.toThrow('a personal access token')
+		expect(fixture.zerops.timeline).toEqual(['user-info'])
 	})
 
 	test('a project that already holds an installation, before it writes or imports anything', async () => {
