@@ -128,6 +128,7 @@ describe('platform admin', () => {
 		expect(run.printed).toEqual([ENROLLMENT_URL])
 		expect(run.lines.join('\n')).not.toContain(ENROLLMENT_URL)
 		expect(run.lines.join('\n')).toContain('https://iam.example.test · operator@example.test')
+		expect(run.lines.join('\n')).toContain('Nothing was e-mailed')
 	})
 
 	test('reports the invite and the cross-app grant it made', async () => {
@@ -136,7 +137,7 @@ describe('platform admin', () => {
 
 		await runPlatformAdmin(input(), run)
 
-		expect(run.lines).toContain('ok: invited operator@example.test as principal principal-1')
+		expect(run.lines).toContain('ok: created principal principal-1 for operator@example.test — no e-mail was sent')
 		expect(run.lines).toContain('ok: granted the cross-app `admin` role')
 		expect(calls).toEqual(['principals.list', 'principals.invite', 'principals.get', 'grants.create', 'passwords.issueEnrollment'])
 	})

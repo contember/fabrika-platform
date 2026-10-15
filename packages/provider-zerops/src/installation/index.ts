@@ -248,23 +248,24 @@ commit availability before its effects; a local commit is not thereby published 
 The first human. A fresh installation has none — nothing seeds an admission list, and this command is
 why it does not have to. It is unattended, prompts for nothing, and changes nothing on a re-run:
 
-  1. find the principal holding that mailbox, or invite one
+  1. find the principal holding that address, or create one
   2. grant it the CROSS-APP \`admin\` role, unless it already holds one
   3. issue ONE password enrollment and print its URL
 
 The grant is cross-app (\`app: null\`) and that is load-bearing: grants filter to the calling app, so an
 \`admin\` grant scoped to the console's own app id leaves Delivery and Operations working while the
-Access plane refuses. A re-run invites nobody twice, grants nothing twice and issues no second
+Access plane refuses. A re-run creates nobody twice, grants nothing twice and issues no second
 enrollment — a password that is already set, or an enrollment already outstanding, is REPORTED. Pass
 \`${REISSUE_FLAG}\` to replace an outstanding one, which is the way out when the first expired unopened.
 
-The enrollment URL is a credential: it is printed once, on a line of its own, and stored nowhere.
+Nothing is e-mailed: a Zerops installation has no mail service. Hand the URL to the administrator
+yourself. It is a credential: it is printed once, on a line of its own, and stored nowhere.
 
 \`install\` reports the host this needs as \`✓ iam <host>\` and ends with this command ready to run.
 
 Options (a flag beats the environment variable beside it):
 
-  --email=<address>                 FABRIKA_PLATFORM_ADMIN_EMAIL    the administrator's mailbox
+  --email=<address>                 FABRIKA_PLATFORM_ADMIN_EMAIL    the administrator's sign-in address
   --iam-host=<host>                 FABRIKA_PLATFORM_IAM_HOST       IAM's public hostname, as \`deploy\` names it
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   ${REISSUE_FLAG}                                                         replace an outstanding enrollment

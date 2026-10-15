@@ -20,7 +20,7 @@ message that names the flag or the variable to set. Read the message: it names t
 | ------------------------------------------------------------------------------ | ---------- |
 | A Zerops personal access token, generated in the Zerops GUI                    | step 1     |
 | A `gh` login allowed to create a repository in the organization that owns it   | step 3     |
-| The administrator's e-mail, and the human to open the enrollment URL           | step 2     |
+| The administrator's e-mail address, and the human to open the enrollment URL   | step 2     |
 | For a PRIVATE application repository: the GitHub App connected in the console  | step 5     |
 | The fabrika release tag to install, for example `v0.4.2` (a branch is refused) | steps 1, 3 |
 
@@ -79,7 +79,8 @@ FABRIKA_IAM_PROVISIONING_KEY="$(cat provisioning.key)" \
   fabrika platform admin --provider=zerops --email=<address> --iam-host=<IAM host from step 1>
 ```
 
-It prints one enrollment URL. The URL is a credential: give it to the human only, and do not log it. The
+It prints one enrollment URL. Nothing is e-mailed: the installation has no mail service, so do not tell the
+human to wait for a message. The URL is a credential: give it to the human only, and do not log it. The
 human opens it, sets a password and signs in at the console origin. A re-run creates nothing new;
 `--reissue` replaces an enrollment that expired unopened.
 

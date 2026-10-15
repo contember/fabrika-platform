@@ -84,7 +84,7 @@ export const runPlatformAdmin = async (input: PlatformAdminInput, collaborators:
 const report = (result: FirstAdministratorResult, log: AdminLog): void => {
 	log.ok(
 		result.principal === 'invited'
-			? `invited ${result.email} as principal ${result.principalId}`
+			? `created principal ${result.principalId} for ${result.email} — no e-mail was sent`
 			: `${result.email} already exists as principal ${result.principalId}`,
 	)
 	// `app: null` is the whole point: an `admin` grant scoped to the console's own app id leaves
@@ -113,7 +113,9 @@ const announceEnrollment = (result: FirstAdministratorResult, log: AdminLog, pri
 		return
 	}
 	log.ok(`enrollment issued, valid until ${expiry(result.enrollment.expiresAt)}`)
-	log.info('The URL below sets the first password. It is a credential: it is printed once, stored nowhere, and it expires.')
+	// IAM answers with the URL only when it has no mail service, so nobody else will deliver it.
+	log.info('Nothing was e-mailed: this installation has no mail service. Give the URL below to the administrator yourself.')
+	log.info('It sets the first password. It is a credential: it is printed once, stored nowhere, and it expires.')
 	print(result.enrollment.url)
 }
 
