@@ -147,7 +147,9 @@ const SECTION_UNVERIFIED_ACTIVATION =
 	'UNVERIFIED: what stops an activation besides an httpGet readiness check — docs/reference/zerops-platform.md:407'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
 const SECTION_VALUE_SIZE = 'Verified live (2026-10-15) — a service variable value over ~32 KB is a bare 500 — docs/reference/zerops-platform.md:767'
-const SECTION_START_MEMORY = "UNVERIFIED: a deploy raises the deploy service's minimum RAM — docs/reference/zerops-platform.md"
+const SECTION_USER_DATA_SENSITIVE_DEFAULT =
+	'Verified live (2026-10-15) — a sensitive value is `REDACTED` outside sudo mode — docs/reference/zerops-platform.md'
+const SECTION_START_MEMORY = "Verified live (2026-10-15) — a deploy raises the deploy service's minimum RAM — docs/reference/zerops-platform.md"
 const SECTION_ENV_ACTIVATION = 'Verified live (2026-09-23) — service variables across activation and rollback — docs/reference/zerops-platform.md:874'
 
 /** The keys the rows write. Literals, not credentials — nothing here is a secret and nothing is printed. */
@@ -217,24 +219,25 @@ const COUNT_IMPORT_DOCUMENT = [
 	'',
 ].join('\n')
 
-/** The same document with the flag the platform accepts and drops. */
 /** The custom autoscaling a deploy sends for a service with none: the minimum RAM its start needs, everything else inherited. */
 const RAISED_MIN_RAM_GB = 0.5
 const inheritedResource = { cpuCoreCount: null, memoryGBytes: null, diskGBytes: null }
-const RAISED_MIN_RAM_AUTOSCALING = {
-	customAutoscaling: {
-		verticalAutoscalingNullable: {
-			cpuMode: null,
-			minResource: { ...inheritedResource, memoryGBytes: RAISED_MIN_RAM_GB },
-			maxResource: inheritedResource,
-			minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
-			startCpuCoreCount: null,
-			swapEnabled: null,
-		},
-		horizontalAutoscalingNullable: { minContainerCount: null, maxContainerCount: null },
-	},
+const raisedVertical = {
+	cpuMode: null,
+	minResource: { ...inheritedResource, memoryGBytes: RAISED_MIN_RAM_GB },
+	maxResource: inheritedResource,
+	minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
+	startCpuCoreCount: null,
+	swapEnabled: null,
+}
+const inheritedHorizontal = { minContainerCount: null, maxContainerCount: null }
+const RAISED_MIN_RAM_AUTOSCALING = { customAutoscaling: { verticalAutoscaling: raisedVertical, horizontalAutoscaling: inheritedHorizontal } }
+/** The keys of the published OpenAPI's `BaseCustomAutoscaling`, which the platform does not read. */
+const NULLABLE_KEYS_AUTOSCALING = {
+	customAutoscaling: { verticalAutoscalingNullable: raisedVertical, horizontalAutoscalingNullable: inheritedHorizontal },
 }
 
+/** The same document with the flag the platform accepts and drops. */
 const IMPORT_WITH_SUBDOMAIN_FLAG = [
 	'services:',
 	'  - hostname: {hostname}',
@@ -468,17 +471,33 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		request: { method: 'PUT', path: '/service-stack/{noopServiceId}/autoscaling', body: RAISED_MIN_RAM_AUTOSCALING },
 		expect: { status: 200 },
 		awaitProcess: 'process.id',
-		then: [{
-			method: 'GET',
-			path: '/service-stack/{noopServiceId}',
-			expect: {
-				status: 200,
-				bodyShape: {
-					'customAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: RAISED_MIN_RAM_GB },
-					'currentAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: RAISED_MIN_RAM_GB },
+		then: [
+			{
+				method: 'GET',
+				path: '/service-stack/{noopServiceId}',
+				expect: {
+					status: 200,
+					bodyShape: {
+						'customAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: RAISED_MIN_RAM_GB },
+						'currentAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: RAISED_MIN_RAM_GB },
+						'currentAutoscaling.verticalAutoscaling.maxResource.memoryGBytes': { kind: 'number', value: 48 },
+					},
 				},
 			},
-		}],
+			// The OpenAPI's request keys answer 200 and reset the custom autoscaling: the platform reads neither.
+			{ method: 'PUT', path: '/service-stack/{noopServiceId}/autoscaling', body: NULLABLE_KEYS_AUTOSCALING, expect: { status: 200 } },
+			{
+				method: 'GET',
+				path: '/service-stack/{noopServiceId}',
+				expect: {
+					status: 200,
+					bodyShape: {
+						'customAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'absent' },
+						'currentAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: 0.125 },
+					},
+				},
+			},
+		],
 		live: 'service',
 		emulator: true,
 	},
@@ -594,12 +613,18 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulator: true,
 	},
 	{
-		id: 'user-data-write-requires-sensitive',
-		section: SECTION_NAMESPACE,
-		// The meta the platform sends is `{"sensitive":["field is required"]}`; its envelope position is
-		// recorded nowhere, so the row asserts the code and leaves the meta to the reference doc.
+		id: 'user-data-write-without-sensitive-is-readable',
+		section: SECTION_USER_DATA_SENSITIVE_DEFAULT,
+		// Until 2026-08-21 this was `400 invalidUserInput`, `{"sensitive":["field is required"]}`. Now the platform
+		// accepts it and stores the value NOT sensitive, so a client that drops the flag publishes a secret.
 		request: { method: 'POST', path: '/service-stack/{serviceId}/user-data', body: { key: KEY_SENSITIVE, content: 'fact-one' } },
-		expect: { status: 400, code: 'invalidUserInput' },
+		expect: { status: 200, bodyShape: { actionName: { kind: 'equals', value: 'stack.updateUserData' } } },
+		awaitProcess: 'id',
+		then: [{
+			method: 'GET',
+			path: '/service-stack/{serviceId}/env',
+			expect: { status: 200, bodyShape: { [`items[key=${KEY_SENSITIVE}].sensitive`]: { kind: 'boolean', value: false } } },
+		}],
 		live: 'service',
 		emulator: true,
 	},

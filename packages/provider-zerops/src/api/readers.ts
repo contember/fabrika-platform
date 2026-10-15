@@ -138,15 +138,18 @@ const scalingFreeResourceSchema = z.object({
  * Strict where `optional` is lenient: the custom autoscaling is sent back whole, so a field read as absent would be
  * reset. One that does not parse makes the whole object absent, and nothing is sent.
  */
+const verticalAutoscalingSchema = z.object({
+	cpuMode: z.enum(['DEDICATED', 'SHARED']).nullish().transform((value) => value ?? null),
+	minResource: scalingResourceSchema,
+	maxResource: scalingResourceSchema,
+	minFreeResource: scalingFreeResourceSchema,
+	startCpuCoreCount: nullableNumber,
+	swapEnabled: z.boolean().nullish().transform((value) => value ?? null),
+})
+
 const serviceAutoscalingSchema = z.object({
-	verticalAutoscaling: z.object({
-		cpuMode: z.enum(['DEDICATED', 'SHARED']).nullish().transform((value) => value ?? null),
-		minResource: scalingResourceSchema,
-		maxResource: scalingResourceSchema,
-		minFreeResource: scalingFreeResourceSchema,
-		startCpuCoreCount: nullableNumber,
-		swapEnabled: z.boolean().nullish().transform((value) => value ?? null),
-	}),
+	// A service with no custom vertical autoscaling reads `null` here (measured 2026-10-15): every field inherits.
+	verticalAutoscaling: verticalAutoscalingSchema.nullish().transform((vertical) => vertical ?? verticalAutoscalingSchema.parse({})),
 	horizontalAutoscaling: z.object({ minContainerCount: nullableNumber, maxContainerCount: nullableNumber }).nullish()
 		.transform((horizontal) => horizontal ?? { minContainerCount: null, maxContainerCount: null }),
 }).transform(({ verticalAutoscaling, horizontalAutoscaling }): ZeropsServiceAutoscaling => ({

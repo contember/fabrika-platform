@@ -702,7 +702,7 @@ than read, and each of which stopped the provision dead until it was addressed.
 | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /client/{id}/project/import` with the installation's integration token (client `NO_ACCESS`, one project `ADMIN`) | **`403 insufficientPermissions`.** Client-scoped READS with the same token answer `200`, so the token is healthy — it simply may not create a project ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)) |
 | The same call after `zops token integration update <id> --can-create-projects`                                         | **Accepted.** The token's grant list gains the new project at `OWNER`, automatically and without being asked                                                                                                                            |
-| `POST /service-stack/{id}/user-data` without `sensitive`                                                               | **`400 invalidUserInput`**, `meta.metadata = {"sensitive":["field is required"]}`. The same applies to `PUT /user-data/{id}`                                                                                                            |
+| `POST /service-stack/{id}/user-data` without `sensitive`                                                               | **`400 invalidUserInput`**, `meta.metadata = {"sensitive":["field is required"]}`. The same applies to `PUT /user-data/{id}` — **SUPERSEDED, see 2026-10-15 below**                                                                     |
 | A user-data write with `sensitive: true`                                                                               | Accepted, and `GET /service-stack/{id}/env` still returns its `content` VERBATIM — **SUPERSEDED, see 2026-10-15 below**                                                                                                                 |
 | `enableSubdomainAccess` immediately after the namespace proxy's first build reports ACTIVE                             | **`serviceStackIsNotHttp`** — "exposes no deployed HTTP port". The ports appear a moment later; the next reconcile succeeds                                                                                                             |
 
@@ -755,12 +755,14 @@ with `sensitive: field is required` (the CLI's update body omits it); the raw `P
 | The same with a personal token whose user is in sudo mode (`GET /auth/sudo` → `inSudo: true`) | The value itself                                                                               |
 | `GET /user-data/{id}/reveal` with that integration token                                      | **`notInSudoMode`** — "Re-authentication via password or any 2FA method is required"           |
 | `PUT /user-data/{id}` with `{ key, content, sensitive: false }` on a sensitive record         | Accepted with the integration token; the record then reads back verbatim as `sensitive: false` |
-| `PUT /user-data/{id}` without `sensitive`                                                     | **200** — the 2026-08-21 `field is required` refusal no longer reproduces                      |
+| `PUT /user-data/{id}` without `sensitive`                                                     | **200**, and a sensitive record becomes `sensitive: false`, readable                           |
+| `POST /service-stack/{id}/user-data` without `sensitive`                                      | **200**, a `stack.updateUserData` process; the record is created `sensitive: false`, readable  |
 
 Sudo mode belongs to a user session (password or 2FA re-authentication, or a token minted with `sudo: true`),
 so the same call reads a secret on one machine and `REDACTED` on another. Fabrika depends on neither: the
 client drops a sensitive record's `content` at the boundary (`api/service-env-response.ts`), every write
-states `sensitive` per key, credentials are written sensitive and never compared, and everything a deploy
+states `sensitive` per key (a write without it stores the value readable, so the client's write type requires it and
+`api.test.ts` pins it in every body), credentials are written sensitive and never compared, and everything a deploy
 compares or merges is written readable. `platform install` writes the operator's copy of every credential it
 creates to `--secrets-file` before placing the first one.
 
@@ -1257,25 +1259,32 @@ otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service
 an existing service (below). Not yet measured on a real account: that Alpine's `clamav` installs through
 `prepareCommands`, that `freshclam` reaches its mirror from the build and the runtime, and the peak memory there.
 
-#### UNVERIFIED: a deploy raises the deploy service's minimum RAM
+#### Verified live (2026-10-15, account `prg1`, a disposable project) — a deploy raises the deploy service's minimum RAM
 
-Observed live (2026-10-15, v0.4.5 and v0.4.6 on a fresh installation): with the runtime's 0.125 GB floor, the start
+Observed live the same day (v0.4.5 and v0.4.6 on a fresh installation): with the runtime's 0.125 GB floor, the start
 script's `fabrika db test-isolation` was killed (`memory limit exceeded`, exit 137) and the version went to
-`DEPLOY_FAILED` on 2 of 3 first deploys onto a new container; the restarted process then passed. Measured locally the
-same day, as the summed anonymous RSS of the CLI and its `bun test` child: 161 MiB for the Notes example (38 cases) and
-225 MiB for the CRM example (133 cases), within about 1.5 s, beside some 45 MiB of Bun's mapped binary. `--smol` on the
-child saved 7 %, a forced collection in the CLI nothing. The serving pair (launcher and application) of Notes holds
-about 105 MiB anonymous. Vertical autoscaling reacts in 10–20 s, so a spike this fast is killed before it scales.
+`DEPLOY_FAILED` on 2 of 3 first deploys onto a new container; the restarted process then passed. Measured locally, as
+the summed anonymous RSS of the CLI and its `bun test` child: 161 MiB for the Notes example (38 cases) and 225 MiB for
+the CRM example (133 cases), within about 1.5 s, beside some 45 MiB of Bun's mapped binary. `--smol` on the child saved
+7 %, a forced collection in the CLI nothing. The serving pair (launcher and application) of Notes holds about 105 MiB
+anonymous. Vertical autoscaling reacts in 10–20 s, so a spike this fast is killed before it scales.
 
 So a deploy raises the deploy service's minimum RAM (`raise-start-memory`, `packages/provider-zerops/src/provider.ts`)
 to `zeropsStartMinRam` (`src/execution.ts`): 0.5 GB for an application with a database, 2 GB for one that scans, before
-it reserves the version. It reads `customAutoscaling` and `currentAutoscaling` of `GET /service-stack/{id}`, and when
-the current minimum is lower, sends the custom object back whole, with only `minResource.memoryGBytes` changed, as
-`PUT /service-stack/{id}/autoscaling` `{ customAutoscaling: { verticalAutoscalingNullable, horizontalAutoscalingNullable } }`
-(`BaseCustomAutoscaling` of the published OpenAPI: a field left out is reset). It awaits the process and reads the
-current minimum back; anything short of it fails the deploy before a version exists. It never lowers a minimum. Not
-yet measured on a real account: the body shape, whether a field sent `null` keeps the service type's value, and how
-soon `currentAutoscaling` shows the change (the `custom-autoscaling-raises-min-ram` fact row probes it).
+it reserves the version. Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
+
+| Call                                                                                                                                                     | Result                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /service-stack/{id}` of the fresh service                                                                                                           | `customAutoscaling: { verticalAutoscaling: null, horizontalAutoscaling: { minContainerCount: 1, maxContainerCount: 2 } }`; `currentAutoscaling` carries every field: min 0.125 GB, max 48 GB |
+| `PUT /service-stack/{id}/autoscaling` `{ customAutoscaling: { verticalAutoscaling, horizontalAutoscaling } }`, nulls but `minResource.memoryGBytes: 0.5` | **`{ process: null }`**; `currentAutoscaling` reads min 0.5 GB AT ONCE, every other field unchanged; a field sent `null` inherits                                                            |
+| The same body under the OpenAPI's `BaseCustomAutoscaling` keys `verticalAutoscalingNullable` / `horizontalAutoscalingNullable`                           | **200 `{ process: null }`, and the WHOLE custom autoscaling is reset**: the minimum stays 0.125 GB and `maxContainerCount` falls back to 10                                                  |
+| `{ customAutoscaling: { verticalAutoscaling: { minResource: { memoryGBytes: 0.75 } } } }`                                                                | Applied, and `horizontalAutoscaling` reset to null (`maxContainerCount` 10): a PUT replaces the whole custom object                                                                          |
+| fabrika's client: read, change only the minimum, send it back, read back (a custom `startCpuCoreCount: 3` and 1–2 containers set before)                 | Minimum 0.125 → 0.5 GB; the custom `startCpuCoreCount` and the container range kept                                                                                                          |
+
+The step therefore sends the custom object it read WHOLE, under `verticalAutoscaling` / `horizontalAutoscaling`, with
+only `minResource.memoryGBytes` changed, and decides by reading `currentAutoscaling` back; anything short of the
+minimum fails the deploy before a version exists. It never lowers a minimum. The `custom-autoscaling-raises-min-ram`
+fact row pins both the working body and the reset under the OpenAPI's keys.
 
 #### Verified live (2026-10-15, account `prg1`) — an application's database roles and the two ports
 

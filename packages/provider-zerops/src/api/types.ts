@@ -179,7 +179,7 @@ export interface ZeropsScalingFreeResource {
 
 /**
  * A service's autoscaling, as `ResponseServiceStack.customAutoscaling` (what was set) and `.currentAutoscaling` (what
- * applies) carry it: `OutDtoCustomAutoscaling` of Zerops' published OpenAPI, every field nullable. UNVERIFIED live.
+ * applies) carry it, every field nullable. VERIFIED live 2026-10-15 (`docs/reference/zerops-platform.md`).
  */
 export interface ZeropsServiceAutoscaling {
 	vertical: {
@@ -487,9 +487,10 @@ export interface ZeropsApi {
 
 	/**
 	 * Replace a service's custom autoscaling: the same `PUT /service-stack/{id}/autoscaling`, body
-	 * `{ customAutoscaling }` (`BaseCustomAutoscaling`). The platform takes the whole object, so a field left out is reset
-	 * to the service type's value: the caller sends what `getService().customAutoscaling` read, changed where it means
-	 * to. UNVERIFIED live: the body shape, and how soon `currentAutoscaling` reads the change.
+	 * `{ customAutoscaling: { verticalAutoscaling, horizontalAutoscaling } }`. VERIFIED live 2026-10-15: it answers
+	 * `{ process: null }` and `currentAutoscaling` reads the change at once. The platform replaces the whole object: a
+	 * field left out, or under a key it does not know, is reset to the service type's value and the call still answers
+	 * 200, so the caller sends what `getService().customAutoscaling` read, changed where it means to.
 	 */
 	configureCustomAutoscaling(input: { serviceId: string; autoscaling: ZeropsServiceAutoscaling; signal: AbortSignal }): Promise<ZeropsProcess | null>
 

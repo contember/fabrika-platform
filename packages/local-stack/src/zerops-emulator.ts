@@ -32,7 +32,6 @@ import {
 	parseJsonBody,
 	PlatformRefusal,
 	RESERVED_KEY_PREFIX,
-	sensitiveIsRequired,
 	serviceStackNotFound,
 	userDataContentTooLarge,
 } from './zerops-emulator/protocol'
@@ -290,8 +289,8 @@ class ZeropsEmulator {
 			if ('autoscalingProfileId' in body.data) {
 				found.autoscalingProfileId = body.data.autoscalingProfileId
 			} else {
-				const minRam = body.data.customAutoscaling.verticalAutoscalingNullable.minResource.memoryGBytes
-				if (minRam === null) delete found.minRamGB
+				const minRam = body.data.customAutoscaling.verticalAutoscaling?.minResource?.memoryGBytes
+				if (minRam === undefined || minRam === null) delete found.minRamGB
 				else found.minRamGB = minRam
 			}
 			const started = this.createProcess('stack.autoscaling', { serviceStackId: found.id })
@@ -433,11 +432,6 @@ class ZeropsEmulator {
 			const body = userDataRequestSchema.parse(await parseJsonBody(request))
 			const key = body.key
 			if (key === undefined) throw new Error('invalid state field key')
-			// `sensitive` is required on every write, create and update alike — omitting it is `invalidUserInput`
-			// with `{"sensitive":["field is required"]}`, which is what stopped a namespace provision dead.
-			if (body.sensitive === undefined) {
-				return sensitiveIsRequired()
-			}
 			if (key.startsWith(RESERVED_KEY_PREFIX)) {
 				return error(400, 'userDataZeropsPrefixForbidden', `UserData key '${key}' uses a reserved prefix.`)
 			}
@@ -455,7 +449,8 @@ class ZeropsEmulator {
 				key,
 				content: body.content,
 				type: 'USER',
-				sensitive: body.sensitive,
+				// A write without `sensitive` is stored readable (measured 2026-10-15; it was refused before).
+				sensitive: body.sensitive ?? false,
 			}
 			this.state.serviceEnv.push(record)
 			const created = this.createProcess('stack.updateUserData', { serviceStackId: serviceId })
@@ -481,14 +476,11 @@ class ZeropsEmulator {
 				if (current === undefined) {
 					return error(404, 'USER_DATA_NOT_FOUND', 'user data not found')
 				}
-				// Both fields are required even when the key is unchanged, and so is `sensitive`.
+				// Both fields are required even when the key is unchanged; `sensitive` is not (measured 2026-10-15).
 				const key = body.key
 				const content = body.content
 				if (key === undefined || content === undefined) {
 					return error(400, 'invalidUserInput', 'key and content are both required')
-				}
-				if (body.sensitive === undefined) {
-					return sensitiveIsRequired()
 				}
 				if (userDataContentTooLarge(content)) {
 					return bareInternalServerError()
@@ -496,7 +488,7 @@ class ZeropsEmulator {
 				current.key = key
 				current.content = content
 				current.type = 'USER'
-				current.sensitive = body.sensitive
+				current.sensitive = body.sensitive ?? false
 				const replaced = this.createProcess('stack.updateUserData', { serviceStackId: current.serviceStackId })
 				await this.persist()
 				return json(this.processResponse(replaced))
@@ -628,7 +620,10 @@ class ZeropsEmulator {
 		return {
 			...fields,
 			...(service.activeAppVersionId === undefined ? {} : { activeAppVersion: { id: service.activeAppVersionId } }),
-			customAutoscaling: { verticalAutoscaling: { minResource: { memoryGBytes: minRamGB ?? null } }, horizontalAutoscaling: {} },
+			customAutoscaling: {
+				verticalAutoscaling: minRamGB === undefined ? null : { minResource: { memoryGBytes: minRamGB } },
+				horizontalAutoscaling: null,
+			},
 			currentAutoscaling: {
 				verticalAutoscaling: { minResource: { memoryGBytes: minRamGB ?? PLATFORM_MIN_RAM_GB }, maxResource: { memoryGBytes: PLATFORM_MAX_RAM_GB } },
 				horizontalAutoscaling: {},

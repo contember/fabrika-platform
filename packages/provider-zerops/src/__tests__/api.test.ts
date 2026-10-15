@@ -497,8 +497,7 @@ describe('Zerops service-level environment writes', () => {
 			await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_PROXY_MANIFEST_JSON', value: '{}', sensitive, signal: signal() })
 			await api.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: 'v', sensitive, signal: signal() })
 
-			// Omitting it answers 400 `invalidUserInput` with `{"sensitive":["field is required"]}` on the live
-			// platform, which is how a namespace's very first proxy variable failed to be written.
+			// Omitted, the live platform stores the value readable (measured 2026-10-15); it used to refuse the write.
 			expect(bodies).toEqual([
 				{ key: 'FABRIKA_PROXY_MANIFEST_JSON', content: '{}', sensitive },
 				{ key: 'TOKEN', content: 'v', sensitive },
@@ -1061,7 +1060,8 @@ describe('Zerops upload-backed app versions', () => {
 			return jsonResponse({
 				id: 'service-1',
 				name: 'api',
-				customAutoscaling: { verticalAutoscaling: { minResource: { memoryGBytes: null } }, horizontalAutoscaling: { maxContainerCount: 4 } },
+				// What a service with no custom vertical autoscaling answers (measured 2026-10-15).
+				customAutoscaling: { verticalAutoscaling: null, horizontalAutoscaling: { maxContainerCount: 4 } },
 				currentAutoscaling: { verticalAutoscaling: vertical, horizontalAutoscaling: { minContainerCount: 1, maxContainerCount: 4 } },
 			})
 		}
@@ -1089,7 +1089,7 @@ describe('Zerops upload-backed app versions', () => {
 		expect(requests[1]).toEqual({
 			method: 'PUT',
 			url: 'https://zerops.test/service-stack/service-1/autoscaling',
-			body: { customAutoscaling: { verticalAutoscalingNullable: custom.vertical, horizontalAutoscalingNullable: custom.horizontal } },
+			body: { customAutoscaling: { verticalAutoscaling: custom.vertical, horizontalAutoscaling: custom.horizontal } },
 		})
 	})
 

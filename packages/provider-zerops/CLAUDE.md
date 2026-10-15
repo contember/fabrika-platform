@@ -159,9 +159,10 @@ bun test
   script's `fabrika db test-isolation` peaks above the runtime's 0.125 GB faster than vertical autoscaling reacts, so
   `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. An import
   cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only
-  `minResource.memoryGBytes` changed (a field left out is reset), awaits the process and decides by reading
-  `currentAutoscaling` back. The reader reads an autoscaling with any unreadable field as absent, and the step then
-  refuses rather than reset a field. It only raises. UNVERIFIED live (`docs/reference/zerops-platform.md`).
+  `minResource.memoryGBytes` changed, under the keys `verticalAutoscaling` / `horizontalAutoscaling`, and decides by
+  reading `currentAutoscaling` back. Measured live: a field left out, and the whole object under the published OpenAPI's
+  `…Nullable` keys, is silently RESET with a 200. The reader reads an autoscaling with any unreadable field as absent,
+  and the step then refuses rather than reset a field. It only raises.
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`

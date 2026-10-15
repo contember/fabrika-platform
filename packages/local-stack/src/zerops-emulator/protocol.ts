@@ -25,7 +25,6 @@ export const error = (status: number, code: string, message: string): Response =
 export const serviceStackNotFound = (): Response => error(400, 'serviceStackNotFound', 'Service stack not found.')
 
 /** The refusal every user-data write gets without `sensitive`, create and update alike. */
-export const sensitiveIsRequired = (): Response => error(400, 'invalidUserInput', 'sensitive: field is required')
 
 /**
  * The smallest value size, in bytes, the platform was measured to refuse (issue #3: 32,000 created, 32,768 refused).

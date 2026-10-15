@@ -357,7 +357,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		configureCustomAutoscaling: async ({ serviceId, autoscaling, signal }) => {
 			const payload = await request('configure custom autoscaling', 'PUT', `/service-stack/${serviceId}/autoscaling`, {
 				body: {
-					customAutoscaling: { verticalAutoscalingNullable: autoscaling.vertical, horizontalAutoscalingNullable: autoscaling.horizontal },
+					customAutoscaling: { verticalAutoscaling: autoscaling.vertical, horizontalAutoscaling: autoscaling.horizontal },
 				},
 				signal,
 			})
