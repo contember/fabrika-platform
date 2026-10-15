@@ -130,14 +130,28 @@ const PROVISIONING_DATABASE_URL = 'FABRIKA_APP_DATABASE_URL'
 /** The runtime role's credential, which the launcher derives and hands the application's process in its place. */
 const RUNTIME_DATABASE_URL = 'FABRIKA_APP_RUNTIME_DATABASE_URL'
 
+/** The most connections one process opens, as the platform sized it from the database's limit (ADR-0043). */
+const DATABASE_CONNECTIONS = 'FABRIKA_APP_DATABASE_CONNECTIONS'
+/** Without one (a deploy by an older platform, the local stack): the size every process had before the platform sized it. */
+const DEFAULT_DATABASE_CONNECTIONS = 10
+const MAX_DATABASE_CONNECTIONS = 100
+
+/** The pool size the platform wrote, the default without one, or null for a value that is no count in range. */
+function databaseConnections(value: string | undefined): number | null {
+	if (value === undefined) return DEFAULT_DATABASE_CONNECTIONS
+	const count = /^[1-9][0-9]*$/.test(value) ? Number(value) : Number.NaN
+	return count <= MAX_DATABASE_CONNECTIONS ? count : null
+}
+
 /**
  * The application's connection: its runtime role `run_<FABRIKA_APP_ID>`, whose URL the launcher derived from the
- * provisioning credential, on the schema `app_<FABRIKA_APP_ID>` its migrations created. A URL is a credential, so no
- * message quotes it.
+ * provisioning credential, on the schema `app_<FABRIKA_APP_ID>` its migrations created, with at most
+ * `FABRIKA_APP_DATABASE_CONNECTIONS` connections. A URL is a credential, so no message quotes it.
  */
 function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Record<string, string>>): Database {
 	const url = framework[RUNTIME_DATABASE_URL] ?? ''
 	const appId = framework['FABRIKA_APP_ID'] ?? ''
+	const connections = framework[DATABASE_CONNECTIONS]
 	const problems: string[] = []
 	if (url.trim() === '') {
 		problems.push('FABRIKA_APP_DATABASE_URL is not set; the platform writes it for an application with a database')
@@ -148,10 +162,14 @@ function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Rec
 	} catch {
 		problems.push(`FABRIKA_APP_ID '${appId}' is not an application id (allowed: lowercase letters, digits and -, at most 59)`)
 	}
-	if (problems.length > 0) {
+	const max = databaseConnections(connections)
+	if (max === null) {
+		problems.push(`${DATABASE_CONNECTIONS} '${connections ?? ''}' is not a number of connections (allowed: 1 to ${MAX_DATABASE_CONNECTIONS})`)
+	}
+	if (problems.length > 0 || max === null) {
 		throw new BootError(problems)
 	}
-	return data.postgres({ url, schema })
+	return data.postgres({ url, schema, max })
 }
 
 /**

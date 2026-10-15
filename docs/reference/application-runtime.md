@@ -252,7 +252,9 @@ block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
 and no DDL, so no query of the application can create a trigger or write the migration ledger. The derivation happens
 in a launcher: handed `FABRIKA_APP_DATABASE_URL`, `serveContract` and `runContractJob` load no application module and
 run the same command again with `FABRIKA_APP_RUNTIME_DATABASE_URL` in its place, so the application's process never
-holds the provisioning credential;
+holds the provisioning credential. Each process opens at most `FABRIKA_APP_DATABASE_CONNECTIONS` connections (10
+without it), which a Zerops deploy sizes from the database's connection limit
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md));
 `boot` binds the layer to it and to its runtime's capability authority, once, and keeps the locator the
 bind answers; the application receives neither. Only an object `scoped` created is bound.
 Without a connection (the data layer runs on Bun with Postgres only, so on Cloudflare),

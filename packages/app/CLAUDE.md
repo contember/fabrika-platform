@@ -489,7 +489,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   `serveContract` and `runContractJob` import `@fabrika/db` before the application (it
   captures its built-ins and freezes the Kysely compiler at load), take `Database.postgres`
   then, and open it on `app_<FABRIKA_APP_ID>` as the runtime role `run_<FABRIKA_APP_ID>`, from
-  `FABRIKA_APP_RUNTIME_DATABASE_URL` (ADR-0017). Handed the provisioning credential `FABRIKA_APP_DATABASE_URL`
+  `FABRIKA_APP_RUNTIME_DATABASE_URL` (ADR-0017), with at most `FABRIKA_APP_DATABASE_CONNECTIONS` connections, which a
+  Zerops deploy sizes from the database's limit (ADR-0043; 10 without it, a value outside 1–100 is a `BootError`).
+  Handed the provisioning credential `FABRIKA_APP_DATABASE_URL`
   instead, both are launchers: they load no application module, derive the runtime URL (`applicationRuntimeUrl`) and
   run the same command again without the provisioning credential (stdio inherited, signals forwarded, exit code
   propagated; `launcher.test.ts`), after making themselves non-dumpable (`src/undumpable.ts`, `prctl` through

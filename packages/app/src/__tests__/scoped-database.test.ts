@@ -278,6 +278,25 @@ describe('boot binds the data layer once', () => {
 		})
 	})
 
+	test('serveContract refuses a pool size the platform could not have written', async () => {
+		for (const connections of ['0', '101', '2.5', ' 4', '']) {
+			await keepingProcessEnvironment(async () => {
+				const application = scopedNotesApp(hooks, scoped(tables))
+				const env = {
+					...frameworkEnvFor(application),
+					FABRIKA_APP_ID: 'notes',
+					FABRIKA_APP_RUNTIME_DATABASE_URL: 'postgres://run_notes:secret@127.0.0.1:1/none',
+					FABRIKA_APP_DATABASE_CONNECTIONS: connections,
+					PORT: '0',
+				}
+				const served = serveContract(() => Promise.resolve({ default: application }), env)
+				await expect(served).rejects.toThrow(
+					`FABRIKA_APP_DATABASE_CONNECTIONS '${connections}' is not a number of connections (allowed: 1 to 100)`,
+				)
+			})
+		}
+	})
+
 	test.skipIf(!hasPostgres)('serveContract opens the application schema from the framework variables and connects it', async () => {
 		await keepingProcessEnvironment(async () => {
 			const served = scoped(tables)
