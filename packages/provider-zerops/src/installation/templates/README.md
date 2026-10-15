@@ -122,4 +122,4 @@ Only a change to `fabrika.ref` or to the workflow triggers a push-driven run; ed
 not deploy.
 
 `fabrika.ref` is operator-owned: `fabrika platform init` writes it once and never overwrites a later
-version pin.
+version pin. The workflow is not: `init` and `upgrade` both rewrite it to the one their CLI generates.

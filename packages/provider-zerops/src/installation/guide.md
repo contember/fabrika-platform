@@ -293,7 +293,10 @@ fabrika platform upgrade --provider=zerops --to=<newer tag> --sidecar=<sidecar c
 ```
 
 It commits the tag to the sidecar's `fabrika.ref`, pushes, and follows the workflow run it triggers. It
-needs only the `gh` login. Existing namespaces keep their proxy version. To move one to the proxy of the
+needs only the `gh` login. When the sidecar's `.github/workflows/platform.yml` differs from the one this CLI
+generates, the same commit rewrites it, so run `upgrade` with the newest CLI: a hand edit of that file does not
+survive. The workflow installs the Bun release the pinned tag names in its `.bun-version` (1.3.14 for a tag
+that has none), never the newest one. Existing namespaces keep their proxy version. To move one to the proxy of the
 new release, after the run succeeded:
 
 ```bash

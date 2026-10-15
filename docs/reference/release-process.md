@@ -39,6 +39,19 @@ bun run release:bump --tag=v1.2.3
 
 Between the bump commit and the publish of its tag, the source names a version npm does not have yet. On Zerops `fabrika platform install` and `deploy` refuse such a checkout ([`zerops-platform.md`](zerops-platform.md#the-checker-version)), so a source install from `main` works again once the tag is published.
 
+## The Bun version
+
+`.bun-version` at the repository root names the one exact Bun release this repository is built, tested and released with. Bun itself ignores the file. Every place that installs Bun follows it:
+
+- Every `setup-bun` step of `ci.yml` and `release.yml` reads it with `bun-version-file`.
+- The runner image copies it and passes it to the Bun installer.
+- Both generated sidecar workflows read it from the checkout of the pinned `fabrika.ref`, so an installation installs the Bun its tag was released with. A newer Bun can rewrite the lockfile, which `bun install --frozen-lockfile` refuses. A tag up to v0.4.3 has no `.bun-version`; the workflow then installs 1.3.14, the release all of those tags were built with. The workflows never install `latest`.
+- The local stack's `oven/bun:<version>-alpine` images (`packages/local-stack/compose.yaml` and `app-image/Dockerfile`) repeat it, because an image tag cannot read a file.
+
+To move to another Bun, change `.bun-version` and the two local-stack image tags, run `bun install` so the lockfile is the one that Bun writes, and land it before the release it should ship with. `scripts/__tests__/bun-version.test.ts` fails when a CI step, the runner image or a local-stack image does not follow the file.
+
+The Zerops platform services build and run on the `alpine/bun@1.3` base. Zerops resolves that alias to the newest concrete 1.3 release in its catalog ([`zerops-platform.md`](zerops-platform.md)), and offers no way to name `.bun-version` there.
+
 ## Cutting a release
 
 1. On an up-to-date `main`, run `bun run release:bump --tag=v1.2.3`, review the diff, and run `bun run format`, `bun run typecheck` and `bun run test`.
@@ -126,6 +139,6 @@ Local Git and package checks verify offline source identity and consumer contrac
 Live GitHub authorization, Cloudflare RPC/image exchange and account rollout
 require separate operator-owned acceptance evidence.
 
-A Zerops installation rolls forward with one command: `fabrika platform upgrade --provider=zerops --to=<tag>` verifies the tag exists on this repository, writes `fabrika.ref` in the sidecar checkout, commits and pushes it, prints the workflow run URL and watches the run to its end. The sidecar builds `iam` and `operations` concurrently, then `proxy`, then `control`.
+A Zerops installation rolls forward with one command: `fabrika platform upgrade --provider=zerops --to=<tag>` verifies the tag exists on this repository, writes `fabrika.ref` in the sidecar checkout, rewrites the sidecar workflow when it differs from the one the running CLI generates, commits and pushes both, prints the workflow run URL and watches the run to its end. The sidecar builds `iam` and `operations` concurrently, then `proxy`, then `control`.
 
 Scaffold commits skip push CI because the GitHub Environment does not exist yet. `fabrika platform init` writes the account secrets and variables first, then explicitly dispatches the platform workflow.

@@ -221,7 +221,8 @@ and the generated installation data; `@fabrika/cli` loads it. Seven commands; th
   points to it. `packages/cli/src/__tests__/guide.test.ts` fails when it names a command or flag the CLI lacks.
   A trap found in a live bring-up belongs there.
 - `upgrade --to=<tag>` is the roll: it checks the tag on the public repository, writes `fabrika.ref`,
-  commits it without `[skip ci]` (the push IS the trigger), pushes, prints the run URL and watches it.
+  regenerates the sidecar workflow when it differs (for the Environment the existing one names), commits
+  both without `[skip ci]` (the push IS the trigger), pushes, prints the run URL and watches it.
 
 The bring-up is two passes, because `zeropsSubdomain` names nothing until the proxy has deployed HTTP
 ports while the manifest must be written before the proxy is built: pass 1 gives the proxy the legal

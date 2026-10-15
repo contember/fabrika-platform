@@ -11,7 +11,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { recordingDeployLog } from '../log'
-import { FABRIKA_REF_FILE } from '../sidecar'
+import { FABRIKA_REF_FILE, renderSidecarWorkflow, SIDECAR_WORKFLOW_PATH } from '../sidecar'
 import { runUpgrade, type SidecarBranch, type TagLookup, type UpgradeCollaborators, type UpgradeRun } from '../upgrade'
 import { parsePlatformUpgradeArgs } from '../upgrade-options'
 
@@ -23,6 +23,8 @@ const ON_MAIN: SidecarBranch = { name: 'main', ahead: 0 }
 interface Recorder {
 	readonly collaborators: UpgradeCollaborators
 	readonly effects: string[]
+	/** The paths each `commit` staged, in order. */
+	readonly committed: (readonly string[])[]
 	readonly lines: readonly string[]
 	/** The transcript as it stood when `watchRun` was entered — the run URL must already be in it. */
 	readonly linesAtWatch: string[]
@@ -39,11 +41,13 @@ const recorder = (options: {
 	readonly watchFails?: boolean
 } = {}): Recorder => {
 	const effects: string[] = []
+	const committed: (readonly string[])[] = []
 	const log = recordingDeployLog()
 	const linesAtWatch: string[] = []
 	const answers = [...(options.runs ?? [undefined, RUN])]
 	return {
 		effects,
+		committed,
 		lines: log.lines,
 		linesAtWatch,
 		collaborators: {
@@ -75,8 +79,9 @@ const recorder = (options: {
 					effects.push('branch')
 					return options.branch ?? ON_MAIN
 				},
-				commit: async ({ message }) => {
+				commit: async ({ files, message }) => {
 					effects.push(`commit: ${message}`)
+					committed.push(files)
 					return SHA
 				},
 				push: async () => void effects.push('push'),
@@ -96,13 +101,23 @@ const recorder = (options: {
 	}
 }
 
-/** A directory that passes the local checkout probe: it exists and carries a `.git`. */
-const withSidecar = async (pin: string | undefined, run: (dir: string) => Promise<void>): Promise<void> => {
+/** A workflow an older CLI generated for the `test` Environment: it installed whatever Bun was newest. */
+const STALE_WORKFLOW =
+	'name: platform\njobs:\n  deploy:\n    environment: test\n    steps:\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: latest\n'
+
+/**
+ * A directory that passes the local checkout probe: it exists and carries a `.git`. Its workflow is the
+ * one this CLI generates for the `test` Environment unless one is given; `null` writes none.
+ */
+const withSidecar = async (pin: string | undefined, run: (dir: string) => Promise<void>, workflow?: string | null): Promise<void> => {
 	const dir = await mkdtemp(join(tmpdir(), 'fabrika-upgrade-'))
 	try {
 		await mkdir(join(dir, '.git'), { recursive: true })
 		if (pin !== undefined) {
 			await Bun.write(join(dir, FABRIKA_REF_FILE), pin)
+		}
+		if (workflow !== null) {
+			await Bun.write(join(dir, SIDECAR_WORKFLOW_PATH), workflow ?? (await renderSidecarWorkflow('test')))
 		}
 		await run(dir)
 	} finally {
@@ -111,6 +126,8 @@ const withSidecar = async (pin: string | undefined, run: (dir: string) => Promis
 }
 
 const pinOf = async (dir: string): Promise<string> => await Bun.file(join(dir, FABRIKA_REF_FILE)).text()
+
+const workflowOf = async (dir: string): Promise<string> => await Bun.file(join(dir, SIDECAR_WORKFLOW_PATH)).text()
 
 describe('the roll', () => {
 	test('checks gh and the tag, writes the pin, commits it under a fixed subject, pushes, then follows the run', async () => {
@@ -132,7 +149,23 @@ describe('the roll', () => {
 			])
 			// The trailing newline is the sidecar template's own shape (`sidecar.test.ts` pins it too).
 			expect(await pinOf(dir)).toBe('v0.2.0\n')
+			// The workflow is already the one this CLI generates, so the commit carries the pin alone.
+			expect(recorded.committed).toEqual([[FABRIKA_REF_FILE]])
 		})
+	})
+
+	test('rewrites a workflow an older CLI generated, in the same commit as the pin', async () => {
+		await withSidecar('v0.1.0\n', async (dir) => {
+			const recorded = recorder()
+			// No installation positional and a repository name that says nothing: the Environment comes
+			// from the workflow being replaced.
+			await runUpgrade(parsePlatformUpgradeArgs(['--to=v0.2.0', `--sidecar=${dir}`]), recorded.collaborators)
+
+			expect(recorded.committed).toEqual([[FABRIKA_REF_FILE, SIDECAR_WORKFLOW_PATH]])
+			expect(await workflowOf(dir)).toBe(await renderSidecarWorkflow('test'))
+			expect(await workflowOf(dir)).not.toContain('bun-version: latest')
+			expect(recorded.lines.join('\n')).toContain(`${SIDECAR_WORKFLOW_PATH} differs from the one this CLI generates`)
+		}, STALE_WORKFLOW)
 	})
 
 	test('prints the run URL BEFORE it starts watching, so an operator who leaves can come back to it', async () => {
@@ -238,7 +271,7 @@ describe('what it refuses, before it writes anything', () => {
 		}
 	})
 
-	test('a dirty sidecar tree, because the commit stages `fabrika.ref` alone', async () => {
+	test('a dirty sidecar tree, because the commit stages `fabrika.ref` and the workflow alone', async () => {
 		await withSidecar('v0.1.0\n', async (dir) => {
 			const recorded = recorder({ dirty: true })
 			await expect(runUpgrade(parsePlatformUpgradeArgs(['--to=v0.2.0', 'test', `--sidecar=${dir}`]), recorded.collaborators))
@@ -288,6 +321,16 @@ describe('what it refuses, before it writes anything', () => {
 		})
 	})
 
+	test('a sidecar whose workflow names no GitHub Environment, which a regenerated one could not deploy with', async () => {
+		await withSidecar('v0.1.0\n', async (dir) => {
+			const recorded = recorder()
+			await expect(runUpgrade(parsePlatformUpgradeArgs(['--to=v0.2.0', 'test', `--sidecar=${dir}`]), recorded.collaborators))
+				.rejects.toThrow(`has no ${SIDECAR_WORKFLOW_PATH}`)
+			expect(recorded.effects).not.toContain('commit: chore: roll test forward to fabrika v0.2.0')
+			expect(await pinOf(dir)).toBe('v0.1.0\n')
+		}, null)
+	})
+
 	test('a directory that is a checkout but not a sidecar', async () => {
 		await withSidecar(undefined, async (dir) => {
 			const recorded = recorder()
@@ -307,5 +350,15 @@ describe('--dry-run', () => {
 			expect(await pinOf(dir)).toBe('v0.1.0\n')
 			expect(recorded.lines.join('\n')).toContain('chore: roll test forward to fabrika v0.2.0')
 		})
+	})
+
+	test('says it would regenerate a stale workflow, and leaves it as it is', async () => {
+		await withSidecar('v0.1.0\n', async (dir) => {
+			const recorded = recorder()
+			await runUpgrade(parsePlatformUpgradeArgs(['--to=v0.2.0', 'test', `--sidecar=${dir}`, '--dry-run']), recorded.collaborators)
+
+			expect(recorded.lines.join('\n')).toContain(`commit ${FABRIKA_REF_FILE} and ${SIDECAR_WORKFLOW_PATH} as`)
+			expect(await workflowOf(dir)).toBe(STALE_WORKFLOW)
+		}, STALE_WORKFLOW)
 	})
 })
