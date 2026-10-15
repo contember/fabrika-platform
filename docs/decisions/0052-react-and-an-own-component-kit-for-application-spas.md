@@ -77,6 +77,12 @@ Three constraints shape the answer:
    the contract's `csp` (`styleSrc`, `fontSrc`), which the approval shows like any other origin.
 7. **The checker admits the stack.** `spa-server-import` allows `@fabrika/app/react` and `@fabrika/ui` beside
    `@fabrika/app/client`; React itself is no `@fabrika/*` module and no builtin, so it was always admitted.
+8. **`FabrikaProvider` reports the page's errors, with no SDK.** It reads the mount's `__fabrika-config.json` and,
+   when that names an Operations DSN, sends each uncaught error and unhandled rejection to the ingest as one Sentry
+   error event (`src/client/error-reporting.ts`): type, message, stack frames, release, environment. Operations
+   ingests error events only, so the reporter is a few kilobytes of the framework's own code. `reportErrors={false}`
+   opts out; without a DSN it installs nothing. The SPA build writes external source maps, which the platform build
+   uploads and no mount serves.
 
 ## Consequences
 
@@ -103,5 +109,8 @@ Three constraints shape the answer:
   theming systems, and fonts or styles that a same-origin CSP admits only with work in each application.
 - **TanStack Query** for the cache: see decision 3.
 - **`@buzola/router`**: see decision 5. It stays the console's router (`packages/dashboard`), which is built with Vite.
+- **`@sentry/browser` for the page's errors**, started by each application (as the template did) or by the provider:
+  about 30 KB gzip in every bundle with only the global handlers, for sessions, tracing and replay that Operations does
+  not ingest, and a runtime dependency of `@fabrika/app`. Started by each application, the CRM example reported nothing.
 - **A new package `@fabrika/react`** for the hooks: it would need the client's node registry as a public export, and a
   second package whose version must match `@fabrika/app` exactly.
