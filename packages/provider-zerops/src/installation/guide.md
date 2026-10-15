@@ -16,14 +16,18 @@ message that names the flag or the variable to set. Read the message: it names t
 
 **Ask the human for these first.** You cannot produce them, and each one blocks a later step:
 
-| What                                                                           | Needed at  |
-| ------------------------------------------------------------------------------ | ---------- |
-| A Zerops PERSONAL access token of a client OWNER, generated in the Zerops GUI  | step 1     |
-| A `gh` login allowed to create a repository in the organization that owns it   | step 3     |
-| The administrator's e-mail address, and the human to open the enrollment URL   | step 2     |
-| For a PRIVATE application repository: the GitHub App connected in the console  | step 5     |
-| The fabrika release tag to install, for example `v0.4.3` (a branch is refused) | steps 1, 3 |
-| The four decisions below                                                       | steps 1, 5 |
+| What                                                                                  | Needed at  |
+| ------------------------------------------------------------------------------------- | ---------- |
+| A Zerops PERSONAL access token of a client OWNER, generated in the Zerops GUI         | step 1     |
+| A verified Zerops account (credit topped up once); an unverified one owns ONE project | step 5     |
+| A `gh` login allowed to create a repository in the organization that owns it          | step 3     |
+| The administrator's e-mail address, and the human to open the enrollment URL          | step 2     |
+| For a PRIVATE application repository: the GitHub App connected in the console         | step 5     |
+| The fabrika release tag to install, for example `v0.4.3` (a branch is refused)        | steps 1, 3 |
+| The four decisions below                                                              | steps 1, 5 |
+
+Every namespace is a Zerops project of its own, so the first one fails with `clientProjectCountLimitExceededTopUp`
+on an unverified account (observed 2026-10-15).
 
 Also needed on the machine: [Bun](https://bun.sh) ≥ 1.3, `git`, `gh`, `curl` and `jq`.
 
