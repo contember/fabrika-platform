@@ -392,6 +392,7 @@ describe('the packages a Zerops application installs', () => {
 			'@fabrika/iam-contract',
 			'@fabrika/installation-init',
 			'@fabrika/jwks',
+			'@fabrika/operations-contract',
 			'@fabrika/platform',
 			'@fabrika/platform-node',
 			'@fabrika/provider-contract',
