@@ -147,3 +147,5 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 - [Canonical Fabrika environment names](07-rename-env-var-prefixes.md) — the
   shipped ADR-0024 compatibility sweep retained as the inventory of renamed
   configuration boundaries and exclusions.
+- [Hotfix releases in a temporary worktree](181-a-hotfix-release-is-a-hand-made-branch.md) — why
+  `release:hotfix` branches off the last tag in a worktree of its own and runs the patched release's own bump.

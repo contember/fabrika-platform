@@ -58,6 +58,29 @@ The Zerops platform services build and run on the `alpine/bun@1.3` base. Zerops 
 2. Commit the result as `chore: release v1.2.3` and land it on `main`.
 3. Tag that commit `v1.2.3` and push the tag. `.github/workflows/release.yml` verifies, validates, packs, smokes, publishes and runs the registry smoke.
 
+## Cutting a hotfix
+
+A hotfix is the last release plus some commits, not `main`. One command builds it:
+
+```bash
+bun run release:hotfix --from=v1.2.3 --tag=v1.2.4 <commit>... [--push]
+```
+
+It works in a temporary git worktree of the same repository, so the caller's checkout, branch and uncommitted files do not change, and a red or dirty `main` does not matter. In that worktree it:
+
+1. creates the branch `hotfix/v1.2.4` from the tag `v1.2.3`;
+2. cherry-picks each commit with `-x`, in the given order;
+3. runs `bun install --frozen-lockfile` and the `release:bump` of the `--from` source, not of the caller's checkout;
+4. commits the result as `chore: release v1.2.4`;
+5. runs `release:validate` of that source;
+6. creates the annotated tag `v1.2.4`, then removes the worktree.
+
+Without `--push` it prints the push command, `git push origin hotfix/v1.2.4 v1.2.4`; with `--push` it runs it. The tag push starts `release.yml`, whose `verify` job runs the full CI against the tagged commit before anything is published. The command runs no tests of its own.
+
+It refuses a `--from` that is not a local tag, a `--tag` that does not move past it, and a tag or branch that already exists. When a commit does not apply, the bump leaves an untracked file, or the validation fails, it removes the worktree and the branch, so a re-run starts clean. A commit that conflicts needs a back-port: make it on a branch off the `--from` tag and pass that commit instead.
+
+The release commit stays on the hotfix branch. `main` keeps its source version, so the next release from `main` must take a version past the hotfix.
+
 ## Local artifact verification
 
 All commands except `pack --local` (below) require a `v<semver>` release tag. Outside a tag checkout, pass `--tag` explicitly. `validate` also requires the tag to equal the source version; `pack`, `smoke` and `publish` do not, so CI packs its disposable `v0.0.0-ci.0`:

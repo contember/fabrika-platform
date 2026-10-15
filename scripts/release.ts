@@ -267,6 +267,10 @@ const resolveTag = async (explicit: string | undefined): Promise<{ readonly tag:
 			throw new Error('Release tag is required. Pass --tag=v1.2.3 or set RELEASE_TAG.')
 		}
 	}
+	return parseReleaseTag(tag)
+}
+
+const parseReleaseTag = (tag: string): { readonly tag: string; readonly version: string } => {
 	const match = TAG_PATTERN.exec(tag)
 	if (match?.[1] === undefined) throw new Error(`Invalid release tag ${JSON.stringify(tag)}; expected v<semver>`)
 	return { tag, version: match[1] }
@@ -1052,8 +1056,125 @@ const bump = async (options: Options, packages: readonly PackageInfo[], sourceVe
 	console.info(`the source is now ${options.version}; review the diff, commit it, and tag that commit ${options.tag}`)
 }
 
+// ── a hotfix release ────────────────────────────────────────────────────────────
+
+export interface HotfixRequest {
+	/** The repository that receives the branch and the tag. Its checkout is never touched. */
+	readonly repository: string
+	readonly from: string
+	readonly tag: string
+	readonly commits: readonly string[]
+	readonly push: boolean
+}
+
+/** What the released source does to itself, run inside the hotfix worktree. */
+export interface HotfixSteps {
+	readonly bump: (worktree: string, tag: string) => Promise<void>
+	readonly validate: (worktree: string, tag: string) => Promise<void>
+}
+
+const HOTFIX_USAGE = 'Usage: bun run release:hotfix --from=v1.2.3 --tag=v1.2.4 <commit>... [--push]'
+
+export const parseHotfixRequest = (argv: readonly string[], repository: string): HotfixRequest => {
+	let from: string | undefined
+	let tag: string | undefined
+	let push = false
+	const commits: string[] = []
+	for (const argument of argv) {
+		if (argument.startsWith('--from=')) from = argument.slice('--from='.length)
+		else if (argument.startsWith('--tag=')) tag = argument.slice('--tag='.length)
+		else if (argument === '--push') push = true
+		else if (!argument.startsWith('-')) commits.push(argument)
+		else throw new Error(`Unknown option: ${argument}`)
+	}
+	if (from === undefined || tag === undefined || commits.length === 0) throw new Error(HOTFIX_USAGE)
+	const source = parseReleaseTag(from)
+	const next = parseReleaseTag(tag)
+	assertBumpForward(source.version, next.version)
+	return { repository, from: source.tag, tag: next.tag, commits, push }
+}
+
+export const hotfixBranch = (tag: string): string => `hotfix/${tag}`
+
+export const hotfixPushCommand = (tag: string): readonly string[] => ['git', 'push', 'origin', hotfixBranch(tag), tag]
+
+const refExists = async (repository: string, ref: string): Promise<boolean> => {
+	const child = Bun.spawn(['git', 'rev-parse', '--verify', '--quiet', ref], { cwd: repository, stdout: 'ignore', stderr: 'ignore' })
+	return (await child.exited) === 0
+}
+
+/** The bump and validate of the release being patched: its own `scripts/release.ts`, not this checkout's. */
+export const worktreeHotfixSteps: HotfixSteps = {
+	bump: async (worktree, tag) => {
+		await run(['bun', 'install', '--frozen-lockfile'], { cwd: worktree })
+		await run(['bun', 'scripts/release.ts', 'bump', `--tag=${tag}`], { cwd: worktree })
+	},
+	validate: async (worktree, tag) => {
+		await run(['bun', 'scripts/release.ts', 'validate', `--tag=${tag}`], { cwd: worktree })
+	},
+}
+
+/**
+ * Cut `tag` from the release `from` plus the given commits, in a temporary worktree: branch `hotfix/<tag>`,
+ * cherry-pick, bump, commit `chore: release <tag>`, validate, tag. Any failure removes the branch again,
+ * so a re-run starts clean. Pushes only when asked.
+ */
+export const hotfix = async (request: HotfixRequest, steps: HotfixSteps): Promise<void> => {
+	const { repository, from, tag } = request
+	const branch = hotfixBranch(tag)
+	const git = (args: readonly string[], cwd = repository) => run(['git', ...args], { cwd })
+	if (!(await refExists(repository, `refs/tags/${from}`))) throw new Error(`${from} is not a tag in ${repository}; fetch the tags first`)
+	if (await refExists(repository, `refs/tags/${tag}`)) throw new Error(`the tag ${tag} already exists`)
+	if (await refExists(repository, `refs/heads/${branch}`)) throw new Error(`the branch ${branch} already exists`)
+	const commits: string[] = []
+	for (const commit of request.commits) commits.push((await git(['rev-parse', '--verify', '--end-of-options', `${commit}^{commit}`])).stdout.trim())
+
+	const worktree = await mkdtemp(join(tmpdir(), 'fabrika-hotfix-'))
+	await git(['worktree', 'add', '-b', branch, worktree, `${from}^{commit}`])
+	const removeWorktree = () => git(['worktree', 'remove', '--force', worktree])
+	try {
+		for (const commit of commits) {
+			console.info(`cherry-picking ${commit}`)
+			try {
+				await git(['cherry-pick', '-x', commit], worktree)
+			} catch (error) {
+				throw new Error(`${commit} does not apply on ${from}; back-port it onto a branch off ${from} and pass that commit instead`, { cause: error })
+			}
+		}
+		console.info(`bumping the source to ${tag}`)
+		await steps.bump(worktree, tag)
+		const untracked = (await git(['status', '--porcelain', '--untracked-files=all'], worktree)).stdout.split('\n').filter((line) =>
+			line.startsWith('??')
+		)
+		if (untracked.length > 0) throw new Error(`the bump left untracked files, which a release commit would miss:\n${untracked.join('\n')}`)
+		await git(['commit', '--all', '--message', `chore: release ${tag}`], worktree)
+		console.info(`validating ${tag}`)
+		await steps.validate(worktree, tag)
+		await git(['tag', '--annotate', tag, '--message', tag], worktree)
+	} catch (error) {
+		await removeWorktree()
+		await git(['branch', '--delete', '--force', branch])
+		throw error
+	}
+	await removeWorktree()
+
+	const push = hotfixPushCommand(tag)
+	console.info(`${branch} is ${from} plus ${commits.length} commit(s) and the release commit, tagged ${tag}`)
+	if (!request.push) {
+		console.info(`publish it: ${push.join(' ')}`)
+		return
+	}
+	await run(push, { cwd: repository })
+	console.info(`pushed ${branch} and ${tag}; .github/workflows/release.yml verifies and publishes it`)
+}
+
 const main = async (): Promise<void> => {
-	const options = await parseOptions(Bun.argv.slice(2))
+	const argv = Bun.argv.slice(2)
+	if (argv[0] === 'hotfix') {
+		await hotfix(parseHotfixRequest(argv.slice(1), ROOT), worktreeHotfixSteps)
+		return
+	}
+	const options = await parseOptions(argv)
 	const packages = await readPackages()
 	const { publicPackages, order, sourceVersion } = packageGraph(packages)
 	if (options.command === 'bump') {
