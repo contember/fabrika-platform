@@ -5,6 +5,7 @@
 // and idempotence is a claim about the SECOND run.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
+import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
 	contractProxyTable,
@@ -265,16 +266,19 @@ describe('the order', () => {
 		expect(fixture.zerops.calls.indexOf('env:iam:ENVIRONMENT')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
 	})
 
-	test('registers the console and ensures the entry point only after the sequence has landed', async () => {
+	test('registers the console and IAM, and ensures the entry point only after the sequence has landed', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		fixture.zerops.env('proxy').delete('zeropsSubdomain')
 		fixture.zerops.env('proxy').set('zeropsSubdomain', SUBDOMAINS)
 		await fixture.run()
-		expect(fixture.reconciled).toHaveLength(1)
+		expect(fixture.reconciled).toHaveLength(2)
 		expect(fixture.reconciled[0]?.app).toBe('vozka')
 		expect(fixture.reconciled[0]?.url).toBe(`https://${IAM_HOST}`)
 		expect(fixture.reconciled[0]?.returnOrigins).toEqual([`https://${CONSOLE_HOST}`])
 		expect(fixture.reconciled[0]?.adminKey).toBe('px_admin')
+		// IAM's own vocabulary, beside the console's (ADR-0058), with no return origin.
+		expect(fixture.reconciled[1]).toMatchObject({ app: IAM_APP_ID, url: `https://${IAM_HOST}`, schema: IAM_APP_SCHEMA, adminKey: 'px_admin' })
+		expect(fixture.reconciled[1]?.returnOrigins).toBeUndefined()
 	})
 
 	test('refuses `local` when the console serves a public origin, before it writes anything', async () => {

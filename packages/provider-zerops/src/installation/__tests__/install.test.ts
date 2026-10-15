@@ -10,6 +10,7 @@ import { join } from 'node:path'
 // and what never reaches a log line.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import { UNATTENDED_FLAG } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
@@ -510,8 +511,8 @@ describe('the hand-off', () => {
 			`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`,
 		])
 
-		expect(fixture.reconciled).toHaveLength(1)
-		expect(fixture.reconciled[0]?.app).toBe('vozka')
+		expect(fixture.reconciled.map((call) => call.app)).toEqual(['vozka', IAM_APP_ID])
+		expect(fixture.reconciled[1]?.schema).toEqual(IAM_APP_SCHEMA)
 		expect(fixture.reconciled[0]?.url).toBe(`https://${IAM_HOST}`)
 		expect(fixture.reconciled[0]?.returnOrigins).toEqual([`https://${CONSOLE_HOST}`])
 		// It authenticates with the key this command generated, which is what makes the hand-off work.

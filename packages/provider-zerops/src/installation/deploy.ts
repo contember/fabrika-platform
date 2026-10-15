@@ -35,6 +35,7 @@
 // readiness gate.
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, readEnvironmentName } from '@fabrika/auth-core'
+import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import { assertServiceEnvValueFits } from '../api'
@@ -702,11 +703,12 @@ export const deployPreparedPlatform = async (
 		log.info('custom-domain installation: the operator binds each domain to the project balancer; no subdomain is published')
 	}
 
-	log.step('Register the console with IAM')
+	log.step('Register the console and IAM with IAM')
 	const consoleApp = platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control')
 	const consoleOrigin = platformOrigin(placement.scheme, placement.hosts.control)
 	if (input.dryRun) {
 		log.info(`would reconcile \`${consoleApp.id}\` and register its return origin ${consoleOrigin}`)
+		log.info(`would reconcile \`${IAM_APP_ID}\`'s own vocabulary`)
 	} else {
 		// The schema PUT is what REGISTERS the app, and `apps.setReturnOrigins` 404s for an app IAM has
 		// never heard of — so both travel in this one call, in that order (ADR-0022/ADR-0023).
@@ -719,6 +721,15 @@ export const deployPreparedPlatform = async (
 			signal,
 		})
 		log.info(`\`${consoleApp.id}\` reconciled; return origin ${consoleOrigin}`)
+		// IAM's own vocabulary, which `user-admin` is granted from (ADR-0058). It has no return origin.
+		await collaborators.reconcileSchema({
+			url: platformOrigin(placement.scheme, placement.hosts.iam),
+			app: IAM_APP_ID,
+			schema: IAM_APP_SCHEMA,
+			adminKey: input.iamAdminKey,
+			signal,
+		})
+		log.info(`\`${IAM_APP_ID}\` reconciled`)
 	}
 
 	log.step(input.dryRun ? 'Dry run complete — nothing was written' : 'Installation deployed')

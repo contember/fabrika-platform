@@ -83,7 +83,7 @@ Both ordering rules in the [platform facts](zerops-platform.md), plus the manife
 `packages/provider-zerops/src/installation/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
 prepare the committed source snapshot, resolve the project and its services, write each service's environment,
 deploy IAM + Operations concurrently, then proxy and then Control, ensure the public entry point,
-and reconcile the console's schema — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
+and reconcile the console's schema and IAM's own vocabulary — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
 the scaffolded workflow keeps the order. The asymmetry is deliberate
 ([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)); its full flag and
 variable surface is the `usage` string in `packages/provider-zerops/src/installation/index.ts`.
