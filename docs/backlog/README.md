@@ -61,4 +61,12 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [163](163-the-installation-hosts-send-no-hsts.md) — Only an `https` application host gets HSTS; IAM's and Control's hosts get none.
 - [164](164-a-job-without-handle-prints-the-builders-type.md) — A job, webhook, link or export procedure without `.handle` prints the builder's type, not a one-line fix.
 - [165](165-app-dev-has-no-stand-in-for-an-import.md) — `fabrika app dev` stands in for a form's challenge and an outside HTTP provider, not for a `connect` import.
+- [166](166-the-ui-kit-has-no-prop-or-token-for-common-layout-rules.md) — `DataTable`, `PageHeader` and `Checkbox` lack a prop, a wrapped column breaks inside words, and many layout rules read no token.
+- [167](167-a-mutations-mutate-is-new-every-render-and-the-screen-test-dom-empties-a-form.md) — `mutate` cannot drive an effect, there is no `useQueries`, and `installDom` makes `Form` submit an empty `FormData`.
+- [168](168-a-public-form-has-no-typed-client-and-the-error-union-drops-the-refusals-type.md) — A failed challenge reads as any 400, issue codes are dropped, and a public form posts through a plain `fetch`.
+- [169](169-app-dev-runs-no-cron-job-and-the-stand-in-iam-lists-no-invitation.md) — `app dev` runs cron jobs only from the seed, and the stand-in IAM lists no open invitation.
+- [170](170-a-column-write-scoped-update-cannot-bump-the-version.md) — A raw UPDATE under a column's write action is refused when it also bumps `version`.
+- [171](171-an-application-table-cannot-own-a-file-collection.md) — Staff-only records cannot carry attachments, and nothing bounds one owner's total bytes.
+- [172](172-a-list-of-values-cannot-show-each-values-last-sign-in.md) — A last sign-in per value needs one call per row and `members.manage`; needs a privacy decision.
+- [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, the screen example renders outside `act`, and the test-mail recipe draws a checker hint.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
