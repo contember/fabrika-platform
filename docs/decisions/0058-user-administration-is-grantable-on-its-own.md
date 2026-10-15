@@ -1,7 +1,7 @@
 ---
 id: 0058
 title: User administration is grantable on its own, and stops at the installation
-status: proposed
+status: accepted
 date: 2026-10-15
 ---
 
@@ -50,8 +50,8 @@ acts only on people whose every grant it could have made.**
 
 ### 1. IAM's vocabulary
 
-IAM declares its vocabulary in code in `packages/iam`, like the console's `controlSchema`
-(`packages/control/fabrika.schema.ts:23-73`):
+IAM's vocabulary is code in `@fabrika/iam-contract` (`IAM_APP_SCHEMA`), as the console's names live in
+`@fabrika/control-contract`. Both providers and IAM import it:
 
 - `displayName`: `Access`.
 - One scope dimension: `app` (label `Application`). Its value is an application's IAM id, `<app>@<env>`.
@@ -63,10 +63,16 @@ IAM declares its vocabulary in code in `packages/iam`, like the console's `contr
 There is no `iam-admin` role: a role holding `iam.admin` alone would be the installation admin by another name (see
 Context). The built-in `admin` keeps working unchanged.
 
-The installation registers `propustka` with the same call and the same provisioning key that register the console.
-It does so on Zerops `platform deploy`, on Cloudflare `platform deploy` (IAM's own `fabrika.config.ts` declares the
-real schema), and on the local stack. No migration is needed: the next platform deploy adds the vocabulary, and
-existing grants are untouched.
+The installation registers `propustka` in the step that registers the console, with the same provisioning key:
+
+- **Zerops:** the console registration of `platform deploy`.
+- **Cloudflare:** the control-plane stage of `platform deploy`. A platform deploy is the installation's own trusted
+  path, so it reconciles a component's schema with IAM directly. An application deploy still only reports its schema
+  to Control. IAM cannot register itself in its own stage, because its signing and provisioning keys are synced after
+  its Worker deploys.
+- **The local stack:** beside the console.
+
+No migration is needed: the next platform deploy adds the vocabulary, and existing grants are untouched.
 
 ### 2. Who holds it, and where
 
@@ -159,13 +165,23 @@ grant of that principal is one the caller could create under section 4. That exc
 - a bootstrap mailbox, which holds `admin` without a grant row;
 - a service principal.
 
-A principal with no grant, such as a fresh invitation, qualifies. The check reads the target's grants in the same
-transaction as the change, so a grant written in between is seen.
+A principal with no grant, such as a fresh invitation, qualifies. The check reads the target's grants just before the
+change. The one window is an installation admin granting the target an installation role in the same instant. For a
+manual password URL, IAM checks again after issuing it, and withholds the URL if the target no longer qualifies.
 
-**The manual password URL** (`packages/iam/src/admin/passwords.ts:32-33`) is returned for exactly those principals.
-It is not a takeover of authority. Whoever holds the URL gets an account whose every grant the caller could already
-give to an account of its own, by inviting its own mailbox and granting the same roles. A password reset of a deployer,
-a console admin or an IAM administrator is refused before any URL exists.
+**Password actions.** A user administrator issues an enrollment, a reset or a password disable only for a principal it
+may act on. A reset of a deployer, a console admin or an IAM administrator is refused before any link exists. Delivery:
+
+- **With an email sender**, every link goes by email to the principal's own mailbox.
+- **Without one**, IAM returns the manual URL (`packages/iam/src/admin/passwords.ts:32-33`) to a user administrator only
+  for an enrollment of a principal that has never signed in (status `invited`). That is onboarding. The account has no
+  password and no history, and its grants are ones the caller could give an account of its own, by inviting its own
+  mailbox. So the URL hands over nothing the caller lacks.
+- **A reset of an existing account** is refused to a user administrator without email, and only `iam.admin` receives
+  a reset URL. A reset URL signs its holder in as an established person. That gives no new authority, but it gives
+  the person's identity: the records an application keeps for that person alone, and the person's name in the audit
+  trail. "Never signed in" is stricter than "never set a password" for the same reason: a person who signs in only
+  through OIDC has no password, but has a history.
 
 The caller works from a signed-in session only, as in `appPeople`; a `px_` key administers only with `iam.admin`.
 
@@ -220,7 +236,9 @@ administrator's scope.
 - **A person in two applications.** That person can be managed only by an unscoped user administrator, or by one
   whose scope covers both applications.
 - Reads stay installation-wide. A scoped user administrator lists every principal, including their grants elsewhere, so
-  that it can find a person to grant to. Only writes are scoped.
+  that it can find a person to grant to. Only writes are scoped. A listing narrowed to the scope is
+  [backlog 175](../backlog/175-a-scoped-user-administrator-lists-every-principal.md).
+- An installation without an email sender cannot let a user administrator reset an existing person's password.
 - `propustka` appears in `apps.list`.
 - **The 409 risk.** The first registration cannot collide: a custom policy needs a registered app
   (`packages/iam/src/admin/policies.ts:69`), and `propustka` is not one today. After registration an admin can create a
@@ -229,18 +247,10 @@ administrator's scope.
   the existing rule for every app.
 - `admin-rpc-gates.test.ts` gains the user-administrator procedures beside the `appPeople.*` exception.
 
-Follow-on work after acceptance is one backlog item. It covers:
-
-- the vocabulary and its registration on all three paths;
-- the gate and sections 4–5, with a test for each refusal: a cross-app grant, a platform audience, a target out of
-  scope, a target with an installation grant, and a bootstrap mailbox;
-- the audit changes;
-- the console's People view and grant form.
-
-Its first check is the Cloudflare path. A platform component's `reconcile-schema` step only writes a runner outcome
-file (`packages/provider-cloudflare/src/provider.ts:326-340`), and the scaffolded workflow sets none
-(`packages/provider-cloudflare/src/collaborators.ts:142-148`). So it is not yet confirmed how the console's vocabulary
-reaches IAM on Cloudflare.
+- **Cloudflare registered nothing before this decision.** A platform deploy's `reconcile-schema` step only wrote a
+  runner outcome file, which exists only inside the runner. So the scaffolded workflow's first stage, IAM, which
+  declared an empty schema, stopped at that step, and the console's vocabulary never reached IAM. The fix applies a
+  platform component's schema directly (section 1).
 
 ## Alternatives considered
 
@@ -267,7 +277,7 @@ catalog tables. A code-only vocabulary would be a second source of role truth.
 
 ### A scope per registry app (all environments of an app) instead of per IAM application
 
-Deferred. An IAM application is one environment, `<app>@<env>`, and that is what a grant names. Grouping environments
+Deferred by decision. An IAM application is one environment, `<app>@<env>`, and that is what a grant names. Grouping environments
 would need a new rule for matching scope values. Two scoped grants cover two environments.
 
 ### Extend `appPeople` instead

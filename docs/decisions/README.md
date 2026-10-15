@@ -19,7 +19,8 @@ a commit message suffices.
 - **Authentication and authorization:** [0022](0022-the-proxy-is-the-only-enforcement-point.md) —
   the proxy is the only enforcement point; then [0023](0023-one-session-per-host.md) for the
   browser-bound session handoff, [0050](0050-approved-access.md) for how access changes are
-  approved and published, and [0051](0051-external-principals.md) for people from outside the organization.
+  approved and published, [0051](0051-external-principals.md) for people from outside the organization, and
+  [0058](0058-user-administration-is-grantable-on-its-own.md) for who may manage people without administering IAM.
 - **Application framework:** [0012](0012-fabrika-app-runtime.md) — one contract built with the staged kit,
   handlers beside their endpoints on a paved road, and every step off it (raw SQL, `unscoped`, connectors, link
   issuing, database code) declared; [0017](0017-service-owned-postgres-migrations.md) for migrations and the
@@ -73,4 +74,4 @@ a commit message suffices.
 | [0050](0050-approved-access.md)                                         | Publish only approved access; a human approves widenings, declared deviations included   |
 | [0051](0051-external-principals.md)                                     | External principals hold only roles declared external                                    |
 | [0052](0052-react-and-an-own-component-kit-for-application-spas.md)     | Build application SPAs with React, hooks over the typed client, and an own component kit |
-| [0058](0058-user-administration-is-grantable-on-its-own.md)             | Proposed: user administration is grantable on its own, and stops at the installation     |
+| [0058](0058-user-administration-is-grantable-on-its-own.md)             | User administration is grantable on its own, and stops at the installation               |
