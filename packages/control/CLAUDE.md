@@ -102,7 +102,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   vocabulary it holds — global actions and actions per `app` or `environment` value, in the caller document's shape
   (ADR-0022 rule 5) — read through `can()` and `scopedTo()` only, so the bootstrap admin reads as holding every
   action. The console shows and hides by it; every procedure still checks its own action. The vocabulary is
-  `controlSchema.actions` (`fabrika.schema.ts`), so an action added there is reported without a change here.
+  `controlSchema.actions` (`fabrika.schema.ts`), so an action added there is reported without a change here. It
+  answers nothing about IAM: what a caller administers there, the installation or the people of applications
+  (ADR-0058), the console reads from IAM's `me` through the IAM gateway. The console's own vocabulary is not where
+  IAM's authority lives — never add an `iam.*` action to `controlSchema`.
 - **The PROXY is the front door; `src/iam.ts` only verifies (ADR-0022).** The proxy decides from the
   console's service table (`fabrika.service.ts`), resolves the credential, and injects the access token as
   `X-Fabrika-Token` and the selected row as `X-Fabrika-Endpoint`.
