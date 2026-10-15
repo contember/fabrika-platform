@@ -3,6 +3,7 @@ import { type AppPresentation, appQuery, landingUrl } from './app-presentation'
 import type { AuthFailure } from './auth/failure'
 import { catalogFor, type PageText } from './catalog'
 import { escapeHtml } from './html'
+import { PAGE_STYLE } from './page-style'
 import { PASSWORD_MAX_CODE_POINTS, PASSWORD_MIN_CODE_POINTS, type PasswordProblem } from './password-policy'
 
 export function loginPage(input: {
@@ -268,7 +269,7 @@ export function htmlPage(page: {
 		`<!doctype html><html lang="${page.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${
 			escapeHtml(page.title)
 		}</title>
-	<style nonce="${nonce}">:root{font-family:system-ui,sans-serif;color-scheme:light dark}body{max-width:30rem;margin:4rem auto;padding:1rem}form{display:grid;gap:1rem}label{display:grid;gap:.35rem}input,button,.button{font:inherit;padding:.65rem}.password{display:flex}.password input{flex:1}.error{color:#c33}hr{margin:2rem 0}.button{display:inline-block}</style></head><body><main>${page.content}</main>
+	<style nonce="${nonce}">${PAGE_STYLE}</style></head><body><main>${page.content}</main>
 	<script nonce="${nonce}">var actionToken=document.getElementById('action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname+location.search);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?button.dataset.labelHide:button.dataset.labelShow;} );});</script></body></html>`
 	return new Response(html, {
 		status: page.status ?? 200,
