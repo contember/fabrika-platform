@@ -18,6 +18,7 @@ import {
 	type ZeropsServiceAutoscaling,
 } from '../api'
 import { withoutSensitiveContent } from '../api/service-env-response'
+import { useSharedPostgres } from '../authoring'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { parseZeropsCheckpoint } from '../control'
@@ -51,8 +52,10 @@ interface Recorded {
 	envWrites: Array<{ key: string; value: string; sensitive: boolean }>
 	envDeletes: string[]
 	alerts: ExposureAlert[]
-	/** Each custom autoscaling the deploy sent. */
+	/** Each custom autoscaling the deploy sent to the deploy service. */
 	autoscaling: ZeropsServiceAutoscaling[]
+	/** Each custom autoscaling the deploy sent to the database `db`. */
+	databaseAutoscaling: ZeropsServiceAutoscaling[]
 }
 
 const fresh = (): Recorded => ({
@@ -75,6 +78,7 @@ const fresh = (): Recorded => ({
 	envDeletes: [],
 	alerts: [],
 	autoscaling: [],
+	databaseAutoscaling: [],
 })
 
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
@@ -123,12 +127,23 @@ interface Overrides {
 	noAutoscaling?: true
 	/** The change is accepted and does not apply. */
 	autoscalingIgnored?: true
+	/** The deploy service's maximum container count; 4 by default, null when it reads none. */
+	maxContainers?: number | null
+	/** The minimum RAM in GB of the database `db`; by default 1 GB, enough for 4 containers. */
+	databaseMinRam?: number
+	/** Its maximum RAM in GB; by default the platform's 48 GB. */
+	databaseMaxRam?: number
+	/** Its autoscaling profile; `oltp-hobby` by default. */
+	databaseProfile?: string
 }
+
+/** The id of the database `db` in the fake platform; the deploy service is `service-1`. */
+const DATABASE_SERVICE_ID = 'service-db'
 
 const AUTOSCALING_PROCESS = 'process-autoscaling'
 
-/** A service's autoscaling with only its RAM bounds set; every other field inherits. */
-const autoscalingWith = (minRam: number | null, maxRam: number | null): ZeropsServiceAutoscaling => ({
+/** A service's autoscaling with only its RAM bounds and its container range set; every other field inherits. */
+const autoscalingWith = (minRam: number | null, maxRam: number | null, maxContainers: number | null = 4): ZeropsServiceAutoscaling => ({
 	vertical: {
 		cpuMode: null,
 		minResource: { cpuCoreCount: null, memoryGBytes: minRam, diskGBytes: null },
@@ -137,7 +152,7 @@ const autoscalingWith = (minRam: number | null, maxRam: number | null): ZeropsSe
 		startCpuCoreCount: null,
 		swapEnabled: null,
 	},
-	horizontal: { minContainerCount: 1, maxContainerCount: 4 },
+	horizontal: { minContainerCount: 1, maxContainerCount: maxContainers },
 })
 
 const LOG_ACCESS: ZeropsLogAccess = {
@@ -156,6 +171,16 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	const deleted = new Set<string>()
 	const records = overrides.serviceEnv ?? []
 	let customMinRam = overrides.minRam === undefined ? ZEROPS_START_MIN_RAM_GB : overrides.minRam
+	let databaseMinRam = overrides.databaseMinRam ?? 1
+	const maxContainers = overrides.maxContainers === undefined ? 4 : overrides.maxContainers
+	const database = (): ZeropsService => ({
+		id: DATABASE_SERVICE_ID,
+		name: 'db',
+		subdomainAccess: false,
+		autoscalingProfileId: overrides.databaseProfile ?? 'oltp-hobby',
+		customAutoscaling: autoscalingWith(databaseMinRam, overrides.databaseMaxRam ?? null, null),
+		currentAutoscaling: autoscalingWith(databaseMinRam, overrides.databaseMaxRam ?? 48, null),
+	})
 	return {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
@@ -220,25 +245,35 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push('enableSubdomainAccess')
 		},
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
-		configureCustomAutoscaling: async ({ autoscaling }) => {
+		configureCustomAutoscaling: async ({ serviceId, autoscaling }) => {
+			if (serviceId === DATABASE_SERVICE_ID) {
+				recorded.calls.push('configureCustomAutoscaling:db')
+				recorded.databaseAutoscaling.push(autoscaling)
+				databaseMinRam = autoscaling.vertical.minResource.memoryGBytes ?? databaseMinRam
+				return { id: AUTOSCALING_PROCESS }
+			}
 			recorded.calls.push('configureCustomAutoscaling')
 			if (overrides.autoscalingError !== undefined) throw overrides.autoscalingError
 			recorded.autoscaling.push(autoscaling)
 			if (overrides.autoscalingIgnored !== true) customMinRam = autoscaling.vertical.minResource.memoryGBytes
 			return { id: AUTOSCALING_PROCESS }
 		},
-		getService: async ({ serviceId }) => ({
-			id: serviceId,
-			name: 'api',
-			...(overrides.noAutoscaling === true ? {} : {
-				customAutoscaling: autoscalingWith(customMinRam, overrides.maxRam ?? null),
-				currentAutoscaling: autoscalingWith(customMinRam ?? 0.125, overrides.maxRam ?? 48),
-			}),
-		}),
+		getService: async ({ serviceId }) =>
+			serviceId === DATABASE_SERVICE_ID ? database() : {
+				id: serviceId,
+				name: 'api',
+				...(overrides.noAutoscaling === true ? {} : {
+					customAutoscaling: autoscalingWith(customMinRam, overrides.maxRam ?? null, maxContainers),
+					currentAutoscaling: autoscalingWith(customMinRam ?? 0.125, overrides.maxRam ?? 48, maxContainers),
+				}),
+			},
 		findService: async ({ hostname }) => {
 			recorded.calls.push(`findService:${hostname}`)
 			const answer = overrides.services?.[hostname]
-			return answer === null ? null : { id: 'service-1', name: hostname, subdomainAccess: false, ...answer }
+			if (answer === null) return null
+			return hostname === 'db' || hostname === 'postgres'
+				? { ...database(), name: hostname, ...answer }
+				: { id: 'service-1', name: hostname, subdomainAccess: false, ...answer }
 		},
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),
 		listProjects: async () => [],
@@ -442,6 +477,7 @@ describe('Zerops provider', () => {
 			'verify-exposure',
 			'write-service-env',
 			'raise-start-memory',
+			'size-database',
 			'reserve-version',
 			'upload-source',
 			'trigger-build',
@@ -454,6 +490,7 @@ describe('Zerops provider', () => {
 			'findService:api',
 			'listServiceEnv',
 			'putServiceEnv:FABRIKA_PROXY_SECRET',
+			'findService:db',
 			'createAppVersion:service-1',
 			'sourceUpload',
 			'buildAndDeployAppVersion:version-1',
@@ -677,6 +714,7 @@ describe('Zerops provider', () => {
 			'findService:api',
 			'listServiceEnv',
 			'putServiceEnv:FABRIKA_PROXY_SECRET',
+			'findService:db',
 			'createAppVersion:service-1',
 			'sourceUpload',
 			'deleteAppVersion:version-1',
@@ -842,6 +880,7 @@ describe('Zerops provider', () => {
 			'findService:api',
 			'listServiceEnv',
 			'putServiceEnv:FABRIKA_PROXY_SECRET',
+			'findService:db',
 			'createAppVersion:service-1',
 			'sourceUpload',
 			'buildAndDeployAppVersion:version-1',
@@ -940,6 +979,7 @@ describe('Zerops provider', () => {
 			'succeeded',
 			'succeeded',
 			'succeeded',
+			'succeeded',
 			'failed',
 			'skipped',
 		])
@@ -968,7 +1008,14 @@ describe('Zerops provider', () => {
 		const result = await provider({ ...run, artifact: driftedArtifact })
 
 		expect(stepError(result, 'reserve-version')).toContain('source descriptor digest')
-		expect(recorded.calls).toEqual(['importServices', 'findService:db', 'findService:api', 'listServiceEnv', 'putServiceEnv:FABRIKA_PROXY_SECRET'])
+		expect(recorded.calls).toEqual([
+			'importServices',
+			'findService:db',
+			'findService:api',
+			'listServiceEnv',
+			'putServiceEnv:FABRIKA_PROXY_SECRET',
+			'findService:db',
+		])
 	})
 
 	test('propagates cancellation into an active schema reconciliation', async () => {
@@ -1110,6 +1157,77 @@ describe("the deploy service's minimum RAM", () => {
 			expect(stepError(result, 'raise-start-memory')).toBe(error)
 			expect(recorded.creates).toEqual([])
 		}
+	})
+})
+
+// Every process of the application opens at most what the database's limit leaves it (ADR-0043).
+describe("the application's database connections", () => {
+	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deployRun(recorded)) =>
+		createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
+
+	/** The pool size the descriptor of the build request hands the application, or undefined without one. */
+	const sentConnections = (): string | undefined => /FABRIKA_APP_DATABASE_CONNECTIONS: "(\d+)"/.exec(recorded.builds[0]?.zeropsYaml ?? '')?.[1]
+
+	test('each process gets its share of what the database admits, and the database is left alone when that is enough', async () => {
+		// 50 connections at 1 GB, 12 of them unavailable or the start script's, shared by 2 × 4 containers and 2 jobs.
+		expect((await deploy({ databaseMinRam: 1, maxContainers: 4 })).status).toBe('succeeded')
+		expect(sentConnections()).toBe('3')
+		expect(recorded.databaseAutoscaling).toEqual([])
+		expect(recorded.logs).toContain(
+			'  db: 50 connections at 1 GB; each process opens at most 3, for 4 container(s) of api, twice while a deploy replaces them, and 2 job process(es)',
+		)
+	})
+
+	test("a database too small for the deploy service's containers is raised to the smallest step that fits, before the version is reserved", async () => {
+		const result = await deploy({ databaseMinRam: 0.25, maxContainers: 4 })
+		expect(result.status).toBe('succeeded')
+		expect(recorded.databaseAutoscaling).toEqual([autoscalingWith(1, null, null)])
+		expect(recorded.calls.indexOf('configureCustomAutoscaling:db')).toBeLessThan(recorded.calls.indexOf('createAppVersion:service-1'))
+		expect(recorded.logs).toContain('  minimum RAM of db: 0.25 → 1 GB, for its connection limit')
+		expect(sentConnections()).toBe('3')
+	})
+
+	test('a service that reads no maximum container count is sized for the 10 Zerops may scale it to', async () => {
+		expect((await deploy({ databaseMinRam: 1, maxContainers: null })).status).toBe('succeeded')
+		expect(recorded.databaseAutoscaling.map((autoscaling) => autoscaling.vertical.minResource.memoryGBytes)).toEqual([2])
+		expect(sentConnections()).toBe('4')
+	})
+
+	test('one container fits the smallest database with the minimum for each process', async () => {
+		expect((await deploy({ databaseMinRam: 0.25, maxContainers: 1 })).status).toBe('succeeded')
+		expect(recorded.databaseAutoscaling).toEqual([])
+		expect(sentConnections()).toBe('2')
+	})
+
+	test("a namespace's shared database is never raised: each process gets the minimum, and the run log says it may not fit", async () => {
+		const shared: ZeropsAppConfig = { ...app([API]), target: { ...app([API]).target, namespaceResources: [useSharedPostgres()] } }
+		const run = { ...deployRun(recorded), artifact: compileFabrikaManifest(shared, 'prod', SOURCE_DESCRIPTOR) }
+		expect((await deploy({ databaseMinRam: 0.25, maxContainers: 4 }, run)).status).toBe('succeeded')
+		expect(recorded.databaseAutoscaling).toEqual([])
+		expect(recorded.logs).toContain(
+			'  [warn] postgres at 0.25 GB has too few connections for 4 container(s) of api, twice while a deploy replaces them, and 2 job process(es); the namespace shares it, so raise its profile',
+		)
+		expect(sentConnections()).toBe('2')
+	})
+
+	test('a database whose maximum RAM is below the step it needs stops the deploy before a version is reserved', async () => {
+		const result = await deploy({ databaseMinRam: 0.25, databaseMaxRam: 0.5, maxContainers: 4 })
+		expect(stepError(result, 'size-database')).toBe(
+			'zerops: db may use at most 0.5 GB of RAM and 4 container(s) of api, twice while a deploy replaces them, and 2 job process(es) need 1 GB; raise verticalAutoscaling.maxRam',
+		)
+		expect(recorded.creates).toEqual([])
+	})
+
+	test('an application without a database is not sized, and a dry run reads nothing', async () => {
+		const run = { ...deployRun(recorded), artifact: compileFabrikaManifest(app([API]), 'prod', SOURCE_DESCRIPTOR) }
+		expect((await deploy({}, run)).status).toBe('succeeded')
+		expect(recorded.calls).not.toContain('findService:db')
+		expect(sentConnections()).toBeUndefined()
+
+		recorded = fresh()
+		expect((await deploy({ databaseMinRam: 0.25 }, deployRun(recorded, target(), true))).status).toBe('succeeded')
+		expect(recorded.databaseAutoscaling).toEqual([])
+		expect(recorded.logs).toContain('  [dry-run] would size each process of api to the connection limit of db')
 	})
 })
 

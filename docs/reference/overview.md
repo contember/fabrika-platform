@@ -328,10 +328,12 @@ Control delivers the repository itself. Before the Operations release context
 exists, control resolves the requested ref and fails the run when the
 `zerops.yaml` digest at the resolved commit differs from the registered artifact.
 The deploy then runs `apply-import → verify-exposure → write-service-env →
-raise-start-memory → reserve-version → upload-source → trigger-build → await-version → reconcile-schema`
+raise-start-memory → size-database → reserve-version → upload-source → trigger-build → await-version → reconcile-schema`
 (`packages/provider-zerops/src/plan.ts`). `reconcile-schema` runs only when the
 app declares a schema. `raise-start-memory` raises the deploy service's minimum
-RAM to what the generated start script needs. `verify-exposure` refuses the run, and raises an
+RAM to what the generated start script needs. `size-database` sizes each
+process's database connections to the database's limit and raises the
+database's minimum RAM where that leaves too few. `verify-exposure` refuses the run, and raises an
 Operations alert, when a declared service has subdomain access or a bucket
 lacks the platform's provenance
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). Control streams the archive to the reserved version's

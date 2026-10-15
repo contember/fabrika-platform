@@ -163,6 +163,14 @@ bun test
   reading `currentAutoscaling` back. Measured live: a field left out, and the whole object under the published OpenAPI's
   `…Nullable` keys, is silently RESET with a 200. The reader reads an autoscaling with any unreadable field as absent,
   and the step then refuses rather than reset a field. It only raises.
+- **`size-database` sizes each process's database connections before a version is reserved (ADR-0043).** Pure in
+  `src/database-budget.ts`: `max_connections` follows the database's minimum RAM step and profile; 7 are never an
+  application role's and 5 are one container's start script; the rest is shared by twice the deploy service's maximum
+  container count (10 when it reads none) and one process per crontab job (`zeropsJobProcesses`, the same list the
+  crontab is rendered from), at most 10 each. Below 2 the step raises the application's OWN database through the same
+  read-modify-write as `raise-start-memory` (`raiseMinRam`); a namespace's shared `postgres` is never raised. The
+  count is the literal `FABRIKA_APP_DATABASE_CONNECTIONS` of the generated run section (`sizedExecution`); a build of
+  an application with a database is never sent without it. Change the budget's constants only with a measurement.
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`

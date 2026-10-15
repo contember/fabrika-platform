@@ -47,6 +47,7 @@ const generatedApplication = async (appId: string): Promise<string> => {
 		appId,
 		contract: { digest: `sha256:${'0'.repeat(64)}`, readinessPath: '/healthz', jobs: [] },
 		databaseUrl: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
+		databaseConnections: 2,
 		storageHostname: null,
 		runtimePackages: [],
 		sourceMaps: null,

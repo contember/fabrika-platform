@@ -6,6 +6,7 @@ export type ZeropsStepKind =
 	| 'verify-exposure'
 	| 'write-service-env'
 	| 'raise-start-memory'
+	| 'size-database'
 	| 'reserve-version'
 	| 'upload-source'
 	| 'trigger-build'
@@ -48,6 +49,11 @@ export const buildZeropsPlan = (manifest: FabrikaManifest, target: ZeropsRuntime
 		id: 'raise-start-memory',
 		kind: 'raise-start-memory',
 		description: "Raise the deploy service's minimum RAM to what its start script needs",
+	})
+	steps.push({
+		id: 'size-database',
+		kind: 'size-database',
+		description: "Size each process's database connections to the database's limit, raising its minimum RAM where it is too low",
 	})
 	steps.push({ id: 'reserve-version', kind: 'reserve-version', description: 'Reserve a Zerops app version' })
 	steps.push({ id: 'upload-source', kind: 'upload-source', description: 'Upload the resolved repository snapshot' })

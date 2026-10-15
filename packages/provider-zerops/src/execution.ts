@@ -93,6 +93,11 @@ export interface ZeropsLockedExecution {
 	readonly contract: ZeropsContractRun
 	/** A `${host_…}` reference to the application's PostgreSQL service, or null when it has none. */
 	readonly databaseUrl: string | null
+	/**
+	 * The most connections each process of the application opens (`FABRIKA_APP_DATABASE_CONNECTIONS`), as the deploy's
+	 * `size-database` step sized it from the database's limit; null until then, and without a database.
+	 */
+	readonly databaseConnections: number | null
 	/** The hostname of the application's one object-storage service, or null when it has none. */
 	readonly storageHostname: string | null
 	readonly runtimePackages: readonly ZeropsRuntimePackage[]
@@ -337,6 +342,18 @@ const storageVariables = (hostname: string): Record<StorageVariable, string> => 
 	FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: `\${${hostname}_secretAccessKey}`,
 })
 
+/** The crontab lines that run a job of the contract or of the framework, each on one container. */
+const jobCrontab = (contract: ZeropsContractRun): { readonly timing: string; readonly command: string; readonly allContainers: boolean }[] => [
+	...contract.jobs.map((job) => ({ timing: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}`, allContainers: false })),
+	...(contract.files === true
+		? [{ timing: FILE_SWEEP_SCHEDULE, command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SWEEP_JOB}`, allContainers: false }]
+		: []),
+	...(contract.scan === true ? [{ timing: '* * * * *', command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SCAN_JOB}`, allContainers: false }] : []),
+]
+
+/** How many job processes the crontab may run at once, each opening the application's database. */
+export const zeropsJobProcesses = (contract: ZeropsContractRun): number => jobCrontab(contract).length
+
 /** The generated selected setup: the authored build kept, everything else the platform's. */
 export function renderLockedSetup(
 	setup: string,
@@ -352,23 +369,13 @@ export function renderLockedSetup(
 		[FABRIKA_CONTRACT_DIGEST]: contract.digest,
 		...(release === null ? {} : { FABRIKA_RELEASE: release }),
 		...(execution.databaseUrl === null ? {} : { FABRIKA_APP_DATABASE_URL: execution.databaseUrl }),
+		...(execution.databaseConnections === null ? {} : { FABRIKA_APP_DATABASE_CONNECTIONS: String(execution.databaseConnections) }),
 		...(execution.storageHostname === null ? {} : storageVariables(execution.storageHostname)),
 	}
 	const scan = contract.scan === true
 	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
-	const crontab = [
-		...contract.jobs.map((job) => ({ timing: job.schedule, command: `${FABRIKA_BIN} job run ${job.name}`, allContainers: false })),
-		...(contract.files === true
-			? [{ timing: FILE_SWEEP_SCHEDULE, command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SWEEP_JOB}`, allContainers: false }]
-			: []),
-		// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
-		...(scan
-			? [
-				{ timing: '* * * * *', command: `${FABRIKA_BIN} job run ${ZEROPS_FILE_SCAN_JOB}`, allContainers: false },
-				{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true },
-			]
-			: []),
-	]
+	// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
+	const crontab = [...jobCrontab(contract), ...(scan ? [{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true }] : [])]
 	// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 	// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 	const initCommands = [

@@ -1286,6 +1286,62 @@ only `minResource.memoryGBytes` changed, and decides by reading `currentAutoscal
 minimum fails the deploy before a version exists. It never lowers a minimum. The `custom-autoscaling-raises-min-ram`
 fact row pins both the working body and the reset under the OpenAPI's keys.
 
+#### Measured in production (2026-10-16) — an application's database connections
+
+Zerops' documentation (PostgreSQL, "Connection limits" and "Scale & profiles", read 2026-10-15) states the limits:
+
+| RAM step of the service | `max_connections` OLTP / WriteHeavy | OLAP |
+| ----------------------- | ----------------------------------- | ---- |
+| 0.25 GB                 | 20                                  | 10   |
+| 0.5 GB                  | 25                                  | 12   |
+| 1 GB                    | 50                                  | 25   |
+| 2 GB                    | 100                                 | 50   |
+| 4 GB                    | 200                                 | 100  |
+| 8 GB                    | 400                                 | 200  |
+| 16 GB and more          | 500                                 | 200  |
+
+- RAM counts in steps (0.25, 0.5, 1, 2, 4 GB, then multiples of 8 GB): 7 GB has the 4 GB limit.
+- 3 connections are kept for superusers, and Zerops itself uses up to 4 (monitoring, health checks, backups).
+- The limit cannot be overridden. Raising the minimum RAM to the next step raises it; crossing a step restarts a
+  single-node service (a short outage) and rolls through an HA one.
+- pgBouncer on `portTls` would multiplex, but it admits only `db`, `postgres` and `zps` (measured 2026-10-15,
+  below), so an application's roles connect on `port` and count against `max_connections` directly.
+
+Measured in production on a contract application with 1–2 containers and a `postgresql:single@18` at `oltp-hobby`
+(0.25 GB, `max_connections` 20): two deploys failed in the start script's `fabrika db test-isolation` with
+`PostgresError: remaining connection slots are reserved for roles with the SUPERUSER attribute` (SQLSTATE 53300),
+reported as 394 and then 414 of 420 generated cases passed. At the peak of one run `pg_stat_activity` held 20 client
+backends: 12 of the serving application's runtime role, 2 of the run's provisioner, 1 of its migration role, 1
+`postgres` and 4 without a user (Zerops). Each process of `@fabrika/app/bun` opened up to 10 connections.
+
+Measured locally against `postgres:18` (2026-10-16), the peak client backends of one `fabrika db test-isolation` run
+of the Notes example (38 cases) and of the CRM example (133 cases): 5 with the test kit of v0.4.7, 4 since it holds
+one provisioning connection per file for the schema's lock and the catalog. None is left once the run ended.
+
+So a deploy sizes each process's connections in `size-database` (`packages/provider-zerops/src/database-budget.ts`):
+of `max_connections` at the database's minimum RAM, 7 are never the application's and 5 are one container's start
+script; the rest is shared by twice the deploy service's maximum container count and one process per crontab job, at
+most 10 each, and handed over as `FABRIKA_APP_DATABASE_CONNECTIONS`. Below 2 each, it raises the application's own
+database to the smallest step that gives 2 (the Notes example, 4 containers and 2 jobs: 0.25 → 1 GB; Zerops charges
+$0.75 per 0.25 GB and 30 days); a namespace's shared `postgres` is never raised. The test kit waits up to 60 s for a
+slot on SQLSTATE 53300, and `fabrika db test-isolation` reports a refused connection as such
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).
+
+| Behaviour                                                                | Row                                       |
+| ------------------------------------------------------------------------ | ----------------------------------------- |
+| `max_connections` follows the minimum RAM; a full database answers 53300 | `postgres-max-connections-follow-min-ram` |
+
+#### UNVERIFIED: the autoscaling API raises the minimum RAM of a PostgreSQL service
+
+`size-database` raises a database with the same `PUT /service-stack/{id}/autoscaling` body that raises a runtime's
+minimum RAM (verified on `alpine/bun@1.3`, above), and reads `currentAutoscaling` back. It was not tried on a
+PostgreSQL service, nor whether `max_connections` follows at once. If the platform refuses it or ignores it, the
+deploy fails before a version is reserved, saying so.
+
+| Behaviour                                                             | Row                                                     |
+| --------------------------------------------------------------------- | ------------------------------------------------------- |
+| The custom autoscaling raises the minimum RAM of a PostgreSQL service | `unverified-postgres-custom-autoscaling-raises-min-ram` |
+
 #### Verified live (2026-10-15, account `prg1`) — an application's database roles and the two ports
 
 Measured on a `postgresql:single@18` service that an application's private import created, after the first deploy of

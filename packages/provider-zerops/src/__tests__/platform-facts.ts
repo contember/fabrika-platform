@@ -140,6 +140,9 @@ const SECTION_POSTGRES_ROLES =
 	"Verified live (2026-10-15) — an application's database roles and the two ports — docs/reference/zerops-platform.md:1259"
 const SECTION_UNVERIFIED_HA_NEW_ROLE =
 	'UNVERIFIED: a role fabrika creates connects on the direct port of `postgresql:ha@18` — docs/reference/zerops-platform.md:1293'
+const SECTION_CONNECTION_LIMITS = "Measured in production (2026-10-16) — an application's database connections — docs/reference/zerops-platform.md"
+const SECTION_UNVERIFIED_POSTGRES_MIN_RAM =
+	'UNVERIFIED: the autoscaling API raises the minimum RAM of a PostgreSQL service — docs/reference/zerops-platform.md'
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_UNVERIFIED_AUTHORIZATION = 'UNVERIFIED: the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md:506'
@@ -1238,6 +1241,26 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		liveNote: "not an API fact: it needs a PostgreSQL service and a client inside the project's VXLAN",
 		emulator: false,
 		emulatorNote: 'the double serves no database',
+	},
+	{
+		id: 'postgres-max-connections-follow-min-ram',
+		section: SECTION_CONNECTION_LIMITS,
+		request: { method: 'GET', path: '/service-stack/{serviceId}' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: "not an API fact: `SHOW max_connections` and a refused connection need a client inside the project's VXLAN",
+		emulator: false,
+		emulatorNote: 'the double serves no database',
+	},
+	{
+		id: 'unverified-postgres-custom-autoscaling-raises-min-ram',
+		section: SECTION_UNVERIFIED_POSTGRES_MIN_RAM,
+		request: { method: 'GET', path: '/service-stack/{serviceId}' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'needs a PostgreSQL service, which the suite does not create, and raising it restarts a single-node database',
+		emulator: false,
+		emulatorNote: 'the double keeps a minimum RAM of any service and models no PostgreSQL configuration',
 	},
 ]
 

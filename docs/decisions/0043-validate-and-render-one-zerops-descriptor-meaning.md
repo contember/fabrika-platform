@@ -26,6 +26,16 @@ what runs.
 The import document can also expose an application past the proxy: a public bucket, subdomain access,
 a mount or a CDN. The compiler copies these fields unchecked today.
 
+An application's database has a fixed number of connections. On Zerops `max_connections` follows the
+PostgreSQL service's RAM step (50 per GB, from 20 to 500; OLAP 25 per GB, from 10 to 200), cannot be
+overridden, and 7 of them are never an application role's: 3 are kept for superusers and Zerops uses up
+to 4. pgBouncer cannot admit the roles fabrika creates. A default `postgresql:single@18` on
+`oltp-hobby` (0.25 GB) has 20. Every process of the Bun runtime opened up to 10, the old and the new
+containers serve together while a deploy replaces them, and every new container runs the isolation
+tests at start. In production (2026-10-16) that failed a deploy at random in `fabrika db
+test-isolation` with SQLSTATE 53300, and the run reported 394 and then 414 of 420 cases passed
+([platform facts](../reference/zerops-platform.md)).
+
 ## Decision
 
 Use the maintained `yaml` v2 parser to validate an explicit descriptor subset at the manifest boundary.
@@ -115,6 +125,31 @@ service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB 
 back, and never lowers it. The tests still run at every container start, so the readiness check still proves that
 they passed for the version that serves.
 
+**Every process of an application fits its database's connection limit.** The deploy's `size-database`
+step, after `raise-start-memory`, reads the minimum RAM and the profile of the application's PostgreSQL
+service and the deploy service's maximum container count (10, Zerops' maximum, when it reads none). Of
+`max_connections`, it keeps 7 for superusers and Zerops and 5 for one container's start script (the
+isolation tests' measured peak with a test kit of v0.4.7, which an application that has not updated still
+runs; 4 since), and shares the rest between twice the maximum container count (old and new
+containers overlap while a deploy replaces them) and one process per crontab job. Each process gets its
+share, at most 10. When the share is below 2 (a job's fenced write and its cancellation need one
+connection each), the step raises the minimum RAM of the application's own database to the smallest
+step at which it is 2, the way `raise-start-memory` raises the deploy service, and reads it back. A
+`cheap` namespace's shared `postgres` is the namespace's to size: it is never raised, each process gets
+2, and the run log says that the namespace's profile is too small. The share reaches the application as
+`FABRIKA_APP_DATABASE_CONNECTIONS`, a literal of the generated run section, and `@fabrika/app/bun`
+opens its pool with it (10 without one). An application with a database is never built without it.
+
+**The isolation tests wait for a connection; they never fail a case for want of one.** A test database
+holds at most 4 connections (`TEST_DATABASE_CONNECTIONS`: the provisioning connection that holds its lock
+and reads the catalog, the seeder, two of the runtime role) and opens the first of each pool before the
+first case: Bun's pool then makes a statement wait for an open connection when the database refuses
+another, so no case meets a refusal. A refusal while it opens (SQLSTATE 53300) releases everything and
+retries, with jittered exponential backoff, for up to 60 s. Then the file fails saying that the database
+had no free connection slot, and every later file of the run fails at once. `fabrika db test-isolation`
+waits the same way for its provisioner, and a run whose output reports a refused connection fails saying
+so, never as a count of passed cases.
+
 The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).
 
@@ -200,6 +235,22 @@ execution document carries the generated `run` and `build`.
   converges on `fabrika platform upgrade` and the application's next deploy: the step is Control's code, not the
   application's, so no package update of the application is needed. Until then the earlier release's deploys can
   still be killed at start.
+- A database too small for its application's container range costs more RAM. At Zerops' price of $3 per GB and
+  30 days, raising one database node from the 0.25 GB floor (1 container and 2 jobs) to 0.5 GB (2 containers and 2
+  jobs) costs $0.75, to 1 GB (8 containers and 2 jobs) $2.25, and to 2 GB (10 containers) $5.25 per 30 days; an HA
+  service has three nodes. The Notes example (4 containers, 2 jobs) needs 1 GB. Crossing a RAM step restarts a single-node database once,
+  a short outage of the version still serving.
+- A process serves at most as many requests at once as it has connections, because a request holds its connection
+  for its transaction; more throughput comes from more containers or a larger database.
+- The share is computed at deploy. A maximum container count raised later in the Zerops GUI holds until the next
+  deploy, which raises the database again; the step never lowers a minimum.
+- Rollout path of an existing installation. No generated installation file changes. `FABRIKA_APP_DATABASE_CONNECTIONS`
+  is a literal of the run section every deploy generates, never a service variable, so nothing removes it. The
+  database's minimum RAM is provider state the step only raises. `fabrika platform upgrade` and the application's
+  next deploy therefore raise its database where needed and hand it the variable. The application reads the
+  variable, and the test kit waits and holds 4 connections, only once it updates its `@fabrika/app`, `@fabrika/db`
+  and `@fabrika/cli`: the start script runs the application's own installed packages. Before that, its processes
+  keep 10 connections each and only the raised database helps it.
 - An application is reachable only through the namespace proxy. A bucket policy changed outside
   Fabrika is not detected, because Zerops has no API to read a policy back.
 - Evidence can still be lost when the import step itself dies between the import's answer and the
@@ -243,3 +294,13 @@ execution document carries the generated `run` and `build`.
   application would carry a platform number. The build still refuses a scanning application without its 2 GB.
 - **Raise the RAM for a moment from the start script (`zsc scale ram`).** Rejected: it takes effect in about
   10 s, so the script would have to wait for it, and a restart outside a deploy would repeat it.
+- **Let each process read `SHOW max_connections` at boot and take a share.** Rejected: a process cannot know how
+  many containers, jobs and replaced containers share the limit; the deploy reads both services.
+- **A lower fixed pool with an override.** Rejected: no one number fits 20 connections for 10 containers and 200 for
+  2, and an override puts a platform number into every application.
+- **pgBouncer on `portTls`.** Rejected: it refuses every role fabrika creates (measured 2026-10-15).
+- **A `CONNECTION LIMIT` on the runtime role.** Rejected: it turns too many connections into failed requests instead
+  of preventing them.
+- **Give every application's database 1 GB.** Rejected: one container with up to 2 jobs fits the 0.25 GB floor.
+- **Retry the whole `bun test` run on a refused connection.** Rejected: a refusal inside a case reads as a failed
+  assertion, not as a refusal; the test kit opens its pools before the first case and waits there instead.

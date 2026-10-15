@@ -410,22 +410,42 @@ const isDescriptorSetup = (value: JsonValue, setup: string): value is { readonly
 const zeropsProvisioningDatabaseUrl = (host: string): string =>
 	`postgresql://\${${host}_superUser}:\${${host}_superUserPassword}@\${${host}_hostname}:\${${host}_port}/\${${host}_dbName}?sslmode=disable`
 
+/** The PostgreSQL service a contract application uses: its own, or the namespace's shared one. */
+export interface ApplicationDatabaseService {
+	readonly hostname: string
+	/** The namespace's `postgres`, which every application of a `cheap` namespace shares and the namespace sizes. */
+	readonly shared: boolean
+}
+
 /**
  * The PostgreSQL service `FABRIKA_APP_DATABASE_URL` is generated for: the namespace's shared one, or the application's
  * one PostgreSQL service. Two candidates would make the generated migration pick one.
  */
-const applicationDatabaseUrl = (
+const applicationDatabase = (
 	services: FabrikaManifestImportDocument['services'],
 	namespaceResources: readonly ZeropsNamespaceResourceRequirement[] | undefined,
-): string | null => {
+): ApplicationDatabaseService | null => {
 	const own = services.filter((service) => service.type.startsWith('postgresql')).map((service) => service.hostname)
 	const shared = namespaceResources?.find((resource) => resource.resourceKey === 'service:postgres')
 	if (own.length + (shared === undefined ? 0 : 1) > 1) {
 		throw new Error('invalid fabrika manifest: a contract application has one PostgreSQL database; it declares more than one')
 	}
-	const host = shared?.hostname ?? own[0]
-	return host === undefined ? null : zeropsProvisioningDatabaseUrl(host)
+	if (shared !== undefined) return { hostname: shared.hostname, shared: true }
+	const [hostname] = own
+	return hostname === undefined ? null : { hostname, shared: false }
 }
+
+const applicationDatabaseUrl = (
+	services: FabrikaManifestImportDocument['services'],
+	namespaceResources: readonly ZeropsNamespaceResourceRequirement[] | undefined,
+): string | null => {
+	const database = applicationDatabase(services, namespaceResources)
+	return database === null ? null : zeropsProvisioningDatabaseUrl(database.hostname)
+}
+
+/** The PostgreSQL service of the application this manifest deploys, or null when it has none. */
+export const applicationDatabaseOf = (manifest: FabrikaManifest): ApplicationDatabaseService | null =>
+	applicationDatabase(manifest.target.importDocument.services, manifest.target.namespaceResources)
 
 /** The hostname the `FABRIKA_APP_STORAGE_*` references name: the application's one object-storage service. */
 const applicationStorageHostname = (services: FabrikaManifestImportDocument['services']): string | null => {
@@ -444,6 +464,7 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 		appId: manifest.app.id,
 		contract,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
+		databaseConnections: null,
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 		sourceMaps: null,
@@ -475,6 +496,7 @@ export function lockedExecutionFor(
 		appId: manifest.app.id,
 		contract,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
+		databaseConnections: null,
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 		sourceMaps: artifactUpload === undefined ? null : sourceMapUpload(artifactUpload, access.contract),

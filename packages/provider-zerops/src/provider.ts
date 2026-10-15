@@ -33,11 +33,28 @@ import {
 	type ZeropsAppVersion,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
+	type ZeropsService,
 	type ZeropsServiceAutoscaling,
 } from './api'
 import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
-import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, renderLockedExecutionDescriptor, zeropsStartMinRam } from './execution'
+import {
+	MIN_PROCESS_CONNECTIONS,
+	ZEROPS_MAX_CONTAINERS,
+	ZEROPS_POSTGRES_MIN_RAM_GB,
+	type ZeropsDatabaseDemand,
+	zeropsDatabaseMinRam,
+	zeropsPostgresMaxConnections,
+	zeropsProcessConnections,
+} from './database-budget'
+import {
+	FABRIKA_CHECK_VERSION,
+	PLATFORM_TYPESCRIPT_VERSION,
+	renderLockedExecutionDescriptor,
+	zeropsJobProcesses,
+	type ZeropsLockedExecution,
+	zeropsStartMinRam,
+} from './execution'
 import {
 	createdServices,
 	type ExposureFinding,
@@ -61,6 +78,7 @@ import {
 	SERVICE_MANAGED_KEYS,
 } from './managed-env'
 import {
+	applicationDatabaseOf,
 	approvedSchemaOf,
 	type FabrikaImportDocument,
 	type FabrikaManifest,
@@ -288,6 +306,8 @@ interface Attempt {
 	triggered: boolean
 	/** What the build's source-map upload reported in its log, once a relayed line said so. */
 	sourceMaps?: OperationsSourceMapUploadState
+	/** The most connections each process of the application opens, as `size-database` sized them. */
+	databaseConnections?: number
 }
 
 /** Everything one step's executor needs, bundled so the per-kind handlers stay small. */
@@ -667,27 +687,36 @@ const raiseStartMemory = async (env: StepEnv): Promise<void> => {
 		log(`  [dry-run] would raise the minimum RAM of ${hostname} to ${minRam} GB where it is lower`)
 		return
 	}
-	const serviceId = run.target.serviceId
 	assertRunning(signal)
-	const service = await zerops.api.getService({ serviceId, signal })
+	const service = await zerops.api.getService({ serviceId: run.target.serviceId, signal })
+	const before = service.currentAutoscaling?.vertical.minResource.memoryGBytes ?? null
+	if (before !== null && before >= minRam) {
+		log(`  minimum RAM of ${hostname}: ${before} GB, unchanged (its start needs ${minRam} GB)`)
+		return
+	}
+	const after = await raiseMinRam(env, service, hostname, minRam, 'its start needs')
+	log(`  minimum RAM of ${hostname}: ${before ?? 'the platform default'} → ${after} GB`)
+}
+
+/**
+ * Sets `service`'s minimum RAM to `minRam` and answers the minimum it reads back. It sends the custom autoscaling it
+ * read WHOLE with only that field changed: the platform resets every field a request leaves out.
+ */
+const raiseMinRam = async (env: StepEnv, service: ZeropsService, hostname: string, minRam: number, need: string): Promise<number> => {
+	const { zerops, signal } = env
 	const custom = service.customAutoscaling
 	const current = service.currentAutoscaling
 	if (custom === undefined || current === undefined) {
 		throw new Error(`zerops: ${hostname} did not report its autoscaling whole, so its minimum RAM cannot be raised to ${minRam} GB`)
 	}
-	const before = current.vertical.minResource.memoryGBytes
-	if (before !== null && before >= minRam) {
-		log(`  minimum RAM of ${hostname}: ${before} GB, unchanged (its start needs ${minRam} GB)`)
-		return
-	}
 	const maxRam = current.vertical.maxResource.memoryGBytes
 	if (maxRam !== null && maxRam < minRam) {
-		throw new Error(`zerops: ${hostname} may use at most ${maxRam} GB of RAM and its start needs ${minRam} GB; raise verticalAutoscaling.maxRam`)
+		throw new Error(`zerops: ${hostname} may use at most ${maxRam} GB of RAM and ${need} ${minRam} GB; raise verticalAutoscaling.maxRam`)
 	}
 	assertRunning(signal)
 	let process: ZeropsProcess | null
 	try {
-		process = await zerops.api.configureCustomAutoscaling({ serviceId, autoscaling: withMinRam(custom, minRam), signal })
+		process = await zerops.api.configureCustomAutoscaling({ serviceId: service.id, autoscaling: withMinRam(custom, minRam), signal })
 	} catch (error) {
 		if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500 && error.status !== 408) {
 			throw new Error(`zerops: raising the minimum RAM of ${hostname} to ${minRam} GB was refused (${error.code === '' ? error.status : error.code})`)
@@ -697,11 +726,69 @@ const raiseStartMemory = async (env: StepEnv): Promise<void> => {
 	if (process !== null) {
 		await waitForProcess({ api: zerops.api, processId: process.id, sleep: zerops.sleep, signal, label: `the autoscaling change of ${hostname}` })
 	}
-	const after = (await zerops.api.getService({ serviceId, signal })).currentAutoscaling?.vertical.minResource.memoryGBytes ?? null
+	const after = (await zerops.api.getService({ serviceId: service.id, signal })).currentAutoscaling?.vertical.minResource.memoryGBytes ?? null
 	if (after === null || after < minRam) {
 		throw new Error(`zerops: ${hostname} reads back a minimum RAM of ${after ?? 'nothing'} GB after it was raised to ${minRam} GB`)
 	}
-	log(`  minimum RAM of ${hostname}: ${before ?? 'the platform default'} → ${after} GB`)
+	return after
+}
+
+/**
+ * Sizes the connections each process of the application opens (`zeropsProcessConnections`) from its database's
+ * `max_connections`, which follows the database's minimum RAM, and the deploy service's maximum container count. When
+ * that leaves a process fewer than `MIN_PROCESS_CONNECTIONS`, it raises the minimum RAM of the application's own
+ * database to the smallest step that does not (`zeropsDatabaseMinRam`). A `cheap` namespace's shared database is the
+ * namespace's to size, so it is never raised: each process then gets the minimum, and the run log says it may not fit.
+ */
+const sizeDatabase = async (env: StepEnv): Promise<void> => {
+	const { run, zerops, log, signal, dryRun, attempt } = env
+	const locked = lockedExecutionFor(run.artifact, run, dryRun)
+	const database = locked === null ? null : applicationDatabaseOf(run.artifact)
+	if (locked === null || database === null) {
+		log('  the application has no database')
+		return
+	}
+	const deployHostname = run.artifact.target.deployService
+	if (dryRun) {
+		log(`  [dry-run] would size each process of ${deployHostname} to the connection limit of ${database.hostname}`)
+		return
+	}
+	assertRunning(signal)
+	const deploy = await zerops.api.getService({ serviceId: run.target.serviceId, signal })
+	const demand: ZeropsDatabaseDemand = {
+		maxContainers: deploy.currentAutoscaling?.horizontal.maxContainerCount ?? ZEROPS_MAX_CONTAINERS,
+		jobs: zeropsJobProcesses(locked.contract),
+	}
+	const service = await zerops.api.findService({ projectId: run.target.projectId, hostname: database.hostname, signal })
+	if (service === null) throw new Error(`zerops: the database ${database.hostname} does not exist, so its connections cannot be sized`)
+	const profile = service.autoscalingProfileId
+	// A minimum the service does not report is taken as the smallest step: its limit is then never overstated.
+	let ram = service.currentAutoscaling?.vertical.minResource.memoryGBytes ?? ZEROPS_POSTGRES_MIN_RAM_GB
+	const holders = `${demand.maxContainers} container(s) of ${deployHostname}, twice while a deploy replaces them, and ${demand.jobs} job process(es)`
+	let connections = zeropsProcessConnections(zeropsPostgresMaxConnections(ram, profile), demand)
+	if (connections === null && database.shared) {
+		connections = MIN_PROCESS_CONNECTIONS
+		log(`  [warn] ${database.hostname} at ${ram} GB has too few connections for ${holders}; the namespace shares it, so raise its profile`)
+	}
+	if (connections === null) {
+		const minRam = zeropsDatabaseMinRam(demand, profile)
+		if (minRam === null) throw new Error(`zerops: no RAM of ${database.hostname} has enough connections for ${holders}`)
+		const before = ram
+		ram = await raiseMinRam(env, service, database.hostname, minRam, `${holders} need`)
+		log(`  minimum RAM of ${database.hostname}: ${before} → ${ram} GB, for its connection limit`)
+		connections = zeropsProcessConnections(zeropsPostgresMaxConnections(ram, profile), demand) ?? MIN_PROCESS_CONNECTIONS
+	}
+	attempt.databaseConnections = connections
+	const limit = zeropsPostgresMaxConnections(ram, profile)
+	log(`  ${database.hostname}: ${limit} connections at ${ram} GB; each process opens at most ${connections}, for ${holders}`)
+}
+
+/** The locked execution with the connections `size-database` sized; an application with a database is never sent without. */
+const sizedExecution = (locked: ZeropsLockedExecution, attempt: Attempt): ZeropsLockedExecution => {
+	if (locked.databaseUrl === null) return locked
+	const connections = attempt.databaseConnections
+	if (connections === undefined) throw new Error('zerops: trigger-build has no database connection size (size-database did not run)')
+	return { ...locked, databaseConnections: connections }
 }
 
 /** Run one step's effect. Resolves on success, throws on failure (caught + recorded by `runSteps`). */
@@ -760,6 +847,11 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 
 		case 'raise-start-memory': {
 			await raiseStartMemory(env)
+			return
+		}
+
+		case 'size-database': {
+			await sizeDatabase(env)
 			return
 		}
 
@@ -830,7 +922,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			const release = env.managedValues.FABRIKA_RELEASE
 			const descriptor = locked === null
 				? overlayRelease(contents, artifact.target.zeropsSetup, release)
-				: renderLockedExecutionDescriptor(contents, artifact.target.zeropsSetup, release, locked)
+				: renderLockedExecutionDescriptor(contents, artifact.target.zeropsSetup, release, sizedExecution(locked, attempt))
 			if (locked !== null) {
 				log(`  generated run section; build checks @fabrika/check@${FABRIKA_CHECK_VERSION}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
 				if (locked.sourceMaps !== null) log(`  the build uploads the source maps of ${locked.sourceMaps.assetRoots.length} asset root(s)`)

@@ -356,7 +356,9 @@ as itself nor as a role it created, with everything it administers. A concurrent
 run's provisioner is still valid, so it is never swept; the sweep holds an
 advisory lock it only tries, so two runs never sweep at once and none waits. The
 test kit migrates each throwaway schema as its own migration role and connects
-and seeds as its runtime role. Before it starts the application, the launcher
+and seeds as its runtime role. It holds at most four connections per test file,
+and waits for a free one rather than fail a case on a database at its limit
+([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). Before it starts the application, the launcher
 makes itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`, Linux), so a process of
 the same user, the application it started among them, cannot read its
 `/proc/<pid>/environ` or `/proc/<pid>/mem`; on Linux a failure stops the launch,
