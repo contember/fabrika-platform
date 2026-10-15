@@ -36,6 +36,22 @@ describe('GitHub App manifest contract', () => {
 		})
 	})
 
+	test('asks GitHub to send the installer back to the setup URL after an install or an update', () => {
+		expect(
+			buildGitHubAppManifest({
+				organization: 'contember',
+				appName: 'fabrika-test',
+				homepageUrl: 'https://control.example.test',
+				webhookUrl: 'https://control.example.test/webhooks/github',
+				setupUrl: 'https://control.example.test/api/source/github/setup/connection-1',
+				public: false,
+			}),
+		).toMatchObject({
+			setup_url: 'https://control.example.test/api/source/github/setup/connection-1',
+			setup_on_update: true,
+		})
+	})
+
 	test.each([
 		{ organization: '../owner', appName: 'fabrika', homepageUrl: 'https://control.test', webhookUrl: 'https://control.test/hook', public: false },
 		{ organization: 'owner', appName: '', homepageUrl: 'https://control.test', webhookUrl: 'https://control.test/hook', public: false },
@@ -53,6 +69,14 @@ describe('GitHub App manifest contract', () => {
 			homepageUrl: 'https://control.test',
 			webhookUrl: 'https://control.test/hook',
 			redirectUrl: 'https://control.test/callback#secret',
+			public: false,
+		},
+		{
+			organization: 'owner',
+			appName: 'fabrika',
+			homepageUrl: 'https://control.test',
+			webhookUrl: 'https://control.test/hook',
+			setupUrl: 'http://control.test/setup',
 			public: false,
 		},
 	])('rejects unsafe manifest input %#', (input) => {

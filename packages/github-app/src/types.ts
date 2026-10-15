@@ -76,6 +76,8 @@ export interface GitHubAppManifestInput {
 	readonly homepageUrl: string
 	readonly webhookUrl: string
 	readonly redirectUrl?: string
+	/** Where GitHub sends the installer after an install or an installation update, with `installation_id` and `setup_action`. */
+	readonly setupUrl?: string
 	/** GitHub requires a public App when repositories outside its owner organization need it. */
 	readonly public: boolean
 }

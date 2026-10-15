@@ -23,6 +23,7 @@ export function buildGitHubAppManifest(input: GitHubAppManifestInput): Readonly<
 		url: input.homepageUrl,
 		hook_attributes: { url: input.webhookUrl, active: true },
 		...(input.redirectUrl === undefined ? {} : { redirect_url: input.redirectUrl }),
+		...(input.setupUrl === undefined ? {} : { setup_url: input.setupUrl, setup_on_update: true }),
 		public: input.public,
 		default_permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
 		default_events: ['push'],
@@ -185,6 +186,7 @@ function validateManifestInput(input: GitHubAppManifestInput): void {
 	validateManifestUrl(input.homepageUrl)
 	validateManifestUrl(input.webhookUrl)
 	if (input.redirectUrl !== undefined) validateManifestUrl(input.redirectUrl)
+	if (input.setupUrl !== undefined) validateManifestUrl(input.setupUrl)
 }
 
 function validateManifestUrl(value: string): void {
