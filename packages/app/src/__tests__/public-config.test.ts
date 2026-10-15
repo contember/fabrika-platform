@@ -150,6 +150,7 @@ describe.skipIf(!hasPostgres)("a form challenge's site key", () => {
 		expect(site.body).toEqual({
 			dsn: null,
 			release: null,
+			environment: null,
 			public: { TURNSTILE_SITE_KEY: VALUES.TURNSTILE_SITE_KEY, SIGNUP_URL: VALUES.SIGNUP_URL },
 		})
 		const hr = await send(app, '/hr/__fabrika-config.json', { token: await token('user', [grant('applications.read')]) })
