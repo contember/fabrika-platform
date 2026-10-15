@@ -1,7 +1,9 @@
 import { createPage, Link } from '@buzola/router'
 import type { OperationsHealthCheckUpsertRequestDto } from '@fabrika/operations-contract/operator-api'
 import { useState } from 'react'
+import { CONSOLE_ACTIONS, mayDo } from '../../../lib/console-access'
 import { fmtDate } from '../../../lib/format'
+import { consoleSession } from '../../../lib/session'
 import { operationsClient } from '../../../operations/client'
 
 const DEFAULT_CHECK: OperationsHealthCheckUpsertRequestDto = {
@@ -18,11 +20,13 @@ const DEFAULT_CHECK: OperationsHealthCheckUpsertRequestDto = {
 export default createPage()
 	.params({ sourceId: 'string' })
 	.loader(async ({ params }) => {
-		const [source, health] = await Promise.all([
+		const [source, health, { access }] = await Promise.all([
 			operationsClient.source({ sourceId: params.sourceId }),
 			operationsClient.sourceHealth({ sourceId: params.sourceId }),
+			consoleSession(),
 		])
-		return { source: source.source, health }
+		const manages = mayDo(access, CONSOLE_ACTIONS.OPERATIONS_MANAGE, { app: source.source.appId, env: source.source.environment })
+		return { source: source.source, health, manages }
 	})
 	.route('/operations/sources/:sourceId')
 	.render(({ data, invalidate }) => {
@@ -53,7 +57,7 @@ export default createPage()
 							<h1>{data.source.displayName}</h1>
 							<p className="hint">{data.source.appId} · {data.source.environment} · {data.source.serviceKey}</p>
 						</div>
-						<Link to="operations/sources/alerts" params={{ sourceId: data.source.id }} className="btn">Alert routing</Link>
+						{data.manages && <Link to="operations/sources/alerts" params={{ sourceId: data.source.id }} className="btn">Alert routing</Link>}
 					</div>
 				</div>
 
@@ -82,16 +86,18 @@ export default createPage()
 									<th>Observed</th>
 									<th>Latency</th>
 									<th>Policy</th>
-									<th>
-										<span className="sr-only">Actions</span>
-									</th>
+									{data.manages && (
+										<th>
+											<span className="sr-only">Actions</span>
+										</th>
+									)}
 								</tr>
 							</thead>
 							<tbody>
 								{data.health.httpChecks.length === 0
 									? (
 										<tr>
-											<td colSpan={6} className="empty">No HTTP health checks configured.</td>
+											<td colSpan={data.manages ? 6 : 5} className="empty">No HTTP health checks configured.</td>
 										</tr>
 									)
 									: data.health.httpChecks.map((check) => (
@@ -110,44 +116,46 @@ export default createPage()
 											<td>{fmtDate(check.current === null ? null : check.current.observedAt / 1000)}</td>
 											<td>{check.current?.latencyMs === null || check.current === null ? '—' : `${check.current.latencyMs} ms`}</td>
 											<td>{check.expectedStatus} · {Math.round(check.intervalMs / 1000)}s</td>
-											<td>
-												<div className="row-actions">
-													<button
-														type="button"
-														className="small"
-														disabled={busy}
-														aria-label={`${check.enabled ? 'Disable' : 'Enable'} health check ${check.path}`}
-														onClick={() =>
-															perform(() =>
-																operationsClient.updateHealthCheck({
-																	sourceId: data.source.id,
-																	checkId: check.id,
-																	input: {
-																		path: check.path,
-																		enabled: !check.enabled,
-																		intervalMs: check.intervalMs,
-																		timeoutMs: check.timeoutMs,
-																		expectedStatus: check.expectedStatus,
-																		failureThreshold: check.failureThreshold,
-																		recoveryThreshold: check.recoveryThreshold,
-																		staleAfterMs: check.staleAfterMs,
-																	},
-																})
-															)}
-													>
-														{check.enabled ? 'Disable' : 'Enable'}
-													</button>
-													<button
-														type="button"
-														className="danger small"
-														disabled={busy}
-														aria-label={`Delete health check ${check.path}`}
-														onClick={() => perform(() => operationsClient.deleteHealthCheck({ sourceId: data.source.id, checkId: check.id }))}
-													>
-														Delete
-													</button>
-												</div>
-											</td>
+											{data.manages && (
+												<td>
+													<div className="row-actions">
+														<button
+															type="button"
+															className="small"
+															disabled={busy}
+															aria-label={`${check.enabled ? 'Disable' : 'Enable'} health check ${check.path}`}
+															onClick={() =>
+																perform(() =>
+																	operationsClient.updateHealthCheck({
+																		sourceId: data.source.id,
+																		checkId: check.id,
+																		input: {
+																			path: check.path,
+																			enabled: !check.enabled,
+																			intervalMs: check.intervalMs,
+																			timeoutMs: check.timeoutMs,
+																			expectedStatus: check.expectedStatus,
+																			failureThreshold: check.failureThreshold,
+																			recoveryThreshold: check.recoveryThreshold,
+																			staleAfterMs: check.staleAfterMs,
+																		},
+																	})
+																)}
+														>
+															{check.enabled ? 'Disable' : 'Enable'}
+														</button>
+														<button
+															type="button"
+															className="danger small"
+															disabled={busy}
+															aria-label={`Delete health check ${check.path}`}
+															onClick={() => perform(() => operationsClient.deleteHealthCheck({ sourceId: data.source.id, checkId: check.id }))}
+														>
+															Delete
+														</button>
+													</div>
+												</td>
+											)}
 										</tr>
 									))}
 							</tbody>
@@ -155,28 +163,30 @@ export default createPage()
 					</div>
 				</section>
 
-				<section className="card">
-					<div className="card-head">
-						<h2>Add HTTP check</h2>
-					</div>
-					<div className="card-body">
-						<div className="form-row">
-							<label className="field-wide">
-								Path on the configured public origin
-								<input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/healthz" />
-							</label>
-							<button
-								type="button"
-								className="primary"
-								disabled={busy || !path.startsWith('/')}
-								onClick={() => perform(() => operationsClient.createHealthCheck({ sourceId: data.source.id, input: { ...DEFAULT_CHECK, path } }))}
-							>
-								Add check
-							</button>
+				{data.manages && (
+					<section className="card">
+						<div className="card-head">
+							<h2>Add HTTP check</h2>
 						</div>
-						<p className="hint">Default policy: every 60s, 5s timeout, three failures to fail and two successes to recover.</p>
-					</div>
-				</section>
+						<div className="card-body">
+							<div className="form-row">
+								<label className="field-wide">
+									Path on the configured public origin
+									<input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/healthz" />
+								</label>
+								<button
+									type="button"
+									className="primary"
+									disabled={busy || !path.startsWith('/')}
+									onClick={() => perform(() => operationsClient.createHealthCheck({ sourceId: data.source.id, input: { ...DEFAULT_CHECK, path } }))}
+								>
+									Add check
+								</button>
+							</div>
+							<p className="hint">Default policy: every 60s, 5s timeout, three failures to fail and two successes to recover.</p>
+						</div>
+					</section>
+				)}
 			</>
 		)
 	})

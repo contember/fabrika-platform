@@ -4,6 +4,8 @@ import { Icon } from '../../components/Icon'
 import { LogView } from '../../components/LogView'
 import { Chip, RunStatus } from '../../components/Status'
 import { api, ApiError } from '../../lib/api'
+import { CONSOLE_ACTIONS, mayDo, opensApplications } from '../../lib/console-access'
+import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 
 // Run detail — the run's metadata + the live log view. The LogView calls `runs.tail` while the run
@@ -22,6 +24,8 @@ export default createPage()
 	.render(({ data, invalidate }) => {
 		const { run, appEnv } = data
 		const inFlight = run.status === 'pending' || run.status === 'running' || run.status === 'awaiting_approval'
+		const access = useConsoleAccess()
+		const at = { app: run.appId, env: run.env }
 
 		return (
 			<>
@@ -36,7 +40,9 @@ export default createPage()
 								Run <code>{run.id.slice(0, 8)}</code>
 							</h1>
 							<div className="subtitle">
-								<Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link>
+								{opensApplications(access)
+									? <Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link>
+									: run.appId}
 								<span className="dot-sep" />
 								<Chip>{run.env}</Chip>
 								<span className="dot-sep">{run.trigger}</span>
@@ -44,7 +50,7 @@ export default createPage()
 						</div>
 						<div className="row-actions">
 							<RunStatus status={run.status} />
-							{inFlight && <CancelButton runId={run.id} onDone={invalidate} />}
+							{inFlight && mayDo(access, CONSOLE_ACTIONS.DEPLOY_TRIGGER, at) && <CancelButton runId={run.id} onDone={invalidate} />}
 						</div>
 					</div>
 				</div>

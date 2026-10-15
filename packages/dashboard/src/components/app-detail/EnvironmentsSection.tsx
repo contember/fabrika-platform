@@ -1,6 +1,8 @@
 import { useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type PutAppEnvRequest, type TriggerDeployRequest } from '../../lib/api'
+import { CONSOLE_ACTIONS, mayDo } from '../../lib/console-access'
+import { useConsoleAccess } from '../../lib/console-caller'
 import { shortRef } from '../../lib/format'
 import { cloudflareArtifactWithConfigPath, cloudflareConfigPath } from '../../lib/manifest-editor'
 import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
@@ -62,6 +64,7 @@ export function EnvironmentsSection(
 }
 
 function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
+	const access = useConsoleAccess()
 	const navigate = useNavigate()
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -78,6 +81,8 @@ function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
 			setBusy(false)
 		}
 	}
+
+	if (!mayDo(access, CONSOLE_ACTIONS.DEPLOY_TRIGGER, { app: appId, env: env.env })) return null
 
 	return (
 		<>

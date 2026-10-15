@@ -1,31 +1,14 @@
-import { Link, Outlet, useRoute } from '@buzola/router'
+import { Link, Outlet, useNavigate, useRoute } from '@buzola/router'
 import { useEffect, useState } from 'react'
 import { BrandMark, Icon, type IconName } from '../components/Icon'
 import { RouteError } from '../components/RouteError'
-import { type ConsoleSession, readConsoleSession } from '../lib/session'
+import { type ConsoleCaller, mayOpen, type NavPage } from '../lib/console-access'
+import { ConsoleAccessContext } from '../lib/console-caller'
+import { type ConsoleSession, consoleSession } from '../lib/session'
 import { effectiveTheme, pinTheme, type Theme } from '../lib/theme'
 
-type Page =
-	| 'index'
-	| 'apps'
-	| 'namespaces'
-	| 'runs'
-	| 'approvals'
-	| 'settings/source'
-	| 'access'
-	| 'access/users'
-	| 'access/credentials'
-	| 'access/permissions'
-	| 'access/audit'
-	| 'operations'
-	| 'operations/errors'
-	| 'operations/sources'
-	| 'operations/releases'
-	| 'operations/health'
-	| 'people'
-
 interface NavItem {
-	to: Page
+	to: NavPage
 	label: string
 	/** Distinguishes repeated visible labels for assistive technology and browser automation. */
 	accessibleLabel?: string
@@ -113,8 +96,17 @@ function isActive(item: NavItem, pathname: string): boolean {
 	return pathname === item.match || pathname.startsWith(`${item.match}/`)
 }
 
+/** The rail as this caller may use it: a section with no usable page is left out. */
+export function visibleNav(caller: ConsoleCaller): { lead: NavItem | null; sections: NavSection[] } {
+	const sections = NAV
+		.map((section) => ({ ...section, items: section.items.filter((item) => mayOpen(caller, item.to)) }))
+		.filter((section) => section.items.length > 0)
+	return { lead: mayOpen(caller, LEAD.to) ? LEAD : null, sections }
+}
+
 export default function RootLayout() {
 	const { pathname } = useRoute()
+	const session = useConsoleSession()
 	// The overview spans all planes, so it isn't filed under any one of them.
 	const plane = pathname === '/'
 		? 'Console'
@@ -139,17 +131,7 @@ export default function RootLayout() {
 						<span className="brand-sub">console</span>
 					</span>
 				</div>
-				<nav aria-label="Console navigation">
-					<div className="nav-section nav-lead">
-						<NavLink item={LEAD} pathname={pathname} />
-					</div>
-					{NAV.map((section) => (
-						<div className="nav-section" key={section.label}>
-							<div className="nav-section-label">{section.label}</div>
-							{section.items.map((item) => <NavLink key={item.to} item={item} pathname={pathname} />)}
-						</div>
-					))}
-				</nav>
+				{session !== null && <Navigation caller={session} pathname={pathname} />}
 				{/* An install-level fact, so it sits on the rail's nameplate rather than in the per-page bar. */}
 				<div className="sidebar-foot">
 					<span className="endpoint" title="Delivery, Access and Operations share one console">
@@ -170,15 +152,18 @@ export default function RootLayout() {
 						<div className="bar-actions">
 							<Link to="builder/authorize" className="btn small">Your builder connections</Link>
 							<ThemeToggle />
-							<SessionControls />
+							{session !== null && <SignedIn session={session} />}
 						</div>
 					</div>
 				</header>
 				<div className="workspace">
-					<Outlet
-						fallback={<div className="loading">Loading console…</div>}
-						errorFallback={(error) => <RouteError error={error} />}
-					/>
+					{session === null
+						? <div className="loading">Loading console…</div>
+						: (
+							<ConsoleAccessContext.Provider value={session.access}>
+								<Workspace session={session} here={here} pathname={pathname} />
+							</ConsoleAccessContext.Provider>
+						)}
 				</div>
 			</main>
 		</div>
@@ -201,13 +186,13 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 	)
 }
 
-/** Read once per console load; until it answers, the bar shows nothing rather than a guess. */
-function SessionControls() {
+/** Read once per console load; until it answers, the rail and the bar show nothing rather than a guess. */
+function useConsoleSession(): ConsoleSession | null {
 	const [session, setSession] = useState<ConsoleSession | null>(null)
 
 	useEffect(() => {
 		let cancelled = false
-		void readConsoleSession().then((read) => {
+		void consoleSession().then((read) => {
 			if (!cancelled) setSession(read)
 		})
 		return () => {
@@ -215,7 +200,78 @@ function SessionControls() {
 		}
 	}, [])
 
-	return session === null ? null : <SignedIn session={session} />
+	return session
+}
+
+function Navigation({ caller, pathname }: { caller: ConsoleCaller; pathname: string }) {
+	const { lead, sections } = visibleNav(caller)
+	return (
+		<nav aria-label="Console navigation">
+			{lead !== null && (
+				<div className="nav-section nav-lead">
+					<NavLink item={lead} pathname={pathname} />
+				</div>
+			)}
+			{sections.map((section) => (
+				<div className="nav-section" key={section.label}>
+					<div className="nav-section-label">{section.label}</div>
+					{section.items.map((item) => <NavLink key={item.to} item={item} pathname={pathname} />)}
+				</div>
+			))}
+		</nav>
+	)
+}
+
+/**
+ * The page, or why it is not shown. Hiding is presentation only: each procedure behind a page still decides. The
+ * overview needs the whole Delivery plane, so a caller without it starts on the first page they may use.
+ */
+function Workspace({ session, here, pathname }: { session: ConsoleSession; here: NavItem | null; pathname: string }) {
+	const navigate = useNavigate()
+	const { lead, sections } = visibleNav(session)
+	const first = lead ?? sections[0]?.items[0] ?? null
+	const redirect = pathname === '/' && lead === null ? first : null
+
+	useEffect(() => {
+		if (redirect !== null) navigate(redirect.to)
+	}, [redirect, navigate])
+
+	if (first === null) return <NoAccess session={session} />
+	if (redirect !== null) return <div className="loading">Loading console…</div>
+	if (here !== null && !mayOpen(session, here.to)) return <NotAvailable />
+	return (
+		<Outlet
+			fallback={<div className="loading">Loading console…</div>}
+			errorFallback={(error) => <RouteError error={error} />}
+		/>
+	)
+}
+
+export function NoAccess({ session }: { session: ConsoleSession }) {
+	return (
+		<div className="gate-screen">
+			<p className="eyebrow">Console</p>
+			<h1>You have no access to this console yet</h1>
+			<p>
+				{session.principal === null ? 'You are signed in' : (
+					<>
+						You are signed in as <strong title={session.principal.id}>{session.principal.label}</strong>
+					</>
+				)}, but no role in this console is granted to you. Ask an administrator to grant you a role.
+			</p>
+			{session.signOutUrl !== null && <a href={session.signOutUrl} className="btn">Sign in as someone else</a>}
+		</div>
+	)
+}
+
+function NotAvailable() {
+	return (
+		<div className="gate-screen">
+			<p className="eyebrow">Console</p>
+			<h1>This page is not available to you</h1>
+			<p>None of your roles in this console includes it. Ask an administrator if you need it.</p>
+		</div>
+	)
 }
 
 export function SignedIn({ session }: { session: ConsoleSession }) {

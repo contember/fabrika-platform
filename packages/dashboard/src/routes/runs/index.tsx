@@ -4,25 +4,35 @@ import { Icon } from '../../components/Icon'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError, type RunDto } from '../../lib/api'
+import { CONSOLE_ACTIONS, holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
 import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
+import { consoleSession } from '../../lib/session'
 
 // Runs — the global deploy history. Filter by app and/or env; keyset-paged with `?before=`. Each row
 // links to the run detail (which tails the live log). A per-app view is the same table prefiltered.
+// A caller who reads runs only in some apps or environments starts filtered to the first of them.
 
 const PAGE_SIZE = 50
 
 export default createPage()
 	.loader(async () => {
+		const { access } = await consoleSession()
+		const readsAll = access === null || holdsGlobally(access, CONSOLE_ACTIONS.DEPLOY_READ)
+		const scoped = access === null ? { apps: [], environments: [] } : scopedRunReads(access)
+		const initialFilter = readsAll || scoped.apps.length > 0
+			? { app: readsAll ? '' : (scoped.apps[0] ?? ''), env: '' }
+			: { app: '', env: scoped.environments[0] ?? '' }
+		const listsApps = opensApplications(access)
 		const [runs, apps] = await Promise.all([
-			api.runs.list({ limit: PAGE_SIZE }),
-			api.apps.list(),
+			api.runs.list({ ...runFilter(initialFilter.app, initialFilter.env), limit: PAGE_SIZE }),
+			listsApps ? api.apps.list().then((list) => list.items.map((app) => app.id)) : scoped.apps,
 		])
-		return { initialRuns: runs, apps: apps.items }
+		return { initialRuns: runs, apps, initialFilter, readsAll, listsApps }
 	})
 	.route('/runs')
 	.render(({ data }) => {
-		const [app, setApp] = useState('')
-		const [env, setEnv] = useState('')
+		const [app, setApp] = useState(data.initialFilter.app)
+		const [env, setEnv] = useState(data.initialFilter.env)
 		const [runs, setRuns] = useState<RunDto[]>(data.initialRuns.items)
 		const [cursor, setCursor] = useState<string | null>(data.initialRuns.nextCursor)
 		const [loading, setLoading] = useState(false)
@@ -34,8 +44,7 @@ export default createPage()
 			try {
 				const before = reset ? undefined : (cursor ?? undefined)
 				const page = await api.runs.list({
-					...(app === '' ? {} : { appId: app }),
-					...(env === '' ? {} : { env }),
+					...runFilter(app, env),
 					...(before === undefined ? {} : { before }),
 					limit: PAGE_SIZE,
 				})
@@ -64,8 +73,8 @@ export default createPage()
 					<label>
 						App
 						<select value={app} onChange={(e) => setApp(e.target.value)}>
-							<option value="">All apps</option>
-							{data.apps.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}
+							{(data.readsAll || data.initialFilter.app === '') && <option value="">{data.readsAll ? 'All apps' : 'Any app'}</option>}
+							{data.apps.map((id) => <option key={id} value={id}>{id}</option>)}
 						</select>
 					</label>
 					<label>
@@ -81,8 +90,8 @@ export default createPage()
 							type="button"
 							className="ghost"
 							onClick={() => {
-								setApp('')
-								setEnv('')
+								setApp(data.initialFilter.app)
+								setEnv(data.initialFilter.env)
 								setRuns(data.initialRuns.items)
 								setCursor(data.initialRuns.nextCursor)
 							}}
@@ -126,7 +135,7 @@ export default createPage()
 								</Link>
 							</td>
 							<td>
-								<Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link>
+								{data.listsApps ? <Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link> : run.appId}
 							</td>
 							<td>
 								<Chip>{run.env}</Chip>
@@ -152,3 +161,7 @@ export default createPage()
 			</>
 		)
 	})
+
+function runFilter(app: string, env: string): { appId?: string; env?: string } {
+	return { ...(app === '' ? {} : { appId: app }), ...(env === '' ? {} : { env }) }
+}

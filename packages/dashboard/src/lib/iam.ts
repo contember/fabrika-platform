@@ -1,4 +1,4 @@
-import { createRpcClient, type RpcFetch } from '@fabrika/app'
+import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import type { ApiKeyDto, AuditEventDto, IamAdminRpcContract, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 
 const RPC_BASE = '/iam/admin/rpc'
@@ -53,14 +53,25 @@ export async function iamSnapshot(fetcher: RpcFetch = fetch): Promise<IamSnapsho
 	}
 }
 
-/**
- * The person this console session belongs to, or null when IAM does not say. IAM answers `me` to an installation
- * administrator only, so someone who administers only an application's people reads as unknown.
- */
-export async function signedInPrincipal(fetcher: RpcFetch = fetch): Promise<SignedInPrincipal | null> {
+/** IAM's `me` answers an installation administrator, and refuses everyone else with 403. */
+export type IamAdministration =
+	| { status: 'admin'; principal: SignedInPrincipal }
+	| { status: 'not-admin' }
+	| { status: 'unknown' }
+
+export async function iamAdministration(fetcher: RpcFetch = fetch): Promise<IamAdministration> {
 	try {
 		const me = await quietIamClient(fetcher).me()
-		return { id: me.id, label: me.label }
+		return { status: 'admin', principal: { id: me.id, label: me.label } }
+	} catch (cause) {
+		return cause instanceof RpcError && cause.httpStatus === 403 ? { status: 'not-admin' } : { status: 'unknown' }
+	}
+}
+
+/** Whether IAM lists an application whose own people the caller administers; null when IAM does not answer. */
+export async function administersPeople(fetcher: RpcFetch = fetch): Promise<boolean | null> {
+	try {
+		return (await quietIamClient(fetcher).appPeople.apps()).items.length > 0
 	} catch {
 		return null
 	}
