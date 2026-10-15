@@ -179,6 +179,9 @@ Each is sent to GitHub over \`gh\` stdin, and never printed and never written to
 
 The generated pipeline pins a published TAG of contember/fabrika-platform and refuses a branch, at
 init and again in the workflow. It uploads that checkout's exact committed archive to every installation service.
+\`--tag\` is written only to a new sidecar: an existing \`fabrika.ref\` is the operator's and stays. When it pins
+another tag, init writes the Environment and then refuses to trigger the run, which would deploy that other tag;
+\`platform upgrade --to=<tag>\` moves the pin and starts the run.
 
 ── platform deploy ───────────────────────────────────────────────────────────────────────────────
 

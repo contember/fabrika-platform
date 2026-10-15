@@ -258,6 +258,12 @@ const readPlatform = async (input: InitInput, { log, prompts, effects }: InitCol
 	})
 }
 
+/** The local checkout and the tag its `fabrika.ref` pins, which an existing sidecar keeps whatever `--tag` says. */
+interface ScaffoldedSidecar {
+	readonly dir: string
+	readonly pinned: string
+}
+
 /**
  * Create or refresh the sidecar repository — the first step that leaves this disk.
  *
@@ -265,7 +271,7 @@ const readPlatform = async (input: InitInput, { log, prompts, effects }: InitCol
  * outward step: an Environment cannot be written to a repository that does not exist, and a workflow
  * cannot be triggered without one.
  */
-const scaffold = async (input: InitInput, { log, prompts, effects }: InitCollaborators): Promise<string | undefined> => {
+const scaffold = async (input: InitInput, { log, prompts, effects }: InitCollaborators): Promise<ScaffoldedSidecar | undefined> => {
 	log.step('Scaffold the sidecar repository')
 	const exists = await effects.repositoryExists(input.repo)
 	const question = exists
@@ -293,7 +299,22 @@ const scaffold = async (input: InitInput, { log, prompts, effects }: InitCollabo
 	if (pinned !== input.fabrikaRef) {
 		log.warn(`the existing pin ${pinned} was kept; ${input.fabrikaRef} was not written, because fabrika.ref is operator-owned`)
 	}
-	return result.dir
+	return { dir: result.dir, pinned }
+}
+
+/**
+ * Refuse to trigger a run that would deploy a tag other than `--tag`: the run deploys the kept pin, so a sidecar reused
+ * for a new installation would roll an older release over it. The Environment is already written, so the pin moves by
+ * `upgrade`, whose push triggers the run with it.
+ */
+const assertPinnedAsRequested = (input: InitInput, sidecar: ScaffoldedSidecar): void => {
+	if (sidecar.pinned === input.fabrikaRef) return
+	throw new Error(
+		`the platform workflow was NOT triggered: ${input.repo} pins ${sidecar.pinned}, not ${input.fabrikaRef}, and a run deploys the pin. `
+			+ `The ${input.installation} Environment is written. To deploy ${input.fabrikaRef}, move the pin: `
+			+ `fabrika platform upgrade --provider=zerops --to=${input.fabrikaRef} --sidecar=${sidecar.dir}. `
+			+ `To deploy ${sidecar.pinned}, run init again with --tag=${sidecar.pinned}`,
+	)
 }
 
 /** Run the whole thing for `<installation>`. */
@@ -320,8 +341,8 @@ export const runInit = async (input: InitInput, collaborators: InitCollaborators
 			: [url(settingsUrl)],
 	)
 
-	const dir = await scaffold(input, collaborators)
-	if (dir === undefined) {
+	const sidecar = await scaffold(input, collaborators)
+	if (sidecar === undefined) {
 		return
 	}
 
@@ -338,6 +359,7 @@ export const runInit = async (input: InitInput, collaborators: InitCollaborators
 	log.ok(`Environment ${input.installation} written: ${Object.keys(config.secrets).join(', ')} and ${Object.keys(config.vars).join(', ')}.`)
 
 	log.step('Trigger the deploy')
+	assertPinnedAsRequested(input, sidecar)
 	log.info("The pipeline runs the whole ordered sequence in the operator's CI; this machine deploys nothing.")
 	if (!(await prompts.confirm(`Run the platform workflow on ${input.repo} now?`, true))) {
 		log.action('OPERATOR ACTION — run it when ready', [
@@ -351,7 +373,7 @@ export const runInit = async (input: InitInput, collaborators: InitCollaborators
 	}
 
 	log.step('Done')
-	log.ok(`Sidecar repository: ${input.repo} (local checkout: ${dir})`)
+	log.ok(`Sidecar repository: ${input.repo} (local checkout: ${sidecar.dir})`)
 	log.info('Roll this installation forward by bumping fabrika.ref to a newer published tag and pushing.')
 	log.info("Who may administer the installation is IAM's to say: this repository holds no admission list to close later.")
 	// The origin comes off the live control service, never from what was typed here: an operator who

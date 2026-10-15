@@ -41,6 +41,8 @@ const recorder = (options: {
 	readonly custom?: boolean
 	readonly controlEnvironment?: Readonly<Record<string, string>>
 	readonly proxyPublished?: boolean
+	/** The `fabrika.ref` an existing sidecar checkout already holds. */
+	readonly existingPin?: string
 }): Recorder => {
 	const input = parseInitArgs([...ARGV, ...(options.custom === true ? CUSTOM_HOSTS : [])], CREDENTIALS, CWD)
 	const asked: string[] = []
@@ -83,8 +85,9 @@ const recorder = (options: {
 			scaffold: async (scaffoldInput): Promise<SidecarScaffoldResult> => {
 				effects.push(`scaffold: ${scaffoldInput.repo}`)
 				scaffolds.push(scaffoldInput)
+				if (options.existingPin !== undefined) await Bun.write(join(scaffoldInput.dir, 'fabrika.ref'), `${options.existingPin}\n`)
 				await scaffoldInput.materialize(scaffoldInput.dir)
-				return { dir: scaffoldInput.dir, created: true }
+				return { dir: scaffoldInput.dir, created: options.existingPin === undefined }
 			},
 			configureEnvironment: async (config) => {
 				effects.push(`environment: ${config.environment}`)
@@ -241,6 +244,31 @@ describe('fabrika platform init --provider=zerops', () => {
 		expect(environment.effects).not.toContain('environment: test')
 		expect(environment.effects.some((effect) => effect.startsWith('trigger:'))).toBe(false)
 		await cleanCheckout(environment)
+	})
+
+	test('refuses to trigger a run when an existing sidecar keeps a pin other than --tag, and names both ways on', async () => {
+		const recorded = recorder({ repositoryExists: true, existingPin: 'v0.0.9' })
+		const error = await recorded.run().catch((caught: unknown) => caught)
+
+		expect(recorded.effects).toContain('environment: test')
+		expect(recorded.effects.some((effect) => effect.startsWith('trigger:'))).toBe(false)
+		expect(recorded.asked).not.toContain('confirm: Run the platform workflow on contember/fabrika-zerops-test now?')
+		const message = error instanceof Error ? error.message : ''
+		expect(message).toContain('the platform workflow was NOT triggered: contember/fabrika-zerops-test pins v0.0.9, not v0.1.0')
+		expect(message).toContain(
+			`fabrika platform upgrade --provider=zerops --to=v0.1.0 --sidecar=${join(CWD, 'fabrika-zerops-test')}`,
+		)
+		expect(message).toContain('run init again with --tag=v0.0.9')
+		expect(await Bun.file(join(CWD, 'fabrika-zerops-test', 'fabrika.ref')).text()).toBe('v0.0.9\n')
+		await cleanCheckout(recorded)
+	})
+
+	test('triggers the run when an existing sidecar already pins --tag', async () => {
+		const recorded = recorder({ repositoryExists: true, existingPin: 'v0.1.0' })
+		await recorded.run()
+
+		expect(recorded.effects).toContain('trigger: contember/fabrika-zerops-test')
+		await cleanCheckout(recorded)
 	})
 
 	test('ends with the block `control key issue` needs, built from the live IAM origin and two NAMES', async () => {
