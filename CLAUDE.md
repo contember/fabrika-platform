@@ -34,7 +34,8 @@ bun run local:up           # the Docker stack: both Postgres, SeaweedFS, a Zerop
 bun run local:status       # …:smoke (disruptive end-to-end), :reset (wipes volumes), :down
 bun run test:browser       # opice suites in tests/browser/ (browser:up/reset/down manage the stack)
 
-bun run release:validate   # publishability + dependency direction; also :pack :smoke :publish
+bun run release:bump --tag=v1.2.3   # set the next release's version in the source, before tagging
+bun run release:validate   # publishability + dependency direction + tag = source version; also :pack :smoke :publish
 bun run release:pack --local --artifacts=<dir>   # unreleased tarballs for an app outside the repo (app-setup.md)
 ```
 
@@ -55,7 +56,9 @@ days (`signatures_stale`), and the image's own go stale between releases: keep t
 nothing about any of them — run them before trusting those halves.
 
 `release:validate` enforces that every package is either `private: true` or declares
-`publishConfig.access: "public"`, and that no public package depends on a private one.
+`publishConfig.access: "public"`, that no public package depends on a private one, and that the tag
+names the source version: installations run the git checkout of their tag, not the tarballs
+([`release-process.md`](./docs/reference/release-process.md#the-source-version)).
 
 Per-package dev/build commands live in each package's own CLAUDE.md.
 

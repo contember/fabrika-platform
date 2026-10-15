@@ -174,7 +174,7 @@ export const readPackages = async (): Promise<readonly PackageInfo[]> => {
 
 export const packageGraph = (
 	packages: readonly PackageInfo[],
-): { readonly publicPackages: readonly PackageInfo[]; readonly order: readonly PackageInfo[] } => {
+): { readonly publicPackages: readonly PackageInfo[]; readonly order: readonly PackageInfo[]; readonly sourceVersion: string } => {
 	const byName = new Map(packages.map((item) => [item.name, item]))
 	if (byName.size !== packages.length) throw new Error('Package names must be unique')
 	const publicPackages = packages.filter((item) => item.publishable)
@@ -207,7 +207,10 @@ export const packageGraph = (
 			}
 		}
 	}
-	if (sourceVersions.size !== 1) throw new Error(`Public package source versions must match: ${[...sourceVersions].sort().join(', ')}`)
+	const [sourceVersion] = sourceVersions
+	if (sourceVersion === undefined || sourceVersions.size !== 1) {
+		throw new Error(`Public package source versions must match: ${[...sourceVersions].sort().join(', ')}`)
+	}
 
 	const publicByName = new Map(publicPackages.map((item) => [item.name, item]))
 	const visiting = new Set<string>()
@@ -228,7 +231,19 @@ export const packageGraph = (
 		order.push(item)
 	}
 	for (const item of publicPackages) visit(item, [])
-	return { publicPackages, order }
+	return { publicPackages, order, sourceVersion }
+}
+
+/**
+ * A release publishes the version its source carries. An installation runs the git checkout of its tag, not the
+ * tarballs, so a version read off `package.json` at runtime (the checker a Zerops build fetches) is only right when the
+ * tag names the same one. `bump` sets it before the tag is pushed.
+ */
+export const assertTagMatchesSource = (tag: string, version: string, sourceVersion: string): void => {
+	if (version === sourceVersion) return
+	throw new Error(
+		`${tag} does not match the source version ${sourceVersion}. Run \`bun run release:bump --tag=${tag}\`, commit the result, and tag that commit.`,
+	)
 }
 
 const run = async (
@@ -257,7 +272,7 @@ const resolveTag = async (explicit: string | undefined): Promise<{ readonly tag:
 	return { tag, version: match[1] }
 }
 
-const COMMANDS: readonly string[] = ['validate', 'pack', 'smoke', 'publish', 'registry-smoke', 'example-pin']
+const COMMANDS: readonly string[] = ['validate', 'pack', 'smoke', 'publish', 'registry-smoke', 'example-pin', 'bump']
 
 /** The package whose published version a local pack builds on. */
 const LOCAL_BASE_PACKAGE = '@fabrika/app'
@@ -300,6 +315,8 @@ export const parseOptions = async (argv: readonly string[]): Promise<Options> =>
 		else throw new Error(`Unknown option: ${argument}`)
 	}
 	if (!COMMANDS.includes(command)) throw new Error(`Unknown release command: ${command}`)
+	// A bump names the version it sets; one read off the environment or the checked-out tag would be a guess.
+	if (command === 'bump' && tagArgument === undefined) throw new Error('bump needs the next release: --tag=v1.2.3')
 	if (local) {
 		if (tagArgument !== undefined) throw new Error('pack --local derives its version and takes no --tag')
 		const { version, published } = await resolveLocalVersion()
@@ -362,7 +379,11 @@ export const stagePackage = async (
 	await cp(item.directory, stagingDirectory, { recursive: true, filter: (source) => stagesPath(source, includeDist) })
 	await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, version, publicNames), null, '\t')}\n`)
 	if (item.name !== APP_SKILL_PACKAGE) return
-	const skillDirectory = join(stagingDirectory, 'skill')
+	await writeAppSkill(join(stagingDirectory, 'skill'), version, pinnedVersion)
+}
+
+/** Rewrites the application skill in `skillDirectory` as `stagedAppSkill` stages it. */
+const writeAppSkill = async (skillDirectory: string, version: string, pinnedVersion: string): Promise<void> => {
 	const references = (await readdir(join(skillDirectory, 'references'))).filter((name) => name.endsWith('.md')).map((name) => `references/${name}`)
 	const files = await Promise.all(
 		['SKILL.md', ...references].map(async (path) => ({ path, text: await readFile(join(skillDirectory, path), 'utf8') })),
@@ -968,10 +989,60 @@ const examplePin = async (options: Options): Promise<void> => {
 	)
 }
 
+// ── the source version ──────────────────────────────────────────────────────────
+
+/** The top-level `"version"` line of a tab-indented workspace manifest. Line for line, so nothing else moves. */
+const MANIFEST_VERSION_LINE = /^(\t"version": ")([^"]*)(",?)$/m
+
+/** One workspace manifest with its `version` set, or the text unchanged when it declares none. */
+export const bumpedManifest = (text: string, version: string): string => text.replace(MANIFEST_VERSION_LINE, `$1${version}$3`)
+
+/** Refuse a bump that would not move the source forward: an older tag would republish a version npm already has. */
+export const assertBumpForward = (sourceVersion: string, version: string): void => {
+	if (compareVersions(version, sourceVersion, 'bump') > 0) return
+	throw new Error(`bump must move forward: the source is already ${sourceVersion}, so ${version} is not a next release`)
+}
+
+/** The template whose `AGENTS.md` is the rendered skill of the workspace `@fabrika/app`. */
+const AGENTS_TEMPLATE = join(ROOT, 'examples', 'zerops-app')
+
+/**
+ * Set the version the next tag publishes, in the source: every workspace package that declares one, the
+ * examples' `@fabrika/*` ranges (which keep bun linking the workspace), the application skill and the template's
+ * `AGENTS.md` rendered from it, then `bun install` for the lockfile. Commits nothing.
+ */
+const bump = async (options: Options, packages: readonly PackageInfo[], sourceVersion: string): Promise<void> => {
+	assertBumpForward(sourceVersion, options.version)
+	for (const item of packages) {
+		const path = join(item.directory, 'package.json')
+		const before = await readFile(path, 'utf8')
+		const after = bumpedManifest(before, options.version)
+		if (after !== before) await writeFile(path, after)
+	}
+	for (const path of await findManifests(join(ROOT, 'examples'))) {
+		const before = await readFile(path, 'utf8')
+		const rewrite = rewriteExamplePins(before, options.version)
+		if (rewrite.changed > 0) await writeFile(path, rewrite.text)
+	}
+	await writeAppSkill(join(ROOT, 'packages', 'app', 'skill'), options.version, options.version)
+	await run([
+		'bun',
+		'-e',
+		"const { readAppAgentSkill, renderAgentsFile } = await import('@fabrika/app/agent-skill'); await Bun.write('AGENTS.md', renderAgentsFile(readAppAgentSkill()))",
+	], { cwd: AGENTS_TEMPLATE })
+	await run(['bun', 'install'])
+	console.info(`the source is now ${options.version}; review the diff, commit it, and tag that commit ${options.tag}`)
+}
+
 const main = async (): Promise<void> => {
 	const options = await parseOptions(Bun.argv.slice(2))
 	const packages = await readPackages()
-	const { publicPackages, order } = packageGraph(packages)
+	const { publicPackages, order, sourceVersion } = packageGraph(packages)
+	if (options.command === 'bump') {
+		await bump(options, packages, sourceVersion)
+		return
+	}
+	if (options.command === 'validate') assertTagMatchesSource(options.tag, options.version, sourceVersion)
 	if (options.command === 'validate' || options.command === 'pack') {
 		const publicNames = new Set(publicPackages.map((item) => item.name))
 		for (const item of publicPackages) await assertPackedImports(item, publicNames)

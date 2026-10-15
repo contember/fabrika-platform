@@ -23,6 +23,7 @@
 		"release:publish": "bun scripts/release.ts publish",
 		"release:registry-smoke": "bun scripts/release.ts registry-smoke",
 		"release:example-pin": "bun scripts/release.ts example-pin",
+		"release:bump": "bun scripts/release.ts bump",
 		"local:up": "bun run --filter @fabrika/local-stack up",
 		"local:status": "bun run --filter @fabrika/local-stack status",
 		"local:smoke": "bun run --filter @fabrika/local-stack smoke",

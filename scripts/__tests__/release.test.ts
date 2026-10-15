@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
+	assertBumpForward,
 	assertPackedImports,
 	assertStandaloneCheckout,
+	assertTagMatchesSource,
 	awaitRegistryTag,
+	bumpedManifest,
 	entryImportSmoke,
 	LOCAL_INSTALL_FILE,
 	LOCAL_TARBALL_DIRECTORY,
@@ -186,6 +189,33 @@ describe('command line', () => {
 		await expect(parseOptions(['publish', '--local', '--tag=v1.2.3'])).rejects.toThrow('Unknown option: --local')
 		await expect(parseOptions(['smoke', '--local', '--tag=v1.2.3'])).rejects.toThrow('Unknown option: --local')
 		await expect(parseOptions(['pack', '--local', '--tag=v1.2.3'])).rejects.toThrow('pack --local derives its version and takes no --tag')
+	})
+
+	test('takes the version a bump sets only from --tag, never from the environment or the checked-out tag', async () => {
+		await expect(parseOptions(['bump'])).rejects.toThrow('bump needs the next release: --tag=v1.2.3')
+		expect((await parseOptions(['bump', '--tag=v0.4.3'])).version).toBe('0.4.3')
+	})
+})
+
+describe('the source version', () => {
+	test('a release tag must name the version the source carries, so a checkout of the tag knows its own release', () => {
+		expect(() => assertTagMatchesSource('v0.4.3', '0.4.3', '0.4.3')).not.toThrow()
+		expect(() => assertTagMatchesSource('v0.4.3', '0.4.3', '0.0.4')).toThrow(
+			'v0.4.3 does not match the source version 0.0.4. Run `bun run release:bump --tag=v0.4.3`',
+		)
+	})
+
+	test('a bump rewrites only the top-level version line of a manifest', () => {
+		const manifest = '{\n\t"name": "@fabrika/x",\n\t"version": "0.0.4",\n\t"dependencies": {\n\t\t"version": "0.0.4"\n\t}\n}\n'
+		expect(bumpedManifest(manifest, '0.4.3')).toBe(manifest.replace('\t"version": "0.0.4",', '\t"version": "0.4.3",'))
+		const unversioned = '{\n\t"name": "@fabrika/private",\n\t"private": true\n}\n'
+		expect(bumpedManifest(unversioned, '0.4.3')).toBe(unversioned)
+	})
+
+	test('a bump only moves forward, so it cannot re-set a version npm already has', () => {
+		expect(() => assertBumpForward('0.0.4', '0.4.3')).not.toThrow()
+		expect(() => assertBumpForward('0.4.3', '0.4.3')).toThrow('bump must move forward: the source is already 0.4.3')
+		expect(() => assertBumpForward('0.4.3', '0.4.2')).toThrow('is not a next release')
 	})
 })
 

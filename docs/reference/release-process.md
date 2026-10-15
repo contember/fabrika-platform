@@ -18,16 +18,34 @@ The workflow is also callable by `.github/workflows/release.yml`. A tag cannot r
 The release set is derived from workspace manifests and checked against an explicit inventory, so adding or removing a public package requires a deliberate release-tool update. A package ships when it is not private and declares `publishConfig.access: public`. Every public package must:
 
 - use the `@fabrika/*` scope;
-- have the same source version as every other public package;
+- have the same source version as every other public package, and as the release tag (see [The source version](#the-source-version));
 - use `workspace:*` for every dependency on another workspace package;
 - depend only on public workspace packages at its published boundary; and
 - participate in an acyclic dependency graph.
 
 `scripts/release.ts` validates these rules and computes the dependency-first order. `release:validate` prints the set and its size; the inventory itself lives in the script.
 
+## The source version
+
+The source tree carries the version of its next release. An installation does not install the tarballs: it runs the git checkout of its pinned tag, so code that reads its own `package.json` there reads the source version. The Zerops build fetches `@fabrika/check` at that version (`FABRIKA_CHECK_VERSION`), and Control records it as the checker of every approval snapshot (`CHECKER_VERSION`). Both are right only when the tag's commit carries the tag's version.
+
+`release:validate` therefore refuses a tag whose version differs from the source version, and the release workflow stops before anything is packed. Set the version before tagging:
+
+```bash
+bun run release:bump --tag=v1.2.3
+```
+
+`bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, rewrites the `@fabrika/*` ranges of `examples/*` to `^1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again and runs `bun install` for the lockfile. It commits nothing.
+
+## Cutting a release
+
+1. On an up-to-date `main`, run `bun run release:bump --tag=v1.2.3`, review the diff, and run `bun run format`, `bun run typecheck` and `bun run test`.
+2. Commit the result as `chore: release v1.2.3` and land it on `main`.
+3. Tag that commit `v1.2.3` and push the tag. `.github/workflows/release.yml` verifies, validates, packs, smokes, publishes and runs the registry smoke.
+
 ## Local artifact verification
 
-All commands except `pack --local` (below) require a `v<semver>` release tag. Outside a tag checkout, pass `--tag` explicitly:
+All commands except `pack --local` (below) require a `v<semver>` release tag. Outside a tag checkout, pass `--tag` explicitly. `validate` also requires the tag to equal the source version; `pack`, `smoke` and `publish` do not, so CI packs its disposable `v0.0.0-ci.0`:
 
 ```bash
 bun run release:validate --tag=v1.2.3
@@ -36,7 +54,7 @@ bun run release:smoke --tag=v1.2.3
 bun run release:publish --tag=v1.2.3 --dry-run
 ```
 
-Packing copies each package into a temporary staging directory. It stamps the tag version, removes development dependencies and test files, and rewrites internal `workspace:*` ranges to the common released version. Source manifests remain unchanged.
+Packing copies each package into a temporary staging directory. It stamps the tag version, removes development dependencies and test files, and rewrites internal `workspace:*` ranges to the common released version. For a release tag the stamped version is the source version already; the stamp matters for the CI and local packs. Source manifests remain unchanged.
 
 The smoke command installs all tarballs into a temporary project with npm. It imports `@fabrika/app` and both providers, then executes `fabrika --help`. The publish dry-run checks npm's final package inputs without registry mutation.
 
