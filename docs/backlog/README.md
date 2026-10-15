@@ -70,5 +70,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [172](172-a-list-of-values-cannot-show-each-values-last-sign-in.md) — A last sign-in per value needs one call per row and `members.manage`; needs a privacy decision.
 - [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, the screen example renders outside `act`, and the test-mail recipe draws a checker hint.
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.
+- [176](176-the-runtime-does-not-know-the-declared-secret-names.md) — An error report scrubs an application secret only when its variable name says it is one; the platform does not hand the runtime the declared names.
 - [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
