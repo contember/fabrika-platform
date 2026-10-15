@@ -9,7 +9,7 @@ import {
 	FABRIKA_IAM_ISSUER,
 	isFrameworkVariableName,
 } from '@fabrika/auth-core'
-import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from '@fabrika/provider-contract'
+import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
@@ -29,6 +29,7 @@ import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './
 import { configSchema } from './config-schema'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker } from './proxy'
+import { defaultReconcileSchema } from './schema'
 
 const CANCELLED = 'deploy cancelled'
 
@@ -237,6 +238,8 @@ interface StepEnv {
 	readonly dir: string
 	readonly cf: CloudflareCollaborators
 	readonly platformResources: 'refuse' | 'allow'
+	readonly platformIam: PlatformIamTarget | undefined
+	readonly reconcileSchema: SchemaReconciler
 	readonly bounds: DeploymentBounds
 	generatedConfigs: readonly GeneratedConfig[]
 }
@@ -328,13 +331,32 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			if (schema === null) return
 			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
 			if (dryRun) {
-				run.log(`  [dry-run] would report the authz schema for \`${config.id}\` to the control plane`)
+				run.log(
+					env.platformResources === 'allow'
+						? `  [dry-run] would reconcile the authz schema for \`${config.id}\` with IAM`
+						: `  [dry-run] would report the authz schema for \`${config.id}\` to the control plane`,
+				)
 				if (returnOrigins !== undefined) {
 					run.log(`  [dry-run] would register return origins for \`${config.id}\`: ${returnOrigins.join(', ')}`)
 				}
 				return
 			}
 			assertRunning(signal)
+			// The installation deploying its own component holds IAM's provisioning key and registers the schema itself.
+			if (env.platformResources === 'allow') {
+				if (env.platformIam === undefined) {
+					throw new Error('reconcile-schema: a platform deploy registers its schema with IAM; set FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY')
+				}
+				await env.reconcileSchema({
+					url: env.platformIam.url,
+					app: config.id,
+					schema,
+					...(returnOrigins === undefined ? {} : { returnOrigins }),
+					adminKey: env.platformIam.adminKey,
+					signal,
+				})
+				return
+			}
 			// The reconcile itself happens in the CONTROL plane, which holds IAM's admin key; this
 			// container runs the checkout's own code and never sees it (ADR-0022).
 			await cf.writeOutcome({ iamReconcile: { app: config.id, schemaJson: JSON.stringify(schema) } })
@@ -376,6 +398,16 @@ export interface CloudflareDeployerOptions {
 	 * operator deploying fabrika itself passes `allow`; a checkout is never trusted with it.
 	 */
 	readonly platformResources?: 'refuse' | 'allow'
+	/** Where a platform deploy (`allow`) registers a component's schema. Never set for an application deploy. */
+	readonly platformIam?: PlatformIamTarget
+	/** Replaces the HTTP reconcile with IAM (tests). */
+	readonly reconcileSchema?: SchemaReconciler
+}
+
+/** IAM's origin and the installation's provisioning key, as the installation's own deploy holds them. */
+export interface PlatformIamTarget {
+	readonly url: string
+	readonly adminKey: string
 }
 
 export interface CloudflareDeployRun {
@@ -463,6 +495,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		dir,
 		cf,
 		platformResources,
+		platformIam: options.platformIam,
+		reconcileSchema: options.reconcileSchema ?? defaultReconcileSchema,
 		bounds,
 		generatedConfigs: [],
 	}

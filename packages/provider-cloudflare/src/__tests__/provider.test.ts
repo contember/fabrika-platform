@@ -1,5 +1,6 @@
 import { schemaFromContract } from '@fabrika/app/contract'
 import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
@@ -26,6 +27,7 @@ import {
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
 } from '..'
+import type { PlatformIamTarget } from '../provider'
 import { CLOUDFLARE_PROXY_WORKER_DIR } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
 
@@ -33,6 +35,7 @@ interface Recorded {
 	readonly commands: CommandSpec[]
 	readonly provisions: ProvisionInput[]
 	readonly outcomes: RunnerOutcomeFile[]
+	readonly reconciled: SchemaReconcileInput[]
 	readonly logs: string[]
 	readonly provisionedVars: Array<Record<string, unknown> | undefined>
 	readonly applicationVars: Array<Record<string, unknown> | undefined>
@@ -140,6 +143,7 @@ const deploy = (
 		 */
 		readonly contract?: ContractArtifact
 		readonly installationApps?: readonly AppEnvironment[]
+		readonly platformIam?: PlatformIamTarget
 	} = {},
 ) => {
 	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
@@ -157,6 +161,10 @@ const deploy = (
 			options.checkoutContract,
 		),
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
+		...(options.platformIam === undefined ? {} : { platformIam: options.platformIam }),
+		reconcileSchema: async (input) => {
+			rec.reconciled.push(input)
+		},
 	})({
 		appId: options.appId ?? 'demo',
 		env: options.env ?? 'stage',
@@ -198,7 +206,7 @@ const assetsApp = (): CloudflareAppConfig =>
 
 let rec: Recorded
 beforeEach(() => {
-	rec = { commands: [], provisions: [], outcomes: [], logs: [], provisionedVars: [], applicationVars: [] }
+	rec = { commands: [], provisions: [], outcomes: [], reconciled: [], logs: [], provisionedVars: [], applicationVars: [] }
 })
 
 afterEach(async () => {
@@ -342,7 +350,32 @@ describe('Cloudflare provider', () => {
 		await deploy(rec, config({ schema }), { returnOrigins: ['https://demo.example.com'] })
 
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: JSON.stringify(schema) } }])
+		expect(rec.reconciled).toEqual([])
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy'], ['wrangler', 'deploy']])
+	})
+
+	test("a platform deploy registers its component's schema with IAM itself, with the provisioning key", async () => {
+		const schema = { scopes: [], actions: [{ action: 'deploy.read' }], roles: {} }
+		const result = await deploy(rec, config({ schema }), {
+			platformResources: 'allow',
+			platformIam: { url: 'https://iam.example.com', adminKey: 'px_provisioning' },
+			returnOrigins: ['https://console.example.com'],
+		})
+
+		expect(result.status).toBe('succeeded')
+		expect(rec.outcomes).toEqual([])
+		expect(rec.reconciled.map(({ signal: _signal, ...input }) => input)).toEqual([
+			{ url: 'https://iam.example.com', app: 'demo', schema, returnOrigins: ['https://console.example.com'], adminKey: 'px_provisioning' },
+		])
+	})
+
+	test('a platform deploy without IAM coordinates fails its schema step naming them, and reports nothing', async () => {
+		const result = await deploy(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), { platformResources: 'allow' })
+
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'reconcile-schema')).toContain('FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY')
+		expect(rec.outcomes).toEqual([])
+		expect(rec.reconciled).toEqual([])
 	})
 
 	test('refuses to report an outcome once the run is cancelled', async () => {
@@ -1097,10 +1130,9 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 				return appWorker()
 			},
 		})
-		await expect(deploy(rec, app, { platformResources: 'allow' })).resolves.toMatchObject({ status: 'succeeded' })
-		expect(rec.outcomes).toEqual([{
-			iamReconcile: { app: 'demo', schemaJson: JSON.stringify({ scopes: [], actions: [{ action: 'notes.read' }], roles: {} }) },
-		}])
+		const platformIam = { url: 'https://iam.example.com', adminKey: 'px_provisioning' }
+		await expect(deploy(rec, app, { platformResources: 'allow', platformIam })).resolves.toMatchObject({ status: 'succeeded' })
+		expect(rec.reconciled.map((input) => input.schema)).toEqual([{ scopes: [], actions: [{ action: 'notes.read' }], roles: {} }])
 	})
 })
 

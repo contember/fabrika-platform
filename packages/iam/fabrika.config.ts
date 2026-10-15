@@ -6,7 +6,6 @@
 // them as plaintext. The Custom Domain route comes from `ctx.domain` (`FABRIKA_IAM_HOSTNAME` in the
 // standalone Oblaka adapter).
 
-import type { AppSchema } from '@fabrika/auth-core'
 import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
@@ -232,13 +231,9 @@ export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSo
 	})
 }
 
-// IAM's own app schema is intentionally empty.
-const schema: AppSchema = { scopes: [], actions: [], roles: {} }
-
 export default defineApp({
 	id: IAM_APP_ID,
 	resources: buildPropustkaWorker,
-	schema,
 	pipeline: {
 		workerDir: '.',
 		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.

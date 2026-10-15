@@ -25,6 +25,11 @@ this one import.
   the control-side `deploy` and `reconcile` decide what IAM hears, with the control plane's own key and the projected
   return origins. They apply Control's approved contract's `access.schema` (`environment.access`, ADR-0050),
   whatever the runner reported. Without approved access, any report fails the run.
+- **A platform deploy (`allow`) registers its component's schema with IAM ITSELF** (ADR-0058). The installation's own
+  deploy runs fabrika's code and holds IAM's provisioning key, so `reconcile-schema` calls IAM at
+  `CloudflareDeployerOptions.platformIam` (`FABRIKA_IAM_ISSUER` + `FABRIKA_IAM_PROVISIONING_KEY`, read by
+  `installation.ts`) with the run's return origins, and fails naming them when they are absent. There is no outcome
+  file outside the runner. IAM's own config declares no schema: its keys sync after its Worker deploys.
 - **An application deploys only with a contract.** With `platformResources: 'refuse'` the deployer refuses a
   checkout without `fabrika.contract.ts` before anything runs, and always builds the proxy Worker from the
   contract's endpoint table. `platformResources: 'allow'` (fabrika deploying its own components) needs none.

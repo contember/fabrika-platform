@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
-import { type CloudflareDeployResult, createCloudflareDeployer } from './provider'
+import { type CloudflareDeployResult, createCloudflareDeployer, type PlatformIamTarget } from './provider'
 import { APPROVED_ACCESS_FILE_ENV, INSTALLATION_APPS_ENV, type RunnerApprovedAccess, runnerApprovedAccessSchema } from './runner-protocol'
 
 const requiredEnvironmentValue = (name: string): string => {
@@ -109,6 +109,8 @@ export interface CloudflareCommandDeployOptions {
 	readonly managedVarNames?: readonly string[]
 	/** Defaults to `refuse`: only fabrika deploying its own components may name a platform resource. */
 	readonly platformResources?: 'refuse' | 'allow'
+	/** Where a platform deploy registers a component's schema (ADR-0058); only the installation sets it. */
+	readonly platformIam?: PlatformIamTarget
 	readonly signal?: AbortSignal
 	readonly log?: (line: string) => void
 }
@@ -123,6 +125,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
 		apiToken: requiredEnvironmentValue('CLOUDFLARE_API_TOKEN'),
 		platformResources: options.platformResources ?? 'refuse',
+		...(options.platformIam === undefined ? {} : { platformIam: options.platformIam }),
 	})
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))

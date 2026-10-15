@@ -2,6 +2,7 @@ import type { InstallationCli, InstallationCommand } from '@fabrika/provider-con
 import { resolve } from 'node:path'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
 import { deployCloudflareConfig } from '../command'
+import type { PlatformIamTarget } from '../provider'
 import { initCommand } from './init'
 
 const USAGE = `Cloudflare installation
@@ -43,10 +44,18 @@ one platform config (IAM, Operations) — the stages a pipeline runs before that
 name a platform resource; \`fabrika app deploy\` may not.
 `
 
+/** IAM's origin and the provisioning key, when the stage names both; a component with a schema needs them. */
+const platformIam = (): PlatformIamTarget | undefined => {
+	const url = process.env['FABRIKA_IAM_ISSUER']
+	const adminKey = process.env['FABRIKA_IAM_PROVISIONING_KEY']
+	return url === undefined || url === '' || adminKey === undefined || adminKey === '' ? undefined : { url, adminKey }
+}
+
 const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Promise<void> => {
 	const args = parseCloudflareArgs(['platform', 'deploy', ...argv, ...(forceDryRun ? ['--dry-run'] : [])])
 	const env = args.env ?? 'prod'
 	const stateNamespace = process.env['CLOUDFLARE_STATE_NAMESPACE']
+	const iam = platformIam()
 	const rootCwd = process.cwd()
 	for (const component of platformComponents(args)) {
 		const absolute = resolve(rootCwd, component.configPath)
@@ -61,6 +70,7 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 				cwd,
 				dryRun: args.dryRun,
 				platformResources: 'allow',
+				...(iam === undefined ? {} : { platformIam: iam }),
 				// Honoured because the scaffolded workflow states it on the IAM stage; absent elsewhere.
 				...(stateNamespace === undefined ? {} : { stateNamespace }),
 			})
