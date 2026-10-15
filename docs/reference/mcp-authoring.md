@@ -79,9 +79,10 @@ make something pass; ask when a file is protected).
    deploy then leaves `FABRIKA_IAM_OAUTH_CONFIG` on `iam` as it is and warns that it is still set;
    delete it there to stop IAM issuing tokens.
 
-   **An existing sidecar does not forward the variable.** `platform upgrade` only bumps
-   `fabrika.ref`; it never rewrites the workflow. Add this line by hand to the `env:` of the
-   _Deploy the platform_ step in `.github/workflows/platform.yml`, next to `FABRIKA_ZEROPS_API_URL`:
+   **A sidecar generated before this variable existed does not forward it** until its workflow is
+   regenerated: `platform upgrade` and `platform init` both rewrite `.github/workflows/platform.yml`
+   to the one their CLI generates. Until then, add this line by hand to the `env:` of the
+   _Deploy the platform_ step, next to `FABRIKA_ZEROPS_API_URL`:
 
    ```yaml
    FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}

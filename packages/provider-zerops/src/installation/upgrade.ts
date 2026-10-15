@@ -19,11 +19,19 @@
 //     answer, never "no such tag": reporting a rate limit as a missing tag sends the operator to look
 //     at the wrong repository.
 //   • A directory that is not a checkout, and a branch the workflow does not trigger on.
-//   • A dirty sidecar tree. The commit stages `fabrika.ref` alone, so anything else the operator was
-//     part-way through would be left behind on a branch that just deployed.
+//   • A dirty sidecar tree. The commit stages `fabrika.ref` and the workflow alone, so anything else the
+//     operator was part-way through would be left behind on a branch that just deployed.
 //   • A pin already equal to `--to` — but only when it is PUSHED. A pin committed and not pushed is
 //     the state a failed push leaves behind, and "already pins it" would be a lie there: the push that
 //     IS the trigger never happened, so nothing was deployed.
+//
+// ── The workflow rides along with the pin ─────────────────────────────────────────────────────────
+//
+// The workflow is CLI-owned (`sidecar.ts`), and a sidecar created by an older CLI keeps its old pipeline
+// until something rewrites it. `init` does, but a roll is the one command every operator runs, so the
+// roll re-renders it too, into the same commit: the pipeline that deploys the new tag is the current one.
+// It is rendered for the GitHub Environment the existing workflow names, never for a name guessed from
+// the repository.
 //
 // ── The commit carries no `[skip ci]`, deliberately ──────────────────────────────────────────────
 //
@@ -38,7 +46,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { defaultSleep, type Sleeper } from '../index'
 import { consoleDeployLog, type DeployLog } from './log'
-import { FABRIKA_REF_FILE, readPinnedTag } from './sidecar'
+import { FABRIKA_REF_FILE, readPinnedTag, readSidecarWorkflowInstallation, renderSidecarWorkflow, SIDECAR_WORKFLOW_PATH } from './sidecar'
 import type { PlatformUpgradeInput } from './upgrade-options'
 import { carriesTag, firstRun } from './upgrade-output'
 
@@ -243,8 +251,8 @@ export const runUpgrade = async (input: PlatformUpgradeInput, collaborators: Upg
 	const repo = await effects.describeCheckout(dir)
 	if (await effects.isDirty(dir)) {
 		throw new Error(
-			`${dir} has uncommitted changes to tracked files — this command commits \`${FABRIKA_REF_FILE}\` alone, so commit or `
-				+ 'discard them first (untracked files are left alone)',
+			`${dir} has uncommitted changes to tracked files — this command commits \`${FABRIKA_REF_FILE}\` and \`${SIDECAR_WORKFLOW_PATH}\` `
+				+ 'alone, so commit or discard them first (untracked files are left alone)',
 		)
 	}
 	const unpushed = await checkedBranch(dir, repo, collaborators)
@@ -263,18 +271,27 @@ export const runUpgrade = async (input: PlatformUpgradeInput, collaborators: Upg
 	if (pinned === input.to) {
 		throw new Error(`${repo} already pins ${input.to}. Nothing to push, and the push is what triggers the deploy`)
 	}
+	const workflow = await renderSidecarWorkflow(await readSidecarWorkflowInstallation(dir))
+	const workflowChanged = (await Bun.file(resolve(dir, SIDECAR_WORKFLOW_PATH)).text()) !== workflow
+	const files = workflowChanged ? [FABRIKA_REF_FILE, SIDECAR_WORKFLOW_PATH] : [FABRIKA_REF_FILE]
 	const message = upgradeCommitMessage(installationLabel(input, repo), input.to)
 	log.info(`${repo}: ${pinned} → ${input.to}`)
+	if (workflowChanged) {
+		log.info(`${SIDECAR_WORKFLOW_PATH} differs from the one this CLI generates — the roll rewrites it`)
+	}
 
 	if (input.dryRun) {
 		log.step('Dry run complete — nothing was written')
-		log.info(`would write \`${input.to}\` to ${FABRIKA_REF_FILE} and commit it as \`${message}\``)
+		log.info(`would write \`${input.to}\` to ${FABRIKA_REF_FILE} and commit ${files.join(' and ')} as \`${message}\``)
 		return
 	}
 
 	log.step('Roll the pin forward')
 	await Bun.write(resolve(dir, FABRIKA_REF_FILE), `${input.to}\n`)
-	const sha = await effects.commit({ dir, files: [FABRIKA_REF_FILE], message })
+	if (workflowChanged) {
+		await Bun.write(resolve(dir, SIDECAR_WORKFLOW_PATH), workflow)
+	}
+	const sha = await effects.commit({ dir, files, message })
 	await effects.push(dir)
 	log.info(`pushed ${sha}`)
 

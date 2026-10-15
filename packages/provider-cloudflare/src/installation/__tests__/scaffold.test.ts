@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod'
 import { INITIAL_SCAFFOLD_COMMIT_MESSAGE, materializePlatformScaffold, REFRESH_SCAFFOLD_COMMIT_MESSAGE } from '../scaffold'
 
 const GENERATED_FILES = ['.gitignore', 'README.md', 'fabrika.ref', '.github/workflows/platform.yml']
@@ -22,6 +23,45 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 		await run(dir)
 	} finally {
 		await rm(dir, { recursive: true, force: true })
+	}
+}
+
+const workflowStepsSchema = z.object({
+	jobs: z.object({
+		deploy: z.object({
+			steps: z.array(
+				z.object({ id: z.string().optional(), uses: z.string().optional(), run: z.string().optional(), with: z.record(z.unknown()).optional() }),
+			),
+		}),
+	}),
+})
+
+const stepsOf = (workflow: string) => workflowStepsSchema.parse(Bun.YAML.parse(workflow)).jobs.deploy.steps
+
+/** Run the workflow's `bun` step as Actions would, in a stand-in for the pinned checkout. */
+async function resolveBunVersion(workflow: string, bunVersionFile: string | undefined): Promise<{ exitCode: number; version: string }> {
+	const step = stepsOf(workflow).find((candidate) => candidate.id === 'bun')
+	if (step?.run === undefined) {
+		throw new Error('the workflow has no `bun` step')
+	}
+	const checkout = await mkdtemp(join(tmpdir(), 'fabrika-pinned-checkout-'))
+	try {
+		if (bunVersionFile !== undefined) {
+			await Bun.write(join(checkout, '.bun-version'), bunVersionFile)
+		}
+		const output = join(checkout, 'github-output')
+		await Bun.write(output, '')
+		const child = Bun.spawn(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step.run], {
+			cwd: checkout,
+			env: { PATH: process.env['PATH'] ?? '', GITHUB_OUTPUT: output, PINNED_REF: 'v0.4.3' },
+			stdout: 'ignore',
+			stderr: 'ignore',
+		})
+		const exitCode = await child.exited
+		const version = (await Bun.file(output).text()).match(/^version=(.*)$/m)?.[1] ?? ''
+		return { exitCode, version }
+	} finally {
+		await rm(checkout, { recursive: true, force: true })
 	}
 }
 
@@ -94,6 +134,27 @@ describe('platform scaffold', () => {
 			for (const forbidden of FORBIDDEN_GENERATED_REFERENCES) {
 				expect(generated).not.toContain(forbidden)
 			}
+		})
+	})
+
+	test('the pipeline installs the Bun of the pinned checkout, never `latest`', async () => {
+		await withTempDir(async (dir) => {
+			await materializePlatformScaffold(dir, 'mangoweb')
+			const workflow = await Bun.file(join(dir, '.github/workflows/platform.yml')).text()
+
+			const steps = stepsOf(workflow)
+			const isSetupBun = (step: { readonly uses?: string | undefined }) => step.uses?.startsWith('oven-sh/setup-bun@') === true
+			expect(steps.filter(isSetupBun).map((step) => step.with)).toEqual([{ 'bun-version': '${{ steps.bun.outputs.version }}' }])
+			const checkout = steps.findIndex((step) => step.with?.['path'] === 'fabrika-platform')
+			const resolve = steps.findIndex((step) => step.id === 'bun')
+			expect(checkout).toBeGreaterThanOrEqual(0)
+			expect(checkout).toBeLessThan(resolve)
+			expect(resolve).toBeLessThan(steps.findIndex(isSetupBun))
+
+			expect(await resolveBunVersion(workflow, '1.4.3\n')).toEqual({ exitCode: 0, version: '1.4.3' })
+			// A tag up to v0.4.3 carries no `.bun-version`; every one of them was released with 1.3.14.
+			expect(await resolveBunVersion(workflow, undefined)).toEqual({ exitCode: 0, version: '1.3.14' })
+			expect((await resolveBunVersion(workflow, 'latest\n')).exitCode).not.toBe(0)
 		})
 	})
 

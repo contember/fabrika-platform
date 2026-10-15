@@ -24,6 +24,7 @@
 // Cloudflare builds a runner image and needs a GitHub App; Zerops has no runner at all (ADR-0003).
 
 import { resolve } from 'node:path'
+import { z } from 'zod'
 
 const TEMPLATES = resolve(import.meta.dir, 'templates')
 
@@ -32,6 +33,9 @@ export const SIDECAR_FILES = ['.gitignore', 'README.md', 'fabrika.ref', '.github
 
 /** The file that pins which published fabrika tag this installation runs. */
 export const FABRIKA_REF_FILE = 'fabrika.ref'
+
+/** The generated pipeline. CLI-owned: `init` and `upgrade` both rewrite it. */
+export const SIDECAR_WORKFLOW_PATH = '.github/workflows/platform.yml'
 
 /** What a rendered sidecar repository is named after. */
 export interface SidecarValues {
@@ -75,6 +79,37 @@ const render = async (name: string, values: SidecarValues): Promise<string> => {
 		.replaceAll('{{FABRIKA_REF}}', values.fabrikaRef)
 }
 
+/** The generated pipeline for one installation. Its only placeholder is the installation, which names its GitHub Environment. */
+export const renderSidecarWorkflow = async (installation: string): Promise<string> =>
+	(await Bun.file(resolve(TEMPLATES, 'platform.yml')).text()).replaceAll('{{INSTALLATION}}', installation)
+
+const sidecarWorkflowSchema = z.object({ jobs: z.object({ deploy: z.object({ environment: z.string().trim().min(1) }) }) })
+
+/**
+ * The installation a sidecar's current workflow was rendered for, read back from its GitHub Environment.
+ *
+ * Not from the repository name: `init --repo` accepts any name, and a workflow rendered for the wrong
+ * Environment deploys with no credentials.
+ */
+export const readSidecarWorkflowInstallation = async (dir: string): Promise<string> => {
+	const regenerate = 'run `fabrika platform init --provider=zerops <installation>` to regenerate it'
+	const file = Bun.file(resolve(dir, SIDECAR_WORKFLOW_PATH))
+	if (!(await file.exists())) {
+		throw new Error(`${dir} has no ${SIDECAR_WORKFLOW_PATH} — ${regenerate}`)
+	}
+	let document: unknown
+	try {
+		document = Bun.YAML.parse(await file.text())
+	} catch {
+		throw new Error(`${dir}/${SIDECAR_WORKFLOW_PATH} is not valid YAML — ${regenerate}`)
+	}
+	const parsed = sidecarWorkflowSchema.safeParse(document)
+	if (!parsed.success) {
+		throw new Error(`${dir}/${SIDECAR_WORKFLOW_PATH} names no \`jobs.deploy.environment\` — ${regenerate}`)
+	}
+	return parsed.data.jobs.deploy.environment
+}
+
 const write = async (dir: string, rel: string, content: string): Promise<void> => {
 	await Bun.write(resolve(dir, rel), content)
 }
@@ -83,7 +118,8 @@ const write = async (dir: string, rel: string, content: string): Promise<void> =
  * Write the sidecar files into `dir`.
  *
  * The workflow, the README and the `.gitignore` are CLI-owned and refreshed on every run, so a fix to
- * the generated pipeline reaches every installation on its operator's next `init`. `fabrika.ref` is
+ * the generated pipeline reaches every installation on its operator's next `init` (and the workflow on
+ * the next `upgrade`). `fabrika.ref` is
  * written ONLY when absent: bumping it is how an operator rolls the installation forward, and a refresh
  * that reset it would silently roll them back.
  *
@@ -99,7 +135,7 @@ export const materializeSidecarScaffold = async (dir: string, values: SidecarVal
 	}
 	await write(dir, '.gitignore', await Bun.file(resolve(TEMPLATES, 'gitignore')).text())
 	await write(dir, 'README.md', await render('README.md', values))
-	await write(dir, '.github/workflows/platform.yml', await render('platform.yml', values))
+	await write(dir, SIDECAR_WORKFLOW_PATH, await renderSidecarWorkflow(values.installation))
 	if (existing === undefined) {
 		await write(dir, FABRIKA_REF_FILE, await render('fabrika.ref', values))
 	}

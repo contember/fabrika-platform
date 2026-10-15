@@ -12,7 +12,8 @@ facts settled against a real account, several of which contradict Zerops' publis
 
 ## Tech Stack
 
-- **Bun** — runtime + workspaces. Libraries run TypeScript directly (`exports.bun` → `src`); no build step.
+- **Bun** — runtime + workspaces, at the exact release in `.bun-version` (bumping it: `docs/reference/release-process.md`).
+  Libraries run TypeScript directly (`exports.bun` → `src`); no build step.
 - **TypeScript** strict, ESM (`"type": "module"`) everywhere.
 - **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the
   second target: it uses its platform API directly and has no runner (ADR-0003). Each installation
