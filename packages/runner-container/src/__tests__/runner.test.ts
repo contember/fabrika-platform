@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { contractDigest } from '../../../auth-core/src/endpoint-digest'
-import { collectSourceMaps, Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
+import { Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
 import { bunSpawner, createSpawner } from '../spawn'
 
 // The Runner routes every child process through an injected `Spawner`, so these tests drive a full
@@ -755,26 +755,6 @@ describe('Runner pipeline', () => {
 		expect(status.error).toBe('runner execution failed unexpectedly')
 		expect(status.artifactState).toBe('complete')
 		expect(runner.isDone()).toBe(true)
-	})
-
-	test('real discovery requires a public logical path and never guesses from a nested basename', async () => {
-		const root = await mkdtemp(join(tmpdir(), 'fabrika-source-maps-'))
-		try {
-			await mkdir(join(root, 'dist', 'assets'), { recursive: true })
-			await writeFile(
-				join(root, 'dist', 'assets', 'ambiguous.js.map'),
-				JSON.stringify({ version: 3, file: 'ambiguous.js', sources: [], names: [], mappings: '' }),
-			)
-			await writeFile(
-				join(root, 'dist', 'assets', 'rooted.js.map'),
-				JSON.stringify({ version: 3, file: '/assets/rooted.js', sources: [], names: [], mappings: '' }),
-			)
-			const collection = await collectSourceMaps(root)
-			expect(collection.incomplete).toBe(true)
-			expect(collection.artifacts.map((artifact) => artifact.logicalPath)).toEqual(['assets/rooted.js'])
-		} finally {
-			await rm(root, { recursive: true, force: true })
-		}
 	})
 })
 

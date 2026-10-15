@@ -46,6 +46,15 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   refused `.handle(…)` included), and loads each shell module, of every extension the reader reads, as its slice; the
   application's other modules load as they are. An SPA build that imports `fabrika.contract.ts` therefore holds no
   handler code, with every package bundled.
+- Source maps: `@fabrika/check/source-maps` finds a build's `*.map` files and uploads them to Operations with the
+  run-scoped bearer Control minted (`uploadSourceMaps`; never throws, a refused or failed upload is `incomplete`).
+  `collectSourceMaps` reads each map's logical path from its own `file` field (the Cloudflare runner);
+  `collectAssetSourceMaps` names each map under an asset root by the URL path of the file it maps,
+  `<prefix>/<path under dir>` without `.map`, as a browser names it in a stack frame. Bin: `fabrika-source-maps
+  <root>` is the last step of a Zerops platform build, fetched by version like the checker. It reads
+  `FABRIKA_SOURCE_MAP_UPLOAD` (destination and asset roots, JSON) and `FABRIKA_SOURCE_MAP_UPLOAD_KEY` (the bearer),
+  prints only `sourceMapUploadReport` (`fabrika-source-maps: N uploaded, state=complete|incomplete`), which the
+  provider reads back from the build log, and always exits 0. It never prints the bearer or an error object.
 - Reader: `@fabrika/check/contract` exports `readContractSource(files, tables?) → ContractArtifact`,
   `readContract(files) → AnyContract`, `readTablesSource(files) → TablePolicies` and
   `readTablesDefinition(files) → Tables | null` (what `defineTables` returns). `files` holds

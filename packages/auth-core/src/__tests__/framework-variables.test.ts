@@ -23,6 +23,12 @@ describe('framework-only variable names', () => {
 		expect(isFrameworkVariableName('FABRIKA_CONTRACT_DIGEST')).toBe(true)
 	})
 
+	test('reserve the source-map upload of a platform build', () => {
+		expect(isFrameworkVariableName('FABRIKA_SOURCE_MAP_UPLOAD')).toBe(true)
+		expect(isFrameworkVariableName('FABRIKA_SOURCE_MAP_UPLOAD_KEY')).toBe(true)
+		expect(frameworkVariableReference('${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}')).not.toBeNull()
+	})
+
 	test('leave application names and public build values to the application', () => {
 		for (const name of ['NOTES_DATABASE_URL', 'FABRIKA_PUBLIC_API_ORIGIN', 'fabrika_release', 'FABRIKA_RELEASE ']) {
 			expect(isFrameworkVariableName(name)).toBe(false)

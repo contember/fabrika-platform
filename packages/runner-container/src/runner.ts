@@ -5,8 +5,8 @@
 // credentials are redacted from every line before it lands in the buffer; they only ever reach
 // the `fabrika` child through its environment, never argv, never a log.
 
+import { type ArtifactFetch, collectSourceMaps, type SourceMapCollection, uploadSourceMaps } from '@fabrika/check/source-maps'
 import type { RunLogLine } from '@fabrika/control-contract'
-import { OPERATIONS_ARTIFACT_HEADERS } from '@fabrika/operations-contract/releases'
 import {
 	APPROVED_ACCESS_FILE_ENV,
 	checkoutRelativeDirectory,
@@ -66,6 +66,8 @@ export interface SpawnSpec {
 /** Streams child output; settles only after the child stops and both output pumps finish, including on rejection. */
 export type Spawner = (spec: SpawnSpec, handlers: SpawnHandlers) => Promise<SpawnResult>
 
+export type { ArtifactFetch }
+
 /** The collaborators a `Runner` needs — substituted by tests, defaulted to a real Bun spawn. */
 export interface RunnerEnv {
 	/** Spawns child processes (git, bun, fabrika). */
@@ -78,19 +80,6 @@ export interface RunnerEnv {
 	collectSourceMaps?: (cwd: string) => Promise<SourceMapCollection>
 	/** Artifact upload transport. */
 	fetch?: ArtifactFetch
-}
-
-export type ArtifactFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
-
-export interface SourceMapArtifact {
-	logicalPath: string
-	digest: string
-	body: ArrayBuffer
-}
-
-export interface SourceMapCollection {
-	artifacts: SourceMapArtifact[]
-	incomplete: boolean
 }
 
 interface GitSource {
@@ -667,29 +656,9 @@ export class Runner {
 		}
 		let uploaded = 0
 		try {
-			const collection = await this.env.collectSourceMaps(cwd)
-			uploaded = collection.artifacts.length
-			let incomplete = collection.incomplete
-			for (const artifact of collection.artifacts) {
-				const response = await this.env.fetch(destination.url, {
-					method: 'POST',
-					headers: {
-						authorization: `Bearer ${destination.bearer}`,
-						'content-type': 'application/json',
-						[OPERATIONS_ARTIFACT_HEADERS.appId]: destination.appId,
-						[OPERATIONS_ARTIFACT_HEADERS.environment]: destination.environment,
-						[OPERATIONS_ARTIFACT_HEADERS.serviceKey]: destination.serviceKey,
-						[OPERATIONS_ARTIFACT_HEADERS.release]: destination.release,
-						[OPERATIONS_ARTIFACT_HEADERS.runId]: destination.runId,
-						[OPERATIONS_ARTIFACT_HEADERS.logicalPath]: artifact.logicalPath,
-						[OPERATIONS_ARTIFACT_HEADERS.digest]: artifact.digest,
-					},
-					body: artifact.body,
-				})
-				if (!response.ok) incomplete = true
-				await response.body?.cancel().catch(() => {})
-			}
-			this.artifactState = incomplete ? 'incomplete' : 'complete'
+			const result = await uploadSourceMaps(destination, await this.env.collectSourceMaps(cwd), this.env.fetch)
+			uploaded = result.uploaded
+			this.artifactState = result.state
 		} catch {
 			this.artifactState = 'incomplete'
 			this.emit('meta', 'Operations source maps: upload incomplete')
@@ -697,74 +666,4 @@ export class Runner {
 		}
 		this.emit('meta', `Operations source maps: ${uploaded} uploaded, state=${this.artifactState}`)
 	}
-}
-
-const MAX_SOURCE_MAP_BYTES = 8 * 1024 * 1024
-const MAX_SOURCE_MAPS = 256
-const MAX_SOURCE_MAP_TOTAL_BYTES = 64 * 1024 * 1024
-
-export async function collectSourceMaps(cwd: string): Promise<SourceMapCollection> {
-	const artifacts: SourceMapArtifact[] = []
-	let totalBytes = 0
-	let incomplete = false
-	const glob = new Bun.Glob('**/*.map')
-	for await (const relativePath of glob.scan({ cwd, dot: false, onlyFiles: true })) {
-		if (relativePath.split('/').some((part) => part === 'node_modules' || part === '.git')) continue
-		if (artifacts.length >= MAX_SOURCE_MAPS) {
-			incomplete = true
-			break
-		}
-		const file = Bun.file(`${cwd}/${relativePath}`)
-		if (file.size > MAX_SOURCE_MAP_BYTES || totalBytes + file.size > MAX_SOURCE_MAP_TOTAL_BYTES) {
-			incomplete = true
-			continue
-		}
-		const body = await file.arrayBuffer()
-		const logicalPath = sourceMapLogicalPath(await file.text(), relativePath)
-		if (logicalPath === null) {
-			incomplete = true
-			continue
-		}
-		totalBytes += file.size
-		artifacts.push({ logicalPath, digest: await digest(body), body })
-	}
-	return { artifacts, incomplete }
-}
-
-const sourceMapFileSchema = z.object({ file: z.string().min(1) })
-
-function sourceMapLogicalPath(raw: string, mapPath: string): string | null {
-	let value: unknown
-	try {
-		value = JSON.parse(raw)
-	} catch {
-		return null
-	}
-	const parsed = sourceMapFileSchema.safeParse(value)
-	if (!parsed.success) return null
-	const { file } = parsed.data
-	const explicitlyRooted = file.startsWith('/') || file.startsWith('~/') || URL.canParse(file)
-	if (!explicitlyRooted && !file.includes('/') && mapPath.includes('/')) {
-		// A nested map with only `file: "app.js"` does not reveal its public build root.
-		// Guessing from the filesystem path would reintroduce basename collisions.
-		return null
-	}
-	let path = file
-	try {
-		path = new URL(file).pathname
-	} catch {
-		const query = path.indexOf('?')
-		if (query !== -1) path = path.slice(0, query)
-		const hash = path.indexOf('#')
-		if (hash !== -1) path = path.slice(0, hash)
-	}
-	path = path.replaceAll('\\', '/').replace(/^~?\//, '')
-	const parts = path.split('/').filter((part) => part !== '' && part !== '.')
-	if (parts.length === 0 || parts.some((part) => part === '..')) return null
-	return parts.join('/')
-}
-
-async function digest(body: ArrayBuffer): Promise<string> {
-	const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', body))
-	return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }

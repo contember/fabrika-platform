@@ -3,6 +3,11 @@ import { FABRIKA_CONTRACT_DIGEST } from './endpoint-digest'
 import { FABRIKA_IAM_ISSUER } from './environment'
 import { FABRIKA_PROXY_SECRET } from './wire'
 
+/** Where a platform build uploads its source maps: the destination without its bearer, and the asset roots (JSON). */
+export const FABRIKA_SOURCE_MAP_UPLOAD = 'FABRIKA_SOURCE_MAP_UPLOAD'
+/** The run-scoped bearer of that upload. */
+export const FABRIKA_SOURCE_MAP_UPLOAD_KEY = 'FABRIKA_SOURCE_MAP_UPLOAD_KEY'
+
 /**
  * The environment names only the platform writes into an application
  * ([ADR-0043](../../../docs/decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). Control refuses an
@@ -28,6 +33,8 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 	FABRIKA_PROXY_SECRET,
 	'FABRIKA_IAM_RPC_URL',
 	'FABRIKA_IAM_RPC_KEY',
+	FABRIKA_SOURCE_MAP_UPLOAD,
+	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 ] as const
 
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]

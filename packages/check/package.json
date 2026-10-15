@@ -11,7 +11,8 @@
 		"access": "public"
 	},
 	"bin": {
-		"fabrika-check": "./src/cli.ts"
+		"fabrika-check": "./src/cli.ts",
+		"fabrika-source-maps": "./src/source-maps-cli.ts"
 	},
 	"files": [
 		"src",
@@ -32,6 +33,11 @@
 			"bun": "./src/bun-plugin.ts",
 			"types": "./src/bun-plugin.ts",
 			"default": "./src/bun-plugin.ts"
+		},
+		"./source-maps": {
+			"bun": "./src/source-maps.ts",
+			"types": "./src/source-maps.ts",
+			"default": "./src/source-maps.ts"
 		}
 	},
 	"scripts": {
@@ -43,6 +49,7 @@
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/db": "workspace:*",
+		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"zod": "^3.25.76"
 	}

@@ -49,6 +49,18 @@ export const operationsReleasePayloadSchema = z.object({
 	observedAt,
 }))
 
+export const operationsSourceMapBuildUploadSchema = z.object({
+	destination: z.object({
+		url: z.string().url(),
+		appId: z.string().min(1),
+		environment: z.string().min(1),
+		serviceKey: z.string().min(1),
+		release: z.string().min(1),
+		runId: z.string().min(1),
+	}),
+	assetRoots: z.array(z.object({ prefix: z.string().startsWith('/'), dir: z.string().min(1) })).max(64),
+})
+
 const releaseRequestHeaderSchema = z.object({ revision: z.number().int().safe().min(1) }).passthrough()
 
 export const operationsReleaseRequestSchema = releaseRequestHeaderSchema.transform((value, ctx) => {
