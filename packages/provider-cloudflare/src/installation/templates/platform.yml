@@ -152,8 +152,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}
-          # The seeded IAM provisioning key — this stage registers the console's schema with it (Bearer px_), at
-          # FABRIKA_IAM_ISSUER, with the console's return origin.
+          # The seeded IAM provisioning key — this stage registers the console's schema, with the console's return
+          # origin, and IAM's own vocabulary with it (Bearer px_), at FABRIKA_IAM_ISSUER.
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
           FABRIKA_IAM_RETURN_ORIGINS: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}

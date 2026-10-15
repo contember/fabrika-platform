@@ -1,8 +1,10 @@
+import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
 import { deployCloudflareConfig } from '../command'
 import type { PlatformIamTarget } from '../provider'
+import { defaultReconcileSchema } from '../schema'
 import { initCommand } from './init'
 
 const USAGE = `Cloudflare installation
@@ -82,6 +84,22 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 			process.chdir(rootCwd)
 		}
 	}
+	// IAM's own vocabulary registers beside the console's (ADR-0058): its own stage cannot, its keys sync after it deploys.
+	if (args.componentConfig === undefined || args.componentConfig === '') {
+		await registerIamVocabulary(iam, args.dryRun)
+	}
+}
+
+const registerIamVocabulary = async (iam: PlatformIamTarget | undefined, dryRun: boolean): Promise<void> => {
+	if (dryRun) {
+		console.info(`would reconcile \`${IAM_APP_ID}\`'s own vocabulary with IAM`)
+		return
+	}
+	if (iam === undefined) {
+		throw new Error(`registering \`${IAM_APP_ID}\`'s vocabulary needs FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY`)
+	}
+	await defaultReconcileSchema({ url: iam.url, app: IAM_APP_ID, schema: IAM_APP_SCHEMA, adminKey: iam.adminKey, signal: new AbortController().signal })
+	console.info(`${IAM_APP_ID}: vocabulary reconciled`)
 }
 
 const run = async (command: InstallationCommand, argv: readonly string[]): Promise<void> => {

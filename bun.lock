@@ -530,6 +530,7 @@
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/check": "workspace:*",
+        "@fabrika/iam-contract": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",

@@ -29,7 +29,8 @@ this one import.
   deploy runs fabrika's code and holds IAM's provisioning key, so `reconcile-schema` calls IAM at
   `CloudflareDeployerOptions.platformIam` (`FABRIKA_IAM_ISSUER` + `FABRIKA_IAM_PROVISIONING_KEY`, read by
   `installation.ts`) with the run's return origins, and fails naming them when they are absent. There is no outcome
-  file outside the runner. IAM's own config declares no schema: its keys sync after its Worker deploys.
+  file outside the runner. IAM's own config declares no schema: its keys sync after its Worker deploys, so the pair
+  form (executor + control plane) reconciles IAM's vocabulary (`IAM_APP_SCHEMA`, ADR-0058) after the console's.
 - **An application deploys only with a contract.** With `platformResources: 'refuse'` the deployer refuses a
   checkout without `fabrika.contract.ts` before anything runs, and always builds the proxy Worker from the
   contract's endpoint table. `platformResources: 'allow'` (fabrika deploying its own components) needs none.
