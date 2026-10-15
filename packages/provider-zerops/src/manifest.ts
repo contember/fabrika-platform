@@ -19,7 +19,7 @@ import {
 	type ZeropsRuntimePackage,
 } from './execution'
 import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-env'
-import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
+import { allowedReferenceHosts, foreignReferenceHost, platformOnlyServiceReference } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
 export const FABRIKA_MANIFEST_VERSION = 3
@@ -32,11 +32,13 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/
  *
  * Restated here rather than imported from `./namespace` — that module imports THIS one, and the
  * literal is part of the manifest's parse contract, so it belongs on the parsing side. The reasoning
- * for the database path and the TLS mode lives with `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING`; a test
- * asserts the two never diverge.
+ * for the port, the database path and the TLS mode lives with `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING`;
+ * a test asserts the two never diverge.
  */
 const SHARED_POSTGRES_CONNECTION_STRING: ZeropsSharedPostgresBinding['connectionString'] =
-	'${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require'
+	'${postgres_connectionString}/${postgres_dbName}?sslmode=disable'
+/** The form an artifact built before the binding moved to the direct port carries: still decoded, as the current form. */
+const LEGACY_SHARED_POSTGRES_CONNECTION_STRING = '${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require'
 
 export interface FabrikaImportDocument {
 	readonly project?: { readonly [key: string]: JsonValue }
@@ -122,7 +124,8 @@ const manifestProxySchema = z.object({
 const namespaceResourcesSchema = z.array(z.object({
 	resourceKey: z.literal('service:postgres'),
 	hostname: z.literal('postgres'),
-	connectionString: z.literal(SHARED_POSTGRES_CONNECTION_STRING),
+	connectionString: z.union([z.literal(SHARED_POSTGRES_CONNECTION_STRING), z.literal(LEGACY_SHARED_POSTGRES_CONNECTION_STRING)])
+		.transform((): ZeropsSharedPostgresBinding['connectionString'] => SHARED_POSTGRES_CONNECTION_STRING),
 })).max(1)
 
 const manifestAppSchema = z.object({
@@ -245,26 +248,33 @@ const importServiceSchema = z.intersection(
 const importProjectSchema = z.intersection(z.record(manifestJsonSchema), z.object({ envIsolation: z.literal(ENV_ISOLATION) }))
 	.superRefine(forbidFields(['envVariables'], 'invalid fabrika manifest: Zerops import contains a forbidden project environment field'))
 
-/** The first foreign host referenced by any string leaf OR key of `value`, however deeply nested. */
-const foreignReferenceInValue = (value: unknown, allowed: ReadonlySet<string>): string | null => {
+/** The first match of `find` in any string leaf OR key of `value`, however deeply nested. */
+const firstInValue = (value: unknown, find: (text: string) => string | null): string | null => {
 	if (typeof value === 'string') {
-		return foreignReferenceHost(value, allowed)
+		return find(value)
 	}
 	if (Array.isArray(value)) {
 		for (const entry of value) {
-			const host = foreignReferenceInValue(entry, allowed)
-			if (host !== null) return host
+			const found = firstInValue(entry, find)
+			if (found !== null) return found
 		}
 		return null
 	}
 	if (typeof value === 'object' && value !== null) {
 		for (const [key, entry] of Object.entries(value)) {
-			const host = foreignReferenceHost(key, allowed) ?? foreignReferenceInValue(entry, allowed)
-			if (host !== null) return host
+			const found = find(key) ?? firstInValue(entry, find)
+			if (found !== null) return found
 		}
 	}
 	return null
 }
+
+/** The first foreign host referenced by any string leaf OR key of `value`, however deeply nested. */
+const foreignReferenceInValue = (value: unknown, allowed: ReadonlySet<string>): string | null =>
+	firstInValue(value, (text) => foreignReferenceHost(text, allowed))
+
+const platformOnlyReferenceMessage = (where: string, reference: string): string =>
+	`invalid fabrika manifest: ${where} references \`${reference}\`, the PostgreSQL superuser's password, which only the platform uses (ADR-0017)`
 
 const importDocumentSchema = z.object({ project: importProjectSchema.optional(), services: z.array(importServiceSchema).min(1) })
 	.strict()
@@ -286,6 +296,11 @@ const importDocumentSchema = z.object({ project: importProjectSchema.optional(),
 					code: 'custom',
 					message: `invalid fabrika manifest: Zerops service \`${service.hostname}\` references service \`${foreign}\`, which this app does not own`,
 				})
+				return
+			}
+			const platformOnly = firstInValue(service, platformOnlyServiceReference)
+			if (platformOnly !== null) {
+				ctx.addIssue({ code: 'custom', message: platformOnlyReferenceMessage(`Zerops service \`${service.hostname}\``, platformOnly) })
 				return
 			}
 		}
@@ -386,8 +401,18 @@ const isDescriptorSetup = (value: JsonValue, setup: string): value is { readonly
 	typeof value === 'object' && value !== null && !Array.isArray(value) && value['setup'] === setup
 
 /**
- * The `${host_…}` reference `FABRIKA_APP_DATABASE_URL` is generated from: the namespace's shared PostgreSQL, or the
- * application's one PostgreSQL service. Two candidates would make the generated migration pick one.
+ * `FABRIKA_APP_DATABASE_URL`, the provisioning credential of the application's role family (ADR-0017), as `${host_…}`
+ * references: the service's superuser, because its own user `db` can neither create roles nor create in the database
+ * (measured 2026-10-15). The direct port, because pgBouncer on `portTls` admits only the service's own users and refuses
+ * the roles the migration creates, which reuse this URL's host, port and options. `disable`, because `ha` offers no TLS
+ * on that port and `Bun.SQL`'s `prefer` does not fall back to plaintext; the port stays inside the project's network.
+ */
+const zeropsProvisioningDatabaseUrl = (host: string): string =>
+	`postgresql://\${${host}_superUser}:\${${host}_superUserPassword}@\${${host}_hostname}:\${${host}_port}/\${${host}_dbName}?sslmode=disable`
+
+/**
+ * The PostgreSQL service `FABRIKA_APP_DATABASE_URL` is generated for: the namespace's shared one, or the application's
+ * one PostgreSQL service. Two candidates would make the generated migration pick one.
  */
 const applicationDatabaseUrl = (
 	services: FabrikaManifestImportDocument['services'],
@@ -398,11 +423,8 @@ const applicationDatabaseUrl = (
 	if (own.length + (shared === undefined ? 0 : 1) > 1) {
 		throw new Error('invalid fabrika manifest: a contract application has one PostgreSQL database; it declares more than one')
 	}
-	if (shared !== undefined) return shared.connectionString
-	const host = own[0]
-	// The direct port, not `portTls`: the application's own roles (`app_<id>`, `run_<id>`) are refused by the TLS endpoint,
-	// which admits only the service's own users (measured 2026-10-15). `prefer` is TLS on `single`; `ha` offers none there.
-	return host === undefined ? null : `\${${host}_connectionString}/\${${host}_dbName}?sslmode=prefer`
+	const host = shared?.hostname ?? own[0]
+	return host === undefined ? null : zeropsProvisioningDatabaseUrl(host)
 }
 
 /** The hostname the `FABRIKA_APP_STORAGE_*` references name: the application's one object-storage service. */
@@ -526,13 +548,13 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	}
 	// Only the selected setup and what it extends reach this app's service, so a sibling setup for another
 	// placement may reference services this app does not own.
-	const foreignInDescriptor = foreignReferenceInValue(
-		executionZeropsDocument(parsedDescriptor, selectedSetup),
-		allowedReferenceHosts(serviceHostnames),
-	)
+	const executed = executionZeropsDocument(parsedDescriptor, selectedSetup)
+	const foreignInDescriptor = foreignReferenceInValue(executed, allowedReferenceHosts(serviceHostnames))
 	if (foreignInDescriptor !== null) {
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
+	const platformOnlyInDescriptor = firstInValue(executed, platformOnlyServiceReference)
+	if (platformOnlyInDescriptor !== null) throw new Error(platformOnlyReferenceMessage('zerops.yaml', platformOnlyInDescriptor))
 	if (contract === undefined && (proxy !== undefined || schema?.contract === true)) {
 		// An endpoint table without the contract would deploy a contract application with an authored run section.
 		throw new Error('invalid fabrika manifest: a contract application carries its contract (`target.contract`), which locks its setup down')

@@ -92,13 +92,14 @@ export interface ZeropsProxySpec extends Pick<ContractProxyApp, 'endpoints' | 'r
 /**
  * A typed reference to the namespace-owned PostgreSQL service; it never contains its credential.
  *
- * The reference names its DATABASE and its TLS MODE rather than inheriting either from the driver — see
- * `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING` in `./namespace.ts` for what the account proved about both.
+ * The reference names its PORT, its DATABASE and its TLS MODE rather than inheriting any from the driver — see
+ * `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING` in `./namespace.ts` for what the account proved about each. It is the
+ * service user's; a contract application's `FABRIKA_APP_DATABASE_URL` is generated from `hostname` instead.
  */
 export interface ZeropsSharedPostgresBinding {
 	readonly resourceKey: 'service:postgres'
 	readonly hostname: 'postgres'
-	readonly connectionString: '${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require'
+	readonly connectionString: '${postgres_connectionString}/${postgres_dbName}?sslmode=disable'
 }
 
 export type ZeropsNamespaceResourceRequirement = ZeropsSharedPostgresBinding

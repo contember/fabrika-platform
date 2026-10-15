@@ -68,7 +68,7 @@ import {
 	verifyZeropsArtifactSourceDescriptor,
 } from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsStep } from './plan'
-import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
+import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost } from './service-references'
 import { isZeropsUploadDestination } from './source'
 import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 import { deleteVersion } from './version-attempt'
@@ -238,13 +238,16 @@ export function interpolateManifest(
 			if (foreign !== null) {
 				throw new Error(`zerops: manifest variable \`${name}\` references service \`${foreign}\`, which this app does not own`)
 			}
+			assertNoPlatformOnlyReference(value)
 			return value
 		})
+		if (substituted === text) return substituted
 		// Adjacent values can spell a reference neither of them carries alone.
-		const foreign = substituted === text ? null : foreignReferenceHost(substituted, hosts)
+		const foreign = foreignReferenceHost(substituted, hosts)
 		if (foreign !== null) {
 			throw new Error(`zerops: a substituted value references service \`${foreign}\`, which this app does not own`)
 		}
+		assertNoPlatformOnlyReference(substituted)
 		return substituted
 	}
 	const services = document.services.map((service) => substituteRecord(service, resolve))

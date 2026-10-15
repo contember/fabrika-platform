@@ -100,6 +100,13 @@ describe('Zerops manifest variable substitution', () => {
 			.toThrow('references service `proxy`')
 	})
 
+	test("refuses a value naming a PostgreSQL superuser's password, alone or spelled by two values together", () => {
+		expect(() => substitute({ IMAGE_TAG: '${notesdb_superUserPassword}' })).toThrow("the PostgreSQL superuser's password")
+		const document = documentWith({ zeropsSetup: '${IMAGE_TAG}${SUFFIX}', buildFromGit: 'https://github.com/acme/notes' })
+		expect(() => interpolateManifest(document, ['IMAGE_TAG', 'SUFFIX'], { IMAGE_TAG: '${postgres_superUser', SUFFIX: 'Password}' }, ['notesapi']))
+			.toThrow("the PostgreSQL superuser's password")
+	})
+
 	test("allows a value naming the app's own service or the shared database", () => {
 		expect(substitute({ IMAGE_TAG: '${notesdb_connectionString}' }).services[0]?.['nginxConfig']).toBe('${notesdb_connectionString}')
 		expect(substitute({ IMAGE_TAG: '${postgres_dbName}' }).services[0]?.['nginxConfig']).toBe('${postgres_dbName}')

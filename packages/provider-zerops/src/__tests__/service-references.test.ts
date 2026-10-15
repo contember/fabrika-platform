@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from '../service-references'
+import { allowedReferenceHosts, foreignReferenceHost, platformOnlyServiceReference, serviceReferenceHosts } from '../service-references'
 
 describe('service references', () => {
 	test('extracts the host of every `${host_KEY}` reference once, in order', () => {
@@ -22,5 +22,12 @@ describe('service references', () => {
 		const allowed = allowedReferenceHosts(['notesapi'])
 		expect(foreignReferenceHost('${RUNTIME_proxy_FABRIKA_IAM_KEY}', allowed)).toBe('proxy')
 		expect(foreignReferenceHost('${RUNTIME_notesapi_PORT}', allowed)).toBeNull()
+	})
+
+	test("finds a reference to a PostgreSQL service's superuser password, on any host and through the build bridge", () => {
+		expect(platformOnlyServiceReference('x ${notesdb_superUserPassword} y')).toBe('${notesdb_superUserPassword}')
+		expect(platformOnlyServiceReference('${RUNTIME_postgres_superUserPassword}')).toBe('${RUNTIME_postgres_superUserPassword}')
+		expect(platformOnlyServiceReference('${postgres_SUPERUSERPASSWORD}')).toBe('${postgres_SUPERUSERPASSWORD}')
+		expect(platformOnlyServiceReference('${notesdb_superUser} ${notesdb_password} ${notesdb_connectionString}')).toBeNull()
 	})
 })

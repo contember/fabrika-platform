@@ -4,6 +4,7 @@ import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import checkManifest from '../../../check/package.json'
+import { useSharedPostgres } from '../authoring'
 import { parseZeropsDescriptor } from '../descriptor'
 import {
 	FABRIKA_CHECK_VERSION,
@@ -17,6 +18,7 @@ import {
 	createZeropsArtifactSourceDescriptor,
 	type FabrikaManifest,
 	lockedExecutionOf,
+	parseFabrikaManifest,
 	zeropsArtifactCodec,
 	type ZeropsArtifactSourceDescriptor,
 } from '../manifest'
@@ -28,6 +30,9 @@ const SPA_DESCRIPTOR = 'zerops:\n  - setup: notesapi\n    build:\n      buildCom
 const API: ZeropsServiceSpec = { hostname: 'notesapi', type: 'alpine/bun@1.3' }
 const DATABASE: ZeropsServiceSpec = { hostname: 'notesdb', type: 'postgresql:single@18' }
 const BUCKET: ZeropsServiceSpec = { hostname: 'notesfiles', type: 'object-storage', objectStorageSize: 1 }
+// The service's superuser on the direct port: `db` cannot create roles, and pgBouncer on `portTls` refuses the roles it would.
+const NOTESDB_PROVISIONING_URL =
+	'postgresql://${notesdb_superUser}:${notesdb_superUserPassword}@${notesdb_hostname}:${notesdb_port}/${notesdb_dbName}?sslmode=disable'
 
 const contractApp = (target: Partial<ZeropsAppConfig['target']> = {}, id = 'notes'): ZeropsAppConfig => ({
 	id,
@@ -122,7 +127,7 @@ describe('the generated execution descriptor of a contract application', () => {
 					PORT: '3000',
 					FABRIKA_CONTRACT_DIGEST: DIGEST,
 					FABRIKA_RELEASE: 'r1',
-					FABRIKA_APP_DATABASE_URL: '${notesdb_connectionString}/${notesdb_dbName}?sslmode=prefer',
+					FABRIKA_APP_DATABASE_URL: NOTESDB_PROVISIONING_URL,
 				},
 			},
 		})
@@ -162,7 +167,7 @@ describe('the generated execution descriptor of a contract application', () => {
 			PORT: '3000',
 			FABRIKA_CONTRACT_DIGEST: DIGEST,
 			FABRIKA_RELEASE: 'r1',
-			FABRIKA_APP_DATABASE_URL: '${notesdb_connectionString}/${notesdb_dbName}?sslmode=prefer',
+			FABRIKA_APP_DATABASE_URL: NOTESDB_PROVISIONING_URL,
 			FABRIKA_APP_STORAGE_ENDPOINT: '${notesfiles_apiUrl}',
 			FABRIKA_APP_STORAGE_BUCKET: '${notesfiles_bucketName}',
 			FABRIKA_APP_STORAGE_ACCESS_KEY_ID: '${notesfiles_accessKeyId}',
@@ -174,16 +179,23 @@ describe('the generated execution descriptor of a contract application', () => {
 		expect(JSON.stringify(render(await compile(contractApp())))).not.toContain('FABRIKA_APP_STORAGE_')
 	})
 
-	test("the namespace's shared PostgreSQL is the database of an application that declares none", async () => {
-		const manifest = await compile(contractApp({
-			services: () => [API],
-			namespaceResources: [{
-				resourceKey: 'service:postgres',
-				hostname: 'postgres',
-				connectionString: '${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require',
-			}],
-		}))
-		expect(lockedExecutionOf(manifest)?.databaseUrl).toBe('${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require')
+	test("the namespace's shared PostgreSQL is the database of an application that declares none, provisioned by its superuser", async () => {
+		const manifest = await compile(contractApp({ services: () => [API], namespaceResources: [useSharedPostgres()] }))
+		expect(lockedExecutionOf(manifest)?.databaseUrl).toBe(
+			'postgresql://${postgres_superUser}:${postgres_superUserPassword}@${postgres_hostname}:${postgres_port}/${postgres_dbName}?sslmode=disable',
+		)
+	})
+
+	test('an artifact built with the TLS-port shared binding still decodes, as the direct-port binding', async () => {
+		const manifest = await compile(contractApp({ services: () => [API], namespaceResources: [useSharedPostgres()] }))
+		const legacy = parseFabrikaManifest(JSON.parse(
+			JSON.stringify(manifest).replace(
+				'${postgres_connectionString}/${postgres_dbName}?sslmode=disable',
+				'${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require',
+			),
+		))
+		expect(legacy.target.namespaceResources).toEqual([useSharedPostgres()])
+		expect(lockedExecutionOf(legacy)?.databaseUrl).toBe(lockedExecutionOf(manifest)?.databaseUrl ?? null)
 	})
 
 	test('only the selected setup reaches the platform, and the source descriptor stays the identity', async () => {

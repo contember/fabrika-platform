@@ -619,6 +619,18 @@ describe('cross-service variable references', () => {
 		expect(parseFabrikaManifest(withUnmodelledField(manifest, shared))).toBeDefined()
 	})
 
+	test("refuses a reference to a PostgreSQL superuser's password, in an import field or the source descriptor", async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		const own = { zerops: [{ setup: 'notesapi', run: { envVariables: { ROOT: '${notesdb_superUserPassword}' } } }] }
+		const shared = { zerops: [{ setup: 'notesapi', run: { envVariables: { ROOT: 'x${postgres_superUserPassword}' } } }] }
+		for (const field of [own, shared]) {
+			expect(() => parseFabrikaManifest(withUnmodelledField(manifest, field))).toThrow("the PostgreSQL superuser's password")
+		}
+		await expect(compileNotes(`${OWN_SETUP}    run:\n      envVariables:\n        ROOT: \${notesdb_superUserPassword}\n`)).rejects.toThrow(
+			"zerops.yaml references `${notesdb_superUserPassword}`, the PostgreSQL superuser's password",
+		)
+	})
+
 	test('refuses a source descriptor that reads a service the app does not own', async () => {
 		const descriptor = `${OWN_SETUP}    run:\n      envVariables:\n        STOLEN: \${proxy_FABRIKA_IAM_KEY}\n`
 		await expect(compileNotes(descriptor)).rejects.toThrow('zerops.yaml references service `proxy`')

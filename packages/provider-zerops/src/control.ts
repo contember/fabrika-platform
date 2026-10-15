@@ -49,7 +49,7 @@ import {
 	zeropsNamespaceTargetCodec,
 } from './namespace'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
-import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
+import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository } from './source'
 import type { ZeropsSourcePort, ZeropsSourcePrivateBinding } from './source/port'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
@@ -466,6 +466,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				assertAuthoredManagedName(input.name)
 				assertNoFrameworkReference(input.name)
 				assertNoFrameworkReference(input.value)
+				assertNoPlatformOnlyReference(input.name)
+				assertNoPlatformOnlyReference(input.value)
 				assertOwnReferencesOnly(input.environment, input.name, input.value)
 				const target = decodeEnvironment(input.environment).target
 				try {

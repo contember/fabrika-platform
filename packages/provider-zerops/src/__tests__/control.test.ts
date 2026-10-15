@@ -1834,6 +1834,21 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.envWrites).toEqual([])
 	})
 
+	test("refuses a secret that references a PostgreSQL superuser's password, before anything is written", async () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		if (control.secrets === undefined) {
+			throw new Error('expected Zerops managed secrets')
+		}
+		const secrets = control.secrets
+		await expect(secrets.put({ environment: environment(), name: 'ROOT', value: 'sk-live-${postgres_superUserPassword}' })).rejects.toThrow(
+			"`${postgres_superUserPassword}`, the PostgreSQL superuser's password",
+		)
+		await expect(secrets.put({ environment: environment(), name: 'ROOT', value: '${RUNTIME_postgres_superUserPassword}' })).rejects.toThrow(
+			"the PostgreSQL superuser's password",
+		)
+		expect(recorded.envWrites).toEqual([])
+	})
+
 	test('refuses a secret value Zerops cannot store as a 4xx that names the secret and its size, never the value', async () => {
 		const requests: string[] = []
 		const client = createZeropsApi({
