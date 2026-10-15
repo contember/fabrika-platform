@@ -73,4 +73,4 @@ a commit message suffices.
 | [0050](0050-approved-access.md)                                         | Publish only approved access; a human approves widenings, declared deviations included   |
 | [0051](0051-external-principals.md)                                     | External principals hold only roles declared external                                    |
 | [0052](0052-react-and-an-own-component-kit-for-application-spas.md)     | Build application SPAs with React, hooks over the typed client, and an own component kit |
-| [0058](0058-user-administration-is-grantable-on-its-own.md)             | Proposed: user administration is grantable on its own, and never widens its holder       |
+| [0058](0058-user-administration-is-grantable-on-its-own.md)             | Proposed: user administration is grantable on its own, and stops at the installation     |

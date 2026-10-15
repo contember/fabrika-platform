@@ -1,49 +1,52 @@
 ---
 id: 0058
-title: User administration is grantable on its own, and never widens its holder
+title: User administration is grantable on its own, and stops at the installation
 status: proposed
 date: 2026-10-15
 ---
 
-# 0058 — User administration is grantable on its own, and never widens its holder
+# 0058 — User administration is grantable on its own, and stops at the installation
 
 ## Context
 
-An operator wants a person who manages users: invites them, disables them, signs them out, sends them a password
-link, and gives them a role. That person must not deploy, read secrets, or administer IAM itself. Today IAM cannot
+An operator wants a person who manages the people of the installation's applications. That person invites people,
+disables them, signs them out, sends them a password link, and gives them roles in the applications, possibly only in
+one application. That person must not deploy, read secrets, triage in Operations, or administer IAM. Today IAM cannot
 express this.
 
 - **IAM administration is one action.** Every `/admin/rpc` procedure requires `iam.admin`
-  (`packages/iam/src/admin/router.ts:42`, `packages/iam/src/admin/rpc.ts:41-203`), resolved at IAM's own app id
-  `propustka` (`router.ts:47`, `:121`), global only. The `/admin/*` REST surface checks the same action
-  (`router.ts:179`). The one exception is `appPeople.*` (`rpc.ts:205-215`), where an application's own administrator
-  grants that application's roles.
+  (`packages/iam/src/admin/router.ts:42`, `packages/iam/src/admin/rpc.ts:41-203`). It is resolved at IAM's own app id
+  `propustka` (`router.ts:47`, `:121`), and only a global holding counts. The `/admin/*` REST surface checks the same
+  action (`router.ts:179`). The one exception is `appPeople.*` (`rpc.ts:205-215`).
 - **Only the built-in `admin` and a bootstrap mailbox hold it.** IAM registers no vocabulary for `propustka`: its
-  config declares an empty schema (`packages/iam/fabrika.config.ts:235-236`), and an installation registers only the
+  config declares an empty schema (`packages/iam/fabrika.config.ts:235-236`). An installation registers only the
   console, `vozka` (`packages/provider-zerops/src/installation/deploy.ts:686-704` at HEAD,
   `packages/local-stack/src/app-registration.ts:54`). A grant must name a registered app
   (`packages/iam/src/admin/grant-support.ts:79-85`, `grants.ts:13-16`). A cross-app inline `iam.admin` fails the
-  catalog check, because no registered app declares it (`grant-support.ts:151-160`, `:177-188`). A cross-app grant
-  names only a built-in role (`grant-support.ts:101-109`, `:141-144`). So `iam.admin` comes from the built-in `admin`
-  (`*`) or a bootstrap mailbox, and both also give everything on `vozka` and `operations`
-  (`packages/iam/src/resolve.ts:100-104`; platform audiences in `packages/iam/src/services.ts:71`).
-- **Grant creation does not check the grantor.** `createGrantUseCase` records `grantedBy` and checks nothing the
-  grantor holds (`grants.ts:7-75`). This is safe today only because every `iam.admin` holder already holds `*`.
-- **`iam.admin` reaches every application anyway.** Its holder sets return origins (`rpc.ts:107-110`), issues workload
-  and membership keys (`rpc.ts:147-164`) and share links. Each of those acts at an application without a grant. So
-  `iam.admin` cannot be made smaller than the installation admin by itself.
-- **A precedent exists.** `appPeople.*` lets a person grant only an application's declared global roles whose every
-  action that person holds globally there (`packages/iam/src/admin/app-people.ts:96-110`,
-  [ADR-0022 rule 6](0022-the-proxy-is-the-only-enforcement-point.md#6-an-application-token-is-minted-for-one-application-in-one-environment)).
-  It never invites, and it accepts only a signed-in session.
+  catalog check (`grant-support.ts:151-160`, `:177-188`). A cross-app grant names only a built-in role
+  (`grant-support.ts:101-109`, `:141-144`). So `iam.admin` comes only from the built-in `admin` (`*`) or a bootstrap
+  mailbox. Both also give everything on `vozka` and `operations` (`packages/iam/src/resolve.ts:100-104`).
+- **`iam.admin` reaches every application anyway.** Its holder sets return origins (`rpc.ts:107-110`). It issues
+  workload keys, membership keys (`rpc.ts:147-164`) and share links, and each acts at an application without a grant.
+  So no role holding `iam.admin` can be narrower than the installation admin.
+- **The installation's own apps are a registry.** `Config.platformAudiences` holds `propustka`, `vozka`, `operations`
+  and every `ADMIN_AUDIENCES` entry (`packages/iam/src/services.ts:71-76`). Only a token for one of these apps carries
+  cross-app grants and the bootstrap `admin` (`resolve.ts:269-290`). An application's id is `<app>@<env>`
+  (`packages/auth-core/src/app-environment.ts:29-34`), so it never equals an installation app id.
+- **`appPeople.*` already delegates per application.** It is
+  [ADR-0022 rule 6](0022-the-proxy-is-the-only-enforcement-point.md#6-an-application-token-is-minted-for-one-application-in-one-environment).
+  The application declares `members: { manage, list }`, and a person holding `manage` globally there grants that
+  application's global roles. It grants only roles whose every action that person holds
+  (`packages/iam/src/admin/app-people.ts:96-110`), never invites, and works from a signed-in session only.
 
-The real question is the escalation path. A user administrator who can create grants can grant itself `admin`. A user
-administrator who can reset a password can take over the account of a person who holds more.
+The real question is where the user administrator's authority ends, and what stops it from becoming the installation
+admin through a grant or a password reset.
 
 ## Decision
 
-**IAM registers its own vocabulary under `propustka`. One new action, `iam.users.manage`, opens the people surface of
-`/admin/rpc`. Its holder only gives what it holds and never acts on an IAM administrator.**
+**IAM registers its own vocabulary under `propustka`, with one new action, `iam.users.manage`, optionally scoped to one
+application. Its holder grants anything at the applications in its scope, nothing at the installation's own apps, and
+acts only on people whose every grant it could have made.**
 
 ### 1. IAM's vocabulary
 
@@ -51,19 +54,41 @@ IAM declares its vocabulary in code in `packages/iam`, like the console's `contr
 (`packages/control/fabrika.schema.ts:23-73`):
 
 - `displayName`: `Access`.
-- Actions: `iam.admin` (administer identity and access for the installation) and `iam.users.manage` (manage people
-  and pass on what you hold).
+- One scope dimension: `app` (label `Application`). Its value is an application's IAM id, `<app>@<env>`.
+- Two actions:
+  - `iam.admin`: administer identity and access for the installation.
+  - `iam.users.manage`: manage the people of applications.
 - One preset role: `user-admin` → `iam.users.manage`.
 
-There is no `iam-admin` role. `iam.admin` reaches every application (see Context), so granting it alone is the
-installation admin with an extra step. The built-in `admin` keeps working unchanged, cross-app or at `propustka`.
+There is no `iam-admin` role: a role holding `iam.admin` alone would be the installation admin by another name (see
+Context). The built-in `admin` keeps working unchanged.
 
-The installation registers `propustka` with the same call and the same provisioning key that register the console,
-on every path: Zerops `platform deploy`, Cloudflare `platform deploy` (IAM's own `fabrika.config.ts` declares the real
-schema), and the local stack. No migration is needed: the next platform deploy adds the vocabulary, and existing
-grants are untouched.
+The installation registers `propustka` with the same call and the same provisioning key that register the console.
+It does so on Zerops `platform deploy`, on Cloudflare `platform deploy` (IAM's own `fabrika.config.ts` declares the
+real schema), and on the local stack. No migration is needed: the next platform deploy adds the vocabulary, and
+existing grants are untouched.
 
-### 2. What `iam.users.manage` opens
+### 2. Who holds it, and where
+
+An operator with `iam.admin` grants `user-admin` at `propustka`:
+
+- **Globally.** The holder manages people at every application that is not an installation app.
+- **In `app` value X.** The holder manages people at application X only.
+
+Nothing new is needed in resolution. A grant's scope is free-form and is not checked against the declared dimensions
+(`grant-support.ts:115-124`). The user administrator's own grants at `propustka` resolve as they do today
+(`router.ts:121`). IAM then asks the two functions behind `scopedTo()` (`packages/auth-core/src/permissions.ts:41-83`):
+
+- `permits(perms, 'iam.users.manage', { type: 'app', value: X })`: may this caller manage people at X?
+- `scopedValues(perms, 'iam.users.manage', 'app')`: which apps? `null` means all of them, and a list means only those.
+
+The scope dimension is declared so that the console can offer it.
+
+The procedure gate changes in one place. `.require(ADMIN_ACTION)` requires a global holding. A procedure open to user
+administrators admits a caller that holds `iam.admin` globally, or holds `iam.users.manage` globally or in at least one
+`app` value. Each use case then checks the specific app.
+
+### 3. What it opens
 
 | Opened to `iam.users.manage`                                         | Stays `iam.admin` only                          |
 | -------------------------------------------------------------------- | ----------------------------------------------- |
@@ -74,126 +99,187 @@ grants are untouched.
 | `grants.create`, `delete`                                            | `shareLinks.*`                                  |
 | `apps.list`, `apps.getSchema`, `roles.list`, `policies.list` (reads) | `audit.*`, and the closed `/admin/*` REST paths |
 
-`iam.admin` keeps every procedure. A procedure open to both checks the narrower rules below only when the caller lacks
-`iam.admin`.
+The rules below apply only to a caller without `iam.admin`.
 
-### 3. The no-escalation rules
+### 4. Grants: anything inside the scope, nothing at the installation
 
-A caller that holds `iam.users.manage` and not `iam.admin`:
+The caller creates or deletes a grant at app X only when all of these hold:
 
-1. **Grants only what it holds.** It creates a grant only of a role an application declares (never a built-in, a
-   custom policy or inline permissions), at a registered app (never cross-app), whose every permission it holds at
-   that app, globally or in the grant's scope, resolved live there. This is the `appPeople` check, applied to every
-   registered app, `propustka` included. A user administrator can therefore make another user administrator, and
-   nothing more.
-2. **Revokes only what it could grant.** A grant it could not create under rule 1 it cannot delete. It cannot strip
-   an administrator.
-3. **Never acts on an IAM administrator.** It does not disable, sign out, or issue or disable a password action for a
-   principal that holds `iam.admin` or `iam.users.manage` at `propustka`: an installation admin, a bootstrap mailbox,
-   or another user administrator. It does not act on a service principal. Only `iam.admin` manages IAM's administrators.
-4. **Never receives a password link.** A password action it issues is delivered by email only. Without configured
-   email, IAM refuses it; the manual URL (`packages/iam/src/admin/passwords.ts:32-33`) stays `iam.admin`'s, because
-   the URL sets the target's password.
-5. **Acts from a session only, under the authority it checked.** As in `appPeople`, a `px_` key administers only with
-   `iam.admin`. A grant or a revoke writes only while the caller's grant revision and the app's schema revision are
-   the ones its check read; otherwise it writes nothing and answers 409.
+- X is a registered app.
+- X is not in `Config.platformAudiences`.
+- The caller holds `iam.users.manage` there (`permits` with scope `app: X`).
 
-**Invariant:** user administration never widens its holder. A caller without `iam.admin` writes only grants of
-declared roles whose every action it holds there, and never acts on a principal that holds an IAM action.
+Within X, `grants.create` takes what it takes from an installation admin:
 
-`principals.invite` stays open to a user administrator. An invitation admits a person past the OIDC allowlist's
-known-principal bypass, and admitting people is the job. The invited principal holds nothing until a grant follows,
-and that grant is bounded by rule 1.
+- any role X knows: a declared role, a custom policy, or the built-in `admin` (`*` at X);
+- inline permissions from X's catalog;
+- globally or in one of X's scope values.
 
-### 4. Audit
+The existing rules still apply. A contract application refuses a wildcard, so it also refuses the built-in `admin`
+(`packages/iam/src/contract-rules.ts:31-53`). A membership role is granted only in its own dimension. An external
+principal holds only external roles ([ADR-0051](0051-external-principals.md)).
 
-- Every change already writes its `audit_events` row in its own transaction (`iam.grant.create`,
-  `iam.principal.*`, `iam.password.*`), with the actor.
-- The `iam.admin.access` row (`rpc.ts:233-243`) is written for every caller that passes an administrative gate:
+The caller is refused:
+
+- a cross-app grant (`app: null`);
+- any grant at `propustka`, `vozka`, `operations` or another platform audience;
+- deleting a grant there.
+
+So a user administrator cannot make another user administrator; that stays with `iam.admin`.
+
+**The caller does not need to hold what it grants.** This is safe because the authority it hands out cannot leave the
+application:
+
+- **An action means something only to its application.** A grant row at X counts only when IAM resolves permissions
+  at X: `getActiveGrantsForApp` matches `app = X`, and cross-app rows only for a platform audience
+  (`packages/iam/src/repositories/grants.ts:117-129`).
+- **The built-in `admin` granted at X is `*` at X only.** It expands where X's grants resolve (`resolve.ts:85-98`,
+  `packages/iam/src/roles.ts:17-19`). It never reaches another application, another environment of X, or the
+  installation.
+- **An action that X names `iam.admin` is X's own string.** IAM resolves its administration at `propustka`
+  (`router.ts:121`), never at X.
+- **The only grants that reach the installation are forbidden.** These are grants at a platform audience and
+  cross-app grants. Nothing the user administrator hands out therefore reaches deploys, secrets, Operations or IAM.
+
+The cost is plain. Within its scope, a user administrator is as powerful as each application's own admin, because it
+can grant itself any role there. The operator grants exactly that.
+
+### 5. Principals: only people whose every grant it could have made
+
+The caller may invite a person, internal or external. An invitation admits that person past the OIDC allowlist's
+known-principal bypass. That is the job, and the invited person holds nothing until a grant follows.
+
+The caller acts on an existing principal (`principals.update`, `sessions.*`, `passwords.*`) only when every active
+grant of that principal is one the caller could create under section 4. That excludes:
+
+- anyone with a grant at an installation app, which covers deployers, console admins and Operations triagers;
+- anyone with a grant at `propustka`, which covers every IAM administrator and every other user administrator;
+- anyone with a cross-app grant;
+- for a scoped caller, anyone with a grant at an application outside its scope;
+- a bootstrap mailbox, which holds `admin` without a grant row;
+- a service principal.
+
+A principal with no grant, such as a fresh invitation, qualifies. The check reads the target's grants in the same
+transaction as the change, so a grant written in between is seen.
+
+**The manual password URL** (`packages/iam/src/admin/passwords.ts:32-33`) is returned for exactly those principals.
+It is not a takeover of authority. Whoever holds the URL gets an account whose every grant the caller could already
+give to an account of its own, by inviting its own mailbox and granting the same roles. A password reset of a deployer,
+a console admin or an IAM administrator is refused before any URL exists.
+
+The caller works from a signed-in session only, as in `appPeople`; a `px_` key administers only with `iam.admin`.
+
+**Invariant:** user administration stops at the installation. A caller without `iam.admin` never writes a grant at a
+platform audience or a cross-app grant. It never acts on a principal holding a grant it could not have written.
+
+### 6. Relation to `appPeople`
+
+The two mechanisms stay separate, because they bound different holders:
+
+- **`appPeople` is authority the application gives its own staff.** Its `members.manage` is an action in the
+  application's approved contract ([ADR-0050](0050-approved-access.md)). Its holder may be less than the application's
+  admin, so it grants only what it holds, and it never invites.
+- **`iam.users.manage` is authority the operator gives.** Its bound is the application boundary, not the holder's own
+  roles.
+
+Merging them would either let an application's staff grant themselves the application's `admin`, or bind the user
+administrator by what it holds, which is the narrower design this ADR replaces. The procedures differ too: `appPeople`
+works by mailbox with global roles, and a user administrator needs invitation, scoped roles, inline grants, sessions and
+passwords. The admin RPC already has all of these.
+
+The two meet in the console only.
+
+### 7. Audit
+
+- Every change already writes its `audit_events` row in its own transaction (`iam.grant.create`, `iam.principal.*`,
+  `iam.password.*`), with the actor.
+- The `iam.admin.access` row (`rpc.ts:233-243`) is written for every caller that passes an administrative gate,
   `iam.admin` or `iam.users.manage`.
 - A login of a principal holding either action is `privileged = 1` in `auth_log`.
-- Reading the audit log stays `iam.admin`'s.
+- Reading the audit log stays with `iam.admin`. `iam.audit.read` is deferred.
 
-### 5. The console
+### 8. The console
 
 `me` answers a user administrator. It already returns the caller's permissions (`MeDto`,
-`packages/iam-contract/src/index.ts:333-338`). The dashboard reads them instead of treating any `me` answer as an
-installation admin (`packages/dashboard/src/lib/iam.ts:56-66`). The Access section shows People to a user
-administrator, and hides keys, policies, share links and audit. The role picker offers only the roles rule 1 admits;
-IAM answers that list, so the console does not compute it.
+`packages/iam-contract/src/index.ts:333-338`). The dashboard reads those permissions instead of treating any answer from
+`me` as an installation admin (`packages/dashboard/src/lib/iam.ts:56-66`).
+
+A user administrator sees People in the Access section. It does not see keys, policies, share links or audit. The grant
+form offers only applications that are not installation apps and that are in its scope.
+
+The console shows one People area for both sources: the apps of `appPeople.apps`, and the apps of a user
+administrator's scope.
 
 ## Consequences
 
-- An operator grants `user-admin` at `propustka`, and that person onboards and offboards people without any other
-  authority.
-- **A user administrator passes on only what it holds.** To let one hand out the console's `deployer`, the operator
-  also grants that person `deployer`. A pure user administrator invites, disables and resets, and grants only
-  `user-admin`.
-- A user administrator can disable or sign out a console admin who holds no IAM action. That is a lockout,
-  not an escalation, and it is part of the job. It cannot touch an IAM administrator.
-- An installation without email cannot let a user administrator issue password links.
-- `propustka` appears in `apps.list`. An external principal cannot hold `user-admin`: it is not declared external
-  ([ADR-0051](0051-external-principals.md)).
+- An operator grants `user-admin`, globally or for one application. That person onboards, offboards and assigns roles
+  there, and holds no authority over the installation.
+- A user administrator cannot touch the installation's own people. It cannot disable or reset a console admin, a
+  deployer or an IAM administrator, so it cannot lock out the people above it. Making someone a user administrator,
+  or giving someone a console role, stays an installation admin's job.
+- **A person in two applications.** That person can be managed only by an unscoped user administrator, or by one
+  whose scope covers both applications.
+- Reads stay installation-wide. A scoped user administrator lists every principal, including their grants elsewhere, so
+  that it can find a person to grant to. Only writes are scoped.
+- `propustka` appears in `apps.list`.
 - **The 409 risk.** The first registration cannot collide: a custom policy needs a registered app
-  (`packages/iam/src/admin/policies.ts:69`), and `propustka` is not one today. After registration, an admin can
-  create a custom policy at `propustka`. If a later IAM release declares a role with the same key, that platform
-  deploy fails with a 409 that names the key (`packages/iam/src/admin/app-schema.ts:119-135`). Renaming the policy
-  fixes it. This is the existing rule for every app.
-- Splitting further later costs only a vocabulary change and a gate: for example `iam.audit.read`, or grants without
-  the people lifecycle.
-- Unlike Operations ([backlog 54](../backlog/54-give-operations-its-own-proxy-app-identity.md)), nothing moves. IAM
-  already resolves administrative authority at `propustka` and not from the console token's audience
-  (`router.ts:121`).
+  (`packages/iam/src/admin/policies.ts:69`), and `propustka` is not one today. After registration an admin can create a
+  custom policy at `propustka`. If a later IAM release declares a role with the same key, that platform deploy fails
+  with a 409 naming the key (`packages/iam/src/admin/app-schema.ts:119-135`), and renaming the policy fixes it. This is
+  the existing rule for every app.
+- `admin-rpc-gates.test.ts` gains the user-administrator procedures beside the `appPeople.*` exception.
 
-Follow-on work, after acceptance, is one backlog item: the vocabulary and its registration on all three paths, the
-gates and rules 1–5 with a test per refusal, the audit changes, and the console's People view and role picker. Its
-first check is the Cloudflare path: a platform component's `reconcile-schema` step only writes a runner outcome file
-(`packages/provider-cloudflare/src/provider.ts:326-340`), and the scaffolded workflow sets none
-(`packages/provider-cloudflare/src/collaborators.ts:142-148`), so how the console's vocabulary reaches IAM on
-Cloudflare is not yet confirmed.
+Follow-on work after acceptance is one backlog item. It covers:
+
+- the vocabulary and its registration on all three paths;
+- the gate and sections 4–5, with a test for each refusal: a cross-app grant, a platform audience, a target out of
+  scope, a target with an installation grant, and a bootstrap mailbox;
+- the audit changes;
+- the console's People view and grant form.
+
+Its first check is the Cloudflare path. A platform component's `reconcile-schema` step only writes a runner outcome
+file (`packages/provider-cloudflare/src/provider.ts:326-340`), and the scaffolded workflow sets none
+(`packages/provider-cloudflare/src/collaborators.ts:142-148`). So it is not yet confirmed how the console's vocabulary
+reaches IAM on Cloudflare.
 
 ## Alternatives considered
 
+### The grantor holds what it grants
+
+Rejected. A pure user administrator could grant nothing, so onboarding would need the operator to make every user
+administrator an admin of every application. The application boundary is the real limit, and section 4 enforces it.
+
 ### A cross-app inline `iam.users.manage` (or `iam.admin`) grant, with no registered vocabulary
 
-Rejected. The catalog check refuses it today. Loosening the check leaves the action without a description, a preset
-or a place in the console, and the grant would cross every platform audience.
+Rejected. The catalog check refuses it today. Loosening the check leaves the action with no description, no preset, no
+scope dimension and no place in the console.
 
 ### IAM's actions in the console's vocabulary
 
 Rejected. IAM resolves administrative authority at `propustka` (`router.ts:121`), not at the gateway's audience, and
-`ADMIN_AUDIENCES` may name more than one gateway. Reading `vozka` grants would make the console's vocabulary the source
-of IAM's authority, and the console's `admin` role (`*`) would become an IAM administrator. ADR-0022 keeps the two
-apart.
+`ADMIN_AUDIENCES` may name more than one gateway. Reading `vozka` grants would make the console's `admin` role (`*`) an
+IAM administrator. ADR-0022 keeps the two apart.
 
 ### A vocabulary built into IAM's code, with no registration
 
 Rejected. The catalog, the role checks and the guarded grant writes (`eligibleGrantSql`) all read the `roles` and
-catalog tables. A code-only vocabulary is a second source of role truth.
+catalog tables. A code-only vocabulary would be a second source of role truth.
+
+### A scope per registry app (all environments of an app) instead of per IAM application
+
+Deferred. An IAM application is one environment, `<app>@<env>`, and that is what a grant names. Grouping environments
+would need a new rule for matching scope values. Two scoped grants cover two environments.
+
+### Extend `appPeople` instead
+
+Rejected; see section 6.
 
 ### Split now into `iam.users.manage`, `iam.grants.manage` and `iam.audit.read`
 
-Deferred. Nobody asked for grants without people or for audit alone. Each extra action is one more gate to reason
-about, and adding one later needs no migration.
-
-### A user administrator who manages people but not grants
-
-Rejected. Onboarding without a role is not managing users. Rule 1 makes grants safe.
-
-### A user administrator who grants any declared role, except to itself
-
-Rejected. It invites a second account it controls and grants that account the console's `admin`.
-
-### Grants limited to applications other than IAM
-
-Rejected. It does not stop escalation: the console's `admin` role reaches deploys and secrets.
-
-### `appPeople` at `propustka`
-
-Rejected. `appPeople` manages one application's own roles and never invites. A user administrator needs every
-application's roles and the people lifecycle. Its check is reused as rule 1.
+Deferred. Nobody asked for grants without people or for audit alone. A later split needs only a vocabulary change and
+a gate.
 
 ### An `iam-admin` role holding only `iam.admin`
 
-Rejected. `iam.admin` sets return origins and issues workload, membership and share-link credentials, each of which
-acts at an application. A role holding `iam.admin` alone would look smaller than `admin` but is not.
+Rejected. `iam.admin` sets return origins and issues workload, membership and share-link credentials, and each of
+those acts at an application. Such a role would look smaller than `admin`, but it is not.
