@@ -357,6 +357,46 @@ describe('Control release projection', () => {
 		expect(storedProjection).not.toContain(rawUploadBearer)
 	})
 
+	test('a provider line that carries the source-map bearer reaches the run log redacted', async () => {
+		const harness = createHarness(() => NOW_S)
+		const runId = await seed(harness)
+		const stored: string[] = []
+		const echoing: ControlProvider = {
+			id: 'memory',
+			normalizeRegistration: (input: ProviderRegistrationInput) => input,
+			async deploy(input) {
+				input.events.log(`build: uploading with ${input.artifactUpload?.bearer ?? 'no bearer'}`)
+				return { state: 'succeeded', exitCode: 0 }
+			},
+		}
+		const deps: RunDeps = {
+			repositories: harness.repositories,
+			provider: echoing,
+			secrets: new VaultSecretResolver({}),
+			lock: makeFakeLock(harness.repositories),
+			logs: {
+				put: (_key, value) => {
+					if (typeof value === 'string') stored.push(value)
+					return Promise.resolve()
+				},
+			},
+			commits: contractCommits('notes'),
+			operations: {
+				repository: harness.repositories.operationsReleases,
+				service: new ReleaseService(),
+				syncKey: SYNC_KEY,
+				artifactOrigin: 'https://operations.test',
+				now: () => NOW_MS,
+			},
+		}
+
+		expect(await executeDeploy(deps, { runId })).toEqual({ runId, status: 'succeeded' })
+		const log = stored.at(-1) ?? ''
+		expect(log).toContain('build: uploading with')
+		expect(log).not.toMatch(/build: uploading with [0-9a-f]{64}/)
+		expect(log).not.toContain('no bearer')
+	})
+
 	test('rejects a user collision with the managed release stamp', async () => {
 		const harness = createHarness()
 		const runId = await seed(harness)

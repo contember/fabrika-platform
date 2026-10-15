@@ -5,7 +5,13 @@ import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import checkManifest from '../../../check/package.json'
 import { parseZeropsDescriptor } from '../descriptor'
-import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, renderLockedExecutionDescriptor, zeropsContractRun } from '../execution'
+import {
+	FABRIKA_CHECK_VERSION,
+	PLATFORM_TYPESCRIPT_VERSION,
+	renderLockedExecutionDescriptor,
+	zeropsAssetRoots,
+	zeropsContractRun,
+} from '../execution'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
@@ -200,6 +206,48 @@ describe('the generated execution descriptor of a contract application', () => {
 			`${SPA_DESCRIPTOR}    run:\n      start: bun x.ts\n`,
 		)
 		expect(lockedExecutionOf(manifest)).toBeNull()
+	})
+})
+
+describe('the source-map upload of a contract build', () => {
+	const destination = {
+		url: 'https://errors.test/api/artifacts/source-maps/',
+		appId: 'notes',
+		environment: 'prod',
+		serviceKey: 'default',
+		release: `fabrika/notes/prod/default/${'a'.repeat(40)}`,
+		runId: 'run-1',
+	}
+	const renderWith = async (assetRoots: { prefix: string; dir: string }[]): Promise<Mapping> => {
+		const manifest = await compile(contractApp())
+		const execution = lockedExecutionOf(manifest)
+		if (execution === null) throw new Error('expected a contract application')
+		const rendered = renderLockedExecutionDescriptor(manifest.target.sourceDescriptor.contents, manifest.target.zeropsSetup, 'r1', {
+			...execution,
+			sourceMaps: { destination, assetRoots },
+		})
+		const setups = parseZeropsDescriptor(rendered.contents).document['zerops']
+		if (!Array.isArray(setups)) throw new Error('expected setups')
+		return mapping(mapping(setups[0])['build'])
+	}
+
+	test('the asset roots are every SPA mount and every share link, by prefix', () => {
+		expect(zeropsAssetRoots(notesArtifact)).toEqual([{ prefix: '/', dir: 'dist/app' }, { prefix: '/s', dir: 'dist/share' }])
+	})
+
+	test('runs last, after every check, and reads its bearer from the service variable', async () => {
+		const build = await renderWith(zeropsAssetRoots(notesArtifact))
+		const commands = build['buildCommands']
+		expect(Array.isArray(commands) ? commands.at(-1) : null).toBe(
+			`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-source-maps /build/source || true`,
+		)
+		const variables = mapping(build['envVariables'])
+		expect(variables['FABRIKA_SOURCE_MAP_UPLOAD_KEY']).toBe('${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}')
+		expect(JSON.parse(String(variables['FABRIKA_SOURCE_MAP_UPLOAD']))).toEqual({ destination, assetRoots: zeropsAssetRoots(notesArtifact) })
+	})
+
+	test('an SPA directory that Zerops would resolve as a reference is refused', async () => {
+		await expect(renderWith([{ prefix: '/', dir: '${db_password}' }])).rejects.toThrow('must not contain `${`')
 	})
 })
 

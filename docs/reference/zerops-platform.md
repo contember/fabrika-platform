@@ -1240,6 +1240,17 @@ known, but none was looked for. The service's
 superuser; that would be a decision of its own. If the second is false, the migration role's first connection fails
 with the server's authentication error.
 
+#### UNVERIFIED: a build lifts a SENSITIVE service variable through `${RUNTIME_…}`
+
+A contract build uploads its SPA source maps to Operations as its last command
+(`fabrika-source-maps` of the same pinned `@fabrika/check`). Its bearer is the run-scoped credential Control mints; the
+deploy writes it as the sensitive service variable `FABRIKA_SOURCE_MAP_UPLOAD_KEY` before the build request, and the
+generated `build.envVariables` lift it as `${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}`, beside the literal
+`FABRIKA_SOURCE_MAP_UPLOAD` (destination and asset roots, no secret). The lift is verified for a plain env-API
+variable (2026-08-03 above); for a sensitive one it is not yet measured. If Zerops hands the build an empty or
+`REDACTED` value, the upload refuses, the build log reports `state=incomplete`, and the deploy still succeeds with its
+release artifacts incomplete. The variable stays readable to the runtime until the next deploy replaces or removes it.
+
 ### The checker version
 
 Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, where

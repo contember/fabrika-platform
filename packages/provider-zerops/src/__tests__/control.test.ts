@@ -1178,6 +1178,36 @@ describe('Zerops ControlProvider lifecycle', () => {
 		).toEqual({ state: 'pending' })
 	})
 
+	test('a deploy with a source-map upload reports what its build log said about it', async () => {
+		const artifactUpload = {
+			url: 'https://errors.test/api/artifacts/source-maps/',
+			bearer: 'b'.repeat(64),
+			appId: 'notes',
+			environment: 'prod',
+			serviceKey: 'default',
+			release: `fabrika/notes/prod/default/${COMMIT_SHA}`,
+			runId: 'run-1',
+		}
+		const logged = {
+			...makeApi(recorded),
+			getLogAccess: async () => ({
+				url: 'https://logs.test/all',
+				urlPlain: 'https://logs.test/plain',
+				urlInfo: 'https://logs.test/info',
+				urlUi: 'https://logs.test/ui',
+				accessToken: 'log-token',
+				expiration: '2099-01-01T00:00:00Z',
+			}),
+			readBuildLog: async () => [{ message: 'fabrika-source-maps: 1 uploaded, state=complete' }],
+		}
+		const control = createTestControlProvider({ accessToken: 'token', api: logged, sleep: async () => {} })
+		expect(await control.deploy({ ...deployInput(recorded), artifactUpload })).toEqual({ state: 'succeeded', artifactState: 'complete' })
+		expect(await control.deploy(deployInput(recorded))).toEqual({ state: 'succeeded' })
+		// A build log that cannot be read leaves the maps unconfirmed.
+		const unread = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded), sleep: async () => {} })
+		expect(await unread.deploy({ ...deployInput(recorded), artifactUpload })).toEqual({ state: 'succeeded', artifactState: 'incomplete' })
+	})
+
 	test('a failed pipeline process fails the deploy, and a cancel of a version stuck UPLOADING settles at the deadline', async () => {
 		const control = createTestControlProvider({
 			accessToken: 'token',

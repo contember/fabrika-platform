@@ -379,12 +379,13 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				target: runtimeTarget,
 				artifact,
 				...(input.environment.access === undefined ? {} : { access: input.environment.access }),
+				...(input.artifactUpload === undefined ? {} : { artifactUpload: input.artifactUpload }),
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: input.events,
 			})
 			input.signal.throwIfAborted()
-			return { state: result.status }
+			return { state: result.status, ...(result.artifactState === undefined ? {} : { artifactState: result.artifactState }) }
 		},
 		cancel: async (input): Promise<ProviderCancelOutcome> => {
 			const signal = input.signal

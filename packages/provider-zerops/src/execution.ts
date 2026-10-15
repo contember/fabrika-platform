@@ -2,7 +2,15 @@
 // runs. Of the authored setup only `build.base`, `build.os` and the SPA's `build.buildCommands` survive; the rest of
 // the build, the deploy gate and the whole `run` section are generated here. PURE — no network, no filesystem.
 
-import { type ContractArtifact, contractDigest, FABRIKA_CONTRACT_DIGEST, type FrameworkVariableName } from '@fabrika/auth-core'
+import {
+	type ContractArtifact,
+	contractDigest,
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_SOURCE_MAP_UPLOAD,
+	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
+	type FrameworkVariableName,
+} from '@fabrika/auth-core'
+import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
 import type { JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
 import { renderYaml } from './compile'
@@ -74,6 +82,8 @@ export interface ZeropsLockedExecution {
 	/** The hostname of the application's one object-storage service, or null when it has none. */
 	readonly storageHostname: string | null
 	readonly runtimePackages: readonly ZeropsRuntimePackage[]
+	/** Where the build uploads its source maps, without the bearer; null when Control minted no upload for the run. */
+	readonly sourceMaps: OperationsSourceMapBuildUpload | null
 }
 
 /** The application ids the generated scripts may name: the contract's own id rule, so a script needs no quoting. */
@@ -147,6 +157,16 @@ const isStringList = (value: JsonValue): value is string[] => Array.isArray(valu
 
 const refuse = (setup: string, key: string, reason: string): never => {
 	throw new Error(`invalid fabrika manifest: zerops.yaml setup \`${setup}\` sets \`${key}\`; ${reason} (allowed form: ${LOCKED_BUILD_FORM})`)
+}
+
+/** The directories a contract serves its pages from: each SPA mount's and each share link's SPA, by URL prefix. */
+export function zeropsAssetRoots(artifact: ContractArtifact): OperationsAssetRoot[] {
+	const roots: OperationsAssetRoot[] = []
+	for (const mount of Object.values(artifact.mounts)) {
+		if (mount.kind === 'spa') roots.push({ prefix: mount.prefix, dir: mount.dir })
+		if (mount.kind === 'link') roots.push({ prefix: mount.prefix, dir: mount.spa })
+	}
+	return roots.sort((left, right) => left.prefix < right.prefix ? -1 : left.prefix > right.prefix ? 1 : 0)
 }
 
 interface AuthoredBuild {
@@ -254,6 +274,21 @@ const startScript = (appId: string, database: boolean): readonly string[] => [
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
+// After every check: a map is uploaded only for a build that can deploy. A failed upload never fails the build; the
+// provider reads the state from the report line.
+const SOURCE_MAP_UPLOAD = `cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-source-maps ${SOURCE_ROOT} || true`
+
+/**
+ * The upload's build variables: the destination and asset roots as a literal, and the bearer lifted from the service
+ * variable the deploy wrote sensitive, so the descriptor never holds it.
+ */
+const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record<string, string> => {
+	const value = JSON.stringify(upload)
+	// Zerops resolves `${…}` in a build variable, so an SPA directory carrying one would read another variable.
+	if (value.includes('${')) throw new Error('zerops: an SPA directory or prefix must not contain `${`')
+	return { [FABRIKA_SOURCE_MAP_UPLOAD]: value, [FABRIKA_SOURCE_MAP_UPLOAD_KEY]: `\${RUNTIME_${FABRIKA_SOURCE_MAP_UPLOAD_KEY}}` }
+}
+
 /**
  * The generated build commands, in order; the authored SPA commands run before all of them. The application's tests
  * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again.
@@ -271,6 +306,7 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution): readon
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
 		...(database ? [writeFileCommand(MIGRATE_SCRIPT, migrateScript(execution.appId))] : []),
 		writeFileCommand(START_SCRIPT, startScript(execution.appId, database)),
+		...(execution.sourceMaps === null ? [] : [SOURCE_MAP_UPLOAD]),
 	]
 }
 
@@ -331,6 +367,7 @@ export function renderLockedSetup(
 			base: authored.base ?? [ZEROPS_APPLICATION_RUNTIME],
 			...(authored.os === null ? {} : { os: authored.os }),
 			buildCommands: [...authored.commands, ...generatedBuildCommands(execution)],
+			...(execution.sourceMaps === null ? {} : { envVariables: sourceMapBuildVariables(execution.sourceMaps) }),
 			deployFiles: ['./'],
 			cache: ['node_modules'],
 		},

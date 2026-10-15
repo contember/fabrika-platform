@@ -1,6 +1,7 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import { type AppSchema, isDigest } from '@fabrika/auth-core'
-import type { JsonValue, ProviderCodec, ProviderEnvironment } from '@fabrika/provider-contract'
+import { type AppSchema, type ContractArtifact, isDigest } from '@fabrika/auth-core'
+import type { OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
+import type { JsonValue, ProviderCodec, ProviderDeployInput, ProviderEnvironment } from '@fabrika/provider-contract'
 import { proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
@@ -11,6 +12,7 @@ import {
 	LOCKED_APP_ID_PATTERN,
 	lockedAuthoredBuild,
 	ZEROPS_RUNTIME_PACKAGES,
+	zeropsAssetRoots,
 	type ZeropsContractRun,
 	zeropsContractRun,
 	type ZeropsLockedExecution,
@@ -420,6 +422,7 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
+		sourceMaps: null,
 	}
 }
 
@@ -430,7 +433,12 @@ export type ZeropsAccess = Pick<ProviderEnvironment, 'access'>
  * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
  * so a configuration cannot drop it. Without an approved contract nothing deploys outside a dry run.
  */
-export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAccess, dryRun: boolean): ZeropsLockedExecution | null {
+export function lockedExecutionFor(
+	manifest: FabrikaManifest,
+	granted: ZeropsAccess,
+	dryRun: boolean,
+	artifactUpload?: ProviderDeployInput['artifactUpload'],
+): ZeropsLockedExecution | null {
 	const access = granted.access
 	if (access === undefined) {
 		if (dryRun) return null
@@ -445,8 +453,22 @@ export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAcc
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
+		sourceMaps: artifactUpload === undefined ? null : sourceMapUpload(artifactUpload, access.contract),
 	}
 }
+
+/** The build's upload: Control's destination without its bearer, and the approved contract's asset roots. */
+const sourceMapUpload = (upload: NonNullable<ProviderDeployInput['artifactUpload']>, contract: ContractArtifact): OperationsSourceMapBuildUpload => ({
+	destination: {
+		url: upload.url,
+		appId: upload.appId,
+		environment: upload.environment,
+		serviceKey: upload.serviceKey,
+		release: upload.release,
+		runId: upload.runId,
+	},
+	assetRoots: zeropsAssetRoots(contract),
+})
 
 /** The IAM schema a deploy, cancel or reconcile applies: the approved contract's. `undefined` reconciles nothing. */
 export function approvedSchemaOf(granted: ZeropsAccess): AppSchema | undefined {

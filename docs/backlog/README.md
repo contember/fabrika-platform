@@ -25,7 +25,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live; what remains is the production two-project shape, custom domains and a full release rehearsal.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps (release-blocking) and link Delivery runs to Operations evidence.
+- [36](36-complete-zerops-release-artifact-correlation.md) — Prove Zerops build source maps on a real account (release-blocking) and link Delivery runs to Operations evidence.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks (release-blocking).
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.

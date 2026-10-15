@@ -62,9 +62,9 @@ descriptor of the version it builds and every other key as a service variable
 
 An optional `artifactUpload` contains the bounded, release-scoped Operations
 source-map endpoint and bearer. The Cloudflare runner consumes it where the build
-files exist. The Zerops provider does not yet have a corresponding build-side
-artifact hook; see
-[backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
+files exist. The Zerops provider hands it to the platform build, whose last command
+uploads the SPA source maps; see
+[operations errors](operations-errors.md#release-source-maps).
 
 Shared lifecycle code calls these capabilities directly. It does not select from
 a runtime registry and does not branch on `cloudflare` or `zerops`.

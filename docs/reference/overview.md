@@ -311,8 +311,9 @@ resetting the container that owns the run.
 
 The Cloudflare runner also owns the build filesystem, so it can upload bounded
 source maps to the release-scoped Operations artifact endpoint. Zerops builds
-inside its own platform and does not yet publish those artifacts; that remaining
-gap is [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
+inside its own platform, so its generated build uploads them as its last command
+and the provider reads the outcome from the build log
+([operations errors](operations-errors.md#release-source-maps)).
 
 On Zerops, the app build runs `fabrika app build --env=<env>` and produces a
 versioned `fabrika.manifest.json`. Registration stores manifest version 2 in the

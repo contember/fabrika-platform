@@ -606,7 +606,14 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
 		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
-		runLogs.redact([...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? '', ...Object.values(workloadKeys), membershipKey ?? ''])
+		runLogs.redact([
+			...Object.values(secrets),
+			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
+			...Object.values(workloadKeys),
+			membershipKey ?? '',
+			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
+			releaseContext?.artifactUpload?.bearer ?? '',
+		])
 		let outcome: ProviderDeployOutcome
 		try {
 			if (ingestGap !== null) {

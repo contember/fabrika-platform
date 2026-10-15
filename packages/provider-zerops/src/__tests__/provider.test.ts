@@ -104,6 +104,8 @@ interface Overrides {
 	alertError?: Error
 	/** Wire the REAL log reader to a canned window, so the relay's version scoping is exercised end to end. */
 	logFetch?: FetchLike
+	/** The build log lines the fake log reader answers. */
+	buildLog?: readonly string[]
 }
 
 const LOG_ACCESS: ZeropsLogAccess = {
@@ -214,7 +216,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', sensitive: false, content: 'value' }),
 		getLogAccess: async () => LOG_ACCESS,
 		readBuildLog: overrides.logFetch === undefined
-			? async () => [{ message: 'building' }]
+			? async () => (overrides.buildLog ?? ['building']).map((message) => ({ message }))
 			: createZeropsApi({ token: 'unused', baseUrl: 'https://zerops.test', fetchImpl: overrides.logFetch }).readBuildLog,
 	}
 }
@@ -1186,6 +1188,7 @@ describe('a contract application deploy', () => {
 		granted: ProviderApprovedAccess | 'none',
 		services: ZeropsServiceSpec[] = [API],
 		overrides: Overrides = {},
+		artifactUpload?: ZeropsDeployRun['artifactUpload'],
 	): Promise<ZeropsDeployResult> => {
 		const { access: _approved, ...run } = deployRun(recorded)
 		const artifact = await contractArtifact(contract, services)
@@ -1195,6 +1198,7 @@ describe('a contract application deploy', () => {
 			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
 			artifact,
 			...(granted === 'none' ? {} : { access: granted }),
+			...(artifactUpload === undefined ? {} : { artifactUpload }),
 		})
 	}
 
@@ -1241,6 +1245,52 @@ describe('a contract application deploy', () => {
 		expect(sent).toContain('FABRIKA_APP_STORAGE_ACCESS_KEY_ID: "${files_accessKeyId}"')
 		expect(sent).toContain('FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: "${files_secretAccessKey}"')
 		expect(recorded.envWrites.map((write) => write.key).filter((key) => key.startsWith('FABRIKA_APP_STORAGE_'))).toEqual([])
+	})
+
+	describe('source maps', () => {
+		const BEARER = 'a'.repeat(64)
+		const upload: ZeropsDeployRun['artifactUpload'] = {
+			url: 'https://errors.test/api/artifacts/source-maps/',
+			bearer: BEARER,
+			appId: 'notes',
+			environment: 'prod',
+			serviceKey: 'default',
+			release: RELEASE,
+			runId: 'run-1',
+		}
+
+		test('the build uploads them last, with the bearer lifted from a sensitive service variable, never in the descriptor', async () => {
+			const result = await contractRun(true, approved, [API], { buildLog: ['building', 'fabrika-source-maps: 2 uploaded, state=complete'] }, upload)
+
+			expect(result.status).toBe('succeeded')
+			expect(result.artifactState).toBe('complete')
+			expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_SOURCE_MAP_UPLOAD_KEY', value: BEARER, sensitive: true })
+			const sent = recorded.builds[0]?.zeropsYaml ?? ''
+			expect(sent).not.toContain(BEARER)
+			expect(sent).toContain('FABRIKA_SOURCE_MAP_UPLOAD_KEY: "${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}"')
+			expect(sent).toContain(`fabrika-source-maps /build/source || true`)
+			expect(recorded.logs.join('\n')).not.toContain(BEARER)
+		})
+
+		test('a build whose log never reports a complete upload deploys, with its artifacts incomplete', async () => {
+			for (const buildLog of [['building'], ['fabrika-source-maps: 0 uploaded, state=incomplete']]) {
+				recorded = fresh()
+				const result = await contractRun(true, approved, [API], { buildLog }, upload)
+				expect(result.status).toBe('succeeded')
+				expect(result.artifactState).toBe('incomplete')
+			}
+		})
+
+		test('a run without an upload builds none, reports no artifact state and removes a stale bearer', async () => {
+			const result = await contractRun(true, approved, [API], {
+				serviceEnv: [{ id: 'env-upload', key: 'FABRIKA_SOURCE_MAP_UPLOAD_KEY', content: 'old', sensitive: true }],
+			})
+
+			expect(result.status).toBe('succeeded')
+			expect(result.artifactState).toBeUndefined()
+			expect(recorded.envDeletes).toContain('env-upload')
+			expect(recorded.builds[0]?.zeropsYaml ?? '').not.toContain('fabrika-source-maps')
+		})
 	})
 
 	test("another application's bucket is refused before any version exists, so no storage variable reaches a build", async () => {

@@ -53,7 +53,7 @@ shipped on 2026-10-08.
   ([ADR-0045](decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). How it works:
   [`reference/installing-on-zerops.md`](reference/installing-on-zerops.md) and
   [`reference/provider-bundles.md`](reference/provider-bundles.md).
-- **A production Zerops release still needs three items:** automatic build source maps
+- **A production Zerops release still needs three items:** build source maps proven on a real account
   ([36](backlog/36-complete-zerops-release-artifact-correlation.md)), DNS-safe Operations egress for
   webhooks ([38](backlog/38-add-dns-safe-operations-egress.md)), and the production topology plus a
   full release rehearsal ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).

@@ -8,13 +8,15 @@
 // runs. Recovery never resumes a deploy (ADR-0044): a version reserved but never triggered is deleted, and
 // one whose build may have been requested is settled only by polling it.
 
-import { appEnvironmentId } from '@fabrika/auth-core'
+import { appEnvironmentId, FABRIKA_SOURCE_MAP_UPLOAD_KEY } from '@fabrika/auth-core'
+import { type OperationsSourceMapUploadState, readSourceMapUploadReport } from '@fabrika/operations-contract/releases'
 import {
 	type DeployStepResult,
 	followLeaseLoss,
 	isLeaseLoss,
 	type JsonValue,
 	type ProviderApprovedAccess,
+	type ProviderDeployInput,
 	ProviderInvocationAbort,
 	type ProviderManagedEnvironment,
 	type ProviderRunEvents,
@@ -84,6 +86,8 @@ export interface ZeropsDeployRun {
 	readonly artifact: FabrikaManifest
 	/** Control's approved access for the environment (ADR-0050); the lock-down and the IAM schema come from it. */
 	readonly access?: ProviderApprovedAccess
+	/** The run-scoped source-map destination Control minted; the build uploads to it. */
+	readonly artifactUpload?: ProviderDeployInput['artifactUpload']
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
@@ -94,6 +98,8 @@ export interface ZeropsDeployResult {
 	readonly env: string
 	readonly status: 'succeeded' | 'failed'
 	readonly steps: readonly DeployStepResult[]
+	/** Whether the build's source maps reached Operations; absent when the run had no upload to make. */
+	readonly artifactState?: OperationsSourceMapUploadState
 }
 
 /** How often `await-version` asks Zerops for the version's status. */
@@ -274,6 +280,8 @@ interface Attempt {
 	uploadUrl?: string
 	processId?: string
 	triggered: boolean
+	/** What the build's source-map upload reported in its log, once a relayed line said so. */
+	sourceMaps?: OperationsSourceMapUploadState
 }
 
 /** Everything one step's executor needs, bundled so the per-kind handlers stay small. */
@@ -356,6 +364,8 @@ const relayLog = async (
 			}
 			seen.add(key)
 			env.log(`  │ ${line.message}`)
+			const reported = readSourceMapUploadReport(line.message)
+			if (reported !== null) env.attempt.sourceMaps = reported
 		}
 	} catch (error) {
 		env.log(`  [warn] build-log relay unavailable: ${error instanceof Error ? error.message : 'unknown error'}`)
@@ -505,8 +515,13 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	const { zerops, log, signal, managedValues, familyVariables } = env
 	const serviceId = env.run.target.serviceId
 	if (env.dryRun) {
-		const written = [...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null), ...Object.keys(familyVariables)]
-		const removed = SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] === null)
+		const upload = env.run.artifactUpload !== undefined
+		const written = [
+			...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null),
+			...Object.keys(familyVariables),
+			...(upload ? [FABRIKA_SOURCE_MAP_UPLOAD_KEY] : []),
+		]
+		const removed = [...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] === null), ...(upload ? [] : [FABRIKA_SOURCE_MAP_UPLOAD_KEY])]
 		log(`  [dry-run] would write service variables on ${serviceId}: ${written.join(', ') || '(none)'}`)
 		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${removed.join(', ') || '(none)'}`)
 		if (Object.keys(familyVariables).length > 0) {
@@ -562,6 +577,18 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 			await zerops.api.deleteServiceEnv({ envId: record.id, signal })
 			log(`  ${record.key}: removed`)
 		}
+	}
+	// The build lifts the upload's bearer from here (`${RUNTIME_…}`), so the descriptor never holds it.
+	const bearer = env.run.artifactUpload?.bearer ?? null
+	const uploadKey = records.find((record) => record.key === FABRIKA_SOURCE_MAP_UPLOAD_KEY)
+	if (bearer !== null) {
+		assertRunning(signal)
+		await zerops.api.putServiceEnv({ serviceId, key: FABRIKA_SOURCE_MAP_UPLOAD_KEY, value: bearer, sensitive: true, signal })
+		log(`  ${FABRIKA_SOURCE_MAP_UPLOAD_KEY}: updated`)
+	} else if (uploadKey !== undefined) {
+		assertRunning(signal)
+		await zerops.api.deleteServiceEnv({ envId: uploadKey.id, signal })
+		log(`  ${FABRIKA_SOURCE_MAP_UPLOAD_KEY}: removed`)
 	}
 }
 
@@ -661,7 +688,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 		}
 
 		case 'trigger-build': {
-			const locked = lockedExecutionFor(artifact, run, dryRun)
+			const locked = lockedExecutionFor(artifact, run, dryRun, run.artifactUpload)
 			if (dryRun) {
 				log(
 					locked === null
@@ -679,6 +706,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 				: renderLockedExecutionDescriptor(contents, artifact.target.zeropsSetup, release, locked)
 			if (locked !== null) {
 				log(`  generated run section; build checks @fabrika/check@${FABRIKA_CHECK_VERSION}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
+				if (locked.sourceMaps !== null) log(`  the build uploads the source maps of ${locked.sourceMaps.assetRoots.length} asset root(s)`)
 			}
 			assertRunning(signal)
 			// Recorded BEFORE the request: from here on the version is settled only by polling it (ADR-0044).
@@ -810,5 +838,15 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 			run.events.log(`  [warn] app-version ${appVersionId} could not be deleted; it was never built`)
 		}
 	}
-	return { appId: run.appId, env: run.env, ...result }
+	return { appId: run.appId, env: run.env, ...result, ...artifactStateOf(run, result.status, env.attempt) }
+}
+
+/** A run that uploads reports `complete` only when its build log said so; a missing or unread report is `incomplete`. */
+const artifactStateOf = (
+	run: ZeropsDeployRun,
+	status: ZeropsDeployResult['status'],
+	attempt: Attempt,
+): Pick<ZeropsDeployResult, 'artifactState'> => {
+	if (run.artifactUpload === undefined || run.dryRun || status !== 'succeeded') return {}
+	return { artifactState: attempt.sourceMaps === 'complete' ? 'complete' : 'incomplete' }
 }

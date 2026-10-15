@@ -139,6 +139,16 @@ bun test
   `parseFabrikaManifest`, and `verify-exposure` refuses a bucket without platform provenance before the build. Generated file lines go through
   `printf` single-quoted: they may hold no `'` and no `$`, which is why the app id must match
   `[a-z0-9][a-z0-9-]*` and the health path is a literal path.
+- **A contract build uploads its SPA source maps last, and never fails on them (backlog 36).** When Control hands
+  `artifactUpload`, `write-service-env` writes its bearer as the SENSITIVE service variable
+  `FABRIKA_SOURCE_MAP_UPLOAD_KEY` (and removes it from a run without one), and the generated build lifts it with
+  `build.envVariables: ${RUNTIME_FABRIKA_SOURCE_MAP_UPLOAD_KEY}` beside the literal `FABRIKA_SOURCE_MAP_UPLOAD` (the
+  destination without the bearer, and `zeropsAssetRoots` of the APPROVED contract: each SPA mount and share link, by
+  prefix). The descriptor never holds the bearer; a directory or prefix carrying `${` is refused. The last build command is
+  `fabrika-source-maps` of `@fabrika/check@FABRIKA_CHECK_VERSION`, `|| true`. The relay reads its report line from the build
+  log (`readSourceMapUploadReport`): a succeeded run reports `artifactState: 'complete'` only when that line said so, else
+  `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
+  next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`

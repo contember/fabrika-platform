@@ -12,6 +12,20 @@ Grouping uses an SDK fingerprint when present. The `{{ default }}` token expands
 
 Queue consumers resolve a merged issue to its canonical fingerprint before storing the payload or occurrence. They coalesce at most 50 events for one source and effective fingerprint into one issue write while retaining every exact occurrence. Duplicate queue deliveries do not duplicate occurrences, transitions, or notifications.
 
+## Application server reports
+
+A contract application reports to the ingest of its own `FABRIKA_OPERATIONS_DSN` ([ADR-0059](../decisions/0059-application-server-errors-carry-their-stack-and-message.md)). Each report is one `event` item:
+
+| Logger             | Last exception value (the issue title)   | Fingerprint                                       | Tags                                                                |
+| ------------------ | ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
+| `fabrika.requests` | `RequestFailed`, endpoint, status, code  | `fabrika-request-failed`, endpoint, code          | `endpoint`, `code`, `status`, `reason`, `request`                   |
+| `fabrika.jobs`     | `JobFailed` or `JobMissed`, job and code | `fabrika-job-failed` or `fabrika-job-missed`, job | `job`, `code`, `reason`                                             |
+| `fabrika.process`  | what was thrown                          | none: the derived fingerprint                     | `crash`: `uncaught_exception`, `unhandled_rejection`, `boot_failed` |
+
+The values before a request's or job's last value are what was thrown and its causes, the deepest first: the error's type, its message and its stack frames (file, function, line, column, in-app). A framework failure sends its reason and catalog text instead of its message. The application scrubs every text first: the values of its secret framework variables and of application variables named as secrets, JWTs, authorization schemes, credential headers, URL userinfo and credential query parameters. It caps a message at 2,048 characters, the frames at the 50 nearest the throw, the chain at five errors and the encoded chain at 64 KiB. Request bodies, headers, input and rows are never sent. Ingest redaction then applies as to any event.
+
+A request's and a job's fingerprint and title do not depend on the thrown value, so grouping is the same with or without it. A crash groups by the thrown value's type and in-app frames.
+
 ## Issue lifecycle and read model
 
 Issues support open, resolved, and ignored states; comments; assignment; time and count snooze; resolution in a release; and merge into a canonical issue. A new event reopens a resolved issue as a regression, subject to resolve-in-release semantics. An expired snooze reopens without recording a regression.
@@ -35,6 +49,25 @@ Webhook is the supported notification channel. Portable email delivery is tracke
 Telemetry health has one rule per source: more than zero archived dead events means `failed`, otherwise `healthy`. Error silence is not evidence of a stalled pipeline, so quiet sources stay `healthy`. A source with no telemetry observation yet shows `unavailable`. Active HTTP checks remain independent of telemetry health.
 
 Dead events are never deleted, so a failed source does not recover. The first `failed` observation produces one `unhealthy_telemetry` alert; later observations produce none. Current state and bounded history are kept per source.
+
+## Release source maps
+
+Control mints one upload credential per deploy run (`releaseContext`, `packages/control/src/operations-releases.ts`):
+an HMAC bearer over the run, the release and its expiry, two hours after the run started. Operations stores only its
+verifier, and the upload endpoint (`/api/artifacts/source-maps/`) accepts a map only under the app, environment, service
+key, release and run the credential names. Both providers upload with `@fabrika/check/source-maps`, and an upload that
+fails never fails the deploy: the run's release artifacts are `incomplete`, otherwise `complete`.
+
+- **Cloudflare.** The runner uploads every `*.map` of the checkout after `wrangler deploy`, named by its own `file`
+  field.
+- **Zerops.** The platform build runs `fabrika-source-maps` as its last command. It uploads every `*.map` under the
+  approved contract's SPA and share-link directories, each named by the URL path of the file it maps
+  (`<prefix>/<path under dir>` without `.map`), and prints one report line. The provider reads that line back from the
+  relayed build log; a log it cannot read leaves the artifacts `incomplete`. The bearer reaches the build as a sensitive
+  service variable ([Zerops platform facts](zerops-platform.md#unverified-a-build-lifts-a-sensitive-service-variable-through-runtime_)).
+
+An event selects a map by its own source, its `release` and the logical path of each frame's file, so a map never
+resolves another application's, environment's or release's frames.
 
 ## Runtime evidence
 

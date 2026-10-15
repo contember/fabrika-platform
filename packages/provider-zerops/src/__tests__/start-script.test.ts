@@ -49,6 +49,7 @@ const generatedApplication = async (appId: string): Promise<string> => {
 		databaseUrl: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
 		storageHostname: null,
 		runtimePackages: [],
+		sourceMaps: null,
 	}
 	for (const command of generatedBuildCommands(execution).filter((line) => line.includes('.generated.sh'))) {
 		expect((await sh(root, ['-c', command])).code).toBe(0)
