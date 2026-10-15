@@ -74,30 +74,19 @@ dispatch through the selected provider's `/installation` subpath.
 
 ## Install
 
-Installing fabrika means bringing the platform up in your own cloud account. The `fabrika` command
-runs on [Bun](https://bun.sh) (≥ 1.3). It loads the provider package of the cloud you install on, so install
-both:
+Installing fabrika means bringing the platform up in your own cloud account. On Zerops, the procedure
+ships with the CLI. Read it first, from a clone at the release tag you install:
 
 ```bash
-bun add --global @fabrika/cli @fabrika/provider-zerops
+git clone --depth 1 --branch <tag> https://github.com/contember/fabrika-platform.git
+cd fabrika-platform && bun install --frozen-lockfile
+bun packages/cli/src/index.ts platform guide --provider=zerops
 ```
 
-On Zerops, the bring-up is three commands run from your machine, in this order:
-
-```bash
-fabrika platform install --provider=zerops --create-project --client-id=<id> --env=<name>
-fabrika platform admin   --provider=zerops --email=<address> --iam-host=<host>
-fabrika platform init    --provider=zerops <installation>
-```
-
-- `install` creates the Zerops project and the installation, and prints the provisioning key once.
-- `admin` admits the first administrator and prints their enrollment URL.
-- `init` creates the sidecar repository you own. Its GitHub pipeline deploys the platform from then
-  on, and `fabrika platform upgrade --provider=zerops --to=<tag>` rolls it to a newer release.
-
-The full procedure — prerequisites, where each credential lives, the first application, and a check
-for every step — is in [`docs/reference/installing-on-zerops.md`](docs/reference/installing-on-zerops.md).
-Each command prints its own surface with `fabrika platform --provider=<cloudflare|zerops> --help`.
+The bring-up runs from that clone, because `platform install` uploads the source of the checkout it runs
+from. The guide gives the order, what to ask the human for, how to hold each credential, and a check for
+every step. Each command prints its own surface with `fabrika platform --provider=<cloudflare|zerops> --help`.
+How install and deploy work inside is in [`docs/reference/installing-on-zerops.md`](docs/reference/installing-on-zerops.md).
 
 ## Development
 

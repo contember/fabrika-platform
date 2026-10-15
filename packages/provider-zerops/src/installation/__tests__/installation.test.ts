@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { installationCli } from '..'
 
 describe('Zerops installation capability', () => {
-	test('offers install, init, plan, deploy, admin and upgrade — and only ONE of them creates an installation', () => {
-		expect(installationCli.commands).toEqual(['install', 'init', 'plan', 'deploy', 'admin', 'upgrade'])
+	test('offers install, init, plan, deploy, admin, upgrade and guide — and only ONE of them creates an installation', () => {
+		expect(installationCli.commands).toEqual(['install', 'init', 'plan', 'deploy', 'admin', 'upgrade', 'guide'])
 		expect(installationCli.usage).toContain('UPDATE AN\nINSTALLATION THAT ALREADY EXISTS')
 		expect(installationCli.usage).toContain('`install` CREATES an installation in a project you created empty')
 	})

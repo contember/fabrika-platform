@@ -185,7 +185,7 @@ bun test
 ## Platform installation (`./installation`, `src/installation/`)
 
 The Zerops implementation of `@fabrika/provider-contract/installation` plus the typed platform topology
-and the generated installation data; `@fabrika/cli` loads it. Six commands; the full surface is the
+and the generated installation data; `@fabrika/cli` loads it. Seven commands; the full surface is the
 `usage` string in `src/installation/index.ts`, which the generated sidecar workflow is written against:
 
 - `install` CREATES an installation, in an empty project (`--project-id`) or one it creates
@@ -194,6 +194,11 @@ and the generated installation data; `@fabrika/cli` loads it. Six commands; the 
 - `plan` validates the generated artifacts against the static installation schemas.
 - `deploy` brings an EXISTING installation to this checkout, unattended and idempotently.
 - `admin --email=<address>` admits the first human.
+- `guide` prints `src/installation/guide.md`, the operator's whole procedure: the order, what to ask the human
+  for, how an agent holds each credential, and the traps no single usage shows. It ships in the package, so
+  the guide matches the release. It is the ONE copy of the procedure: `docs/reference/installing-on-zerops.md`
+  points to it. `packages/cli/src/__tests__/guide.test.ts` fails when it names a command or flag the CLI lacks.
+  A trap found in a live bring-up belongs there.
 - `upgrade --to=<tag>` is the roll: it checks the tag on the public repository, writes `fabrika.ref`,
   commits it without `[skip ci]` (the push IS the trigger), pushes, prints the run URL and watches it.
 

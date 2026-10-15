@@ -17,11 +17,20 @@
  * and brings an installation to the checkout it was handed, while `upgrade` runs on the operator's
  * machine and moves the pin that pipeline reads. A provider whose operator edits no pin does not
  * declare it.
+ *
+ * `guide` prints the operator's procedure for the whole bring-up, with the traps the per-command usage
+ * cannot show. It ships with the provider package, so an agent reads the guide of the release it runs.
  */
-export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy' | 'admin' | 'upgrade'
+export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy' | 'admin' | 'upgrade' | 'guide'
 
 export const isInstallationCommand = (value: unknown): value is InstallationCommand =>
-	value === 'init' || value === 'install' || value === 'plan' || value === 'deploy' || value === 'admin' || value === 'upgrade'
+	value === 'init'
+	|| value === 'install'
+	|| value === 'plan'
+	|| value === 'deploy'
+	|| value === 'admin'
+	|| value === 'upgrade'
+	|| value === 'guide'
 
 export interface InstallationCli {
 	readonly provider: string

@@ -9,6 +9,7 @@ import {
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
+import { fileURLToPath } from 'node:url'
 import { createZeropsApi, defaultSleep } from '../index'
 import { consoleAdminCollaborators, runPlatformAdmin } from './admin'
 import { parsePlatformAdminArgs, REISSUE_FLAG } from './admin-options'
@@ -44,7 +45,11 @@ export {
 
 const USAGE = `Zerops installation
 
+New here, or an agent? Run \`fabrika platform guide --provider=zerops\` first: the whole bring-up in order,
+what to ask the human for, and the traps this text cannot show.
+
 Commands:
+  fabrika platform guide   --provider=zerops
   fabrika platform install --provider=zerops [options]
   fabrika platform init    --provider=zerops <installation> --tag=<tag> --project-id=<id> [options]
   fabrika platform plan    --provider=zerops
@@ -305,6 +310,16 @@ laptop and not in the pipeline it triggers.
 /** No cancellation source exists behind a CLI invocation; the ports all take a signal regardless. */
 const neverAborted = (): AbortSignal => new AbortController().signal
 
+/** The operator's guide of this release, shipped beside this module. */
+export const readInstallationGuide = (): Promise<string> => Bun.file(fileURLToPath(new URL('./guide.md', import.meta.url))).text()
+
+const runGuide = async (argv: readonly string[]): Promise<void> => {
+	if (argv.length > 0) {
+		throw new Error(`Unexpected Zerops guide arguments: ${argv.map(describeArgument).join(' ')}`)
+	}
+	console.info(await readInstallationGuide())
+}
+
 const runPlan = (argv: readonly string[]): void => {
 	if (argv.length > 0) {
 		throw new Error(`Unexpected Zerops plan arguments: ${argv.map(describeArgument).join(' ')}`)
@@ -368,9 +383,13 @@ const runPlatformUpgrade = async (argv: readonly string[]): Promise<void> => {
 
 export const installationCli: InstallationCli = {
 	provider: 'zerops',
-	commands: ['install', 'init', 'plan', 'deploy', 'admin', 'upgrade'],
+	commands: ['install', 'init', 'plan', 'deploy', 'admin', 'upgrade', 'guide'],
 	usage: USAGE,
 	run: async (command: InstallationCommand, argv: readonly string[]) => {
+		if (command === 'guide') {
+			await runGuide(argv)
+			return
+		}
 		if (command === 'install') {
 			await runPlatformInstall(argv)
 			return

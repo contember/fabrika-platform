@@ -9,6 +9,7 @@ import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './contro
 const USAGE = `fabrika — application platform CLI
 
 Usage:
+  fabrika platform guide --provider=zerops
   fabrika platform install --provider=zerops [provider options]
   fabrika platform init --provider=<cloudflare|zerops> [provider options]
   fabrika platform plan --provider=<cloudflare|zerops> [provider options]
@@ -28,6 +29,9 @@ Usage:
   fabrika db <new|migrate|codegen|test-scaffold|test-isolation> [options]
   fabrika job run <name>
   fabrika connect <add|pull> <app>/<export>@<version> --consumer=<app> --env=<env> [--url=<control origin>]
+
+Installing the platform on Zerops? Run \`fabrika platform guide --provider=zerops\` first: the whole bring-up
+in order, what to ask the human for, and the traps.
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.

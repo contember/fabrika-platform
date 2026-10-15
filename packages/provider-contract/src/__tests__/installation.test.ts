@@ -39,6 +39,11 @@ describe('installation CLI contract', () => {
 		expect(isInstallationCli({ ...installationCli, commands: ['init', 'plan', 'deploy', 'admin', 'upgrade'] })).toBe(true)
 	})
 
+	test('`guide` is optional the same way', () => {
+		expect(isInstallationCommand('guide')).toBe(true)
+		expect(supportsInstallationCommand(installationCli, 'guide')).toBe(false)
+	})
+
 	test('validates the provider selected by a built-in dispatcher', () => {
 		expect(installationCliFromModule({ installationCli }, 'cloudflare')).toBe(installationCli)
 		expect(() => installationCliFromModule({ installationCli }, 'zerops')).toThrow(
