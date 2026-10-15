@@ -96,6 +96,7 @@
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/db": "workspace:*",
+		"@fabrika/email": "workspace:*",
 		"@fabrika/jwks": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",

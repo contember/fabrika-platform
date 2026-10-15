@@ -1,6 +1,15 @@
 // @fabrika/app/implement — serving a contract: `serve` binds the handlers its endpoints carry, `boot` (called only by
 // the generated entrypoint, through a runtime adapter) serves it. Imports `node:async_hooks`, so it is not browser-safe.
 // `implement` (a mirrored handler tree) is the framework's own test entry, `./implement`, and no application's.
+export {
+	EmailDeliveryError,
+	type EmailDeliveryErrorCode,
+	type EmailDeliveryOutcome,
+	type EmailDeliveryResult,
+	type EmailSender,
+	type EmailSenderCapabilities,
+	mayRetryDelivery,
+} from '@fabrika/email'
 export { FILE_SWEEP_JOB } from '../files/collections'
 export type { FileCollectionHandle, FileCollectionReader, FileListing, ListedFile, OpenedFile } from '../files/handle'
 export {
@@ -15,7 +24,7 @@ export {
 export { crashEnvelope, type OperationsReport, type OperationsReporter, reportEnvelope } from '../jobs/report'
 export { type ContractJobs, type JobClock, JobError, type JobFailureCode, type JobRunOptions, type JobRunResult } from '../jobs/runner'
 export { secretScrubber } from '../jobs/scrub'
-export type { JobContext, JobHandler, JobHandlersOf, JobPrincipal } from '../jobs/types'
+export type { AppMail, AppMailMessage, JobContext, JobHandler, JobHandlersOf, JobPrincipal } from '../jobs/types'
 export { LINK_BOOTSTRAP_SCRIPT } from './anonymous'
 export { boot, BootError, type BootOptions, type ContractApp, type IamKeySource } from './boot'
 export { readBoundedBytes, REQUEST_BUDGET_MS } from './bounded'

@@ -1,7 +1,10 @@
 // The kit `fabrika app dev` previews an application through, and the types of the seed module it runs first.
 
+import { EMAIL_DELIVERY_ERRORS, type EmailDeliveryErrorCode, type EmailDeliveryOutcome } from '@fabrika/email'
+import type { MemoryHandoff } from '@fabrika/email/memory'
 import type { AnyContract, DimensionOf } from '../contract/define'
 import type { ContractImplementation } from '../implement/implement'
+import { mailKeyPrefix } from '../jobs/mail'
 import type { PersonTestCaller, TestCaller } from './caller'
 import { passingChallenge, TURNSTILE_TEST_TOKEN } from './challenge'
 import { bootTestKit, type TestKit, type TestKitOptions } from './kit'
@@ -51,6 +54,28 @@ export interface DevOutboxMessage {
 	readonly body: string
 }
 
+/** A message a job handed to the kit's mail stand-in, as `fabrika app dev` shows it. */
+export interface DevMail {
+	/** Its position among the handoffs, from 1. */
+	readonly id: number
+	/** When it was handed off, ISO 8601. */
+	readonly at: string
+	readonly to: string
+	readonly subject: string
+	readonly text: string
+	readonly html: string | null
+	readonly replyTo: string | null
+	readonly fromName: string | null
+	/** The idempotency key as the job passed it. */
+	readonly key: string
+	/** The key the transport got: `key` behind the application environment's prefix. */
+	readonly transportKey: string
+	readonly answer: 'accepted' | EmailDeliveryErrorCode
+	readonly outcome: 'accepted' | EmailDeliveryOutcome
+	/** Whether this handoff put the message in the inbox; a repeat under its key does not. */
+	readonly delivered: boolean
+}
+
 /** What `fabrika app dev` stands in for outside the application, for the seed to read. */
 export interface DevOutside {
 	/** Every request sent to `DEV_OUTBOX_ORIGIN` so far, oldest first. */
@@ -71,6 +96,8 @@ export interface DevKit<C extends AnyContract> {
 	membershipsOf(caller: TestCaller): readonly TestMembership[]
 	/** The invitation e-mails the stand-in IAM sent, in the order it first sent them. */
 	invitations(): readonly SentInvitation[]
+	/** Every message the application's jobs handed to the mail stand-in, oldest first; one refused before the handoff is absent. */
+	mails(): readonly DevMail[]
 }
 
 const isPerson = (caller: TestCaller): caller is PersonTestCaller => caller.kind === 'human' && caller.email !== null
@@ -95,5 +122,29 @@ export function devKit<C extends AnyContract>(app: ContractImplementation<C>, op
 		},
 		membershipsOf: (caller: TestCaller) => standIn.membershipsOf(caller),
 		invitations: () => standIn.invitations(),
+		mails: () => {
+			const prefix = mailKeyPrefix(kit.mailKeyScope)
+			return kit.mail.handoffs.map((handoff, index) => devMail(handoff, index + 1, prefix))
+		},
 	})
+}
+
+function devMail(handoff: MemoryHandoff, id: number, prefix: string): DevMail {
+	const { message, answer } = handoff
+	const transportKey = message.idempotencyKey
+	return {
+		id,
+		at: new Date(handoff.at).toISOString(),
+		to: message.to,
+		subject: message.subject,
+		text: message.text,
+		html: message.html ?? null,
+		replyTo: message.replyTo ?? null,
+		fromName: message.fromName ?? null,
+		key: transportKey.startsWith(prefix) ? transportKey.slice(prefix.length) : transportKey,
+		transportKey,
+		answer,
+		outcome: answer === 'accepted' ? 'accepted' : EMAIL_DELIVERY_ERRORS[answer].outcome,
+		delivered: handoff.taken,
+	}
 }

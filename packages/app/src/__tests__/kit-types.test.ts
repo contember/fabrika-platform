@@ -62,6 +62,9 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'45-remove-files-outside-a-job-transaction.ts': 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
 	'46-then-on-a-query.ts': 'a query kicks no job: declare then on a mutation',
 	'47-then-not-a-literal.ts': "then names one cron job, as a literal: then: 'mailing'",
+	'48-job-mail-without-mailer.ts': "declare mailer: 'installation' or 'own' on this job to send mail",
+	'49-mail-in-an-endpoint.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
+	'50-mail-in-a-webhook.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
 }
 
 /**

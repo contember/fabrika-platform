@@ -1,6 +1,7 @@
 // `serve(contract, { database, deps })`: how `src/app.ts` serves a contract of the staged kit. Its handlers sit
 // beside their endpoints, so there is no handler tree to pass: `serve` collects the one `boot` binds by endpoint id.
 
+import type { EmailSender } from '@fabrika/email'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { AnyContract, Schema } from '../contract/define'
@@ -61,6 +62,8 @@ export interface ServeOptions {
 	/** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or `null` for a kit without tables (`defineApp(vocabulary)`). */
 	readonly database: ImplementationDatabase | null
 	readonly deps?: AppDeps<unknown>
+	/** The transport of the jobs that declare `mailer: 'own'`, built once at boot from the application's own variables. */
+	readonly mail?: (env: ApplicationEnvironment) => EmailSender | null
 }
 
 /**
@@ -86,6 +89,7 @@ export function serve<const C extends AnyContract>(contract: C, options: ServeOp
 		database: options.database,
 		connect: snapshotsOf(contract),
 		handlers: (env, runtime) => handlerTree(contract, build?.(env, runtime) ?? ((work) => work())),
+		...(options.mail === undefined ? {} : { mail: options.mail }),
 	})
 }
 

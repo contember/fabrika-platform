@@ -26,6 +26,7 @@ import {
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import { refuseInProduction } from '@fabrika/db/production'
+import { MemoryEmailSender } from '@fabrika/email/memory'
 import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
@@ -44,6 +45,7 @@ import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
+import type { MailKeyScope } from '../jobs/mail'
 import type { HandlerErrorSink } from '../jobs/runner'
 import type { JobRunOptions, JobRunResult } from '../jobs/runner'
 import {
@@ -106,6 +108,11 @@ export interface TestKitOptions {
 	readonly challengeFetch?: ChallengeFetch
 	/** What a job's handler threw, shown on the developer's own machine: `fabrika app dev` sets it, a test need not. */
 	readonly revealHandlerErrors?: HandlerErrorSink
+	/**
+	 * The stand-in for every job's mail transport; a new `MemoryEmailSender` by default. Pass one with other capabilities
+	 * to model another provider: `new MemoryEmailSender({ capabilities: { idempotent: false, confirmation: 'queued' } })`.
+	 */
+	readonly mail?: MemoryEmailSender
 }
 
 export interface TestConnection {
@@ -154,6 +161,14 @@ export interface TestKit<C extends AnyContract> {
 	runJob(name: JobName<C> | typeof FILE_SCAN_JOB | typeof FILE_SWEEP_JOB, options?: JobRunOptions): Promise<JobRunResult>
 	/** Waits for the work requests left running: the runs a form's or a mutation's `then` kicked, a failure's report. */
 	drain(): Promise<void>
+	/**
+	 * The stand-in for every job's transport: what reached it (`accepted`, `handoffs`) and its faults (`refuse`,
+	 * `unavailable`, `unreachable`, `loseAnswers`, `during`, `heal`). Each message carries the transport key,
+	 * `transportMailKey(kit.mailKeyScope, key)`.
+	 */
+	readonly mail: MemoryEmailSender
+	/** Whose keys this kit's prefix separates: `mailKeyPrefix(kit.mailKeyScope)` is what a job's key gets in front. */
+	readonly mailKeyScope: MailKeyScope
 }
 
 /** The names of the contract's cron jobs. */
@@ -310,6 +325,8 @@ export function bootTestKit<C extends AnyContract>(
 	// issues the proxy's delegation grants.
 	const standIn = options.membership === undefined ? kitMembership(artifact, directoryCallers) : null
 	const membership = options.membership ?? standIn?.rpc
+	const mail = options.mail ?? new MemoryEmailSender()
+	const mailKeyScope: MailKeyScope = Object.freeze({ issuer: TEST_ISSUER, appId })
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -333,6 +350,7 @@ export function bootTestKit<C extends AnyContract>(
 		membership,
 		connectBindings,
 		workloadTokens,
+		mailStandIn: mail,
 	})
 
 	let issued = 0
@@ -584,7 +602,21 @@ export function bootTestKit<C extends AnyContract>(
 		return invitee
 	}
 	return {
-		kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob, drain, acceptInvitation }),
+		kit: Object.freeze({
+			origin,
+			appId,
+			artifact,
+			testCaller,
+			scope,
+			fetch: kitFetch,
+			browser,
+			iam,
+			runJob,
+			drain,
+			acceptInvitation,
+			mail,
+			mailKeyScope,
+		}),
 		standIn,
 		callerOf: (value) => [...memberships.keys()].find((caller) => caller === value),
 	}

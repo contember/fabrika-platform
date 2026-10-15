@@ -1,6 +1,7 @@
 // The handler types of a contract's jobs: one handler per `c.cron` job under `handlers.jobs`, each with a context
 // that reaches only the actions the job declares. A job has no request and no caller, so there is no `input`.
 
+import type { EmailDeliveryResult, EmailSenderCapabilities } from '@fabrika/email'
 import type { CronJob, DimensionOf } from '../contract/define'
 import type { Ref, Within } from '../implement/capability'
 
@@ -30,6 +31,31 @@ export interface JobContext<A extends string, D extends string> {
 	within<const Act extends A, const Dim extends D>(action: Act, dimension: Dim): Within<Dim, Act>
 	/** One object of `dimension` for a declared action, located now: what a write takes. A missing object is NotFound. */
 	ref<const Act extends A, const Dim extends D>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>>
+}
+
+/** One message a job sends. The framework prefixes `idempotencyKey` before the transport sees it. */
+export interface AppMailMessage {
+	readonly to: string
+	readonly subject: string
+	readonly text: string
+	readonly html?: string
+	/** 1..200 visible ASCII characters, unique per message within this application environment. */
+	readonly idempotencyKey: string
+	readonly replyTo?: string
+	readonly fromName?: string
+}
+
+/** `ctx.mail` of a job that declares `mailer`. */
+export interface AppMail {
+	/** What the transport promises: whether a repeat under one key is deduplicated, sync or queued acceptance. */
+	readonly capabilities: EmailSenderCapabilities
+	/**
+	 * Hands one message to the transport. Rejects with `EmailDeliveryError`; its `outcome` says whether the message may
+	 * have left. `signal` adds to the attempt's own `ctx.signal`, which always aborts the send.
+	 */
+	send(message: AppMailMessage, signal?: AbortSignal): Promise<EmailDeliveryResult>
+	/** `mayRetryDelivery` over this transport: true only for an `EmailDeliveryError` that is safe to send again. */
+	mayRetry(error: unknown): boolean
 }
 
 export type JobHandler<A extends string, D extends string> = (args: { readonly ctx: JobContext<A, D> }) => void | Promise<void>

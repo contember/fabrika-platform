@@ -4,6 +4,7 @@
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import type { DataLayer } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
+import type { EmailSender } from '@fabrika/email'
 import type { ConnectSnapshot } from '../contract/connect'
 import type { AnyContract } from '../contract/define'
 import type { ConnectSnapshots, ExactHandlers, HandlersOf } from './types'
@@ -41,6 +42,8 @@ export interface ContractImplementation<C extends AnyContract = AnyContract> {
 	readonly connect?: Readonly<Record<string, ConnectSnapshot>>
 	/** Runs `deps`, then `handlers` over its result. The tree is checked by the types of `implement`, and again by `boot`. */
 	readonly handlers: (env: ApplicationEnvironment, runtime: DepsRuntime) => unknown
+	/** The application's own transport, built once at boot from its own variables; `null` when they configure none. */
+	readonly mail?: (env: ApplicationEnvironment) => EmailSender | null
 }
 
 /**

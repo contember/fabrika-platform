@@ -18,6 +18,7 @@ import {
 	FABRIKA_PROXY_SECRET,
 	type FormMountArtifact,
 	type IamMembershipRpc,
+	isLoopbackHost,
 	type Jwks,
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
@@ -33,6 +34,8 @@ import {
 	type WebhookTables,
 } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
+import type { EmailProviderRegistry, EmailSender } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
@@ -44,6 +47,7 @@ import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
 import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
+import { resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runner'
 import { environmentScrubber } from '../jobs/scrub'
@@ -127,6 +131,15 @@ export interface BootOptions {
 	 * application withholds because it may carry a credential.
 	 */
 	readonly revealHandlerErrors?: HandlerErrorSink
+	/** The providers `FABRIKA_EMAIL_PROVIDER` may name for the jobs that declare `mailer: 'installation'`; the built-in ones by default. */
+	readonly emailProviders?: EmailProviderRegistry
+	/**
+	 * Providers added to `emailProviders` only in a local composition (a loopback `FABRIKA_IAM_ISSUER`); anywhere else
+	 * `FABRIKA_EMAIL_PROVIDER` naming one is refused like any unknown provider. On a name both hold, `emailProviders` wins.
+	 */
+	readonly localEmailProviders?: EmailProviderRegistry
+	/** The test kit's stand-in for every mailer job; boot then reads neither `FABRIKA_EMAIL_*` nor `serve`'s `mail`. */
+	readonly mailStandIn?: EmailSender
 }
 
 export interface ContractApp {
@@ -630,6 +643,19 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
 		release: options.environment.framework['FABRIKA_RELEASE']?.trim() || null,
 	}, problems)
+	// A token of a deployed IAM never carries a loopback issuer, so a deployed application is never local.
+	const local = variables.issuer !== '' && isLoopbackHost(new URL(variables.issuer).hostname)
+	const providers = options.emailProviders ?? builtinEmailProviders
+	const mail = resolveMailTransports({
+		artifact,
+		framework: options.environment.framework,
+		application: options.environment.application,
+		own: app.mail,
+		standIn: options.mailStandIn,
+		registry: local ? { ...options.localEmailProviders, ...providers } : providers,
+		keyScope: { issuer: variables.issuer, appId: variables.iamAppId },
+		local,
+	}, problems)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -749,6 +775,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		capabilities: issuer.authority,
 		containers,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
+		mail,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)

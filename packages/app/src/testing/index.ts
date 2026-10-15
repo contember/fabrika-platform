@@ -4,8 +4,10 @@ import { refuseInProduction } from '@fabrika/db/production'
 
 refuseInProduction('@fabrika/app/testing')
 export type { IamMembershipRpc } from '@fabrika/auth-core'
+export { type MemoryEmail, MemoryEmailSender, type MemoryHandoff } from '@fabrika/email/memory'
 export type { FileScanner } from '../files/scan'
 export type { ChallengeFetch } from '../implement/challenge'
+export { mailKeyPrefix, type MailKeyScope, transportMailKey } from '../jobs/mail'
 export type { HandlerErrorSink } from '../jobs/runner'
 export type {
 	LabelledTestCaller,
@@ -24,6 +26,7 @@ export {
 	type DevKit,
 	devKit,
 	type DevLink,
+	type DevMail,
 	type DevOutboxMessage,
 	type DevOutside,
 	type DevPersona,

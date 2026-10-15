@@ -11,6 +11,7 @@ import {
 	serve,
 	type WorkloadTokenSource,
 } from '@fabrika/app/implement'
+import { MemoryEmailSender } from '@fabrika/app/testing'
 import { parseAccessClaims } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
@@ -294,7 +295,7 @@ describe.skipIf(!hasPostgres)('a job that declares its mailer', () => {
 			issues: null,
 			mailer: 'own',
 		})
-		const served = serve(mailingContract, { database: scoped(tables) })
+		const served = serve(mailingContract, { database: scoped(tables), mail: () => new MemoryEmailSender() })
 		const connection = Database.postgres({ url, schema, max: 2 })
 		connections.push(connection)
 		const mailingApp = bootApp(served, {

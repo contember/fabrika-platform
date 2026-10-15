@@ -1,8 +1,10 @@
 // The endpoint access kit over the application's own implementation: an honest one passes every case, and one whose
 // handlers cache rows across requests (the "performance" edit) is caught. Over a kit application (`access-fixture/`):
 // a write and a link holder reach their own target, a seed meets a precondition, and a report `in` a scope that
-// forgets the scope is caught. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
+// forgets the scope is caught. A mutation that kicks a mailer job: its case returns once the kicked run sent. Skips
+// cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
+import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { endpointAccessKit } from '@fabrika/app/testing/isolation'
 import { type Ref, scoped, type Within } from '@fabrika/db'
@@ -11,10 +13,15 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
 import { migration as accessMigration } from './access-fixture/migration'
 import { accessApp } from './access-fixture/src/app'
 import { tables as accessTables } from './access-fixture/src/db/tables'
+import { migration as outboxMigration } from './fixtures/mutation-kick/migration'
+import { app as outboxApp } from './fixtures/mutation-kick/src/app-kit'
+import { tables as outboxTables } from './fixtures/mutation-kick/src/db/tables'
+import { Message, Queued } from './fixtures/mutation-kick/src/schemas'
 import { contract } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { tables } from './fixtures/scoped-notes/src/db/tables'
@@ -25,12 +32,17 @@ const postgres = await testDatabase({ migrations, label: 'endpoint-access.test.t
 const accessMigrations = mkdtempSync(join(tmpdir(), 'fabrika-endpoint-access-kit-'))
 writeFileSync(join(accessMigrations, '20261012120000_notes.sql'), accessMigration)
 const accessPostgres = await testDatabase({ migrations: accessMigrations, label: 'endpoint-access.test.ts' })
+const outboxMigrations = mkdtempSync(join(tmpdir(), 'fabrika-endpoint-access-outbox-'))
+writeFileSync(join(outboxMigrations, '20261015120000_outbox.sql'), outboxMigration)
+const outboxPostgres = await testDatabase({ migrations: outboxMigrations, label: 'endpoint-access.test.ts' })
 
 afterAll(async () => {
 	await postgres?.close()
 	await accessPostgres?.close()
+	await outboxPostgres?.close()
 	rmSync(migrations, { recursive: true, force: true })
 	rmSync(accessMigrations, { recursive: true, force: true })
+	rmSync(outboxMigrations, { recursive: true, force: true })
 })
 
 interface Row {
@@ -217,5 +229,39 @@ describe.skipIf(accessPostgres === null)('the endpoint access kit over a kit app
 		expect((await read()).status).toBe(200)
 		expect(await kit.runJob('purge')).toEqual({ status: 'succeeded', attempts: 1 })
 		expect((await read()).status).toBe(404)
+	})
+})
+
+/** The answers `notify` got from the kit's mail stand-in. */
+const mailed: string[] = []
+const Pending = z.strictObject({ id: z.string(), body: z.string() })
+
+const notify = outboxApp.cron('* * * * *', { actions: ['outbox.read'], scope: 'app', sql: 'write', mailer: 'installation' }).handle(
+	async ({ ctx }) => {
+		const pending = await ctx.transaction((tx) => tx.sql(Pending)`delete from outbox returning id::text, body`)
+		for (const row of pending) {
+			const sent = await ctx.mail.send({ to: 'staff@example.com', subject: 'Queued', text: row.body, idempotencyKey: `queued-${row.id}` })
+			mailed.push(sent.status)
+		}
+	},
+)
+
+const queue = outboxApp.group({ callers: ['human'] }, (r) => ({
+	enqueue: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', then: 'notify' })
+		.handle(async ({ input, ctx }) => {
+			const id = Bun.randomUUIDv7()
+			await ctx.sql(Queued)`insert into outbox (id, body) values (${id}, ${input.body}) returning id`
+			return { id }
+		}),
+}))
+
+const mailing = outboxApp.contract((c) => ({ api: c.rpc('/api', { queue }), jobs: { notify } }))
+
+describe.skipIf(outboxPostgres === null)('the endpoint access kit over a mutation that kicks a mailer job', () => {
+	test('the case answers, and the run it kicked has sent its mail by the time the case returns', async () => {
+		if (outboxPostgres === null) return
+		const kit = endpointAccessKit(serve(mailing, { database: scoped(outboxTables) }), outboxTables, outboxPostgres)
+		expect(await kit.global('api.queue.enqueue', { body: 'hello' })).toEqual({ answered: true })
+		expect(mailed).toEqual(['accepted'])
 	})
 })

@@ -24,7 +24,7 @@ import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, 
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
 import type { ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
-import type { JobContext } from '../jobs/types'
+import type { AppMail, JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
 import type { MemberAccess, Schema } from './define'
 import type { App } from './kit'
@@ -349,6 +349,7 @@ export type EndpointContext<
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], Kind>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, Acc, Of<D, 'unscoped'>>> }
+	& NoMail
 
 /** A link procedure acts on the one object its key is bound to. */
 export type LinkContext<
@@ -365,6 +366,7 @@ export type LinkContext<
 	& {
 		readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>>>
 	}
+	& NoMail
 
 /** An export procedure runs read-only, for a consumer application: its capability and data, nothing that writes. */
 export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', unknown, never, never>> =
@@ -372,6 +374,7 @@ export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', un
 	& CapabilityContext<Acc>
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>>> }
+	& NoMail
 
 /**
  * A capability a job or webhook minted or received, of one of its declared actions `Acts`, bound to the same handles
@@ -402,6 +405,14 @@ type JobLinksContext<Dim extends string, A extends string, Is extends string> = 
 	? { readonly links: Unavailable<"declare issues: '<link mount>' on this job to issue its share links"> }
 	: { readonly links: LinkIssuing<Dim, A, Is> }
 
+/** `ctx.mail` of a cron job that declares the transport it sends through (`mailer: 'installation' | 'own'`). */
+type JobMailContext<M extends JobMailer> = [M] extends [never]
+	? { readonly mail: Unavailable<"declare mailer: 'installation' or 'own' on this job to send mail"> }
+	: { readonly mail: AppMail }
+
+/** A send is external I/O that never rolls back, so only a job sends, from the outbox row an endpoint wrote. */
+type NoMail = { readonly mail: Unavailable<"an endpoint sends no mail: write an outbox row and kick a job that declares mailer (then: '<job>')"> }
+
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
 export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =
 	& JobContext<A, K['dimension']>
@@ -409,6 +420,7 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
 	& FilesContext<K['index'], 'job'>
 	& JobLinksContext<K['dimension'], A, Of<D, 'issues'>>
+	& JobMailContext<Of<D, 'mailer'>>
 	& { transaction<R>(work: (tx: JobTransaction<K, A, D>) => Promise<R>): Promise<R> }
 
 /** What a webhook delivery's handler receives: one transaction per delivery, idempotent by `ctx.delivery.key`. */
@@ -417,6 +429,7 @@ export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends
 	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& { readonly db: SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>> }
+	& NoMail
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never
 

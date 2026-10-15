@@ -6,9 +6,10 @@
 // to Operations, each under a fixed failure code.
 
 import type { IamMembership } from '@fabrika/auth'
-import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
+import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type JobMailer, type PermissionEntry, permits } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
+import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
 import { NotFoundError } from '../errors'
 import type { FileCollections } from '../files/collections'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
@@ -30,9 +31,10 @@ import {
 } from '../implement/invocation'
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
 import type { WorkloadCredential } from '../implement/workload'
+import { jobMail, type MailTransports } from './mail'
 import type { OperationsReporter } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
-import type { JobContext, JobPrincipal } from './types'
+import type { AppMail, JobContext, JobPrincipal } from './types'
 
 /** An attempt of a job without a `timeout` is cancelled after this long. */
 export const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000
@@ -68,6 +70,8 @@ export type JobFailureCode =
 	| 'iam_unavailable'
 	/** The process stopped a kicked run while shutting down; the schedule runs the job again. */
 	| 'stopped'
+	/** The transport refused a message the handler did not catch; `reason` is the `EmailDeliveryError` code. */
+	| 'mail_failed'
 
 export type JobRunResult =
 	| { readonly status: 'succeeded'; readonly attempts: number }
@@ -151,6 +155,8 @@ interface BoundJob {
 	readonly site: SiteDeclaration | null
 	/** The link mount the approved artifact says the job `issues`: its `ctx.links`. */
 	readonly links: JobLinkMount | null
+	/** The mail transport the approved artifact says the job reaches: its `ctx.mail`. */
+	readonly mailer: JobMailer | null
 }
 
 interface RunnerContext {
@@ -166,6 +172,7 @@ interface RunnerContext {
 	readonly capabilities: CapabilityAuthority
 	readonly containers: ReadonlyMap<string, readonly string[]>
 	readonly revealHandlerErrors: HandlerErrorSink | null
+	readonly mail: MailTransports
 }
 
 /** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
@@ -199,6 +206,8 @@ export interface JobBindingInput {
 	readonly containers: ReadonlyMap<string, readonly string[]>
 	/** What a job's handler threw, for `fabrika app dev`; without it the error is only its fixed code. */
 	readonly revealHandlerErrors?: HandlerErrorSink
+	/** The transports of the jobs that declare `mailer`, which `boot` resolved. */
+	readonly mail: MailTransports
 }
 
 interface BoundFrameworkJob {
@@ -265,12 +274,23 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		const site = isSiteHandler(node) ? approvedDeclaration(where, `${JOB_SITE_PREFIX}${name}`, node.declared, 'job', input.artifact, problems) : null
 		const credential = input.credentials.get(`job:${name}`)
 		const links = jobLinks(where, `${JOB_SITE_PREFIX}${name}`, site, input, problems)
+		const mailer = input.artifact.declared?.[`${JOB_SITE_PREFIX}${name}`]?.mailer ?? null
 		if (typeof handler !== 'function') {
 			problems.push(`${where} has no handler; add it to handlers.jobs`)
 		} else if (site !== null && input.data === null) {
 			problems.push(`${where} reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 		} else if (schedule !== null && timeoutMs !== null && credential !== undefined) {
-			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential, site, links })
+			bound.set(name, {
+				name,
+				artifact,
+				schedule,
+				timeoutMs,
+				handler: (args) => Reflect.apply(handler, undefined, [args]),
+				credential,
+				site,
+				links,
+				mailer,
+			})
 		}
 	}
 	const frameworkJobs = new Map<string, BoundFrameworkJob>()
@@ -297,6 +317,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		capabilities: input.capabilities,
 		containers: input.containers,
 		revealHandlerErrors: input.revealHandlerErrors ?? null,
+		mail: input.mail,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -514,7 +535,7 @@ async function runLeased(
 	const attempts = job.artifact.retries + 1
 	progress.attempts = 1
 	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context, stop)
-	while (outcome !== null && outcome.code !== 'stopped' && progress.attempts < attempts) {
+	while (outcome !== null && outcome.code !== 'stopped' && !outcome.final && progress.attempts < attempts) {
 		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}`)
 		const delay = backoffMs(progress.attempts, clock.random())
 		// A new generation at once: nothing the failed attempt still has in flight commits from here on.
@@ -548,9 +569,11 @@ interface JobFailure {
 	readonly why: FailureReason | null
 	/** What the attempt threw, which only the report carries, scrubbed (ADR-0059); never a log line or the result. */
 	readonly thrown?: unknown
+	/** Another attempt must not run: it could send a message the transport may already have taken. */
+	readonly final: boolean
 }
 
-const failure = (code: JobFailureCode): JobFailure => ({ code, why: null })
+const failure = (code: JobFailureCode): JobFailure => ({ code, why: null, final: false })
 
 /** The code, then a refusal's reason and its fixed text: the same words a request's log line uses. */
 const describeFailure = ({ code, why }: JobFailure): string => (why === null ? code : `${code}: ${why.reason}: ${why.text}`)
@@ -595,7 +618,7 @@ async function runFrameworkJob(bound: BoundFrameworkJob, context: RunnerContext,
 	const timer = new AbortController()
 	let outcome: JobFailure | null
 	try {
-		const ran = runInRequest(frame, () => bound.job.run(context.reporter, cancel.signal)).then(() => null, failureOf)
+		const ran = runInRequest(frame, () => bound.job.run(context.reporter, cancel.signal)).then(() => null, (error: unknown) => failureOf(error, null))
 		const timeout = clock.wait(bound.job.timeoutMs, timer.signal).then((): typeof TIMED_OUT => TIMED_OUT)
 		const result = await Promise.race([ran, timeout])
 		outcome = result === TIMED_OUT ? failure('timeout') : result
@@ -655,7 +678,7 @@ async function attemptOnce(
 		const ran = runInRequest(frame, async () => {
 			await job.handler({ ctx })
 		}).then(() => null, (error: unknown) => {
-			const failed = failureOf(error)
+			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.capabilities ?? null))
 			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
 			return failed
 		})
@@ -676,18 +699,26 @@ async function attemptOnce(
 	}
 }
 
+/** What a job without a declared transport sends through, if it sends at all: nothing it promises, so nothing is resent. */
+const UNKNOWN_TRANSPORT: EmailSenderCapabilities = Object.freeze({ idempotent: false, confirmation: 'queued', maxBatch: 1 })
+
 /**
  * By class, never by name: an application error can call itself anything. A refusal is classified as a request's is
  * (`failureCode`), so both name it alike; every other thrown value is `handler_failed`.
  */
-function failureOf(error: unknown): JobFailure {
+function failureOf(error: unknown, transport: EmailSenderCapabilities | null): JobFailure {
 	if (error instanceof LeaseLostError) {
 		return failure('lease_lost')
 	}
+	if (error instanceof EmailDeliveryError) {
+		const text = error.outcome === 'unknown' ? 'the transport may have accepted the message' : 'the transport did not send the message'
+		// ADR-0019's one retry rule: a repeat over a non-idempotent transport may deliver the message twice.
+		return { code: 'mail_failed', why: { reason: error.code, text }, final: !mayRetryDelivery(error, transport ?? UNKNOWN_TRANSPORT) }
+	}
 	const code = failureCode(error)
 	return code === 'query_refused' || code === 'capability_refused'
-		? { code, why: failureReason(error), thrown: error }
-		: { code: 'handler_failed', why: null, thrown: error }
+		? { code, why: failureReason(error), thrown: error, final: false }
+		: { code: 'handler_failed', why: null, thrown: error, final: false }
 }
 
 function jobContext(
@@ -723,6 +754,7 @@ function jobContext(
 		signal,
 		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
+		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
 			return context.mint.within(frame, dimension, action, principal.id, 'all')
@@ -768,6 +800,24 @@ function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, fram
 				)
 			}
 			return { credential: authority.token, requestId: frame.id }
+		},
+	})
+}
+
+/** `ctx.mail` of a job that declares `mailer`: the transport `boot` resolved for it, until the attempt ends. */
+function jobMailOf(job: BoundJob, mailer: JobMailer, frame: RequestFrame, signal: AbortSignal, context: RunnerContext): AppMail {
+	const sender = context.mail[mailer]
+	if (sender === null) {
+		throw new ServerFault('facility_unbound', `job '${job.name}' declares mailer: '${mailer}', and boot resolved no transport for it`)
+	}
+	return jobMail({
+		sender,
+		keyPrefix: context.mail.keyPrefix,
+		signal,
+		assertLive: () => {
+			if (frame.ended) {
+				throw new CapabilityRefusedError('ended', `attempt ${frame.id} of job '${job.name}' has ended; it sends no mail`)
+			}
 		},
 	})
 }
