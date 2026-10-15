@@ -458,8 +458,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   sign-in's app; the issued action stores it, its link names it, and the completed action's 302 goes to the app's
   first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the
   same for its app. The application's proxy then signs the browser in through the normal handoff, which the IAM
-  session just issued makes silent; `readHandoff` and `safeRedirect` are unchanged. Without a registered origin the
-  action lands on the issuer and the invitation answers its outcome page.
+  session just issued makes silent; `readHandoff` and `safeRedirect` are unchanged. An action without its own
+  registered origin lands on the installation's console (`installationLanding`: the first admin audience with a
+  registered origin), or on IAM's sign-in page without one — never on IAM's bare origin, which serves no page. An
+  invitation without one answers its outcome page.
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
   `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
   expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the
