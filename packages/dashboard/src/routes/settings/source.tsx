@@ -1,4 +1,4 @@
-import { createPage, useRouter } from '@buzola/router'
+import { createPage, useRouter, useSearchParams } from '@buzola/router'
 import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { type Lamp, Status } from '../../components/Status'
@@ -6,6 +6,7 @@ import { EmptyState, Table } from '../../components/Table'
 import {
 	api,
 	ApiError,
+	GITHUB_SETUP_OUTCOME_PARAM,
 	GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE,
 	type GitHubSourceConnectionAppDto,
 	type GitHubSourceConnectionConnectedDto,
@@ -25,6 +26,7 @@ import {
 	sourceChain,
 	sourceConnectionInput,
 	sourceManifestContinuePath,
+	sourceSetupNotice,
 	sourceStartContinuePath,
 } from '../../lib/source-connection'
 
@@ -36,6 +38,7 @@ export default createPage()
 		const [adding, setAdding] = useState(false)
 		const [loadingMore, setLoadingMore] = useState(false)
 		const [loadError, setLoadError] = useState<string | null>(null)
+		const setupOutcome = useSearchParams()[GITHUB_SETUP_OUTCOME_PARAM]
 
 		useEffect(() => {
 			setCollection((current) => reconcileSourceConnectionFirstPage(current, data.page))
@@ -82,6 +85,7 @@ export default createPage()
 				)}
 				<SourceWorkflow
 					workflow={data.page.workflow}
+					setupOutcome={setupOutcome}
 					connectionCount={collection.items.length}
 					adding={adding}
 					onAdd={() => setAdding(true)}
@@ -156,8 +160,10 @@ export function ConnectedConnections(
 }
 
 export function SourceWorkflow(
-	{ workflow, connectionCount, adding, onAdd, onCancelAdd, invalidate }: {
+	{ workflow, setupOutcome, connectionCount, adding, onAdd, onCancelAdd, invalidate }: {
 		workflow: GitHubSourceConnectionWorkflowDto | null
+		/** What Control's GitHub setup URL reported, from the page URL. */
+		setupOutcome?: string
 		connectionCount: number
 		adding: boolean
 		onAdd: () => void
@@ -166,11 +172,17 @@ export function SourceWorkflow(
 	},
 ) {
 	const idle = workflow === null || workflow.state === 'anonymous'
+	const notice = sourceSetupNotice(setupOutcome, workflow, connectionCount)
 	return (
 		<section aria-labelledby="source-connection-workflow">
 			<div className="section-head">
 				<h2 id="source-connection-workflow">Connection setup</h2>
 			</div>
+			{notice !== null && (
+				<p className={notice.lamp === 'stop' ? 'notice notice-bad source-notice' : 'notice source-notice'} role="status">
+					<Status lamp={notice.lamp}>{notice.text}</Status>
+				</p>
+			)}
 			{idle && connectionCount > 0 && !adding
 				? (
 					<div className="source-checkpoint">
@@ -248,34 +260,7 @@ function SourceAction(
 			</section>
 		)
 	}
-	if (status.state === 'installation-required') {
-		return (
-			<section className="source-checkpoint">
-				<CheckpointHead lamp="run" title="Install the verified GitHub App" />
-				<p>The App is active on the private source. Grant it access in GitHub, then verify the installation here.</p>
-				<AppFacts app={status.app} />
-				<div className="form-actions">
-					<a
-						className="btn primary"
-						href={status.installationUrl}
-						target="_blank"
-						rel="noreferrer"
-						aria-label={`Open GitHub installation for ${status.app.owner.login}`}
-					>
-						Open GitHub installation <Icon name="external" size={14} />
-					</a>
-					<ConnectionMutation
-						label="Verify installation"
-						ariaLabel={`Verify GitHub installation for ${status.app.owner.login}`}
-						connectionId={status.connectionId}
-						pending="Verifying…"
-						action={() => api.sourceConnection.verifyInstallation(sourceConnectionInput(status.connectionId))}
-						onDone={invalidate}
-					/>
-				</div>
-			</section>
-		)
-	}
+	if (status.state === 'installation-required') return <InstallationSteps status={status} invalidate={invalidate} />
 	if (status.state === 'repair-required') {
 		return (
 			<section className="source-checkpoint source-checkpoint-failed">
@@ -294,6 +279,57 @@ function SourceAction(
 			</section>
 		)
 	}
+}
+
+/** GitHub's return to the setup URL normally finishes both steps; these are for when it did not come back. */
+function InstallationSteps(
+	{ status, invalidate }: {
+		status: Extract<GitHubSourceConnectionWorkflowDto, { state: 'installation-required' }>
+		invalidate: () => void
+	},
+) {
+	const [opened, setOpened] = useState(false)
+	const organization = status.app.owner.login
+	return (
+		<section className="source-checkpoint">
+			<CheckpointHead lamp="run" title="Install the GitHub App" />
+			<p>The App exists and its private key is in the Control vault. Install it on {organization} to finish the connection.</p>
+			<AppFacts app={status.app} />
+			<ol className="source-steps">
+				<li className={opened ? undefined : 'current'}>
+					<div>
+						<strong>Install the App on GitHub</strong>
+						<span>Choose the repositories and confirm. GitHub then returns you to Fabrika, which verifies the installation.</span>
+					</div>
+					<a
+						className={opened ? 'btn' : 'btn primary'}
+						href={status.installationUrl}
+						target="_blank"
+						rel="noreferrer"
+						onClick={() => setOpened(true)}
+						aria-label={`Open GitHub installation for ${organization}`}
+					>
+						Open GitHub <Icon name="external" size={14} />
+					</a>
+				</li>
+				<li className={opened ? 'current' : undefined}>
+					<div>
+						<strong>Verify the installation</strong>
+						<span>This page updates by itself when GitHub returns. If the App is installed and it did not, verify it here.</span>
+					</div>
+					<ConnectionMutation
+						primary={opened}
+						label="Verify installation"
+						ariaLabel={`Verify GitHub installation for ${organization}`}
+						connectionId={status.connectionId}
+						pending="Verifying…"
+						action={() => api.sourceConnection.verifyInstallation(sourceConnectionInput(status.connectionId))}
+						onDone={invalidate}
+					/>
+				</li>
+			</ol>
+		</section>
+	)
 }
 
 function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
@@ -332,7 +368,10 @@ function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 	return (
 		<section className="source-checkpoint">
 			<CheckpointHead lamp="idle" title="Create the organization-owned App" />
-			<p>Fabrika will hand off to GitHub once, persist the App on the private source, and return here for installation verification.</p>
+			<p>
+				GitHub asks you to create the App and then to install it on the organization. Fabrika keeps the App key in its vault, verifies the installation
+				and brings you back here.
+			</p>
 			<form className="form source-form" onSubmit={submit}>
 				<div className="form-row">
 					<label>

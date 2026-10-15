@@ -39,9 +39,15 @@ const withRouter = (element: React.ReactElement): React.ReactElement =>
 		}),
 	}, element)
 
-const workflowMarkup = (workflow: GitHubSourceConnectionWorkflowDto | null, connectionCount: number, adding = false): string =>
+const workflowMarkup = (
+	workflow: GitHubSourceConnectionWorkflowDto | null,
+	connectionCount: number,
+	adding = false,
+	setupOutcome?: string,
+): string =>
 	renderToStaticMarkup(withRouter(createElement(SourceWorkflow, {
 		workflow,
+		...(setupOutcome === undefined ? {} : { setupOutcome }),
 		connectionCount,
 		adding,
 		onAdd: () => undefined,
@@ -112,11 +118,32 @@ describe('source connection collection components', () => {
 			reason: 'credential-activation',
 			app,
 		}, 1)
+		expect(install).toContain('Install the App on GitHub')
+		expect(install).toContain('Verify the installation')
+		expect(install).toContain('href="https://github.com/apps/beta-fabrika/installations/new"')
 		expect(install).toContain('aria-label="Open GitHub installation for beta"')
 		expect(install).toContain('aria-label="Verify GitHub installation for beta"')
 		expect(install).toContain('data-connection-id="connection-2"')
 		expect(repair).toContain('aria-label="Repair GitHub source connection beta"')
 		expect(repair).toContain('data-connection-id="connection-2"')
 		expect(`${install}${repair}`).not.toContain('privateKey')
+	})
+
+	test("reports GitHub's return only where the connection state agrees with it", () => {
+		const app = connection('connection-2', 'beta').app
+		const installation: GitHubSourceConnectionWorkflowDto = {
+			provider: 'zerops',
+			kind: 'github-app',
+			state: 'installation-required',
+			connectionId: 'connection-2',
+			app,
+			installationUrl: 'https://github.com/apps/beta-fabrika/installations/new',
+		}
+		expect(workflowMarkup(null, 1, false, 'connected')).toContain('GitHub is connected.')
+		expect(workflowMarkup(installation, 1, false, 'connected')).not.toContain('GitHub is connected.')
+		expect(workflowMarkup(installation, 1, false, 'unverified')).toContain('could not verify the installation yet')
+		expect(workflowMarkup(installation, 1, false, 'approval-requested')).toContain('an owner of beta for approval')
+		expect(workflowMarkup(null, 1, false, 'unverified')).not.toContain('could not verify')
+		expect(workflowMarkup(installation, 1, false, 'anything')).not.toContain('role="status"')
 	})
 })

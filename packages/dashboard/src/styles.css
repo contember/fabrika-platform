@@ -1915,6 +1915,60 @@ td.empty:hover {
 	gap: var(--s-2);
 }
 
+.source-notice {
+	max-width: 52rem;
+	margin: 0 0 var(--s-4);
+}
+
+.source-steps {
+	margin: var(--s-4) 0 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: source-step;
+}
+
+.source-steps li {
+	display: grid;
+	grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+	align-items: start;
+	gap: var(--s-3) var(--s-4);
+	padding: var(--s-4) 0;
+	border-top: 1px solid var(--rule-soft);
+	counter-increment: source-step;
+}
+
+.source-steps li::before {
+	content: counter(source-step);
+	display: grid;
+	place-items: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	border: 1px solid var(--rule-strong);
+	border-radius: 50%;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	font-weight: 600;
+}
+
+.source-steps li.current::before {
+	border-color: var(--blueprint);
+	background: var(--blueprint);
+	color: var(--blueprint-on);
+}
+
+.source-steps li > div strong {
+	display: block;
+	color: var(--ink);
+}
+
+.source-steps li > div span {
+	display: block;
+	max-width: var(--measure);
+	margin-top: var(--s-1);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
 @media (max-width: 720px) {
 	.source-chain {
 		flex-direction: column;
@@ -1934,6 +1988,14 @@ td.empty:hover {
 
 	.source-facts {
 		grid-template-columns: 1fr;
+	}
+
+	.source-steps li {
+		grid-template-columns: 1.75rem minmax(0, 1fr);
+	}
+
+	.source-steps li > :last-child {
+		grid-column: 2;
 	}
 }
 

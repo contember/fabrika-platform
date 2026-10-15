@@ -1,4 +1,5 @@
 import type {
+	GitHubSetupOutcome,
 	GitHubSourceConnectionConnectedDto,
 	GitHubSourceConnectionInput,
 	GitHubSourceConnectionListResponse,
@@ -141,13 +142,52 @@ function mergeSourceConnections(
 	return [...leading, ...trailing.filter((connection) => !seen.has(connection.connectionId))]
 }
 
+/** While the App waits for its installation, another tab may finish it on GitHub and its return to Control. */
 export function scheduleSourceConnectionPoll(
 	status: GitHubSourceConnectionWorkflowDto | null,
 	invalidate: () => void,
 	schedule: SourcePollScheduler,
 ): () => void {
-	if (status?.state !== 'setup-pending') return () => undefined
-	return schedule(invalidate, 2_000)
+	if (status?.state === 'setup-pending') return schedule(invalidate, 2_000)
+	if (status?.state === 'installation-required') return schedule(invalidate, 5_000)
+	return () => undefined
+}
+
+export interface SourceSetupNotice {
+	readonly lamp: 'ok' | 'run' | 'stop'
+	readonly text: string
+}
+
+/**
+ * What to say about the return from GitHub the URL reports. The URL is anyone's to write, so a notice shows only
+ * when the state the API answered agrees with it.
+ */
+export function sourceSetupNotice(
+	outcome: string | undefined,
+	workflow: GitHubSourceConnectionWorkflowDto | null,
+	connectionCount: number,
+): SourceSetupNotice | null {
+	const reported = setupOutcome(outcome)
+	if (reported === 'connected') {
+		const idle = workflow === null || workflow.state === 'anonymous'
+		return idle && connectionCount > 0 ? { lamp: 'ok', text: 'GitHub is connected. Fabrika verified the App installation.' } : null
+	}
+	if (workflow?.state !== 'installation-required') return null
+	if (reported === 'approval-requested') {
+		return {
+			lamp: 'run',
+			text: `GitHub sent the installation to an owner of ${workflow.app.owner.login} for approval. Verify it here after they approve it.`,
+		}
+	}
+	if (reported === 'unverified') {
+		return { lamp: 'stop', text: 'GitHub returned, but Fabrika could not verify the installation yet. Check it on GitHub, then verify it here.' }
+	}
+	return null
+}
+
+function setupOutcome(value: string | undefined): GitHubSetupOutcome | null {
+	if (value === 'connected' || value === 'approval-requested' || value === 'unverified') return value
+	return null
 }
 
 export function sourceStartContinuePath(started: StartGitHubSourceConnectionResponse): string | null {

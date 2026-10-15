@@ -161,6 +161,36 @@ describe('source connection presentation', () => {
 		}
 	})
 
+	test('keeps polling while the App waits for its installation, more slowly than a running setup', () => {
+		const delays: number[] = []
+		const schedule = (_callback: () => void, delayMs: number) => {
+			delays.push(delayMs)
+			return () => undefined
+		}
+		scheduleSourceConnectionPoll(
+			{
+				provider: 'zerops',
+				kind: 'github-app',
+				state: 'installation-required',
+				connectionId: 'connection-1',
+				app: {
+					id: 1,
+					slug: 'acme-fabrika',
+					htmlUrl: 'https://github.com/apps/acme-fabrika',
+					public: false,
+					owner: { login: 'acme', type: 'Organization' },
+					permissions: { contents: 'read' },
+					events: ['push'],
+				},
+				installationUrl: 'https://github.com/apps/acme-fabrika/installations/new',
+			},
+			() => undefined,
+			schedule,
+		)
+		scheduleSourceConnectionPoll({ provider: 'zerops', kind: 'github-app', state: 'anonymous' }, () => undefined, schedule)
+		expect(delays).toEqual([5_000])
+	})
+
 	test('resumes a lost start response only from the exact server-bound manifest path', () => {
 		const pending: GitHubSourceConnectionStatusDto = {
 			provider: 'zerops',
