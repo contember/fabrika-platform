@@ -893,17 +893,39 @@ const FABRIKA_PIN_LINE = /^(\s*"(?:@fabrika\/[A-Za-z0-9._-]+)"\s*:\s*")([^"]*)("
 export const rewriteExamplePins = (text: string, version: string): { readonly text: string; readonly changed: number } => {
 	let changed = 0
 	const rewritten = text.split('\n').map((line) => {
-		const match = FABRIKA_PIN_LINE.exec(line)
-		const prefix = match?.[1]
-		const range = match?.[2]
-		const suffix = match?.[3]
-		if (prefix === undefined || range === undefined || suffix === undefined) return line
-		// A workspace range means the checkout is a monorepo member; rewriting it would unlink the package.
-		if (range.startsWith('workspace:') || range === version) return line
-		changed++
-		return `${prefix}${version}${suffix}`
+		const pinned = pinnedLine(line, version)
+		if (pinned !== line) changed++
+		return pinned
 	})
 	return { text: rewritten.join('\n'), changed }
+}
+
+const pinnedLine = (line: string, version: string): string => {
+	const match = FABRIKA_PIN_LINE.exec(line)
+	const prefix = match?.[1]
+	const range = match?.[2]
+	const suffix = match?.[3]
+	if (prefix === undefined || range === undefined || suffix === undefined) return line
+	// A workspace range means the checkout is a monorepo member; rewriting it would unlink the package.
+	if (range.startsWith('workspace:') || range === version) return line
+	return `${prefix}${version}${suffix}`
+}
+
+const LOCKFILE_EXAMPLE_WORKSPACE = /^ {4}"examples\/[^"]+": \{$/
+const LOCKFILE_WORKSPACE_END = /^ {4}\},?$/
+
+/**
+ * Pin the `@fabrika/*` ranges that `bun.lock` records for the `examples/*` workspaces. Bun links those packages to the
+ * workspace and never rewrites a range it recorded, so without this the lockfile keeps the range of the release that first
+ * added the dependency.
+ */
+export const rewriteLockfileExamplePins = (text: string, version: string): string => {
+	let inExample = false
+	return text.split('\n').map((line) => {
+		if (LOCKFILE_EXAMPLE_WORKSPACE.test(line)) inExample = true
+		else if (inExample && LOCKFILE_WORKSPACE_END.test(line)) inExample = false
+		return inExample ? pinnedLine(line, version) : line
+	}).join('\n')
 }
 
 /**
@@ -1025,7 +1047,7 @@ const AGENTS_TEMPLATE = join(ROOT, 'examples', 'zerops-app')
 /**
  * Set the version the next tag publishes, in the source: every workspace package that declares one, the
  * examples' `@fabrika/*` ranges (which keep bun linking the workspace), the builder decisions' `npm:` ranges, the application skill and the template's
- * `AGENTS.md` rendered from it, then `bun install` for the lockfile and the local stack's source fixture pin.
+ * `AGENTS.md` rendered from it, then the examples' ranges in `bun.lock`, `bun install` for the rest of the lockfile, and the local stack's source fixture pin.
  * Commits nothing.
  */
 const bump = async (options: Options, packages: readonly PackageInfo[], sourceVersion: string): Promise<void> => {
@@ -1054,6 +1076,10 @@ const bump = async (options: Options, packages: readonly PackageInfo[], sourceVe
 		'-e',
 		"const { readAppAgentSkill, renderAgentsFile } = await import('@fabrika/app/agent-skill'); await Bun.write('AGENTS.md', renderAgentsFile(readAppAgentSkill()))",
 	], { cwd: AGENTS_TEMPLATE })
+	const lockfile = join(ROOT, 'bun.lock')
+	const lockBefore = await readFile(lockfile, 'utf8')
+	const lockAfter = rewriteLockfileExamplePins(lockBefore, options.version)
+	if (lockAfter !== lockBefore) await writeFile(lockfile, lockAfter)
 	await run(['bun', 'install'])
 	// The local stack's Notes fixture is the template pinned by tree, and the bump moved its manifest and AGENTS.md.
 	await run(['bun', 'run', 'fixtures:pin'], { cwd: join(ROOT, 'packages', 'local-stack') })

@@ -23,6 +23,7 @@ import {
 	REGISTRY_DEADLINE_MS,
 	type RegistryWaitDeps,
 	rewriteExamplePins,
+	rewriteLockfileExamplePins,
 	stagedAppSkill,
 	unifiedDiff,
 } from '../release'
@@ -363,6 +364,47 @@ const EXAMPLE_MANIFEST = `{
 	}
 }
 `
+
+const LOCKFILE = `{
+  "workspaces": {
+    "examples/app": {
+      "name": "fabrika-example-app",
+      "dependencies": {
+        "@fabrika/app": "^0.0.4",
+        "@fabrika/proxy-core": "0.0.25",
+        "jose": "^5.9.0",
+      },
+    },
+    "packages/app": {
+      "name": "@fabrika/app",
+      "version": "0.0.25",
+      "dependencies": {
+        "@fabrika/auth": "workspace:*",
+        "@fabrika/jwks": "^0.0.4",
+      },
+    },
+  },
+}
+`
+
+describe('pinning the examples in the lockfile', () => {
+	test('pins the fabrika ranges of an examples workspace and nothing outside it', () => {
+		const text = rewriteLockfileExamplePins(LOCKFILE, '0.0.26')
+
+		expect(text).toContain('        "@fabrika/app": "0.0.26",')
+		expect(text).toContain('        "@fabrika/proxy-core": "0.0.26",')
+		expect(text).toContain('        "jose": "^5.9.0",')
+		expect(text).toContain('        "@fabrika/auth": "workspace:*",')
+		expect(text).toContain('        "@fabrika/jwks": "^0.0.4",')
+		expect(text.split('\n')).toHaveLength(LOCKFILE.split('\n').length)
+	})
+
+	test('is a no-op the second time', () => {
+		const once = rewriteLockfileExamplePins(LOCKFILE, '0.0.26')
+
+		expect(rewriteLockfileExamplePins(once, '0.0.26')).toBe(once)
+	})
+})
 
 describe('pinning an example checkout to a released version', () => {
 	test('pins every fabrika dependency exactly and leaves every other dependency alone', () => {
