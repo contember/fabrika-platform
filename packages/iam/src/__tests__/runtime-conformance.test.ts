@@ -99,7 +99,7 @@ describe('IAM runtime conformance', () => {
 		// `assertAppRuntimeConformance` already compares the body across adapters; this pins WHAT they
 		// agree on, so a future relaxation of the helper cannot quietly drop the assertion.
 		expect(JSON.parse(response.body)).toEqual({
-			error: { type: 'auth', message: 'missing_token', loginUrl: `${ISSUER}/auth/login?redirect=${encodeURIComponent(ISSUER)}` },
+			error: { type: 'auth', message: 'missing_token', loginUrl: `${ISSUER}/auth/login` },
 		})
 	})
 

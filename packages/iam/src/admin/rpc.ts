@@ -222,7 +222,7 @@ export const adminRpcAuth = async (request: Request, ctx: IamAppContext, next: (
 		const resolution = await resolveAdmin(ctx.services, ctx.env, credentials)
 		if (!resolution.ok) {
 			if (resolution.status === 401) {
-				const loginUrl = credentials.bearer === null ? createLoginUrl(ctx.services.config.issuer, request) : undefined
+				const loginUrl = credentials.bearer === null ? createLoginUrl(ctx.services.config.issuer) : undefined
 				return toErrorResponse(new UnauthorizedError(resolution.reason, loginUrl === undefined ? undefined : { loginUrl }))
 			}
 			return toErrorResponse(new ForbiddenError(resolution.reason))
@@ -337,8 +337,7 @@ function internalError(): Response {
 	return Response.json({ error: { type: 'internal', message: 'internal error' } }, { status: 500 })
 }
 
-function createLoginUrl(issuer: string, request: Request): string {
-	const login = new URL('/auth/login', issuer)
-	login.searchParams.set('redirect', new URL(request.url).origin)
-	return login.toString()
+/** No `redirect`: a sign-in that names no destination lands on the installation's landing, not IAM's bare origin. */
+function createLoginUrl(issuer: string): string {
+	return new URL('/auth/login', issuer).toString()
 }

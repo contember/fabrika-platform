@@ -70,7 +70,7 @@ describe('POST /admin/rpc authentication', () => {
 
 		expect(response.status).toBe(401)
 		expect(prop(prop(body, 'error'), 'type')).toBe('auth')
-		expect(prop(prop(body, 'error'), 'loginUrl')).toBe(`${ORIGIN}/auth/login?redirect=${encodeURIComponent(ORIGIN)}`)
+		expect(prop(prop(body, 'error'), 'loginUrl')).toBe(`${ORIGIN}/auth/login`)
 	})
 
 	test('a scope-bound admin grant does not satisfy the global admin gate', async () => {
