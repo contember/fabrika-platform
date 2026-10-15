@@ -23,7 +23,7 @@ import {
 	type ProviderSourceBinding,
 	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
+import { redactNamespaceErrorText, republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, type ProviderAccessFields } from './approval/snapshot'
@@ -680,7 +680,11 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		if (invocation.lost) return { runId, status: 'running' }
 		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
 		if (accepted) return { runId, status: 'running' }
-		console.error(`deploy run ${runId} failed:`, error instanceof Error ? error.message : 'unknown error')
+		const reason = failureReason(error)
+		console.error(`deploy run ${runId} failed: ${reason}`)
+		// The run log is where `runs log` and the console read a failure from, so it lands there before the row turns failed.
+		logWriter?.log(`deploy failed: ${reason}`)
+		await logWriter?.flush()
 		try {
 			await invocation.write((fence) => runs.markRunFinished(runId, 'failed', null, fence))
 		} catch (refused) {
@@ -693,6 +697,12 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		await namespaceLease?.release()
 		await invocation.release()
 	}
+}
+
+/** A failed run's cause as one credential-free line: never the error object, which can carry a clone URL with a token. */
+function failureReason(error: unknown): string {
+	const message = error instanceof Error ? error.message : ''
+	return redactNamespaceErrorText(message, { cap: false }) || 'unknown error'
 }
 
 /** The environment's approved access as the provider reads it, read again after this run's publication. */

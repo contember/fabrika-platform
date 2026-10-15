@@ -456,6 +456,25 @@ describe('provider-neutral run lifecycle', () => {
 		}
 	})
 
+	test('records why a run failed in its run log, without a credential the cause carried', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const provider = makeProvider([], { state: 'succeeded' })
+		provider.resolveSource = () =>
+			Promise.reject(new Error('source resolve failed (ref_not_found) at https://x-access-token:ghs_leaked@github.com/acme/notes.git'))
+		const deps = makeDeps(db, provider)
+		const stored = memoryLogs()
+		deps.logs = stored.logs
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('failed')
+		const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
+		expect(response.status).toBe('failed')
+		expect(response.lines.map((line) => line.text)).toEqual([
+			'deploy failed: source resolve failed (ref_not_found) at https://github.com/acme/notes.git',
+		])
+		expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).not.toContain('ghs_leaked')
+	})
+
 	test('does not resolve source during a dry run', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)

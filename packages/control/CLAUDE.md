@@ -262,6 +262,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   it prints or stores it, because a provider relays what the application printed.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
+  A run that fails before the provider accepted it writes `deploy failed: <reason>` to its run log before the row
+  turns `failed`: the message only, through `redactNamespaceErrorText` and the run's known secrets, never the error object.
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
   both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
   restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the
