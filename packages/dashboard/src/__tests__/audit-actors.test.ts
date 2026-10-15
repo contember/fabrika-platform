@@ -1,11 +1,10 @@
-import { createMemoryNavigationAdapter, Router } from '@buzola/router'
+import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
 import type { AuditEventDto, PrincipalListItem } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { actorIdsToResolve, type AuditActor, auditActor, resolveActors } from '../access/lib/audit-actors'
-import { pageRegistry, routes } from '../buzola.gen'
 import { ActorCell } from '../routes/access/audit'
 
 const USER_ID = '01a13f67-253c-70ea-b4e3-fbb18b79a7fe'
@@ -35,7 +34,11 @@ function principal(id: string, label: string, type: PrincipalListItem['type'] = 
 // The real route map, so a link resolves to the path the console serves.
 const withRouter = (element: React.ReactElement): React.ReactElement =>
 	createElement(BuzolaProvider, {
-		router: new Router({ routes, adapter: createMemoryNavigationAdapter(), pageRegistry }),
+		router: new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry: { 'access/users/detail': '/access/users/:id' },
+		}),
 	}, element)
 
 const cell = (actor: AuditActor): string => renderToStaticMarkup(withRouter(createElement(ActorCell, { actor })))
