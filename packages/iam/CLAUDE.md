@@ -421,11 +421,13 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **THE LOGIN PAGE'S `form-action` MUST NAME THE HANDOFF DESTINATION.** Chromium applies `form-action`
   to the REDIRECT a submission answers with, not only to its action, so `'self'` alone silently blocks
   the 302 to `<app>/__fabrika/auth/callback` — the login succeeds, a code is issued and spent, and the
-  browser never leaves the form. `loginHandoffFields` widens the directive by exactly one origin, and
+  browser never leaves the form. `loginDestinationFields` widens the directive by exactly one origin, and
   that origin comes from the REGISTERED return URL, so widening the CSP can never widen where a
-  browser may be sent. A page rendered for no handoff stays at `'self'`. The set-password and
-  invitation pages widen it the same way, by the one registered origin their application lands on
-  (`AppPresentation.landing`), and stay at `'self'` without one. Every widening origin is one `normalizeOrigin`
+  browser may be sent. A page rendered for no handoff stays at `'self'`, unless it has no return address
+  either and lands on the console, whose registered origin it then admits. The set-password and
+  invitation-password pages widen it the same way, by the one registered origin the completed action lands on
+  (`actionLandingOrigin`: the application's, else the console's), and so does the sign-out confirmation that
+  lands on the console; each stays at `'self'` when it lands on IAM. Every widening origin is one `normalizeOrigin`
   admitted, and it refuses a host carrying `;`, `,`, a quote or `*` — the URL parser keeps them in a host, and each
   would end or widen the directive. `presentationFor` checks a stored origin again.
 - **IAM SPEAKS THE APPLICATION'S LANGUAGE, AND THE APPLICATION CHOOSES ONLY THE LANGUAGE AND THE NAME**
@@ -459,9 +461,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the
   same for its app. The application's proxy then signs the browser in through the normal handoff, which the IAM
   session just issued makes silent; `readHandoff` and `safeRedirect` are unchanged. An action without its own
-  registered origin lands on the installation's console (`installationLanding`: the first admin audience with a
-  registered origin), or on IAM's sign-in page without one — never on IAM's bare origin, which serves no page. An
-  invitation without one answers its outcome page.
+  registered origin lands on the installation's landing, below. An invitation without one answers its outcome page.
+- **A FLOW THAT NAMES NO DESTINATION LANDS ON THE INSTALLATION'S LANDING, NEVER ON IAM'S BARE ORIGIN**
+  (`installationLanding`), which serves no page and which the Zerops proxy answers with 403. That is the console (the
+  first admin audience with a registered origin), or IAM's sign-in page without one. It covers a login with no handoff
+  and no accepted `?redirect=` (password, OIDC, local), a sign-out without one, and a password action or invitation
+  enrollment without its own landing: `issueSession` lands a `redirect: null` there, and `handleLogout` a refused one.
+  A same-origin `?redirect=` still wins; the landing is chosen by IAM from the registry, never by the request.
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
   `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
   expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the
@@ -473,8 +479,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   registry and the browser gets a code, or it is not and this is a 400 NAMING THE ADDRESS. An empty
   registry is the second case, not an opt-out. Restoring a fallback recreates the login loop SEC-6
   found — a login that succeeds and lands the browser where it has no session, with nothing logged.
-- **`safeRedirect` accepts IAM'S OWN ORIGIN AND NOTHING ELSE.** Not the cookie domain (there is
-  none), not `*.localhost` locally. The return-origin registry is the ONLY authority on sending a
+- **`safeRedirect` accepts IAM'S OWN ORIGIN AND NOTHING ELSE**, and answers null for anything else.
+  Not the cookie domain (there is none), not `*.localhost` locally. The return-origin registry is the ONLY authority on sending a
   browser to another host, and `readHandoff` has consulted it before this ever runs; a second, weaker
   answer to the same question is how an open redirect gets in.
 - **`Secure` is unconditional on every cookie this service writes**, including the clear-cookie on

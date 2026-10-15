@@ -60,7 +60,8 @@ server-side and injects it as `X-Fabrika-Token`.
 Given `?app=`, IAM issues a code only when the return address is in that app's registry, the request
 carries a valid handoff state and challenge, and the human is authenticated. Otherwise it answers
 **400 and names the refused address**. An empty registry is an app that cannot log anyone in.
-`safeRedirect` accepts only IAM's own origin and falls back to the issuer.
+`safeRedirect` accepts only IAM's own origin. A flow without an accepted address lands on the
+installation's console, a registered origin, or on IAM's sign-in page without one.
 
 **Invariant: the return-origin registry is the only thing that may send a browser to another host.**
 
