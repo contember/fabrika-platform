@@ -132,9 +132,10 @@ describe.skipIf(postgres === null)("a job handler's own error", () => {
 	})
 })
 
-describe('the dev kit', () => {
+describe.skipIf(postgres === null)('the dev kit', () => {
 	test("answers a person only for a caller the kit made, and a caller's roles as the stand-in holds them now", () => {
-		const dev = devKit(serve(contract, { database: scoped(tables) }), postgres === null ? {} : { database: postgres.database })
+		if (postgres === null) return
+		const dev = devKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
 		const editor = dev.kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w1' } }], { label: 'Eda', email: 'eda@notes.test' })
 		expect(dev.membershipsOf(editor)).toEqual([{ role: 'editor', scope: { type: 'workspace', value: 'w1' } }])
 		expect(dev.personOf(editor)).toBe(editor)
