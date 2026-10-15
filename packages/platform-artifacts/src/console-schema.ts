@@ -48,6 +48,7 @@ export const platformConsoleSchemaArtifact = (): Artifact => {
 		"import type { AppSchema } from '@fabrika/auth-core'",
 		'',
 		'export const PLATFORM_CONSOLE_APP_SCHEMA: AppSchema = {',
+		...(schema.displayName === undefined ? [] : [`\tdisplayName: ${quote(schema.displayName)},`]),
 		'\tscopes: [',
 		...schema.scopes.map((scope) => `\t\t{ type: ${quote(scope.type)}${scope.label === undefined ? '' : `, label: ${quote(scope.label)}`} },`),
 		'\t],',

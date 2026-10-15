@@ -4,8 +4,11 @@
 // (`src/actions.ts`) — the action strings and scope dimensions here are exactly what
 // `auth.can(action, scope)` checks.
 //
-// Roles (`origin='app'`):
-//   - operator → `deploy.*` + `operations.*`  (trigger + read any deploy; no registry/secret management)
+// Roles (`origin='app'`), each a preset for a grant in any scope:
+//   - observer → `operations.read`
+//   - triager  → `operations.read` + `operations.triage`
+//   - deployer → `deploy.*`                   (trigger, read and cancel deploys; no registry, namespace or secret management)
+//   - operator → `deploy.*` + `operations.*`
 //   - admin    → `*`                          (every action, every scope)
 //
 // **This module must stay free of `@fabrika/provider-cloudflare`**, like `fabrika.service.ts` next to
@@ -18,6 +21,7 @@ import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { ACTIONS, SCOPES } from './src/actions'
 
 export const controlSchema: AppSchema = {
+	displayName: 'Console',
 	// The two scope dimensions fabrika authorizes within (flat + independent — see src/actions.ts).
 	scopes: [
 		{ type: SCOPES.APP, label: 'App' },
@@ -40,15 +44,29 @@ export const controlSchema: AppSchema = {
 		{ action: OPERATIONS_ACTIONS.MANAGE, description: 'Manage Operations sources, alerts, and retention' },
 	],
 	roles: {
+		observer: {
+			name: 'Observer',
+			description: 'Read Operations errors and activity.',
+			permissions: [OPERATIONS_ACTIONS.READ],
+		},
+		triager: {
+			name: 'Triager',
+			description: 'Read and triage Operations errors.',
+			permissions: [OPERATIONS_ACTIONS.READ, OPERATIONS_ACTIONS.TRIAGE],
+		},
+		deployer: {
+			name: 'Deployer',
+			description: 'Trigger, read and cancel deploys (no registry, namespace or secret management).',
+			permissions: ['deploy.*'],
+		},
 		operator: {
 			name: 'Operator',
-			description: 'Trigger and read any deploy (no registry or secret management).',
-			// `deploy.*` covers deploy.trigger + deploy.read (prefix wildcard).
+			description: 'Deploy, and read, triage and manage Operations (no registry or secret management).',
 			permissions: ['deploy.*', 'operations.*'],
 		},
 		admin: {
 			name: 'Admin',
-			description: 'Full access to every vozka action in every scope.',
+			description: 'Every console action in every scope.',
 			permissions: ['*'],
 		},
 	},

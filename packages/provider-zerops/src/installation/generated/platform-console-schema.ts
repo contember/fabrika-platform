@@ -11,6 +11,7 @@
 import type { AppSchema } from '@fabrika/auth-core'
 
 export const PLATFORM_CONSOLE_APP_SCHEMA: AppSchema = {
+	displayName: 'Console',
 	scopes: [
 		{ type: 'app', label: 'App' },
 		{ type: 'environment', label: 'Environment' },
@@ -31,14 +32,29 @@ export const PLATFORM_CONSOLE_APP_SCHEMA: AppSchema = {
 		{ action: 'operations.manage', description: 'Manage Operations sources, alerts, and retention' },
 	],
 	roles: {
+		observer: {
+			name: 'Observer',
+			description: 'Read Operations errors and activity.',
+			permissions: ['operations.read'],
+		},
+		triager: {
+			name: 'Triager',
+			description: 'Read and triage Operations errors.',
+			permissions: ['operations.read', 'operations.triage'],
+		},
+		deployer: {
+			name: 'Deployer',
+			description: 'Trigger, read and cancel deploys (no registry, namespace or secret management).',
+			permissions: ['deploy.*'],
+		},
 		operator: {
 			name: 'Operator',
-			description: 'Trigger and read any deploy (no registry or secret management).',
+			description: 'Deploy, and read, triage and manage Operations (no registry or secret management).',
 			permissions: ['deploy.*', 'operations.*'],
 		},
 		admin: {
 			name: 'Admin',
-			description: 'Full access to every vozka action in every scope.',
+			description: 'Every console action in every scope.',
 			permissions: ['*'],
 		},
 	},

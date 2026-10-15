@@ -26,4 +26,16 @@ describe('the committed console schema', () => {
 		expect(Object.keys(PLATFORM_CONSOLE_APP_SCHEMA.roles)).toContain('admin')
 		expect(PLATFORM_CONSOLE_APP_SCHEMA.actions.length).toBeGreaterThan(0)
 	})
+
+	test('names the console for people and presets its roles', () => {
+		expect(PLATFORM_CONSOLE_APP_SCHEMA.displayName).toBe('Console')
+		const permissions = Object.fromEntries(Object.entries(PLATFORM_CONSOLE_APP_SCHEMA.roles).map(([key, role]) => [key, role.permissions]))
+		expect(permissions).toEqual({
+			observer: ['operations.read'],
+			triager: ['operations.read', 'operations.triage'],
+			deployer: ['deploy.*'],
+			operator: ['deploy.*', 'operations.*'],
+			admin: ['*'],
+		})
+	})
 })
