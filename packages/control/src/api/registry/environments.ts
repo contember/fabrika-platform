@@ -1,7 +1,14 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest } from '@fabrika/control-contract'
 import type { ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
 import { requireHumanForProtectedDelete } from '../../approval/human'
-import { AppEnvChangedError, type AppEnvExpectation, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
+import {
+	AppEnvChangedError,
+	type AppEnvExpectation,
+	type AppEnvRow,
+	AppEnvTriggerRefConflictError,
+	type AppRow,
+	NamespaceResourceClaimConflictError,
+} from '../../db'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
 import { assertNoHeldResourceClaims, requireApp } from './apps'
@@ -32,6 +39,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		const other = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.authoring === 1 && row.env !== env)
 		if (other !== undefined) fail(409, `app ${appId} already authors environment ${other.env}; clear its authoring flag first`)
 	}
+	await assertTriggerRefFree(c, appId, env, input.triggerRef ?? null)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
 	const nextNamespaceId = namespace?.id ?? null
@@ -90,6 +98,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	} catch (cause) {
 		if (cause instanceof NamespaceResourceClaimConflictError) fail(409, cause.message)
 		if (cause instanceof AppEnvChangedError) fail(409, `${cause.message}; retry`)
+		if (cause instanceof AppEnvTriggerRefConflictError) fail(409, cause.message)
 		throw cause
 	}
 	await c.auth.audit({
@@ -117,6 +126,16 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		)
 	}
 	return toAppEnvDto(row)
+}
+
+/**
+ * An app's environments deploy on distinct trigger refs. Checked before the provider prepares anything, because
+ * preparation creates provider services; the write repeats the check for a concurrent put.
+ */
+async function assertTriggerRefFree(c: RegistryUseCaseContext, appId: string, env: string, triggerRef: string | null): Promise<void> {
+	if (triggerRef === null) return
+	const holder = await c.repositories.registry.getAppEnvByTriggerRef(appId, triggerRef)
+	if (holder !== null && holder.env !== env) fail(409, new AppEnvTriggerRefConflictError(appId, env, triggerRef, holder.env).message)
 }
 
 export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string): Promise<OkResponse> {

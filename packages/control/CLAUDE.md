@@ -88,7 +88,10 @@ GETs the repo's commits/tags Atom feed (ETag) and enqueues on a new head sha (`r
 An env's `trigger_ref` is an exact git ref OR a `*`-GLOB (`src/ref-match.ts` `refMatches`), most usefully
 `refs/tags/v*` to deploy on every version tag. The DEPLOYED ref is always concrete — the pushed ref
 (webhook) or the resolved newest matching tag (poll) — never the pattern. NULL trigger_ref = manual-only;
-a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
+a glob trigger_ref falls back to the default branch for a no-ref manual deploy. An app's environments hold
+DISTINCT trigger refs (`idx_app_envs_trigger`): `apps.environments.put` refuses a taken one with a 409 that names the
+other environment, before the provider prepares anything, and the write maps a racing put's index violation to
+`AppEnvTriggerRefConflictError`.
 
 ## Invariants
 

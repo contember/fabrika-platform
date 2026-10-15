@@ -16,6 +16,7 @@ export {
 	type AppEnvExpectation,
 	type AppEnvInput,
 	type AppEnvRow,
+	AppEnvTriggerRefConflictError,
 	type AppInput,
 	type AppRow,
 	type AppSecretRow,

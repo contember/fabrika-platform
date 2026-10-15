@@ -7,6 +7,7 @@ import {
 	type AppEnvExpectation,
 	type AppEnvInput,
 	type AppEnvRow,
+	AppEnvTriggerRefConflictError,
 	type AppInput,
 	type AppRow,
 	type AppSecretRow,
@@ -655,7 +656,7 @@ export class ControlRegistryRepository {
 			? null
 			: { namespaceId: input.namespaceId, ownerAppId: input.appId, ownerEnv: input.env, resourceKeys }
 		const statements = [...lock, ...write.statements, ...(owner === null ? [] : this.namespaceResourceClaimStatements(owner))]
-		const run = () => this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>(statements)
+		const run = () => this.withTriggerRefConflict(input, () => this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>(statements))
 		const claimed = owner === null ? run : () => this.withNamespaceResourceClaimConflict(owner, run)
 		const results = expected === undefined ? await claimed() : await this.expectedWrite(input, expected, claimed)
 		const envResult = results[lock.length + write.envAt]
@@ -664,6 +665,20 @@ export class ControlRegistryRepository {
 			throw new Error('expected one row from an app environment write')
 		}
 		return { appEnv, resourceClaims: claimRows(results.slice(lock.length + write.statements.length)) }
+	}
+
+	/** A failed write is a trigger-ref conflict when another environment of the app holds the ref (`idx_app_envs_trigger`). */
+	private async withTriggerRefConflict<T>(input: AppEnvInput, write: () => Promise<T>): Promise<T> {
+		try {
+			return await write()
+		} catch (cause) {
+			const triggerRef = input.triggerRef ?? null
+			const holder = triggerRef === null ? null : await this.getAppEnvByTriggerRef(input.appId, triggerRef)
+			if (triggerRef !== null && holder !== null && holder.env !== input.env) {
+				throw new AppEnvTriggerRefConflictError(input.appId, input.env, triggerRef, holder.env)
+			}
+			throw cause
+		}
 	}
 
 	/** A failed conditional write is a conflict when the environment is no longer what the caller read. */

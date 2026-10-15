@@ -123,6 +123,16 @@ export class AppEnvChangedError extends Error {
 	}
 }
 
+/** Another environment of the app already deploys on this trigger ref; `idx_app_envs_trigger` holds one per app. */
+export class AppEnvTriggerRefConflictError extends Error {
+	constructor(readonly appId: string, readonly env: string, readonly triggerRef: string, readonly otherEnv: string) {
+		super(
+			`trigger ref ${triggerRef} is already used by environment ${otherEnv} of app ${appId}; each environment of an app needs its own trigger ref`,
+		)
+		this.name = 'AppEnvTriggerRefConflictError'
+	}
+}
+
 export class NamespaceResourceClaimConflictError extends Error {
 	constructor(readonly namespaceId: string, readonly resourceKey: string) {
 		super(`namespace resource claim owner is immutable: ${namespaceId}/${resourceKey}`)

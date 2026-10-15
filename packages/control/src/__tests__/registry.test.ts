@@ -10,6 +10,7 @@ import { type RegistryUseCaseContext } from '../api/registry/context'
 import { deleteAppEnvUseCase, putAppEnvUseCase } from '../api/registry/environments'
 import { registerAppUseCase } from '../api/registry/registration'
 import { normalizeRegistration } from '../api/registry/registration'
+import { AppEnvTriggerRefConflictError } from '../db'
 import type { AnonymousReadability, CommitSource } from '../github/source/commit-files'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
@@ -538,6 +539,34 @@ describe('onboarding + registry CRUD', () => {
 		await rpcResult(rpcRequest('register', { ...registrationEnvelopes(), id: 'dup', repoUrl: 'r', env: 'prod' }), deps)
 		const dup = await rpcResult(rpcRequest('register', { ...registrationEnvelopes(), id: 'dup', repoUrl: 'r', env: 'stage' }), deps)
 		expect(dup.status).toBe(409)
+	})
+
+	test('a trigger ref another environment of the app uses is a conflict that names that environment', async () => {
+		const { deps } = makeDeps()
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+		const put = (env: string, triggerRef: string) =>
+			rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env, environment: { ...registrationEnvelopes(), triggerRef } }), deps)
+		expect((await put('prod', 'refs/heads/main')).status).toBe(200)
+
+		const refused = await put('stage', 'refs/heads/main')
+
+		expect(refused.status).toBe(409)
+		expect(await refused.json()).toMatchObject({
+			error: 'trigger ref refs/heads/main is already used by environment prod of app app; each environment of an app needs its own trigger ref',
+		})
+		expect(await deps.repositories.registry.getAppEnv('app', 'stage')).toBeNull()
+		expect((await put('prod', 'refs/heads/main')).status).toBe(200)
+	})
+
+	test('the unique trigger-ref index surfaces as a typed conflict when two puts race', async () => {
+		const { deps } = makeDeps()
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+
+		const write = deps.repositories.registry.upsertAppEnv(storedEnvironment('app', 'stage', { triggerRef: 'refs/heads/main' }), { absent: true })
+
+		await expect(write).rejects.toBeInstanceOf(AppEnvTriggerRefConflictError)
+		await expect(write).rejects.toMatchObject({ appId: 'app', env: 'stage', triggerRef: 'refs/heads/main', otherEnv: 'prod' })
 	})
 
 	test('apps / app_envs / secrets CRUD round-trips', async () => {
