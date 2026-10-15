@@ -35,7 +35,7 @@ The source tree carries the version of its next release. An installation does no
 bun run release:bump --tag=v1.2.3
 ```
 
-`bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, rewrites the `@fabrika/*` ranges of `examples/*` to `^1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again and runs `bun install` for the lockfile. It commits nothing.
+`bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, rewrites the `@fabrika/*` ranges of `examples/*` to `^1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again, runs `bun install` for the lockfile, and re-pins the local stack's Notes source fixture (`fixtures:pin`), whose tree holds that template. It commits nothing.
 
 Between the bump commit and the publish of its tag, the source names a version npm does not have yet. On Zerops `fabrika platform install` and `deploy` refuse such a checkout ([`zerops-platform.md`](zerops-platform.md#the-checker-version)), so a source install from `main` works again once the tag is published.
 

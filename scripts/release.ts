@@ -1009,7 +1009,8 @@ const AGENTS_TEMPLATE = join(ROOT, 'examples', 'zerops-app')
 /**
  * Set the version the next tag publishes, in the source: every workspace package that declares one, the
  * examples' `@fabrika/*` ranges (which keep bun linking the workspace), the application skill and the template's
- * `AGENTS.md` rendered from it, then `bun install` for the lockfile. Commits nothing.
+ * `AGENTS.md` rendered from it, then `bun install` for the lockfile and the local stack's source fixture pin.
+ * Commits nothing.
  */
 const bump = async (options: Options, packages: readonly PackageInfo[], sourceVersion: string): Promise<void> => {
 	assertBumpForward(sourceVersion, options.version)
@@ -1031,6 +1032,8 @@ const bump = async (options: Options, packages: readonly PackageInfo[], sourceVe
 		"const { readAppAgentSkill, renderAgentsFile } = await import('@fabrika/app/agent-skill'); await Bun.write('AGENTS.md', renderAgentsFile(readAppAgentSkill()))",
 	], { cwd: AGENTS_TEMPLATE })
 	await run(['bun', 'install'])
+	// The local stack's Notes fixture is the template pinned by tree, and the bump moved its manifest and AGENTS.md.
+	await run(['bun', 'run', 'fixtures:pin'], { cwd: join(ROOT, 'packages', 'local-stack') })
 	console.info(`the source is now ${options.version}; review the diff, commit it, and tag that commit ${options.tag}`)
 }
 
