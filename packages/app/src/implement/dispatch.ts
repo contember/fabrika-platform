@@ -300,7 +300,7 @@ export class ContractRuntime {
 					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
 						return bootstrapResponse()
 					}
-					return await withBootstrap(await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request), served.prefix)
+					return await withBootstrap(await this.#asset(served, request), served.prefix)
 				case 'procedure':
 					return await this.#procedure(served, request)
 				case 'file':
@@ -344,6 +344,14 @@ export class ContractRuntime {
 				throw new UnauthorizedError('A public page carries no caller')
 			}
 			return jsonResponse(pageCallerOf(caller.principal, caller.perms, this.#parts.actions), 200)
+		}
+		return await this.#asset(served, request)
+	}
+
+	/** A file of the mount's directory. A source map goes to Operations at build and is never served: it holds the source. */
+	async #asset(served: { readonly prefix: string; readonly dir: string }, request: Request): Promise<Response> {
+		if (rawRequestTarget(request.url).pathname.endsWith('.map')) {
+			throw new NotFoundError('A source map is not served')
 		}
 		return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
 	}

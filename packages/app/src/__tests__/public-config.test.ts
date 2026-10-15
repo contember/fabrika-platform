@@ -100,9 +100,9 @@ describe('the public values of an SPA mount', () => {
 		const site = await send(app, '/__fabrika-config.json')
 		expect(site.status).toBe(200)
 		// A value is served verbatim: the page and the server put the same string together.
-		expect(site.body).toEqual({ dsn: null, release: null, public: { SIGNUP_URL: VALUES.SIGNUP_URL, GREETING_PREFIX: ' Hello ' } })
+		expect(site.body).toEqual({ dsn: null, release: null, environment: null, public: { SIGNUP_URL: VALUES.SIGNUP_URL, GREETING_PREFIX: ' Hello ' } })
 		const hr = await send(app, '/hr/__fabrika-config.json', { token: await token('user', [grant('applications.read')]) })
-		expect(hr.body).toEqual({ dsn: null, release: null })
+		expect(hr.body).toEqual({ dsn: null, release: null, environment: null })
 	})
 
 	test('a declared variable that is not set refuses the boot', () => {
@@ -153,7 +153,7 @@ describe.skipIf(!hasPostgres)("a form challenge's site key", () => {
 			public: { TURNSTILE_SITE_KEY: VALUES.TURNSTILE_SITE_KEY, SIGNUP_URL: VALUES.SIGNUP_URL },
 		})
 		const hr = await send(app, '/hr/__fabrika-config.json', { token: await token('user', [grant('applications.read')]) })
-		expect(hr.body).toEqual({ dsn: null, release: null, public: { TURNSTILE_SITE_KEY: VALUES.TURNSTILE_SITE_KEY } })
+		expect(hr.body).toEqual({ dsn: null, release: null, environment: null, public: { TURNSTILE_SITE_KEY: VALUES.TURNSTILE_SITE_KEY } })
 		expect(JSON.stringify([site.body, hr.body])).not.toContain(VALUES.TURNSTILE_SECRET)
 	})
 

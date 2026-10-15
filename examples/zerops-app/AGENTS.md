@@ -338,7 +338,6 @@ the SPA is added with it.
 		"@fabrika/provider-zerops": "^0.4.3",
 		"@fabrika/proxy-core": "^0.4.3",
 		"@fabrika/ui": "^0.4.3",
-		"@sentry/browser": "10.69.0",
 		"kysely": "0.29.6",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
@@ -362,8 +361,9 @@ the SPA is added with it.
   Bun still links the workspace copies.
 - `build:web` builds the SPA: add it, `build-web.ts`, `web/`, the contract's `site` mount and the `bun run build:web`
   line of `zerops.yaml` when the application gets an SPA, and not before.
-- `kysely` is there for the generated schema's types. `@sentry/browser` reports the SPA's errors to Operations, from
-  the DSN and release the framework serves at `<prefix>/__fabrika-config.json`. The same file carries
+- `kysely` is there for the generated schema's types. The SPA reports its errors to Operations by itself:
+  `FabrikaProvider` reads the DSN, release and environment the framework serves at `<prefix>/__fabrika-config.json`
+  and sends every uncaught error and unhandled rejection there; add no error-reporting SDK. The same file carries
   `public: { <VARIABLE>: <value> }`: each form challenge's `siteKey`, and the variables the SPA mount lists in
   `c.spa(prefix, { …, public: ['SIGNUP_URL'] })`. A page reads a per-environment public value (a site key, a link
   target) there, never as a build-time constant; it holds no other variable, and the contract refuses a secret in it.
@@ -652,6 +652,7 @@ const built = await Bun.build({
 	outdir,
 	target: 'browser',
 	define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+	sourcemap: 'external',
 	plugins: [shellSlicePlugin({ root: import.meta.dir })],
 })
 if (!built.success) {
@@ -671,6 +672,12 @@ await Bun.write(
   the rows are passed in.
 - The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every path
   under it, so a deep link such as `/tasks/<id>` renders. `define` gives React's production build.
+- `sourcemap: 'external'` writes each script's map beside it, and the page names none. The platform build uploads the
+  maps to Operations for the release the page reports, so an error's frames show the original source; the mount
+  never serves a `.map` file (404). Keep the maps external: `inline` would ship the source to every visitor.
+- **Errors.** `FabrikaProvider` reports the page's uncaught errors and unhandled rejections to Operations, with the
+  release and the environment, through the DSN the mount serves; without a DSN (local development, a test) it reports
+  nothing. An application that must not report passes `reportErrors={false}`.
 - Set text through JSX, never `dangerouslySetInnerHTML` or `innerHTML`. Same-origin calls carry the session cookie.
 - **Who is signed in.** Every member SPA serves `<prefix>/__fabrika-me.json` to the person it admitted:
   `{ label, email, actions: { app, scopes } }`. `useCaller()` (`@fabrika/app/react`) answers `{ label, email,
@@ -3638,7 +3645,8 @@ if (root !== null) {
 - `FabrikaProvider` holds the clients of the mounts the page calls. A hook takes a procedure of a client
   (`api.tasks.get`) as the typed name of the call and runs it on the provider's client of that mount; a test hands the
   provider a client over the test kit instead (below). An SPA mounted under a prefix passes it: `spa="/app"`. Its bare
-  prefix (`/app`) redirects to `/app/`, so a link may name either.
+  prefix (`/app`) redirects to `/app/`, so a link may name either. It also reports the page's uncaught errors to
+  Operations (`reportErrors={false}` turns that off); never add an error-reporting SDK.
 - `createRouter` answers typed paths: `href('task', { id })`, `navigate('project', { orgId, projectId })`, `<Link
   to="task" params={{ id }}>`, and `useRoute()`, the match or `null`. `<Router>` makes every plain `<a href>` under the
   SPA navigate without a reload: the kit's components render links that way. Pass `{ base: '/app' }` for a prefix.

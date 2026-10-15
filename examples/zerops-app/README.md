@@ -49,8 +49,9 @@ On Zerops the platform owns the setup. The build runs the SPA build (`bun run bu
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
 
-The SPA reports its uncaught errors to Operations: `web/operations.ts` reads the DSN and the release from the
-framework's `/__fabrika-config.json` and starts `@sentry/browser`. Because `guests.invite` manages the members of a
+The SPA reports its uncaught errors to Operations without code of its own: `FabrikaProvider` reads the DSN, the
+release and the environment from the framework's `/__fabrika-config.json`. The build writes each script's source map
+beside it; the platform build uploads the maps to Operations, and the mount never serves them. Because `guests.invite` manages the members of a
 workspace, the platform also gives the process IAM's membership transport (`FABRIKA_IAM_RPC_URL`, `FABRIKA_IAM_RPC_KEY`),
 and IAM sends the invitation; `guest` is the one role declared `external`, and `staff` may assign it in any workspace.
 

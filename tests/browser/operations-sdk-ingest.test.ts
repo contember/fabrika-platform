@@ -1,7 +1,8 @@
 import { browserTest, byLabel, byRole, expect, getContext, getPage, invariant, step } from '@opice/harness'
 
 const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
-// The Notes example: its SPA reads the DSN and the release from the framework's `/__fabrika-config.json`.
+// The Notes example: its `FabrikaProvider` reads the DSN, the release and the environment from the framework's
+// `/__fabrika-config.json` and reports the page's uncaught errors, with no SDK of the application's own.
 const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
 const CONFIG_URL = `${APP_URL}/__fabrika-config.json`
 
@@ -22,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseManagedConfig(value: unknown): ManagedConfig {
 	if (!isRecord(value) || typeof value['dsn'] !== 'string' || typeof value['release'] !== 'string') {
-		throw new Error('Operations SDK configuration response is invalid')
+		throw new Error('Operations reporting configuration response is invalid')
 	}
 	return { dsn: value['dsn'], release: value['release'] }
 }
@@ -97,7 +98,7 @@ function parseEnvelopeItemTypes(bytes: Uint8Array): string[] {
 }
 
 /**
- * An uncaught error in the page, which the SDK's global handler reports. The marker names the throwing function, so the
+ * An uncaught error in the page, which the framework's global handler reports. The marker names the throwing function, so the
  * server-side grouping (type and frames) keeps each run's issue apart and folds two captures of one run together.
  */
 async function throwUncaught(marker: string): Promise<void> {
@@ -166,7 +167,7 @@ function issueTitle(marker: string): string {
 	return `Error: ${witnessMessage(marker)}`
 }
 
-/** The notes page has rendered its list, which it does only after the SDK started. */
+/** The notes page has rendered its list; its provider reads the reporting configuration as it mounts. */
 async function openNotes(): Promise<void> {
 	await getPage().goto(APP_URL, { waitUntil: 'domcontentloaded' })
 	await expect(byRole('heading', 'Notes', { exact: true, level: 1 })).toBeVisible()
@@ -179,7 +180,7 @@ function issueFact(label: string) {
 
 browserTest(
 	{
-		name: 'The official browser SDK creates one managed Operations issue',
+		name: 'The framework browser reporter creates one managed Operations issue',
 		url: APP_URL,
 		feature: 'operations-adoption-sdk',
 		seeds: ['operations-browser-fixtures'],
@@ -192,8 +193,8 @@ browserTest(
 		const capturedItemTypes: string[][] = []
 		const scenarioMarker = crypto.randomUUID()
 
-		await step('the framework hands the SPA only the managed DSN and release, never in the HTML', {
-			intent: 'the browser receives only the public DSN and release through the application runtime boundary',
+		await step('the framework hands the SPA only the managed DSN, release and environment, never in the HTML', {
+			intent: 'the browser receives only the public DSN, release and environment through the application runtime boundary',
 			manual: 'Open the Notes example. Verify that its list of notes renders.',
 		}, async () => {
 			runMarker = scenarioMarker
@@ -202,7 +203,7 @@ browserTest(
 			const configResponse = await getContext().request.get(CONFIG_URL, { failOnStatusCode: false })
 			expect(configResponse.status()).toBe(200)
 			const configValue: unknown = await configResponse.json()
-			expect(isRecord(configValue) ? Object.keys(configValue).sort() : null).toEqual(['dsn', 'release'])
+			expect(isRecord(configValue) ? Object.keys(configValue).sort() : null).toEqual(['dsn', 'environment', 'release'])
 			managedConfig = parseManagedConfig(configValue)
 
 			const documentResponse = await getContext().request.get(`${APP_URL}/`, { failOnStatusCode: false })
@@ -214,16 +215,16 @@ browserTest(
 			}
 		})
 
-		await step('the official SDK sends an uncaught exception through the managed DSN', {
-			intent: 'the tested @sentry/browser version reaches Fabrika ingest using its native envelope transport',
-			manual: 'Throw an uncaught error in the page (the browser console). Verify that the SDK posts one envelope.',
+		await step('the framework reporter sends an uncaught exception through the managed DSN', {
+			intent: "FabrikaProvider's reporter reaches Fabrika ingest with a Sentry error-event envelope",
+			manual: 'Throw an uncaught error in the page (the browser console). Verify that the page posts one envelope.',
 		}, async () => {
 			capturedItemTypes.push(await captureManagedEnvelope(requireConfig(managedConfig)))
 			expect(capturedItemTypes[0]).toEqual(['event'])
 		})
 
 		await step('the first event becomes one grouped issue with the managed release', {
-			intent: 'asynchronous Operations processing retains the SDK exception and deploy release',
+			intent: 'asynchronous Operations processing retains the reported exception and deploy release',
 			manual: 'Open Operations Errors and find "Fabrika Operations SDK witness". Verify its release and occurrence count.',
 		}, async () => {
 			await getPage().goto(`${CONTROL_URL}/operations/errors`, { waitUntil: 'domcontentloaded' })
@@ -238,8 +239,8 @@ browserTest(
 			await expect(issueFact('Release')).toHaveText(requireConfig(managedConfig).release)
 		})
 
-		await step('a second equivalent SDK exception increments the same issue', {
-			intent: 'native SDK events use stable server-side grouping instead of creating duplicate issues',
+		await step('a second equivalent exception increments the same issue', {
+			intent: 'reported events use stable server-side grouping instead of creating duplicate issues',
 			manual: 'Throw the same uncaught error once more. Return to the same issue and verify that its occurrence count increased.',
 		}, async () => {
 			await openNotes()
@@ -256,7 +257,7 @@ browserTest(
 		})
 
 		await invariant(
-			'the SDK witness sends only the documented Sentry compatibility profile',
+			'the browser reporter sends only error-event envelopes',
 			async () => {
 				expect(capturedItemTypes).toEqual([['event'], ['event']])
 			},

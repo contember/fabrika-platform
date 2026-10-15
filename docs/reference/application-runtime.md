@@ -1461,24 +1461,37 @@ forwards no token to an anonymous kind. The test kit serves it for a test caller
 
 ## Browser error reporting
 
-Fabrika supplies an application's Operations ingest settings as two managed
+Fabrika supplies an application's Operations ingest settings as three managed
 runtime values:
 
 - `FABRIKA_OPERATIONS_DSN` is a browser-safe public DSN scoped to one application
   environment.
 - `FABRIKA_RELEASE` is the current deploy-scoped release name.
+- `FABRIKA_ENVIRONMENT` is the environment's name.
 
 Every SPA mount of a contract application (`c.spa`, member or public) serves
-`<prefix>/__fabrika-config.json` with these two values, `{ "dsn": …, "release": … }`
+`<prefix>/__fabrika-config.json` with these three values, `{ "dsn": …, "release": …, "environment": … }`
 (`null` when unset), and under `public` (present only when there is one) the public values the contract names: each form challenge's
 `siteKey` on every SPA mount, and the variables the mount lists in `c.spa(prefix, { public: […] })`
 on that mount only, by variable name. Nothing else of the environment reaches it. A named variable
 that is not set refuses the boot, and the contract refuses a variable that is both a challenge's
 secret and public; a member SPA's answer needs a
-member's session like every file of its mount. The Zerops example's SPA
-(`examples/zerops-app/web/operations.ts`) initializes `@sentry/browser` **10.69.0** from it
-with only the global error handlers, and `tests/browser/operations-sdk-ingest.test.ts`
-proves the round trip against it on the local stack.
+member's session like every file of its mount.
+
+`FabrikaProvider` (`@fabrika/app/react`, `src/client/error-reporting.ts`) reads that file
+when it mounts. With a DSN, it sends every uncaught error and unhandled rejection of the
+page to the ingest as one Sentry error event: the exception's type, message and stack
+frames, the release, the environment, and the page's address without its query and
+fragment. It sends a simple request (the DSN's key in the query, a `text/plain` body), so
+the proxy's `connect-src`, which admits the ingest origin, is all it needs. It drops an
+error equal to the one just sent and stops after 20 per page; `reportErrors={false}` turns
+it off, and a missing or DSN-less config (local development, a test) installs nothing.
+`tests/browser/operations-sdk-ingest.test.ts` proves the round trip on the local stack.
+
+An SPA build writes each script's source map beside it (`sourcemap: 'external'`), and no
+SPA or share-link mount serves a `.map` file (404): the platform build uploads the maps to
+Operations for the release the page reports
+([operations errors](operations-errors.md#release-source-maps)).
 
 A request that answers 5xx is one error event too (`RequestFailed`, logger
 `fabrika.requests`): the endpoint id, the proxy's request id, a fixed failure code and the
@@ -1489,7 +1502,7 @@ the runtime's `CAPABILITY_REFUSALS` and `SERVER_FAULTS` — and the log line add
 fixed text.
 
 The tested compatibility profile is deliberately narrow. Fabrika accepts the
-SDK's envelope authentication query and an `event` item for a captured browser
+envelope authentication query and an `event` item for a captured browser
 exception. It parses the exception, JavaScript stack frames, release,
 environment, level, tags, and optional SDK fingerprint used for grouping.
 Non-event items are not processed; bounded item types such as `client_report`

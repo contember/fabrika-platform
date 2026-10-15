@@ -13,6 +13,8 @@ export async function buildWeb(outdir: string, options: { readonly metafile?: bo
 		// React's production build: without it the bundle carries React's development checks.
 		define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 		minify: options.minify ?? true,
+		// Each map beside its file, unreferenced: the platform build uploads it to Operations and the mount never serves it.
+		sourcemap: 'external',
 		metafile: options.metafile ?? false,
 		plugins: [shellSlicePlugin({ root: import.meta.dir })],
 	})

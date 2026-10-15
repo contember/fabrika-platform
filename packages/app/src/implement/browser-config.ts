@@ -1,5 +1,5 @@
-// What an SPA mount answers at `<prefix>/__fabrika-config.json`: the browser's Operations settings and the public
-// values the contract names, and nothing else of the environment.
+// What an SPA mount answers at `<prefix>/__fabrika-config.json`: the browser's Operations settings (DSN, release and
+// environment) and the public values the contract names, and nothing else of the environment.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
 import type { CapturedEnvironment } from './environment'
@@ -8,9 +8,11 @@ export interface BrowserConfig {
 	/** The Operations ingest DSN (a public key), or `null` without one. */
 	readonly dsn: string | null
 	readonly release: string | null
+	/** `FABRIKA_ENVIRONMENT`, which the page's error reports carry, or `null` when unset. */
+	readonly environment: string | null
 	/**
 	 * Every form challenge's site key, and the variables the mount lists in `public`, by variable name. Absent when
-	 * there is none, so the file of an application without them holds the two Operations values only.
+	 * there is none, so the file of an application without them holds the three Operations values only.
 	 */
 	readonly public?: Readonly<Record<string, string>>
 }
@@ -48,7 +50,8 @@ export function browserConfigs(
 			else own[variable] = value
 		}
 		const served = { ...siteKeys, ...own }
-		configs.set(name, Object.freeze(Object.keys(served).length === 0 ? { ...operations } : { ...operations, public: Object.freeze(served) }))
+		const reporting = { ...operations, environment: environment.framework['FABRIKA_ENVIRONMENT']?.trim() || null }
+		configs.set(name, Object.freeze(Object.keys(served).length === 0 ? reporting : { ...reporting, public: Object.freeze(served) }))
 	}
 	return configs
 }

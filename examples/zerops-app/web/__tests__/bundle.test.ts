@@ -20,9 +20,14 @@ test('the SPA bundle holds the client and the contract, no handler and no server
 		const inputs = Object.keys(built.metafile?.inputs ?? {})
 		for (const shell of ['fabrika.contract.ts', 'src/notes/endpoints.ts']) expect(inputs.some((input) => input.endsWith(shell))).toBe(true)
 		expect(inputs.filter((input) => SERVER_MODULE.test(input))).toEqual([])
-		const code = (await Promise.all(built.outputs.map((output) => output.text()))).join('\n')
+		const scripts = built.outputs.filter((output) => output.kind !== 'sourcemap')
+		const code = (await Promise.all(scripts.map((output) => output.text()))).join('\n')
 		expect(code).toContain('/api')
 		for (const handler of HANDLER_CODE) expect(code).not.toContain(handler)
+		// Every script has its map beside it for Operations, and the page names none of them.
+		const maps = built.outputs.filter((output) => output.kind === 'sourcemap').map((output) => output.path)
+		for (const script of scripts.filter((output) => output.path.endsWith('.js'))) expect(maps).toContain(`${script.path}.map`)
+		expect(code).not.toContain('sourceMappingURL')
 	} finally {
 		rmSync(outdir, { recursive: true, force: true })
 	}

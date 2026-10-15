@@ -200,6 +200,13 @@ describe('the SPA', () => {
 		expect((await send(app, '/', { token: await token('user', []) })).status).toBe(403)
 		expect((await send(app, '/')).status).toBe(401)
 	})
+
+	test('never serves a source map, whose sources went to Operations at build', async () => {
+		const member = { token: await token('user', [inW1('notes.read')]) }
+		expect((await send(app, '/chunk-abc.js', member)).body).toBe('dist/app /chunk-abc.js')
+		expect((await send(app, '/chunk-abc.js.map', member)).status).toBe(404)
+		expect((await send(app, '/nested/chunk-abc.css.map', member)).status).toBe(404)
+	})
 })
 
 describe('the token', () => {

@@ -1,6 +1,6 @@
-// The SPA: the notes the signed-in person may read, through the typed client of the `/api` mount and its React hooks,
-// with its errors reported to Operations. It imports the contract and the shared schemas only; the SPA build loads the
-// contract without its handlers.
+// The SPA: the notes the signed-in person may read, through the typed client of the `/api` mount and its React hooks.
+// `FabrikaProvider` reports its errors to Operations. It imports the contract and the shared schemas only; the SPA
+// build loads the contract without its handlers.
 
 import '@fabrika/ui/styles.css'
 import { createClient } from '@fabrika/app/client'
@@ -10,7 +10,6 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { contract } from '../fabrika.contract'
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_NOTE } from '../src/schemas'
-import { startErrorReporting } from './operations'
 
 const api = createClient(contract, 'api', { bounceOnAuth: true })
 
@@ -33,7 +32,6 @@ function Notes() {
 	)
 }
 
-await startErrorReporting()
 const root = document.getElementById('root')
 if (root !== null) {
 	createRoot(root).render(

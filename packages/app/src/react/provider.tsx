@@ -1,13 +1,15 @@
-// `FabrikaProvider`: the page's clients, the cache of their answers, and the caller document of the SPA mount. The
-// hooks take a procedure of a client as the typed name of a call; the provider runs it on the client it holds for
-// that mount, so a test hands in a client over the test kit and the page's own module-level client stays as it is.
+// `FabrikaProvider`: the page's clients, the cache of their answers, the caller document of the SPA mount, and the
+// page's error reporting. The hooks take a procedure of a client as the typed name of a call; the provider runs it on
+// the client it holds for that mount, so a test hands in a client over the test kit and the page's own module-level
+// client stays as it is.
 
-import { createContext, type ReactNode, useContext, useState } from 'react'
+import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
 import { z } from 'zod/v4'
 import { type PageCaller, parsePageCaller } from '../client/caller'
 import { attachmentAt, type ClientNode, clientNodeOf, downloadFile } from '../client/contract'
+import { startErrorReporting } from '../client/error-reporting'
 import { RpcError, type RpcFetch } from '../client/transport'
-import { joinPath, PAGE_CALLER_FILE } from '../contract/defaults'
+import { BROWSER_CONFIG_FILE, joinPath, PAGE_CALLER_FILE } from '../contract/defaults'
 import { type FabrikaError, toFabrikaError } from './errors'
 import { QueryStore, type StoreTarget } from './store'
 
@@ -149,13 +151,35 @@ export interface FabrikaProviderProps {
 	readonly clients: readonly object[]
 	/** The prefix of the SPA mount the page is served from: the caller document is `<spa>/__fabrika-me.json`. */
 	readonly spa?: string
-	/** What the caller document is fetched with; the global `fetch` by default (a test passes the kit's). */
+	/**
+	 * What the caller document, the browser config and the error reports are fetched with; the global `fetch` by default
+	 * (a test passes the kit's).
+	 */
 	readonly fetch?: RpcFetch
+	/**
+	 * Report the page's uncaught errors and unhandled rejections to Operations, through the DSN and release the mount
+	 * serves at `<spa>/__fabrika-config.json`; `true` by default. Without a DSN nothing is reported.
+	 */
+	readonly reportErrors?: boolean
 	readonly children?: ReactNode
 }
 
-export function FabrikaProvider({ clients, spa = '/', fetch: fetchCaller, children }: FabrikaProviderProps): ReactNode {
-	const [value] = useState(() => fabrika(clients, spa, fetchCaller ?? ((input, init) => fetch(input, init))))
+export function FabrikaProvider({ clients, spa = '/', fetch: fetchGiven, reportErrors = true, children }: FabrikaProviderProps): ReactNode {
+	const [send] = useState<RpcFetch>(() => fetchGiven ?? ((input, init) => fetch(input, init)))
+	const [value] = useState(() => fabrika(clients, spa, send))
+	useEffect(() => {
+		if (!reportErrors || typeof window === 'undefined') return
+		let stopped = false
+		let uninstall: (() => void) | null = null
+		void startErrorReporting(joinPath(spa, BROWSER_CONFIG_FILE), send, window).then((installed) => {
+			if (stopped) installed?.()
+			else uninstall = installed
+		})
+		return () => {
+			stopped = true
+			uninstall?.()
+		}
+	}, [reportErrors, spa, send])
 	return <FabrikaContext.Provider value={value}>{children}</FabrikaContext.Provider>
 }
 

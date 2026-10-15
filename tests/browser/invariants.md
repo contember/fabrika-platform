@@ -24,8 +24,8 @@ Every authored scenario must preserve these properties:
    or transient success text.
 6. The SDK scenario treats ingest HTTP 202 plus the persisted grouped issue as
    acceptance. `Sentry.flush()` alone is not delivery evidence.
-7. The SDK witness (the Notes example's SPA) is limited to `@sentry/browser` 10.69.0 error-event envelopes.
-   It does not claim tracing, replay, sessions, logs, metrics, or general Sentry
+7. The browser reporting witness (the Notes example's SPA, through `FabrikaProvider`) is limited to error-event
+   envelopes. It does not claim tracing, replay, sessions, logs, metrics, or general Sentry
    protocol compatibility.
 8. Operations disruption remains bounded to the Operations plane and always
    restores the service before test exit.

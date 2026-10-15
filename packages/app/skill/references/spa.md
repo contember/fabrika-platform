@@ -96,7 +96,8 @@ if (root !== null) {
 - `FabrikaProvider` holds the clients of the mounts the page calls. A hook takes a procedure of a client
   (`api.tasks.get`) as the typed name of the call and runs it on the provider's client of that mount; a test hands the
   provider a client over the test kit instead (below). An SPA mounted under a prefix passes it: `spa="/app"`. Its bare
-  prefix (`/app`) redirects to `/app/`, so a link may name either.
+  prefix (`/app`) redirects to `/app/`, so a link may name either. It also reports the page's uncaught errors to
+  Operations (`reportErrors={false}` turns that off); never add an error-reporting SDK.
 - `createRouter` answers typed paths: `href('task', { id })`, `navigate('project', { orgId, projectId })`, `<Link
   to="task" params={{ id }}>`, and `useRoute()`, the match or `null`. `<Router>` makes every plain `<a href>` under the
   SPA navigate without a reload: the kit's components render links that way. Pass `{ base: '/app' }` for a prefix.

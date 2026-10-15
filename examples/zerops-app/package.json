@@ -14,7 +14,6 @@
 		"@fabrika/provider-zerops": "^0.4.3",
 		"@fabrika/proxy-core": "^0.4.3",
 		"@fabrika/ui": "^0.4.3",
-		"@sentry/browser": "10.69.0",
 		"kysely": "0.29.6",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",

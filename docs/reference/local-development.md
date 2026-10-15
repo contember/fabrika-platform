@@ -134,8 +134,8 @@ webhook, where it waits for approval. The scenario
 follows the deploy. Every `up` returns the container to the workspace example.
 
 Every prepare also builds the example's SPA (`dist/web`), which Notes serves at `/`. The
-SPA reads the managed DSN and release from the framework's `/__fabrika-config.json` and
-initializes `@sentry/browser` from them; the browser stack recreates Notes with the DSN of a
+SPA's `FabrikaProvider` reads the managed DSN, release and environment from the framework's
+`/__fabrika-config.json` and reports the page's uncaught errors there; the browser stack recreates Notes with the DSN of a
 seeded Operations source, so `tests/browser/operations-sdk-ingest.test.ts` finds its events
 there.
 

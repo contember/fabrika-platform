@@ -83,9 +83,12 @@ src/
     share.ts          shareKey: the key the share SPA's bootstrap kept
     caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
+    error-reporting.ts  the page's uncaught errors as Sentry error events to the DSN of <prefix>/__fabrika-config.json
+                      (not exported; FabrikaProvider starts it)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope or a file
   react/              @fabrika/app/react — browser-safe; React is an optional peer dependency (ADR-0052)
-    provider.tsx      FabrikaProvider: the clients by mount, the cache, the caller document; a procedure's input checked first
+    provider.tsx      FabrikaProvider: the clients by mount, the cache, the caller document, the page's error reporting
+                      (reportErrors); a procedure's input checked first
     hooks.ts          useQuery (keepPrevious: an offset list), useInfiniteQuery, useMutation, useAction, useDownload,
                       useInvalidate, skip
     testing.ts        @fabrika/app/react/testing: installDom (happy-dom over Bun's web platform, no navigation),
@@ -272,12 +275,13 @@ src/
   `GET <prefix>/*`, and below the root also `GET <prefix>` (row `<mount>.prefix`, `spaPrefixRowId`) under the same
   access, which answers 308 to `<prefix>/` so the bare prefix never falls through to the root SPA; both are anonymous
   (kind `public-spa`, no token) with `access: { public: true }`,
-  which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release, public }` (the
-  browser-safe `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`, `null` when unset; `public`, present only when non-empty, the values of
+  which takes no other key, and answers `<prefix>/__fabrika-config.json` itself with `{ dsn, release, environment, public }` (the
+  browser-safe `FABRIKA_OPERATIONS_DSN`, `FABRIKA_RELEASE` and `FABRIKA_ENVIRONMENT`, `null` when unset; `public`, present only when non-empty, the values of
   every form challenge's `siteKey` and of the mount's own `public` list, `browserConfigs` in `browser-config.ts`, each one
   required at boot) and nothing else of the environment, and
   `<prefix>/__fabrika-me.json` (`PAGE_CALLER_FILE`) with the caller document (`pageCallerOf` in `principal.ts`) under
-  the mount's own access, 401 on a public SPA; a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
+  the mount's own access, 401 on a public SPA; no SPA or link mount serves a path ending in `.map` (404: the platform
+  build uploads source maps to Operations, and a map holds the source); a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook

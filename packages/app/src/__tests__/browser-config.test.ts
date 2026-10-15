@@ -1,4 +1,4 @@
-// Every SPA mount serves `<prefix>/__fabrika-config.json`: the browser's Operations DSN and the release, the public
+// Every SPA mount serves `<prefix>/__fabrika-config.json`: the browser's Operations DSN, release and environment, the public
 // values the contract names (none here; `public-config.test.ts` holds them), and nothing else of the environment. A
 // member SPA's answer needs the member's token, a public SPA's none.
 
@@ -11,7 +11,7 @@ import { bootApp, environment, frameworkEnvFor, grant, send, token } from './fix
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.test/42'
 const RELEASE = 'fabrika/notes/prod/default/abc'
-const OPERATIONS = { FABRIKA_OPERATIONS_DSN: ` ${DSN} `, FABRIKA_RELEASE: RELEASE }
+const OPERATIONS = { FABRIKA_OPERATIONS_DSN: ` ${DSN} `, FABRIKA_RELEASE: RELEASE, FABRIKA_ENVIRONMENT: 'prod' }
 
 const notes = notesApp(new Map())
 
@@ -26,11 +26,11 @@ const site = implement(
 )
 
 describe('the browser config of an SPA mount', () => {
-	test('a member SPA answers the DSN and the release to its member, and only those two', async () => {
+	test('a member SPA answers the DSN, the release and the environment to its member, and only those three', async () => {
 		const app = bootApp(notes, { environment: environment({ ...frameworkEnvFor(notes), ...OPERATIONS }) })
 		const sent = await send(app, '/__fabrika-config.json', { token: await token('user', [grant('notes.read')]) })
 		expect(sent.status).toBe(200)
-		expect(sent.body).toEqual({ dsn: DSN, release: RELEASE })
+		expect(sent.body).toEqual({ dsn: DSN, release: RELEASE, environment: 'prod' })
 		expect(sent.headers.get('Cache-Control')).toBe('no-store')
 		expect((await send(app, '/__fabrika-config.json')).status).toBe(401)
 		// Any other path of the mount is still the asset server's.
@@ -39,18 +39,18 @@ describe('the browser config of an SPA mount', () => {
 		)
 	})
 
-	test('without a DSN or a release the values are null', async () => {
+	test('without a DSN, a release or an environment the values are null', async () => {
 		const sent = await send(bootApp(notes), '/__fabrika-config.json', { token: await token('user', [grant('notes.read')]) })
-		expect(sent.body).toEqual({ dsn: null, release: null })
+		expect(sent.body).toEqual({ dsn: null, release: null, environment: null })
 	})
 
 	test('a public SPA answers anyone; a member SPA beside it serves its own under its prefix', async () => {
 		const app = bootApp(site, { environment: environment({ ...frameworkEnvFor(site), ...OPERATIONS }) })
 		const anonymous = await send(app, '/__fabrika-config.json')
 		expect(anonymous.status).toBe(200)
-		expect(anonymous.body).toEqual({ dsn: DSN, release: RELEASE })
+		expect(anonymous.body).toEqual({ dsn: DSN, release: RELEASE, environment: 'prod' })
 		expect((await send(app, '/app/__fabrika-config.json')).status).toBe(401)
 		const member = await send(app, '/app/__fabrika-config.json', { token: await token('user', [grant('notes.read')]) })
-		expect(member.body).toEqual({ dsn: DSN, release: RELEASE })
+		expect(member.body).toEqual({ dsn: DSN, release: RELEASE, environment: 'prod' })
 	})
 })
