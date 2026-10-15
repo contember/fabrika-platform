@@ -168,6 +168,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `connections/credentials.ts`, and `source/metadata.ts`. On Cloudflare `cloudflareGitHubSource` (`src/platform-cf.ts`) resolves the commit and
   builds the runner's clone URL with a repository-scoped token as `x-access-token`. Every gzip stage goes through `pullThrough` (`src/github/source/streams.ts`):
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
+  A platform archive may carry ONE generated data file (`SourceDataFile`, the Zerops proxy manifest, ADR-0045),
+  appended after every entry of the commit; a commit that holds its path is refused, and the upload reports its sha256.
 - **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
   plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.
   The resolver knows only `vault:`; any other stored ref — a row from before this rule — THROWS rather than
@@ -371,6 +373,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
     repair asked for during an update is replayed, never dropped. A marked namespace REFUSES deploys
     (`providerEnvironment`) and republishes (`republishUnderLease`), naming the retry: a republish writes
     `provisioning` → `ready` and would erase the mark. This replaces the old sprint's "usable while marked".
+    A proxy source re-pin (plan change `proxySource`, ADR-0045) is the one update a `failed` namespace accepts; it
+    stores the target `pending` and queues the reconcile that rebuilds the proxy.
 - **Removal is the narrow case only** (backlog 73). `namespaces.remove` frees a namespace with no
   registered app environment that no worker is settling; it deletes the row and its resource claims in ONE
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which

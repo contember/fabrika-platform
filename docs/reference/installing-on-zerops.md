@@ -109,10 +109,12 @@ pinned merely by selecting this installation checkout.
 Three behaviours worth knowing before reading that file:
 
 - **The manifest is MERGED.** On the light tier an application shares the project and therefore the
-  platform proxy's one `FABRIKA_PROXY_MANIFEST_JSON` — the light-tier installation carried `notes` → `notesapi:3000`
-  beside the three platform apps. Application entries are carried through unchanged; an entry standing
-  on one of the platform's own public hosts is superseded and reported, because a host belongs to
-  exactly one app.
+  platform proxy — the light-tier installation carried `notes` → `notesapi:3000` beside the three platform
+  apps. Its entry is held by the operator in the proxy's `FABRIKA_PROXY_MANIFEST_JSON` variable, which the
+  deploy reads and never writes; the composed manifest travels as the data file of the proxy's build archive
+  ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). Application entries
+  are carried through unchanged; an entry standing on one of the platform's own public hosts is superseded and
+  reported, because a host belongs to exactly one app.
 - **Hosts come from `zeropsSubdomain` unless the operator names them.** That variable is a NAME and not
   a state (see the [platform facts](zerops-platform.md)), so it can be read one step before `enableSubdomainAccess`. Naming all three hosts
   instead marks the installation `custom-domain`, and no subdomain is published.

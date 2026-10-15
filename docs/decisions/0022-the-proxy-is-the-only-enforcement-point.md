@@ -605,7 +605,9 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   another environment, so a global `admin` grant no longer reaches every application.
 - **IAM administration lists one entry per environment** of each application.
 - **A proxy table change is a proxy rebuild on Zerops**: about 190 s of build plus 60 s of deploy,
-  because the manifest is read once at build. On Cloudflare it is a Worker variable.
+  because the manifest is read once at build, from the data file of the proxy's build archive
+  ([ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)). On Cloudflare it is a Worker
+  variable.
 - **The proxy is a per-deployment single point of failure** and the only thing that establishes an app
   session. Keep it thin. If the auth service dies, Caddy answers 502 and every request is denied.
 - **Zerops carries a second toolchain** (generated Caddy JSON, a pinned binary, an Alpine runtime) and

@@ -37,8 +37,8 @@ that the two providers do not have the same shape of work to order:
   There is no directory to enter and no per-package config to point at, so the Cloudflare stage shape
   does not translate.
 - **The proxy manifest is cross-service state that must move with the code it describes.** Enforcement
-  configuration for IAM, the console and Operations is one `FABRIKA_PROXY_MANIFEST_JSON` document on
-  one proxy service. Regenerating it and applying it must happen in the same run as the deploy, or
+  configuration for IAM, the console and Operations is one manifest document, carried in the build
+  archive of one proxy service. Regenerating it and applying it must happen in the same run as the deploy, or
   enforcement silently describes a previous version of the service contracts. No single pipeline step owns
   that document, because it spans every service the pipeline deploys.
 - **The order carries a security property, not just a dependency.** Since

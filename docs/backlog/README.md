@@ -71,4 +71,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [173](173-the-skills-test-recipes-leak-a-files-globals-and-render-outside-act.md) — The `fetch` stand-in recipe leaks under `--isolate`, the screen example renders outside `act`, and the test-mail recipe draws a checker hint.
 - [174](174-grant-user-administration-on-its-own.md) — Build ADR-0058: `user-admin` at `propustka`, Cloudflare's platform schema registration first.
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.
+- [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

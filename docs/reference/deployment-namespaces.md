@@ -206,10 +206,13 @@ artifact is not read. Before an app deploy, the control plane:
 
 1. verifies namespace coordinates and claims;
 2. compiles the proxy manifest from every assigned app with approved access;
-3. writes it to the proxy service-level
-   `FABRIKA_PROXY_MANIFEST_JSON` variable, and writes each contract application's
-   proxy secret under `proxySecretVariable('<app>@<env>')`;
-4. rolls the proxy and waits for its app version;
+3. writes each contract application's proxy secret to the proxy service under
+   `proxySecretVariable('<app>@<env>')`;
+4. rolls the proxy with the manifest as the data file of its build archive
+   ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)), and waits for its
+   app version. A namespace pinned to a release whose proxy build lifts `FABRIKA_PROXY_MANIFEST_JSON` gets the
+   variable instead, bound by the ~32 KB Zerops value limit, until
+   `fabrika control namespaces update --proxy-source=current` re-pins it;
 5. applies and deploys the application import, with the same secret as its
    `FABRIKA_PROXY_SECRET`.
 

@@ -70,3 +70,9 @@ remains in place.
 - Installation commands need a full checkout and fail before writes when it cannot be verified.
 - A namespace can deliberately retain an older proxy revision through a Control upgrade.
 - Proxy upload adds bounded work to registry-triggered rebuild requests.
+- A proxy manifest has no size limit but the archive's: it never travels through the service environment,
+  whose values Zerops caps at ~32 KB. The archive is therefore not byte-identical to the commit's
+  `git archive`; what stays identical is every entry of the commit, and the data file is identified by its
+  own digest.
+- Moving a namespace to a newer proxy is an operator action. Until it is taken, a namespace pinned to a
+  release whose proxy build lifts the manifest variable keeps that variable and its size limit.

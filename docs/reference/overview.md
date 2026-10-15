@@ -449,9 +449,9 @@ IAM replaces any other value with a generated UUID and does not truncate it. The
 same rule applies to the `requestId` that apps pass to `IamRpc`.
 
 On Zerops the proxy manifest is a baked deploy artefact. Before an app deploy, the
-control plane compiles every registered app manifest assigned to that namespace,
-writes the JSON to the namespace proxy's service-level
-`FABRIKA_PROXY_MANIFEST_JSON` variable, and rolls the proxy. Cloudflare app
+control plane compiles every registered app manifest assigned to that namespace and
+rolls the proxy with the JSON as the one data file of its build archive
+([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). Cloudflare app
 authoring embeds one app manifest in the proxy Worker's vars and binds the app
 Worker under `APP`; the provider deploys the proxy and child configs together.
 Missing or malformed JSON fails closed. The control plane never uses a project-level
