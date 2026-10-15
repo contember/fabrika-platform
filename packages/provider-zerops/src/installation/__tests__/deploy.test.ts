@@ -418,6 +418,50 @@ describe('what it writes', () => {
 	})
 })
 
+describe('an installation an older release wrote, every variable sensitive', () => {
+	const olderInstallation = (sensitiveManifest: boolean) =>
+		fakeZerops({
+			...PROJECT,
+			services: platformServices({
+				proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest, ENVIRONMENT: 'stage' },
+				control: { ENVIRONMENT: 'stage' },
+			}).map((service) => {
+				const sensitive = Object.keys(service.env ?? {}).filter((key) => key !== 'zeropsSubdomain')
+				return {
+					...service,
+					sensitive: sensitiveManifest ? sensitive : sensitive.filter((key) => key !== FABRIKA_PROXY_MANIFEST_JSON),
+				}
+			}),
+		})
+	const deploy = (zerops: FakeZerops) =>
+		deployPlatform(input(), {
+			...fakeSourceCollaborators,
+			api: zerops.api,
+			reconcileSchema: async () => {},
+			sleep: async () => {},
+			log: recordingDeployLog(),
+			signal: new AbortController().signal,
+		})
+
+	test('rewrites each value it cannot read as a readable one, so the next deploy can compare it', async () => {
+		const zerops = olderInstallation(false)
+
+		await deploy(zerops)
+
+		expect(zerops.calls).toContain('env:proxy:ENVIRONMENT')
+		expect(zerops.calls).toContain('env:control:ENVIRONMENT')
+		expect(zerops.sensitive('proxy').has('ENVIRONMENT')).toBe(false)
+		expect(zerops.sensitive('control').has('ENVIRONMENT')).toBe(false)
+	})
+
+	test('refuses a manifest it cannot read, naming why, before anything is written', async () => {
+		const zerops = olderInstallation(true)
+
+		await expect(deploy(zerops)).rejects.toThrow('stored as a SENSITIVE variable')
+		expect(zerops.calls).toEqual([])
+	})
+})
+
 describe('the write→deploy race', () => {
 	test('a trigger that lands on a running userData synchronisation is retried, not lost', async () => {
 		// Live-recorded: a deploy racing an env write dies on `userDataSyncRunning` and leaves the app

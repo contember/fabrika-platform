@@ -6,7 +6,15 @@ import {
 	type ProviderNamespaceRepublishInput,
 	type ProviderNamespaceRepublishResult,
 } from '@fabrika/provider-contract'
-import { waitForProcess, ZEROPS_SERVICE_NOT_HTTP, ZEROPS_TERMINAL, ZeropsApiError, type ZeropsProject, type ZeropsService } from '../api'
+import {
+	readableContent,
+	waitForProcess,
+	ZEROPS_SERVICE_NOT_HTTP,
+	ZEROPS_TERMINAL,
+	ZeropsApiError,
+	type ZeropsProject,
+	type ZeropsService,
+} from '../api'
 import { defaultSleep } from '../collaborators'
 import { namespaceResourceClaims, registrationResourceClaims } from './claims'
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
@@ -179,8 +187,8 @@ const readProxyHosts = async (
 	}
 	try {
 		const variables = await options.api.listServiceEnv({ serviceId: proxyServiceId, signal })
-		const subdomains = variables.find((variable) => variable.key === ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE)
-		return subdomains === undefined ? [] : parseZeropsProxyHosts(subdomains.content)
+		const subdomains = readableContent(variables.find((variable) => variable.key === ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE))
+		return subdomains === undefined ? [] : parseZeropsProxyHosts(subdomains)
 	} catch {
 		// A host listing is a convenience; the proxy is already built, deployed and published. Failing the
 		// namespace over it would report a placement that WORKS as broken. Never the cause: it can carry

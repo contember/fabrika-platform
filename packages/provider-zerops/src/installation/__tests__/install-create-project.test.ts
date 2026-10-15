@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 // What `--create-project` adds to the bring-up: the project itself.
 //
 // Three properties are observable nowhere else. The ORDER — create, then wait for `ACTIVE`, and only
@@ -16,8 +18,11 @@ import { compileTopology, platformTopology } from '../topology/topology'
 import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
+/** A path outside the checkout that does not exist; `storeSecrets` is faked, so nothing is written there. */
+const SECRETS_FILE = join(tmpdir(), `fabrika-install-test-${crypto.randomUUID()}.env`)
+
 const PROJECT = { projectId: 'proj-created', projectName: 'fabrika-stage' }
-const parsePlatformInstallArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
+const parsePlatformInstallArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', `--secrets-file=${SECRETS_FILE}`, ...argv], env)
 const CLIENT_ID = 'client-1'
 const TOKEN_ENV = { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' }
 
@@ -31,6 +36,7 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	environment: 'stage',
 	scheme: 'https',
 	sourceDir: '.',
+	secretsFile: SECRETS_FILE,
 	tier: 'light',
 	unattended: false,
 	...overrides,
@@ -93,6 +99,7 @@ const harness = (
 			},
 		},
 		signal: new AbortController().signal,
+		storeSecrets: async () => {},
 	}
 	return { zerops, log, asked, sleeps, run: () => runInstall(input(), collaborators) }
 }
@@ -186,6 +193,7 @@ describe('what it prints', () => {
 			log,
 			prompts: { confirm: async () => true },
 			signal: new AbortController().signal,
+			storeSecrets: async () => {},
 		})
 
 		const resume = log.lines.findIndex((line) => line.includes(`--project-id=${PROJECT.projectId}`))

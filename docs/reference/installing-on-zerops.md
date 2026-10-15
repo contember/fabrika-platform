@@ -56,18 +56,20 @@ Its shape is decided by three [platform facts](zerops-platform.md):
   `NEW` is refused too — see the [platform facts](zerops-platform.md).
 - **Every process the import returns is waited on before anything is read or written**, because a
   service holds no environment at all until it leaves `NEW`.
-- **Generated secrets are written blind.** They are never read back for comparison, so the command
-  cannot tell a correct value from a stale one — which is why it refuses a project that already carries
-  those KEYS instead of writing over them. A second bring-up would roll a new vault KEK (unrecoverable)
-  and new signing keys (every live token invalid).
+- **Generated secrets are written blind and SENSITIVE.** Zerops answers `REDACTED` when one is read
+  back outside sudo mode, so the command never compares one and cannot tell a correct value from a stale
+  one — which is why it refuses a project that already carries those KEYS instead of writing over them.
+  A second bring-up would roll a new vault KEK (unrecoverable) and new signing keys (every live token
+  invalid). Every other variable is written readable, because `platform deploy` compares and merges it.
 
 It places six generated values — IAM's ES256 signing keys, the IAM RPC key, the proxy key, the
 provisioning key, the Operations sync key and the control vault KEK
 (`packages/provider-zerops/src/installation/secrets.ts`) — plus one minted on the account: a Zerops
 INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on this
 project only), so the installation never holds the personal token the operator authenticated with.
-Exactly one value is printed: the provisioning key, once, at the end, because it lives
-nowhere else, and `platform init` reads it from `FABRIKA_IAM_PROVISIONING_KEY`.
+No value is printed. Before the first one is placed, all of them and the integration token are written to
+`--secrets-file`, a new file outside the source checkout, mode `0600`, under the names `platform init`,
+`platform admin`, `platform deploy` and `control key issue` read.
 
 Fresh install always leaves GitHub source anonymous: it writes no App private key or webhook secret.
 Public repositories therefore deploy without another setup step.
@@ -148,14 +150,15 @@ token, so correcting it costs nothing.
 
 ## Where each credential lives
 
-| Credential                        | Held by                                                                             |
-| --------------------------------- | ----------------------------------------------------------------------------------- |
-| Zerops personal access token      | The operator only. Used by `install`, stored nowhere.                               |
-| Zerops integration token          | The `control` service's environment, and the sidecar GitHub Environment.            |
-| Provisioning key                  | The `iam` and `control` services' environments, and the sidecar GitHub Environment. |
-| Signing keys, vault key, RPC keys | The environments of the services that use them. Nowhere else.                       |
-| GitHub App id and private key     | Control's vault, next to the connection's webhook secret.                           |
-| Machine keys                      | Whoever they were issued to. `key issue` prints each one once.                      |
+| Credential                        | Held by                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| Zerops personal access token      | The operator only. Used by `install`, stored nowhere.                            |
+| Zerops integration token          | The secrets file, the `control` service, and the sidecar GitHub Environment.     |
+| Provisioning key                  | The secrets file, the `iam` and `control` services, and the sidecar Environment. |
+| Signing keys, vault key, RPC keys | The secrets file, and the services that use them.                                |
+| GitHub App id and private key     | Control's vault, next to the connection's webhook secret.                        |
+| Machine keys                      | Whoever they were issued to. `key issue` prints each one once.                   |
 
-The vault key cannot be recovered or re-rolled. Losing the Zerops project's service environments loses
-every secret the control plane holds.
+The services hold their copies as sensitive variables, which Zerops hands back only in sudo mode, so the
+secrets file is the operator's only readable copy. The vault key cannot be recovered or re-rolled: losing
+both the file and the Zerops project loses every secret the control plane holds.

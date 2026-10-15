@@ -81,18 +81,19 @@ is not consent.
      the wait), or read the one you named — and refuse a core package the tier does not match
   2. import the tier's services without code, and wait for the import's processes
   3. generate six secrets and mint the control plane's Zerops INTEGRATION token
-     (client role NO_ACCESS, ADMIN on this project only — never your personal token)
+     (client role NO_ACCESS, ADMIN on this project only — never your personal token), and write
+     all of them to \`--secrets-file\` (mode 0600) before the first one is placed
   4. pass 1: give the proxy an EMPTY manifest and build it, so it publishes one public hostname per
      HTTP port; the three platform hosts are then READ off those, never composed
   5. write every remaining variable on all four runtime services
   6. pass 2: hand the whole ordered sequence to \`platform deploy\`
-  7. print the provisioning key — the CLI keeps no copy; it is held by iam and control in Zerops
+  7. print the next commands; they read their credentials from the secrets file. Zerops holds the
+     same values as SENSITIVE variables and does not hand them back, so that file is the only copy
 
 It REFUSES a project that already holds an installation's generated secrets: a second bring-up would
 roll a new vault key over the old one, which is unrecoverable, and new signing keys, which logs
 everyone out. Once every bootstrap variable is placed, \`platform deploy\` can update the installation
-or finish a failed pass 2. Read FABRIKA_IAM_PROVISIONING_KEY from iam or control and
-FABRIKA_ZEROPS_ACCESS_TOKEN from control in Zerops if the handoff was interrupted.
+or finish a failed pass 2, with the credentials from the secrets file.
 Neither deploy nor init completes a partial bootstrap. If interrupted after a generated secret was
 placed but before every bootstrap variable was placed, preserve the existing keys and arrange
 operator-owned recovery, or start a fresh installation in a separate empty project.
@@ -115,6 +116,7 @@ Options (a flag beats the environment variable beside it):
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --source-dir=<checkout>           required                       clean full checkout running this CLI
   --tier=<light|standard>           FABRIKA_PLATFORM_TIER           default light
+  --secrets-file=<path>             FABRIKA_PLATFORM_SECRETS_FILE   required: a NEW file outside the checkout
   ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
                                                                     required when stdin is not a terminal
 

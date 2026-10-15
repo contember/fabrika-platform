@@ -9,6 +9,7 @@
 // and the variable that would supply it, so a mistyped install fails before it contacts anything.
 
 import { describeArgument, readEnv, readFlag, requiredSetting, setting, UNATTENDED_FLAG } from '@fabrika/installation-init'
+import { checkedSecretsFilePath, SECRETS_FILE_FLAG, SECRETS_FILE_VARIABLE } from './install-secrets'
 import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 import type { PlatformTier } from './topology/topology'
@@ -43,6 +44,8 @@ export interface PlatformInstallInput {
 	/** The scheme a browser speaks to this installation. */
 	readonly scheme: 'http' | 'https'
 	readonly sourceDir: string
+	/** Where every credential this run creates is written, mode 0600, before the first is placed. */
+	readonly secretsFile: string
 	readonly tier: PlatformTier
 	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
 	readonly unattended: boolean
@@ -51,7 +54,7 @@ export interface PlatformInstallInput {
 /** The canonical public release repository used for namespace proxy source identities. */
 export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
-const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--source-dir', '--tier'] as const
+const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--source-dir', '--tier', SECRETS_FILE_FLAG] as const
 
 /** `--create-project`: bring the project up too, instead of naming one the operator made. */
 export const CREATE_PROJECT_FLAG = '--create-project'
@@ -143,6 +146,10 @@ export const parsePlatformInstallArgs = (
 		environment: readEnvironment(argv, env),
 		scheme: readScheme(argv, env),
 		sourceDir,
+		secretsFile: checkedSecretsFilePath(
+			requiredSetting(setting(argv, env, SECRETS_FILE_FLAG, SECRETS_FILE_VARIABLE), SECRETS_FILE_FLAG, SECRETS_FILE_VARIABLE),
+			sourceDir,
+		),
 		tier: readTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),

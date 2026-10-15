@@ -39,9 +39,9 @@ describe('the machine-key next step', () => {
 
 	test('says where each key is READ FROM, and which copy the sidecar holds', () => {
 		const named = machineKeyNextStepLines({ iamOrigin: ORIGIN, sidecarEnvironment: 'test' }).join('\n')
-		expect(named).toContain("read from: the `iam` or `control` service's env, in the Zerops project")
-		// A GitHub Environment secret cannot be read back; the service env is the copy an operator can get.
-		expect(named).toContain('the copy anyone with the project can read')
+		expect(named).toContain('read from: the secrets file `platform install` wrote (--secrets-file)')
+		// Neither a GitHub Environment secret nor a sensitive Zerops variable can be read back; the file can.
+		expect(named).toContain('the copy an operator can read')
 		expect(named).toContain("the sidecar's `test` Environment holds the copy the pipeline uses")
 
 		const anonymous = machineKeyNextStepLines({ iamOrigin: ORIGIN }).join('\n')

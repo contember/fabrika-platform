@@ -84,11 +84,10 @@ describe('local Zerops emulator', () => {
 		if (notes === null) {
 			throw new Error('notes service is missing')
 		}
-		await api.putServiceEnv({ serviceId: notes.id, key: 'NOTES_DATABASE_URL', value: 'secret-one', signal })
-		await api.putServiceEnv({ serviceId: notes.id, key: 'NOTES_DATABASE_URL', value: 'secret-two', signal })
+		await api.putServiceEnv({ serviceId: notes.id, key: 'NOTES_DATABASE_URL', value: 'secret-one', sensitive: false, signal })
+		await api.putServiceEnv({ serviceId: notes.id, key: 'NOTES_DATABASE_URL', value: 'secret-two', sensitive: false, signal })
 		const environment = await api.listServiceEnv({ serviceId: notes.id, signal })
-		expect(environment).toHaveLength(1)
-		expect(environment[0]?.content).toBe('secret-two')
+		expect(environment).toEqual([expect.objectContaining({ key: 'NOTES_DATABASE_URL', sensitive: false, content: 'secret-two' })])
 
 		const process = await api.triggerPipeline({ serviceId: notes.id, buildFromGit: 'https://example.test/repo.git', signal })
 		// A just-started process has not finished. It reports FINISHED from the second read on.
@@ -116,12 +115,14 @@ describe('local Zerops emulator', () => {
 
 		// `/env` is the read path the client uses; `/service-stack/{id}/user-data` is a second one it does not.
 		await expect(api.listServiceEnv({ serviceId, signal })).resolves.toEqual([])
-		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'first', signal })
-		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'second', signal })
+		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'first', sensitive: true, signal })
+		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'second', sensitive: true, signal })
 
 		const written = await api.listServiceEnv({ serviceId, signal })
 		expect(written.map((entry) => entry.key)).toEqual(['FABRIKA_IAM_KEY'])
-		expect(written[0]?.content).toBe('second')
+		// The client never reads a sensitive value back.
+		expect(written[0]).toMatchObject({ sensitive: true })
+		expect(written[0]).not.toHaveProperty('content')
 		await api.deleteServiceEnv({ envId: written[0]?.id ?? '', signal })
 		await expect(api.listServiceEnv({ serviceId, signal })).resolves.toEqual([])
 	})

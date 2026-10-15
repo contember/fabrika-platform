@@ -99,8 +99,8 @@ export const assertNotAlreadyInstalled = async (
 			`this project already holds an installation's generated secrets — ${placed.join(', ')} ${placed.length === 1 ? 'is' : 'are'} already set. `
 				+ '`platform install` is a BRING-UP and would roll a new vault key and new signing keys over them, which is unrecoverable '
 				+ 'for the vault and logs everyone out. If every bootstrap variable was placed, use `fabrika platform deploy --provider=zerops` '
-				+ 'to update or finish deploying the installation; recover FABRIKA_IAM_PROVISIONING_KEY from `iam` or `control` and '
-				+ 'FABRIKA_ZEROPS_ACCESS_TOKEN from `control` in Zerops. Neither deploy nor init completes a partial bootstrap. '
+				+ 'to update or finish deploying the installation, with the credentials from the secrets file the first install wrote. '
+				+ 'Neither deploy nor init completes a partial bootstrap. '
 				+ 'For partial bootstrap, preserve the existing keys and arrange operator-owned recovery, or start a fresh installation in a separate empty project',
 		)
 	}

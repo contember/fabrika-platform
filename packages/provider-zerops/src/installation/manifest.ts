@@ -28,7 +28,8 @@
 // to some other app. A genuinely misplaced application therefore goes dark and is reported, instead of
 // quietly being served by the console.
 
-import { findDuplicateProxyHost, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { FABRIKA_PROXY_MANIFEST_JSON, findDuplicateProxyHost, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import type { ZeropsServiceEnv } from '../index'
 
 /** The composed document plus what happened to every live entry that was not the platform's. */
 export interface MergedProxyManifest {
@@ -78,10 +79,22 @@ export const mergePlatformProxyManifest = (platform: ProxyManifest, live: ProxyM
 /**
  * The live manifest a proxy service currently carries.
  *
- * Absent means "no manifest yet". Present-but-unparseable throws: see `mergePlatformProxyManifest`.
+ * Absent means "no manifest yet". Present-but-unparseable throws: see `mergePlatformProxyManifest`. So
+ * does a SENSITIVE record, which an older release wrote: Zerops will not hand its value back.
  */
-export const readLiveProxyManifest = (value: string | undefined): ProxyManifest | null => {
-	if (value === undefined || value.trim() === '') {
+export const readLiveProxyManifest = (record: ZeropsServiceEnv | undefined): ProxyManifest | null => {
+	if (record === undefined) {
+		return null
+	}
+	if (record.sensitive) {
+		throw new Error(
+			`the proxy's ${FABRIKA_PROXY_MANIFEST_JSON} is stored as a SENSITIVE variable, which Zerops returns as \`REDACTED\`, so the `
+				+ 'application entries it may carry cannot be read and are not replaced. A release before this one wrote it that way. '
+				+ 'Re-save it in the Zerops GUI as a non-sensitive variable with the same value, then run this again',
+		)
+	}
+	const value = record.content
+	if (value.trim() === '') {
 		return null
 	}
 	const manifest = parseProxyManifestJson(value)

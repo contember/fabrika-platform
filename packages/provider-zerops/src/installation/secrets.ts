@@ -1,8 +1,7 @@
 // The six values `fabrika platform install --provider=zerops` GENERATES, and their shapes.
 //
-// Every one of them is written to a Zerops service and never stored anywhere else — there is no `.env`
-// on this path, deliberately (see `init.ts`). Only the provisioning key is ever printed, once, at the
-// end of the install, because `platform init` asks the operator for it afterwards.
+// Every one of them is written to a Zerops service as a SENSITIVE variable, which Zerops does not hand
+// back, and to the operator's local secrets file (`install-secrets.ts`) before that. None is printed.
 //
 // The shapes are not free choices. Each one is what the consuming code already parses:
 //
@@ -59,7 +58,7 @@ export interface InstallationSecrets {
 	readonly rpcKey: string
 	/** Authenticates IAM's `/auth/mint/*` surface, which the proxy calls on the cold path. */
 	readonly proxyKey: string
-	/** The `px_` admin bearer IAM admits as a synthetic global admin. The one value this command prints. */
+	/** The `px_` admin bearer IAM admits as a synthetic global admin. `platform init` and `admin` take it. */
 	readonly provisioningKey: string
 	/** The catalog credential control and Operations share. No `px_` prefix — it is not an IAM credential. */
 	readonly operationsSyncKey: string

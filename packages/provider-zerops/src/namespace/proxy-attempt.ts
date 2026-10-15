@@ -1,6 +1,6 @@
 import { followLeaseLoss, isLeaseLoss, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
-import { ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, ZeropsApiError, type ZeropsAppVersion } from '../api'
+import { readableContent, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, ZeropsApiError, type ZeropsAppVersion } from '../api'
 import type { Sleeper } from '../collaborators'
 import { prepareZeropsDescriptor } from '../descriptor'
 import { isZeropsUploadDestination } from '../source'
@@ -49,16 +49,16 @@ const digest = async (text: string): Promise<string> =>
 const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string): Promise<void> => {
 	const { api, signal } = input
 	const variables = await api.listServiceEnv({ serviceId, signal })
-	if (variables.find(variable => variable.key === SESSION_OWNER_VARIABLE)?.content !== 'null') {
-		await api.putServiceEnv({ serviceId, key: SESSION_OWNER_VARIABLE, value: 'null', signal })
+	if (readableContent(variables.find(variable => variable.key === SESSION_OWNER_VARIABLE)) !== 'null') {
+		await api.putServiceEnv({ serviceId, key: SESSION_OWNER_VARIABLE, value: 'null', sensitive: false, signal })
 	}
-	if (variables.find(variable => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)?.content !== input.iamUrl) {
-		await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, value: input.iamUrl, signal })
+	if (readableContent(variables.find(variable => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)) !== input.iamUrl) {
+		await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, value: input.iamUrl, sensitive: false, signal })
 	}
-	// Secret read-back is not trustworthy, so overwrite it without inspecting its value.
-	await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE, value: input.iamKey, signal })
+	// A secret cannot be read back, so it is overwritten without inspecting its value.
+	await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE, value: input.iamKey, sensitive: true, signal })
 	for (const [key, value] of input.proxySecrets ?? []) {
-		await api.putServiceEnv({ serviceId, key, value, signal })
+		await api.putServiceEnv({ serviceId, key, value, sensitive: true, signal })
 	}
 }
 
@@ -162,7 +162,7 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 		throw new Error('Proxy source resolution identity mismatch')
 	}
 	await input.boundary()
-	await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, signal: input.signal })
+	await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, sensitive: false, signal: input.signal })
 	await writeProxyIam(input, serviceId)
 	input.signal.throwIfAborted()
 	const reserved = await input.api.createAppVersion({ serviceId, name: runId, signal: input.signal })

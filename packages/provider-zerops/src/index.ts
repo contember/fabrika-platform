@@ -1,5 +1,6 @@
 export {
 	createZeropsApi,
+	readableContent,
 	waitForProcess,
 	ZEROPS_ACTIVE,
 	ZEROPS_API_BASE,
@@ -28,6 +29,7 @@ export type {
 	ZeropsRoleCode,
 	ZeropsService,
 	ZeropsServiceEnv,
+	ZeropsServiceEnvWrite,
 	ZeropsServiceStatus,
 	ZeropsTokenProjectGrant,
 	ZeropsUserInfo,

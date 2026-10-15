@@ -95,8 +95,14 @@ export const inspectPlatform = async (projectId: string, api: ZeropsApi, signal:
 	if (control === undefined || control.id === '') throw new Error(`Zerops project ${projectId} has no \`control\` service`)
 	const proxy = oneService(services, 'proxy')
 	if (proxy === undefined || proxy.id === '') throw new Error(`Zerops project ${projectId} has no \`proxy\` service`)
-	const readEnv = async (serviceId: string): Promise<Map<string, string>> =>
-		new Map((await api.listServiceEnv({ serviceId, signal })).map((item) => [item.key, item.content]))
+	// Only the readable values: everything init prints is derived from non-secret configuration.
+	const readEnv = async (serviceId: string): Promise<Map<string, string>> => {
+		const readable = new Map<string, string>()
+		for (const item of await api.listServiceEnv({ serviceId, signal })) {
+			if (!item.sensitive) readable.set(item.key, item.content)
+		}
+		return readable
+	}
 	return {
 		controlEnv: await readEnv(control.id),
 		proxyEnv: await readEnv(proxy.id),

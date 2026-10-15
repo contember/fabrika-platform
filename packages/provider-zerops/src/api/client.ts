@@ -19,15 +19,6 @@ import {
 import { parseServiceEnvResponse } from './service-env-response'
 import type { ZeropsApi, ZeropsApiOptions, ZeropsAppVersion, ZeropsLogLine } from './types'
 
-/**
- * `sensitive` on every user-data WRITE, create and update alike. Required by the platform — omitting it answers
- * `400 invalidUserInput` with `{"sensitive":["field is required"]}` (measured live, 2026-08-18) — and
- * `true` because most of what fabrika writes is a credential. It costs nothing to read: a sensitive
- * variable's `content` still comes back verbatim from `GET /service-stack/{id}/env`, also measured, so the
- * compare-before-write both `platform deploy` and the create-only credential slots depend on still works.
- */
-const SENSITIVE_USER_DATA = true
-
 /** The RFC3339 stamp the plaintext log window puts first on every line. Anchored so a bare year cannot pass. */
 const LOG_LINE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 
@@ -404,11 +395,11 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		listServiceEnv,
 
-		createServiceEnv: async ({ serviceId, key, value, signal }) => {
+		createServiceEnv: async ({ serviceId, key, value, sensitive, signal }) => {
 			let started: unknown
 			try {
 				started = await request('create-only service env', 'POST', `/service-stack/${serviceId}/user-data`, {
-					body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
+					body: { key, content: value, sensitive },
 					signal,
 					omitErrorResponseDetails: true,
 				})
@@ -419,12 +410,12 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			await awaitUserDataSync(started, `the user-data sync on service ${serviceId}`, signal)
 		},
 
-		putServiceEnv: async ({ serviceId, key, value, signal }) => {
+		putServiceEnv: async ({ serviceId, key, value, sensitive, signal }) => {
 			const label = `the user-data sync on service ${serviceId}`
 			// `redactDetail` on both writes: this is the one place a secret VALUE is in the request body.
 			try {
 				const created = await request('create service env', 'POST', `/service-stack/${serviceId}/user-data`, {
-					body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
+					body: { key, content: value, sensitive },
 					signal,
 					redactDetail: true,
 				})
@@ -446,7 +437,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				)
 			}
 			const updated = await request('update service env', 'PUT', `/user-data/${existing.id}`, {
-				body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
+				body: { key, content: value, sensitive },
 				signal,
 				redactDetail: true,
 			})

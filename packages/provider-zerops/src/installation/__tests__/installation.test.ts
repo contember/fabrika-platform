@@ -23,14 +23,15 @@ describe('Zerops installation capability', () => {
 	test('install documents the whole from-scratch surface, credentials included', async () => {
 		// The bring-up is the one command an operator runs before anything exists, so its usage is the only
 		// place the sequence and its two-pass shape are written down for them.
-		for (const flag of ['--project-id', '--client-id', '--env', '--scheme', '--source-dir', '--tier']) {
+		for (const flag of ['--project-id', '--client-id', '--env', '--scheme', '--source-dir', '--tier', '--secrets-file']) {
 			expect(installationCli.usage).toContain(flag)
 		}
 		expect(installationCli.usage).toContain('envIsolation: service')
 		expect(installationCli.usage).toContain('PASSWORD ONLY')
 		expect(installationCli.usage).toContain('Neither deploy nor init completes a partial bootstrap')
 		expect(installationCli.usage).toContain('finish a failed pass 2')
-		expect(installationCli.usage).toContain('the CLI keeps no copy; it is held by iam and control in Zerops')
+		expect(installationCli.usage).toContain('--secrets-file=<path>')
+		expect(installationCli.usage).toContain('so that file is the only copy')
 		expect(installationCli.usage).not.toContain('it is stored nowhere else')
 		// Credentials are environment-only here too, so an unknown flag is an error rather than a value.
 		await expect(installationCli.run('install', ['--source-dir=.', '--token=nope'])).rejects.toThrow('unexpected argument')

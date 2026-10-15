@@ -175,7 +175,7 @@ describe('Zerops API discovery', () => {
 
 		let thrown: unknown
 		try {
-			await api.putServiceEnv({ serviceId: 'proxy', key: 'FABRIKA_IAM_KEY', value: secret, signal: signal() })
+			await api.putServiceEnv({ serviceId: 'proxy', key: 'FABRIKA_IAM_KEY', value: secret, sensitive: true, signal: signal() })
 		} catch (error) {
 			thrown = error
 		}
@@ -194,18 +194,34 @@ describe('Zerops API discovery', () => {
 			urls.push(url)
 			return jsonResponse({
 				items: [
-					{ id: 'env-1', key: 'FABRIKA_RELEASE', content: 'v1', serviceStackId: 'service-1', type: 'SECRET' },
-					{ id: 'env-2', key: 'hostname', content: 'notesapi', serviceStackId: 'service-1', type: 'READ_ONLY' },
+					{ id: 'env-1', key: 'FABRIKA_RELEASE', content: 'v1', serviceStackId: 'service-1', type: 'SECRET', sensitive: false },
+					{ id: 'env-2', key: 'hostname', content: 'notesapi', serviceStackId: 'service-1', type: 'READ_ONLY', sensitive: false },
 				],
 			})
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
 		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).resolves.toEqual([
-			{ id: 'env-1', key: 'FABRIKA_RELEASE', content: 'v1', serviceStackId: 'service-1', type: 'SECRET' },
-			{ id: 'env-2', key: 'hostname', content: 'notesapi', serviceStackId: 'service-1', type: 'READ_ONLY' },
+			{ id: 'env-1', key: 'FABRIKA_RELEASE', content: 'v1', serviceStackId: 'service-1', type: 'SECRET', sensitive: false },
+			{ id: 'env-2', key: 'hostname', content: 'notesapi', serviceStackId: 'service-1', type: 'READ_ONLY', sensitive: false },
 		])
 		expect(urls).toEqual(['https://zerops.test/service-stack/service-1/env'])
+	})
+
+	test('reads a sensitive variable without its content, which outside sudo mode is a placeholder', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () =>
+				jsonResponse({
+					items: [{ id: 'env-1', key: 'FABRIKA_SERVICE_KEY', content: 'REDACTED', serviceStackId: 'service-1', type: 'USER', sensitive: true }],
+				}),
+		})
+
+		const records = await api.listServiceEnv({ serviceId: 'service-1', signal: signal() })
+
+		expect(records).toEqual([{ id: 'env-1', key: 'FABRIKA_SERVICE_KEY', serviceStackId: 'service-1', type: 'USER', sensitive: true }])
+		expect(records[0]).not.toHaveProperty('content')
 	})
 
 	test('accepts every service environment entry inside the response byte bound', async () => {
@@ -215,6 +231,7 @@ describe('Zerops API discovery', () => {
 			content: `value-${index}`,
 			serviceStackId: 'service-1',
 			type: 'SECRET',
+			sensitive: false,
 		}))
 		const api = createZeropsApi({
 			token: 'secret',
@@ -289,7 +306,7 @@ describe('Zerops API discovery', () => {
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: async () => jsonResponse({ items: [valid] }) })
 		const records = await api.listServiceEnv({ serviceId: 'service-1', signal: signal() })
-		expect(records).toEqual([valid])
+		expect(records).toEqual([{ id: 'record', key: 'KEY', type: 'USER', sensitive: true }])
 		expect(records[0]).not.toHaveProperty('serviceStackId')
 	})
 
@@ -387,7 +404,7 @@ describe('Zerops API discovery', () => {
  * a create conflicts on an existing key, and `/env` is the only reading that works.
  */
 const zeropsEnvDouble = (
-	stored: { id: string; key: string; content: string }[],
+	stored: { id: string; key: string; content: string; sensitive: boolean }[],
 	log: { method: string; path: string; body: unknown }[],
 ): FetchLike =>
 async (url, init) => {
@@ -403,13 +420,14 @@ async (url, init) => {
 	}
 	if (init?.method === 'POST' && path.endsWith('/user-data')) {
 		const key = typeof body === 'object' && body !== null && 'key' in body ? String(Reflect.get(body, 'key')) : ''
+		const sensitive = typeof body === 'object' && body !== null && Reflect.get(body, 'sensitive') === true
 		if (stored.some((entry) => entry.key === key)) {
 			return jsonResponse(
 				{ error: { code: 'userDataDuplicateKey', message: `UserData key '${key}' is not unique in service stack frame of reference.` } },
 				400,
 			)
 		}
-		stored.push({ id: `env-${stored.length + 1}`, key, content: 'created' })
+		stored.push({ id: `env-${stored.length + 1}`, key, content: 'created', sensitive })
 		return jsonResponse({ id: 'process-1' })
 	}
 	if (init?.method === 'PUT' && path.startsWith('/user-data/')) {
@@ -433,7 +451,7 @@ describe('Zerops service-level environment writes', () => {
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
-		await api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', signal: controller.signal })
+		await api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', sensitive: true, signal: controller.signal })
 
 		expect(requests).toEqual([{
 			method: 'POST',
@@ -443,19 +461,25 @@ describe('Zerops service-level environment writes', () => {
 		}])
 	})
 
-	test('marks every user-data write sensitive, which the platform requires', async () => {
-		const bodies: unknown[] = []
-		const fetchImpl: FetchLike = async (_url, init) => {
-			bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null)
-			return jsonResponse({ id: 'process-1' })
+	test("sends the caller's sensitivity on every user-data write, which the platform requires", async () => {
+		for (const sensitive of [false, true]) {
+			const bodies: unknown[] = []
+			const fetchImpl: FetchLike = async (_url, init) => {
+				bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null)
+				return jsonResponse({ id: 'process-1' })
+			}
+			const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+			await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_PROXY_MANIFEST_JSON', value: '{}', sensitive, signal: signal() })
+			await api.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: 'v', sensitive, signal: signal() })
+
+			// Omitting it answers 400 `invalidUserInput` with `{"sensitive":["field is required"]}` on the live
+			// platform, which is how a namespace's very first proxy variable failed to be written.
+			expect(bodies).toEqual([
+				{ key: 'FABRIKA_PROXY_MANIFEST_JSON', content: '{}', sensitive },
+				{ key: 'TOKEN', content: 'v', sensitive },
+			])
 		}
-		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
-
-		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_PROXY_MANIFEST_JSON', value: '{}', signal: signal() })
-
-		// Omitting it answers 400 `invalidUserInput` with `{"sensitive":["field is required"]}` on the live
-		// platform, which is how a namespace's very first proxy variable failed to be written.
-		expect(bodies).toEqual([{ key: 'FABRIKA_PROXY_MANIFEST_JSON', content: '{}', sensitive: true }])
 	})
 
 	test('waits out the user-data sync a write starts, because the next operation is refused until it ends', async () => {
@@ -482,7 +506,7 @@ describe('Zerops service-level environment writes', () => {
 			},
 		})
 
-		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test', signal: signal() })
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test', sensitive: false, signal: signal() })
 
 		expect(calls).toEqual([
 			'POST /service-stack/service-1/user-data',
@@ -502,7 +526,7 @@ describe('Zerops service-level environment writes', () => {
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl, sleep: async () => {} })
 
-		await api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', signal: signal() })
+		await api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', sensitive: false, signal: signal() })
 
 		expect(calls).toEqual(['POST /service-stack/service-1/user-data'])
 	})
@@ -519,7 +543,7 @@ describe('Zerops service-level environment writes', () => {
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
-		const error = await api.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, signal: signal() }).catch(
+		const error = await api.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, sensitive: true, signal: signal() }).catch(
 			(cause: unknown) => cause,
 		)
 
@@ -538,7 +562,7 @@ describe('Zerops service-level environment writes', () => {
 			throw new Error(`transport echoed ${secret}`)
 		}
 		const failed = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: failingFetch })
-		const failure = await failed.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, signal: signal() }).catch(
+		const failure = await failed.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, sensitive: true, signal: signal() }).catch(
 			(cause: unknown) => cause,
 		)
 		expect(failure instanceof Error ? failure.message : '').toBe('zerops: create-only service env failed')
@@ -546,9 +570,10 @@ describe('Zerops service-level environment writes', () => {
 
 		const controller = new AbortController()
 		controller.abort()
-		const aborted = await failed.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, signal: controller.signal }).catch(
-			(cause: unknown) => cause,
-		)
+		const aborted = await failed.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, sensitive: true, signal: controller.signal })
+			.catch(
+				(cause: unknown) => cause,
+			)
 		expect(aborted).toBeInstanceOf(DOMException)
 		expect(aborted instanceof Error ? aborted.name : '').toBe('AbortError')
 		expect(calls).toBe(1)
@@ -559,21 +584,21 @@ describe('Zerops service-level environment writes', () => {
 		const fetchImpl = zeropsEnvDouble([], log)
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
-		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', signal: signal() })
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', sensitive: false, signal: signal() })
 
 		expect(log).toEqual([{
 			method: 'POST',
 			path: '/service-stack/service-1/user-data',
-			body: { key: 'FABRIKA_RELEASE', content: 'v1', sensitive: true },
+			body: { key: 'FABRIKA_RELEASE', content: 'v1', sensitive: false },
 		}])
 	})
 
 	test('updates an existing key through its record id after the create conflicts', async () => {
 		const log: { method: string; path: string; body: unknown }[] = []
-		const fetchImpl = zeropsEnvDouble([{ id: 'env-7', key: 'FABRIKA_RELEASE', content: 'v1' }], log)
+		const fetchImpl = zeropsEnvDouble([{ id: 'env-7', key: 'FABRIKA_RELEASE', content: 'v1', sensitive: false }], log)
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
-		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v2', signal: signal() })
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v2', sensitive: true, signal: signal() })
 
 		expect(log.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
 			'POST /service-stack/service-1/user-data',
@@ -581,7 +606,24 @@ describe('Zerops service-level environment writes', () => {
 			'PUT /user-data/env-7',
 		])
 		// Zerops rejects an update that sends `content` alone, and one that omits `sensitive`.
+		expect(log[0]?.body).toEqual({ key: 'FABRIKA_RELEASE', content: 'v2', sensitive: true })
 		expect(log[2]?.body).toEqual({ key: 'FABRIKA_RELEASE', content: 'v2', sensitive: true })
+	})
+
+	test('an update sends the requested sensitivity, so a record an older release wrote sensitive becomes readable', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const fetchImpl = zeropsEnvDouble([{ id: 'env-7', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'REDACTED', sensitive: true }], log)
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_STORAGE_PROVENANCE', value: '["bucket"]', sensitive: false, signal: signal() })
+
+		expect(log.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+			'POST /service-stack/service-1/user-data',
+			'GET /service-stack/service-1/env',
+			'PUT /user-data/env-7',
+		])
+		expect(log[0]?.body).toEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', content: '["bucket"]', sensitive: false })
+		expect(log[2]?.body).toEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', content: '["bucket"]', sensitive: false })
 	})
 
 	test('refuses a key the service declares outside the environment API, without echoing the value', async () => {
@@ -598,7 +640,7 @@ describe('Zerops service-level environment writes', () => {
 
 		let message = ''
 		try {
-			await api.putServiceEnv({ serviceId: 'service-1', key: 'PORT', value: secret, signal: signal() })
+			await api.putServiceEnv({ serviceId: 'service-1', key: 'PORT', value: secret, sensitive: false, signal: signal() })
 		} catch (error) {
 			message = error instanceof Error ? error.message : String(error)
 		}
@@ -614,7 +656,7 @@ describe('Zerops service-level environment writes', () => {
 		}
 		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
 
-		await expect(api.putServiceEnv({ serviceId: 'service-1', key: 'ZEROPS_X', value: 'v', signal: signal() })).rejects.toThrow(
+		await expect(api.putServiceEnv({ serviceId: 'service-1', key: 'ZEROPS_X', value: 'v', sensitive: false, signal: signal() })).rejects.toThrow(
 			'zerops: create service env failed (400) — userDataZeropsPrefixForbidden',
 		)
 		expect(log).toHaveLength(1)

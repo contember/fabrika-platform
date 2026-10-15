@@ -22,18 +22,62 @@ message that names the flag or the variable to set. Read the message: it names t
 | A `gh` login allowed to create a repository in the organization that owns it   | step 3     |
 | The administrator's e-mail address, and the human to open the enrollment URL   | step 2     |
 | For a PRIVATE application repository: the GitHub App connected in the console  | step 5     |
-| The fabrika release tag to install, for example `v0.4.2` (a branch is refused) | steps 1, 3 |
+| The fabrika release tag to install, for example `v0.4.3` (a branch is refused) | steps 1, 3 |
+| The four decisions below                                                       | steps 1, 5 |
 
 Also needed on the machine: [Bun](https://bun.sh) ≥ 1.3, `git`, `gh`, `curl` and `jq`.
+
+## Decisions: ask the human, with the prices
+
+Each choice trades price against stability, and two of them cannot be undone. Show the human this section
+and let them choose; do not pick for them. Prices are Zerops' list prices as of 2026-10-15
+([zerops.io/pricing](https://zerops.io/pricing)): a shared core $0.60, a dedicated core $6.00, RAM $3.00 per
+GB, disk $0.10 per GB and object storage $0.01 per GB, each per 30 days and billed per minute. A Lightweight
+project core is free (15 build hours, 100 GB egress); a Serious one is $10 (150 build hours, 3 TB egress, a
+highly available balancer). The figures below are the idle FLOOR. Every service scales up under load, to 8
+cores and 48 GB per container, and costs more while it does.
+
+**1. Platform tier** (`platform install --tier`, step 1). Cannot be changed later: a project's core package
+is upgrade-only, and the data services differ.
+
+| Tier              | What runs                                                                                                                                                                           | Idle floor | Fails when                                               |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------------- |
+| `light` (default) | Lightweight core. One single-node PostgreSQL (`oltp-hobby`) and one bucket shared by IAM, control and Operations; one container each.                                               | about $6   | any one container or the database is down: sign-in stops |
+| `standard`        | Serious core. HA PostgreSQL (3 nodes, `oltp-production`, dedicated CPU) for IAM and control; a second HA PostgreSQL and bucket for Operations; two containers of IAM and the proxy. | about $100 | survives the loss of one node of each                    |
+
+Most of `standard`'s price is the identity database's dedicated floor (about $72). `light` is right for an
+evaluation and a small fleet that tolerates an outage; `standard` for sign-in that must stay up.
+
+**2. Namespace preset** (`control namespaces create --preset`, step 5). A namespace is the Zerops project
+applications run in. Each one adds its own proxy, about $1.08.
+
+| Preset          | Where an application's database lives                                   | Use with                             |
+| --------------- | ----------------------------------------------------------------------- | ------------------------------------ |
+| `cheap`         | One shared single-node PostgreSQL in the namespace, about $1.45 for all | `fabrika.cheap.config.ts`            |
+| `mid` (default) | Each application imports its own database into the namespace            | `fabrika.config.ts`                  |
+| `full`          | The namespace belongs to ONE application (`--exclusive-app=<id>`)       | an application that must be isolated |
+
+**3. The application's database** (the application's `fabrika.config.ts`, before step 5). The example
+declares `postgresql:single@18` at `oltp-hobby`, about $1.45, plus its runtime from about $1.08 per
+container. `postgresql:ha@18` survives a node failure: about $11 at `oltp-staging` (shared CPU), about $72 at
+`oltp-production` (dedicated). Single to HA later means a new service and a data migration.
+
+**4. Namespace core package** (`--core-package=LIGHT|SERIOUS`, step 5). `LIGHT` is free and the default on
+every environment. `SERIOUS` adds $10 per namespace and a highly available balancer in front of its proxy,
+and it can never be downgraded again.
 
 ## Secrets: rules for an agent
 
 - Every credential is read from the ENVIRONMENT ONLY. No command takes one as a flag.
 - Never print a credential, never put one in a command line you echo, never commit one.
-- Keep each one in its own file with mode `0600` (`umask 077` first) and pass it as
-  `NAME="$(cat <file>)" fabrika …`. Check a file with `wc -c`, never with `cat`.
-- The provisioning key from step 1 is printed ONCE. Capture it from the output into its file at once.
-  The only other copies are in the `iam` and `control` service environments.
+- `platform install` writes every credential it creates to `--secrets-file`, mode `0600`, before it places
+  the first one. That file is the ONLY readable copy. Zerops stores them as sensitive variables and answers
+  `REDACTED` when they are read back, so never try to read a secret from the Zerops API, and never ask the
+  human for sudo mode to do it. Back the file up where the human keeps credentials.
+- Load the file in a subshell, so its integration token never replaces the personal one in your shell:
+  `( set -a && . <secrets file> && set +a && fabrika … )`.
+- Keep any other credential in its own `0600` file (`umask 077` first) and pass it as `NAME="$(cat <file>)"`.
+  Check a file with `wc -c`, never with `cat`.
 
 ## Step 0. Get the CLI at the release tag
 
@@ -55,32 +99,33 @@ checkout is refused, and a local commit is not on GitHub, so namespaces cannot f
 export FABRIKA_ZEROPS_ACCESS_TOKEN="$(cat <personal token file>)"
 curl -s -H "Authorization: Bearer $FABRIKA_ZEROPS_ACCESS_TOKEN" \
   https://api.app-prg1.zerops.io/api/rest/public/user/info | jq '{email, clients: [.clientUserList[] | {clientId, name: .client.accountName, role: .roleCode}]}'
-fabrika platform install --provider=zerops --create-project --client-id=<clientId> --env=<name> --source-dir=. --yes > install.log 2>&1
+fabrika platform install --provider=zerops --create-project --client-id=<clientId> --env=<name> --tier=<light|standard> \
+  --secrets-file=<path outside the clone> --source-dir=. --yes > install.log 2>&1
 ```
 
 - Check the token kind first. The `email` of a personal token is the person's address, and its `role` on the
   client is `OWNER`. An `email` of `token-<id>@zerops.io` is an INTEGRATION token. The install refuses one before
   it creates anything, because an integration token may not mint the token the control plane needs. Ask the
   human for a personal token instead.
-- Run it from the clone root. It runs for many minutes: it imports six services, builds the proxy once to
-  learn the public hosts, then deploys everything.
+- Run it from the clone root. It runs for many minutes: it imports the tier's services, builds the proxy
+  once to learn the public hosts, then deploys everything.
 - `--yes` is required when stdin is not a terminal.
-- Capture the key right away and keep the log away from anything that publishes it:
-  `grep -o 'FABRIKA_IAM_PROVISIONING_KEY=px_[A-Za-z0-9_-]*' install.log | cut -d= -f2 > provisioning.key`
+- `--secrets-file` names a NEW file outside the clone, for example `~/fabrika-<env>.secrets.env`. An existing
+  file is refused. The log prints no credential.
 - The project id is printed BEFORE the long wait. If the run is interrupted, re-run with
   `--project-id=<id>` instead of `--create-project`.
 - A project that already holds generated secrets is refused. Do not try to force it: a second bring-up
   over the same project would destroy the vault key. Start over in a new empty project.
 - The account must be in the default region, or set `FABRIKA_ZEROPS_API_URL` for every command.
 
-**Check.** The log ends with `✓ iam <host>`, the console origin and the provisioning key box. Write down
-the three hosts: IAM, console and Operations.
+**Check.** The log ends with `✓ iam <host>`, the console origin and the `ADMIT YOURSELF` box, and the
+secrets file exists with mode `0600`. Write down the three hosts: IAM, console and Operations.
 
 ## Step 2. Admit the first administrator
 
 ```bash
-FABRIKA_IAM_PROVISIONING_KEY="$(cat provisioning.key)" \
-  fabrika platform admin --provider=zerops --email=<address> --iam-host=<IAM host from step 1>
+( set -a && . <secrets file> && set +a && \
+  fabrika platform admin --provider=zerops --email=<address> --iam-host=<IAM host from step 1> )
 ```
 
 It prints one enrollment URL. Nothing is e-mailed: the installation has no mail service, so do not tell the
@@ -92,22 +137,15 @@ human opens it, sets a password and signs in at the console origin. A re-run cre
 
 The sidecar is a GitHub repository the operator owns. Its workflow runs `platform deploy` at the pinned tag.
 
-Read the integration token that step 1 minted. Never use the personal token here:
+`init` takes the integration token step 1 minted, never the personal one. The secrets file holds it as
+`FABRIKA_ZEROPS_ACCESS_TOKEN`, beside the provisioning key. Run `init` from a directory that is NOT inside
+any git repository. The fabrika clone is a repository, and a home directory under dotfiles version control is
+one too. Otherwise pass `--checkout=<dir>` outside one:
 
 ```bash
-A=https://api.app-prg1.zerops.io/api/rest/public
-H="Authorization: Bearer $FABRIKA_ZEROPS_ACCESS_TOKEN"
-control=$(curl -s -H "$H" "$A/project/<project id>/service-stack?limit=100&offset=0" | jq -r '.list[] | select(.name=="control") | .id')
-curl -s -H "$H" "$A/service-stack/$control/env" | jq -r '.items[] | select(.key=="FABRIKA_ZEROPS_ACCESS_TOKEN") | .content' > integration.token
-```
-
-Then run `init` from a directory that is NOT inside any git repository. The fabrika clone is a repository,
-and a home directory under dotfiles version control is one too. Otherwise pass `--checkout=<dir>` outside one:
-
-```bash
-FABRIKA_ZEROPS_ACCESS_TOKEN="$(cat integration.token)" FABRIKA_IAM_PROVISIONING_KEY="$(cat provisioning.key)" \
+( set -a && . <secrets file> && set +a && \
   fabrika platform init --provider=zerops <installation> --repo=<owner>/<name> --tag=<tag> \
-  --project-id=<project id> --env=<name from step 1> --yes < /dev/null
+  --project-id=<project id> --env=<name from step 1> --yes < /dev/null )
 ```
 
 - Without `--repo` the repository is `contember/fabrika-zerops-<installation>`. Pass `--repo` for any
@@ -120,13 +158,13 @@ FABRIKA_ZEROPS_ACCESS_TOKEN="$(cat integration.token)" FABRIKA_IAM_PROVISIONING_
 ## Step 4. Mint a machine key for `fabrika control`
 
 ```bash
-iam=$(curl -s -H "$H" "$A/project/<project id>/service-stack?limit=100&offset=0" | jq -r '.list[] | select(.name=="iam") | .id')
-curl -s -H "$H" "$A/service-stack/$iam/env" | jq -r '.items[] | select(.key=="FABRIKA_IAM_RPC_KEY") | .content' > iam-rpc.key
-FABRIKA_IAM_RPC_URL=https://<IAM host> FABRIKA_IAM_RPC_KEY="$(cat iam-rpc.key)" FABRIKA_IAM_PROVISIONING_KEY="$(cat provisioning.key)" \
+( umask 077 && set -a && . <secrets file> && set +a && FABRIKA_IAM_RPC_URL=https://<IAM host> \
   fabrika control key issue --label=<name> --permissions=app.manage,namespace.manage,deploy.trigger,deploy.read \
-  --expires-in=2592000 > control-key.out
+  --expires-in=2592000 > control-key.out )
 grep -o 'px_[A-Za-z0-9_-]*' control-key.out | head -1 > control.key && rm control-key.out
 ```
+
+The secrets file supplies `FABRIKA_IAM_RPC_KEY` and `FABRIKA_IAM_PROVISIONING_KEY`.
 
 - `FABRIKA_IAM_RPC_URL` is IAM's PUBLIC `https://` origin. The private `http://iam:3000` answers only inside
   the Zerops project.
@@ -147,13 +185,13 @@ The public example is [`contember/fabrika-example-zerops`](https://github.com/co
 Its `fabrika.config.ts` places the app with its own database (`mid` preset), and `fabrika.cheap.config.ts`
 places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config that matches the preset.
 
-1. **Create a namespace.** It is the Zerops project applications are placed in. Without a custom domain
-   bound to its proxy, pass `--public-access=zerops-subdomain`; the default is `custom-domain`, which serves
-   no host until you bind one.
+1. **Create a namespace** with the preset and core package the human chose (see Decisions). Without a
+   custom domain bound to its proxy, pass `--public-access=zerops-subdomain`; the default is
+   `custom-domain`, which serves no host until you bind one.
 
    ```bash
-   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=mid --public-access=zerops-subdomain
-   fabrika control namespaces create --namespace=<id> --env=<name> --preset=mid --public-access=zerops-subdomain
+   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> --public-access=zerops-subdomain
+   fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> --public-access=zerops-subdomain
    fabrika control namespaces get    --namespace=<id>
    ```
 
@@ -206,6 +244,10 @@ needs only the `gh` login. Existing namespaces keep their proxy version.
 
 - Every refusal names its flag or variable. Fix that one value and re-run. `init`, `admin`, `deploy` and
   `upgrade` are safe to re-run. `install` is not: see step 1.
+- A failed install pass 2 is finished with `platform deploy`, with the credentials from the secrets file. The
+  install prints the command.
+- Lost the secrets file? Nothing in fabrika can recover it, and Zerops will not hand the values back. Start a
+  new installation in a new project.
 - A Zerops build or deploy failure: read the service log in the Zerops GUI or with
   `zcli service log -S <service id> --show-build-logs`.
 - Do not work around a refusal by editing the clone or the generated sidecar. Report what failed, with the

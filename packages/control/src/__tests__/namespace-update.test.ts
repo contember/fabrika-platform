@@ -115,9 +115,12 @@ function fakeZerops(): FakeZerops {
 		},
 		listProjectServices: async ({ projectId }) => services.filter((candidate) => candidate.projectId === projectId),
 		listServiceEnv: async ({ serviceId }) => [...(env.get(serviceId) ?? [])],
-		putServiceEnv: async ({ serviceId, key, value }) => {
+		putServiceEnv: async ({ serviceId, key, value, sensitive }) => {
 			const variables = (env.get(serviceId) ?? []).filter((variable) => variable.key !== key)
-			env.set(serviceId, [...variables, { id: `${serviceId}:${key}`, key, content: value }])
+			const id = `${serviceId}:${key}`
+			// Zerops withholds a sensitive value on read.
+			const written: ZeropsServiceEnv = sensitive ? { id, key, sensitive: true } : { id, key, sensitive: false, content: value }
+			env.set(serviceId, [...variables, written])
 		},
 		createAppVersion: async ({ serviceId }) => {
 			calls.push(`createAppVersion:${serviceId}`)

@@ -39,6 +39,7 @@ import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import {
 	prepareZeropsDescriptor,
+	readableContent,
 	type Sleeper,
 	ZEROPS_ACTIVE,
 	ZEROPS_SERVICE_NOT_HTTP,
@@ -47,6 +48,7 @@ import {
 	ZeropsApiError,
 	type ZeropsNamespaceProxySource,
 	type ZeropsService,
+	type ZeropsServiceEnv,
 } from '../index'
 import type { PlatformDeployInput } from './deploy-options'
 import { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
@@ -237,13 +239,16 @@ export const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedS
 	return service
 }
 
-/** Read one service's environment as a key → value map. Values are never logged. */
+/** One service's environment by key. A sensitive record carries no value. Values are never logged. */
+export type LiveServiceEnv = ReadonlyMap<string, ZeropsServiceEnv>
+
+/** Read one service's environment by key. */
 export const readServiceEnv = async (
 	serviceId: string,
 	{ api, signal }: Pick<PlatformServiceDeployCollaborators, 'api' | 'signal'>,
-): Promise<Map<string, string>> => {
+): Promise<LiveServiceEnv> => {
 	const variables = await api.listServiceEnv({ serviceId, signal })
-	return new Map(variables.map((variable) => [variable.key, variable.content]))
+	return new Map(variables.map((variable) => [variable.key, variable]))
 }
 
 /**
@@ -254,11 +259,11 @@ export const readServiceEnv = async (
  * `custom-domain` installation, where the domains are bound to the project balancer out of band and
  * publishing a subdomain would add a public address nobody asked for.
  */
-const resolvePlacement = (input: PlatformDeployInput, proxyEnv: ReadonlyMap<string, string>): PlatformPlacement => {
+const resolvePlacement = (input: PlatformDeployInput, proxyEnv: LiveServiceEnv): PlatformPlacement => {
 	if (input.hosts !== undefined) {
 		return { hosts: input.hosts, scheme: input.scheme, zeropsSubdomain: false }
 	}
-	const subdomains = proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE)
+	const subdomains = readableContent(proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE))
 	if (subdomains === undefined || subdomains.trim() === '') {
 		throw new Error(
 			'the proxy service publishes no Zerops subdomain — deploy it once so it has HTTP ports, or name every host '
@@ -338,17 +343,22 @@ const desiredServiceEnv = (
 	])
 }
 
-/** Write only what differs. Returns the KEYS written — never a value, not even in a debug line. */
+/**
+ * Write only what differs. Returns the KEYS written — never a value, not even in a debug line.
+ *
+ * Nothing here is a credential, so everything is written readable. A record an older release wrote
+ * sensitive reads as different and is rewritten readable, which is what lets the next deploy compare it.
+ */
 const applyServiceEnv = async (
 	service: ResolvedService,
 	desired: ReadonlyMap<string, string>,
-	live: ReadonlyMap<string, string>,
+	live: LiveServiceEnv,
 	input: PlatformDeployInput,
 	collaborators: PlatformDeployCollaborators,
 ): Promise<string[]> => {
 	const written: string[] = []
 	for (const [key, value] of desired) {
-		if (live.get(key) === value) {
+		if (readableContent(live.get(key)) === value) {
 			continue
 		}
 		written.push(key)
@@ -356,7 +366,7 @@ const applyServiceEnv = async (
 			continue
 		}
 		assertRunning(collaborators.signal)
-		await collaborators.api.putServiceEnv({ serviceId: service.id, key, value, signal: collaborators.signal })
+		await collaborators.api.putServiceEnv({ serviceId: service.id, key, value, sensitive: false, signal: collaborators.signal })
 	}
 	return written
 }
@@ -636,7 +646,9 @@ export const deployPreparedPlatform = async (
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)
 		const keys = desired.get(hostname) ?? new Map<string, string>()
-		if (hostname === 'iam' && oauthConfig === undefined && (live.get(IAM_OAUTH_CONFIG) ?? '').trim() !== '') {
+		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG)
+		const oauthStillSet = liveOAuthConfig !== undefined && (liveOAuthConfig.sensitive || liveOAuthConfig.content.trim() !== '')
+		if (hostname === 'iam' && oauthConfig === undefined && oauthStillSet) {
 			log.warn(`iam: MCP authoring is off but ${IAM_OAUTH_CONFIG} is still set; IAM keeps issuing MCP tokens until it is removed`)
 		}
 		const written = await applyServiceEnv(service, keys, live, input, collaborators)

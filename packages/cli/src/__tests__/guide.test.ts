@@ -17,7 +17,8 @@ const helpOf = async (argv: readonly string[]): Promise<string> => {
 /** Every `fabrika …` command of the guide's code blocks, its `\` continuations joined. */
 const guideCommands = (guide: string): string[] => {
 	const blocks = [...guide.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1] ?? '')
-	const lines = blocks.flatMap((block) => block.replaceAll(/\\\n\s*/g, ' ').split('\n'))
+	// A `<light|standard>` placeholder is one value; its `|` must not end the command before the flags after it.
+	const lines = blocks.flatMap((block) => block.replaceAll(/\\\n\s*/g, ' ').replaceAll(/<[^<>\n]*>/g, '<value>').split('\n'))
 	const commands = lines.flatMap((line) => [...line.matchAll(/\bfabrika (platform|control|app) [^|&;]*/g)].map((match) => match[0]))
 	return commands.map((command) => command.replace(/\s\d?>\s.*$/, ''))
 }

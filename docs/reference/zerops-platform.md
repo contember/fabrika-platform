@@ -225,7 +225,7 @@ The following were confirmed against a real account and are no longer inferences
 | `GET /service-stack/{id}/user-data`                                                 | **Always 400 `serviceStackNotFound`**, before AND after a successful deploy — **SUPERSEDED, see 2026-08-21 below**             |
 | `POST /service-stack/{id}/user-data`                                                | Works from the moment the service exists                                                                                       |
 | `POST /user-data/search` (with `clientId` **and** `serviceStackId`)                 | Works, but is not in the published OpenAPI document and needs a `clientId` — see `/env` below                                  |
-| Secret value read-back                                                              | **Yes.** Env-API writes are stored `type: SECRET` and `content` returns the plaintext to a write-capable token                 |
+| Secret value read-back                                                              | **SUPERSEDED, see 2026-10-15 below:** a sensitive value reads `REDACTED` outside sudo mode                                     |
 | `run.envVariables` visible through the search endpoint                              | Yes, as `type: ENV`                                                                                                            |
 | Custom variables prefixed `ZEROPS_`                                                 | **Refused** — 400 `userDataZeropsPrefixForbidden`. The prefix is reserved                                                      |
 | `zeropsSetup` in an import without `buildFromGit`                                   | **Refused** — 400 `projectImportInvalidParameter`, `{"iam.buildFromGit": ["parameter is required for use of pipelineConfig"]}` |
@@ -703,7 +703,7 @@ than read, and each of which stopped the provision dead until it was addressed.
 | `POST /client/{id}/project/import` with the installation's integration token (client `NO_ACCESS`, one project `ADMIN`) | **`403 insufficientPermissions`.** Client-scoped READS with the same token answer `200`, so the token is healthy — it simply may not create a project ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)) |
 | The same call after `zops token integration update <id> --can-create-projects`                                         | **Accepted.** The token's grant list gains the new project at `OWNER`, automatically and without being asked                                                                                                                            |
 | `POST /service-stack/{id}/user-data` without `sensitive`                                                               | **`400 invalidUserInput`**, `meta.metadata = {"sensitive":["field is required"]}`. The same applies to `PUT /user-data/{id}`                                                                                                            |
-| A user-data write with `sensitive: true`                                                                               | Accepted, and `GET /service-stack/{id}/env` still returns its `content` VERBATIM — so compare-before-write keeps working on secrets                                                                                                     |
+| A user-data write with `sensitive: true`                                                                               | Accepted, and `GET /service-stack/{id}/env` still returns its `content` VERBATIM — **SUPERSEDED, see 2026-10-15 below**                                                                                                                 |
 | `enableSubdomainAccess` immediately after the namespace proxy's first build reports ACTIVE                             | **`serviceStackIsNotHttp`** — "exposes no deployed HTTP port". The ports appear a moment later; the next reconcile succeeds                                                                                                             |
 
 The last one is worth stating plainly, because it contradicts the natural reading of the
@@ -740,6 +740,23 @@ with `sensitive: field is required` (the CLI's update body omits it); the raw `P
 (`UpdateUserDataById`) with `{ key, content, sensitive: true }` is accepted and returns a
 `stack.updateUserData` process. A token swapped that way is read by the service only after
 `service restart`.
+
+### Verified live (2026-10-15, account `prg1`, a disposable project) — a sensitive value is `REDACTED` outside sudo mode
+
+| Call                                                                                          | Result                                                                                         |
+| --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /service-stack/{id}/env` with an integration token (`sudo: false`), sensitive record     | **`content: "REDACTED"`**, `sensitive: true`. A non-sensitive record reads back verbatim       |
+| The same with a personal token whose user is in sudo mode (`GET /auth/sudo` → `inSudo: true`) | The value itself                                                                               |
+| `GET /user-data/{id}/reveal` with that integration token                                      | **`notInSudoMode`** — "Re-authentication via password or any 2FA method is required"           |
+| `PUT /user-data/{id}` with `{ key, content, sensitive: false }` on a sensitive record         | Accepted with the integration token; the record then reads back verbatim as `sensitive: false` |
+| `PUT /user-data/{id}` without `sensitive`                                                     | **200** — the 2026-08-21 `field is required` refusal no longer reproduces                      |
+
+Sudo mode belongs to a user session (password or 2FA re-authentication, or a token minted with `sudo: true`),
+so the same call reads a secret on one machine and `REDACTED` on another. Fabrika depends on neither: the
+client drops a sensitive record's `content` at the boundary (`api/service-env-response.ts`), every write
+states `sensitive` per key, credentials are written sensitive and never compared, and everything a deploy
+compares or merges is written readable. `platform install` writes the operator's copy of every credential it
+creates to `--secrets-file` before placing the first one.
 
 ### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — a missing service by name is a 400
 

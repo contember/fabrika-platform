@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 // What `fabrika platform install --provider=zerops` must do to a project the operator created empty.
 //
 // Four properties here cannot be observed any other way, and each is why its test exists: the ORDER of
@@ -15,14 +18,18 @@ import { deployPlatform, PLATFORM_DEPLOY_ORDER, type PlatformDeployService } fro
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
 import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { provisioningDocument } from '../install-provisioning'
+import { renderSecretsFile, writeSecretsFile } from '../install-secrets'
 import { recordingInitLog } from '../log'
 import { generateInstallationSecrets } from '../secrets'
 import { generatedArtifacts } from '../topology/artifacts'
 import { fakeNamespaceProxySource, fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeServiceSpec, type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
+/** A path outside the checkout that does not exist; `storeSecrets` is faked, so nothing is written there. */
+const SECRETS_FILE = join(tmpdir(), `fabrika-install-test-${crypto.randomUUID()}.env`)
+
 const PROJECT = { projectId: 'proj-1', projectName: 'fabrika-fresh' }
-const parsePlatformInstallArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
+const parsePlatformInstallArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', `--secrets-file=${SECRETS_FILE}`, ...argv], env)
 const CLIENT_ID = 'client-1'
 
 /** The hosts the proxy's six generated subdomains resolve to, keyed by the template's listener ports. */
@@ -37,6 +44,7 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	environment: 'stage',
 	scheme: 'https',
 	sourceDir: '.',
+	secretsFile: SECRETS_FILE,
 	tier: 'light',
 	unattended: false,
 	...overrides,
@@ -47,6 +55,8 @@ interface Harness {
 	readonly reconciled: SchemaReconcileInput[]
 	readonly log: ReturnType<typeof recordingInitLog>
 	readonly asked: string[]
+	/** The text of every secrets file the run stored. */
+	readonly stored: string[]
 	run(overrides?: Partial<PlatformInstallInput>): Promise<void>
 }
 
@@ -67,9 +77,11 @@ const harness = (options: {
 	const reconciled: SchemaReconcileInput[] = []
 	const log = recordingInitLog()
 	const asked: string[] = []
+	const stored: string[] = []
 	const collaborators: InstallCollaborators = {
 		...fakeSourceCollaborators,
 		api: zerops.api,
+		storeSecrets: async (text) => void stored.push(text),
 		reconcileSchema: async (call) => void reconciled.push(call),
 		sleep: async () => {},
 		log,
@@ -81,8 +93,17 @@ const harness = (options: {
 		},
 		signal: new AbortController().signal,
 	}
-	return { zerops, reconciled, log, asked, run: (overrides = {}) => runInstall(input(overrides), collaborators) }
+	return { zerops, reconciled, log, asked, stored, run: (overrides = {}) => runInstall(input(overrides), collaborators) }
 }
+
+/** The `NAME='value'` assignments of a stored secrets file. */
+const storedCredentials = (text: string): Map<string, string> =>
+	new Map(
+		text.split('\n').flatMap((line) => {
+			const match = /^([A-Z_]+)='([^']*)'$/.exec(line)
+			return match?.[1] === undefined || match[2] === undefined ? [] : [[match[1], match[2]]]
+		}),
+	)
 
 /** Every generated secret value that reached any service, so a test can hunt for it in the transcript. */
 const writtenSecrets = (zerops: FakeZerops): Map<string, string> => {
@@ -212,6 +233,7 @@ describe('pass 1', () => {
 			log: recordingInitLog(),
 			prompts: { confirm: async () => true },
 			signal: new AbortController().signal,
+			storeSecrets: async () => {},
 		})
 
 		expect(seen[0]).toBe('{"apps":[]}')
@@ -246,6 +268,7 @@ describe('pass 1', () => {
 				log: recordingInitLog(),
 				prompts: { confirm: async () => true },
 				signal: new AbortController().signal,
+				storeSecrets: async () => {},
 			}),
 		).rejects.toThrow('publishes no Zerops subdomain')
 	})
@@ -493,40 +516,57 @@ describe('the hand-off', () => {
 		expect(fixture.reconciled[0]?.adminKey).toBe(fixture.zerops.env('iam').get('FABRIKA_IAM_PROVISIONING_KEY'))
 	})
 
-	test('names the provisioning key ONCE and the two required deploy secrets `platform init` will ask for', async () => {
+	test('stores every credential it created in the secrets file, BEFORE the first one is placed', async () => {
 		const fixture = harness()
 
 		await fixture.run()
 
-		const provisioningKey = fixture.zerops.env('iam').get('FABRIKA_IAM_PROVISIONING_KEY') ?? 'none'
-		const occurrences = fixture.log.lines.filter((line) => line.includes(provisioningKey))
-		// Twice, and BOTH through `action` — the boxed path is the only one that ever carries the value,
-		// so the key still reaches no `info` line and no other helper.
-		expect(occurrences).toHaveLength(2)
-		expect(occurrences[0]).toStartWith('action: CAPTURE THIS NOW')
-		expect(occurrences[1]).toStartWith('action: ADMIT YOURSELF')
-		expect(occurrences.every((line) => line.startsWith('action: '))).toBe(true)
-		const transcript = fixture.log.lines.join('\n')
-		expect(transcript).toContain('FABRIKA_IAM_PROVISIONING_KEY')
-		expect(transcript).toContain('FABRIKA_ZEROPS_ACCESS_TOKEN')
-		expect(transcript).toContain('recover it from the `iam` or `control` service environment in Zerops')
-		expect(transcript).not.toContain('stored nowhere else')
-		expect(transcript).not.toContain('cannot be recovered')
-		// The command is ready to run: the host it needs is the one this install just read off the proxy.
-		expect(occurrences[1]).toContain(`fabrika platform admin --provider=zerops --email=<you> --iam-host=${IAM_HOST}`)
+		expect(fixture.stored).toHaveLength(1)
+		const stored = storedCredentials(fixture.stored[0] ?? '')
+		for (const [where, value] of writtenSecrets(fixture.zerops)) {
+			expect(`${where} stored: ${[...stored.values()].includes(value)}`).toEndWith('true')
+		}
+		expect(stored.get('FABRIKA_ZEROPS_ACCESS_TOKEN')).toBe(fixture.zerops.mintedTokens[0])
+		expect(stored.get('FABRIKA_ZEROPS_PROJECT_ID')).toBe(PROJECT.projectId)
+		expect([...stored.values()]).not.toContain(input().accessToken)
+		const firstPlaced = fixture.log.lines.findIndex((line) => line.includes('proxy: wrote'))
+		const storedAt = fixture.log.lines.findIndex((line) => line.includes(`wrote ${SECRETS_FILE} (mode 0600)`))
+		expect(storedAt).toBeGreaterThan(-1)
+		expect(storedAt).toBeLessThan(firstPlaced)
 	})
 
-	test('NO other secret value reaches the transcript — not one of them', async () => {
+	test('writes exactly the generated secrets sensitive, and everything platform deploy compares readable', async () => {
+		const fixture = harness()
+
+		await fixture.run()
+
+		for (const [hostname, keys] of GENERATED_SECRET_KEYS) {
+			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual([...keys].sort())
+		}
+		expect(fixture.zerops.sensitive('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+	})
+
+	test('points the hand-off at the secrets file, ready to run', async () => {
 		const fixture = harness()
 
 		await fixture.run()
 
 		const transcript = fixture.log.lines.join('\n')
-		const provisioningKey = fixture.zerops.env('iam').get('FABRIKA_IAM_PROVISIONING_KEY')
+		expect(transcript).toContain(`Every credential is in ${SECRETS_FILE}`)
+		expect(transcript).not.toContain('CAPTURE THIS NOW')
+		const admit = fixture.log.lines.find((line) => line.startsWith('action: ADMIT YOURSELF')) ?? ''
+		expect(admit).toContain(
+			`( set -a && . '${SECRETS_FILE}' && set +a && fabrika platform admin --provider=zerops --email=<you> --iam-host=${IAM_HOST} )`,
+		)
+	})
+
+	test('NO secret value reaches the transcript — not one of them', async () => {
+		const fixture = harness()
+
+		await fixture.run()
+
+		const transcript = fixture.log.lines.join('\n')
 		for (const [where, value] of writtenSecrets(fixture.zerops)) {
-			if (value === provisioningKey) {
-				continue
-			}
 			expect(`${where} leaked: ${transcript.includes(value)}`).toEndWith('false')
 		}
 		expect(transcript).not.toContain(input().accessToken)
@@ -560,6 +600,7 @@ describe('what it refuses', () => {
 			log,
 			prompts: { confirm: async () => true },
 			signal: new AbortController().signal,
+			storeSecrets: async () => {},
 		})
 
 		expect(log.lines.some((line) => line.startsWith('warn: ') && line.includes('mode'))).toBe(true)
@@ -703,14 +744,14 @@ describe('every outward step is confirmed', () => {
 		expect(writtenSecrets(fixture.zerops)).toEqual(keys)
 	})
 
-	test('a fully configured pass-two failure can be repaired by deploy with the remote credentials', async () => {
+	test('a fully configured pass-two failure can be repaired by deploy with the credentials from the secrets file', async () => {
 		const fixture = harness()
 		fixture.zerops.failDeploy('iam')
 		await expect(fixture.run()).rejects.toThrow('finished as DEPLOY_FAILED')
-		expect(fixture.log.lines.join('\n')).toContain('If this deploy fails, read FABRIKA_IAM_PROVISIONING_KEY from `iam` or `control`')
-		expect(fixture.log.lines.some((line) => line.startsWith('action: CAPTURE THIS NOW'))).toBe(false)
-		const iamAdminKey = fixture.zerops.env('iam').get('FABRIKA_IAM_PROVISIONING_KEY')
-		const accessToken = fixture.zerops.env('control').get('FABRIKA_ZEROPS_ACCESS_TOKEN')
+		expect(fixture.log.lines.join('\n')).toContain(`finish it with \`platform deploy\`, which takes its credentials from ${SECRETS_FILE}`)
+		const stored = storedCredentials(fixture.stored[0] ?? '')
+		const iamAdminKey = stored.get('FABRIKA_IAM_PROVISIONING_KEY')
+		const accessToken = stored.get('FABRIKA_ZEROPS_ACCESS_TOKEN')
 		if (iamAdminKey === undefined || accessToken === undefined) throw new Error('bootstrap credentials were not placed')
 		const credentials = writtenSecrets(fixture.zerops)
 		fixture.zerops.calls.length = 0
@@ -780,9 +821,11 @@ describe('every outward step is confirmed', () => {
 		await fixture.run()
 
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual(['deploy:proxy'])
-		expect(fixture.log.lines.join('\n')).toContain('fabrika platform deploy --provider=zerops --source-dir=. --project-id=proj-1 --env=stage')
-		// The hand-off still happens: the key exists whether or not the deploy ran.
-		expect(fixture.log.lines.some((line) => line.startsWith('action: CAPTURE THIS NOW'))).toBe(true)
+		expect(fixture.log.lines.join('\n')).toContain(
+			`( set -a && . '${SECRETS_FILE}' && set +a && fabrika platform deploy --provider=zerops --source-dir=. --project-id=proj-1 --env=stage )`,
+		)
+		// The hand-off still happens: the credentials exist whether or not the deploy ran.
+		expect(fixture.log.lines.some((line) => line.startsWith('action: ADMIT YOURSELF'))).toBe(true)
 	})
 })
 
@@ -829,6 +872,7 @@ describe('the argument surface', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
+			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			unattended: false,
 		})
@@ -866,3 +910,53 @@ describe('the argument surface', () => {
 
 /** A type-level reminder that the deploy order is not this command's to restate. */
 const _order: readonly PlatformDeployService[] = PLATFORM_DEPLOY_ORDER
+
+describe('the secrets file', () => {
+	const scratch = () => mkdtempSync(join(tmpdir(), 'fabrika-secrets-'))
+	const args = (
+		secretsFile: string,
+		sourceDir: string,
+	) => ['--project-id=p1', '--client-id=c1', '--env=stage', `--source-dir=${sourceDir}`, `--secrets-file=${secretsFile}`]
+
+	test('is required', () => {
+		expect(() => parseArgs(['--source-dir=.', '--project-id=p1', '--client-id=c1', '--env=stage'], { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' })).toThrow(
+			'--secrets-file=<value> or FABRIKA_PLATFORM_SECRETS_FILE is required',
+		)
+	})
+
+	test("is refused when it exists: it may be another installation's only copy", () => {
+		const dir = scratch()
+		const existing = join(dir, 'secrets.env')
+		writeFileSync(existing, 'kept')
+		expect(() => parseArgs(args(existing, join(dir, 'checkout')), { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' })).toThrow('already exists')
+		expect(readFileSync(existing, 'utf8')).toBe('kept')
+	})
+
+	test('is refused inside the source checkout, which deploy uploads', () => {
+		const dir = scratch()
+		expect(() => parseArgs(args(join(dir, 'secrets.env'), dir), { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' })).toThrow('inside the source checkout')
+	})
+
+	test('is created mode 0600, and never replaces a file that appeared since the check', async () => {
+		const path = join(scratch(), 'secrets.env')
+		await writeSecretsFile(path, "FABRIKA_IAM_RPC_KEY='px_x'\n")
+		expect(statSync(path).mode & 0o777).toBe(0o600)
+		await expect(writeSecretsFile(path, 'other')).rejects.toThrow()
+		expect(readFileSync(path, 'utf8')).toBe("FABRIKA_IAM_RPC_KEY='px_x'\n")
+	})
+
+	test('is shell-sourceable, under the names the next commands read', () => {
+		const text = renderSecretsFile({
+			environment: 'stage',
+			projectId: 'proj-1',
+			clientId: CLIENT_ID,
+			secrets: generateInstallationSecrets(),
+			zeropsAccessToken: 'minted',
+		})
+		const names = [...storedCredentials(text).keys()]
+		expect(names).toEqual(
+			expect.arrayContaining(['FABRIKA_IAM_PROVISIONING_KEY', 'FABRIKA_ZEROPS_ACCESS_TOKEN', 'FABRIKA_IAM_RPC_KEY', 'FABRIKA_CONTROL_VAULT_KEY']),
+		)
+		expect(text.split('\n').filter((line) => line !== '' && !line.startsWith('#')).length).toBe(names.length)
+	})
+})

@@ -7,6 +7,7 @@
 // run given a project id that creates one anyway fails too; and a project-level write has no opt-in at
 // all, because nothing may ever make one (ADR-0004).
 
+import { withoutSensitiveContent } from '../../api/service-env-response'
 import {
 	type ZeropsApi,
 	ZeropsApiError,
@@ -14,7 +15,6 @@ import {
 	type ZeropsProjectMode,
 	type ZeropsProjectStatus,
 	type ZeropsService,
-	type ZeropsServiceEnv,
 	type ZeropsServiceStatus,
 } from '../../index'
 
@@ -23,6 +23,8 @@ export interface FakeServiceSpec {
 	readonly id: string
 	readonly subdomainAccess?: boolean
 	readonly env?: Readonly<Record<string, string>>
+	/** Keys of `env` stored SENSITIVE, as a release before per-key sensitivity wrote every variable. */
+	readonly sensitive?: readonly string[]
 	readonly sequence?: number
 	/** What `listProjectServices` reports. `NEW` is a service the platform has not finished creating. */
 	readonly status?: ZeropsServiceStatus
@@ -71,6 +73,8 @@ export interface FakeZerops {
 	/** The plaintext of every integration token this fake minted, so a test can hunt for it in a log. */
 	readonly mintedTokens: string[]
 	env(service: string): Map<string, string>
+	/** The keys a service stores sensitive: the API hands their values back to nobody. */
+	sensitive(service: string): ReadonlySet<string>
 	subdomainAccess(service: string): boolean
 	/** Make one write fail, so the fail-closed path can be exercised. */
 	failWrite(service: string, key: string): void
@@ -105,6 +109,7 @@ export const fakeZerops = (options: {
 	const byName = new Map(live.map((service) => [service.name, service]))
 	const idToName = new Map(live.map((service) => [service.id, service.name]))
 	const env = new Map(live.map((service) => [service.name, new Map(Object.entries(service.env ?? {}))]))
+	const sensitiveKeys = new Map(live.map((service) => [service.name, new Set(service.sensitive ?? [])]))
 	const published = new Map(live.map((service) => [service.name, service.subdomainAccess === true]))
 	const sequence = new Map(live.map((service) => [service.name, service.sequence ?? 0]))
 	const failedWrites = new Set<string>()
@@ -125,6 +130,16 @@ export const fakeZerops = (options: {
 			throw new Error(`unknown service ${name}`)
 		}
 		return values
+	}
+	const sensitiveOf = (name: string): Set<string> => {
+		const keys = sensitiveKeys.get(name) ?? new Set<string>()
+		sensitiveKeys.set(name, keys)
+		return keys
+	}
+	const store = (name: string, key: string, value: string, sensitive: boolean): void => {
+		envOf(name).set(key, value)
+		if (sensitive) sensitiveOf(name).add(key)
+		else sensitiveOf(name).delete(key)
 	}
 
 	/** An EFFECT: recorded in both, because `calls` is what a test asserting "nothing happened" reads. */
@@ -149,6 +164,7 @@ export const fakeZerops = (options: {
 		byName.set(service.name, service)
 		idToName.set(service.id, service.name)
 		env.set(service.name, new Map(Object.entries(service.env ?? {})))
+		sensitiveKeys.set(service.name, new Set(service.sensitive ?? []))
 		published.set(service.name, service.subdomainAccess === true)
 		sequence.set(service.name, service.sequence ?? 0)
 	}
@@ -307,24 +323,27 @@ export const fakeZerops = (options: {
 		listServiceEnv: async ({ serviceId }) => {
 			const name = nameOf(serviceId)
 			observe(`readenv:${name}`)
-			return [...envOf(name)].map(([key, content]): ZeropsServiceEnv => ({ id: `${name}:${key}`, key, content, serviceStackId: serviceId }))
+			// Through the real reader's rule: a sensitive value is never handed back.
+			return [...envOf(name)].map(([key, content]) =>
+				withoutSensitiveContent({ id: `${name}:${key}`, key, content, serviceStackId: serviceId, sensitive: sensitiveOf(name).has(key) })
+			)
 		},
 
-		createServiceEnv: async ({ serviceId, key, value }) => {
+		createServiceEnv: async ({ serviceId, key, value, sensitive }) => {
 			const name = nameOf(serviceId)
 			if (failedWrites.delete(`${name}:${key}`)) throw new Error('zerops: create-only service env failed')
 			if (envOf(name).has(key)) throw new Error('zerops: create-only service env failed')
 			effect(`env:${name}:${key}`)
-			envOf(name).set(key, value)
+			store(name, key, value, sensitive)
 		},
 
-		putServiceEnv: async ({ serviceId, key, value }) => {
+		putServiceEnv: async ({ serviceId, key, value, sensitive }) => {
 			const name = nameOf(serviceId)
 			if (failedWrites.delete(`${name}:${key}`)) {
 				throw new Error(`zerops: create service env failed (400)`)
 			}
 			effect(`env:${name}:${key}`)
-			envOf(name).set(key, value)
+			store(name, key, value, sensitive)
 		},
 
 		triggerPipeline: NEVER('triggerPipeline'),
@@ -377,6 +396,7 @@ export const fakeZerops = (options: {
 		projectImports,
 		mintedTokens,
 		env: (service) => envOf(service),
+		sensitive: (service) => sensitiveOf(service),
 		subdomainAccess: (service) => published.get(service) === true,
 		failWrite: (service, key) => void failedWrites.add(`${service}:${key}`),
 		failDeploy: (service) => void failedDeploys.add(service),

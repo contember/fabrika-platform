@@ -50,8 +50,9 @@ export const machineKeyNextStepLines = (step: MachineKeyNextStep = {}): readonly
 		// Never a guessed origin: the control service records the real one, and reading it is one command.
 		? readFrom('FABRIKA_IAM_RPC_URL', "`control`'s own FABRIKA_IAM_ISSUER, in the Zerops project")
 		: `export FABRIKA_IAM_RPC_URL=${step.iamOrigin}`,
-	readFrom('FABRIKA_IAM_RPC_KEY', "the `iam` or `control` service's env, in the Zerops project"),
-	readFrom('FABRIKA_IAM_PROVISIONING_KEY', 'the same env — the copy anyone with the project can read;'),
+	// Not the service env: Zerops reads a sensitive value back as `REDACTED` outside sudo mode.
+	readFrom('FABRIKA_IAM_RPC_KEY', 'the secrets file `platform install` wrote (--secrets-file)'),
+	readFrom('FABRIKA_IAM_PROVISIONING_KEY', 'the same file — the copy an operator can read;'),
 	continued(
 		step.sidecarEnvironment === undefined
 			? "the sidecar repository's Environment holds the copy the pipeline uses"

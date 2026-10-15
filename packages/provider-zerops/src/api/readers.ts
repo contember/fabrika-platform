@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { withoutSensitiveContent } from './service-env-response'
 import type {
 	ZeropsAppVersion,
 	ZeropsAppVersionStatus,
@@ -160,8 +161,8 @@ export const serviceEnvSchema = z.object({
 	content: z.string(),
 	serviceStackId: optional(idSchema),
 	type: optional(z.string()),
-	sensitive: optional(z.boolean()),
-}) satisfies z.ZodType<ZeropsServiceEnv, z.ZodTypeDef, unknown>
+	sensitive: z.boolean(),
+}).transform(withoutSensitiveContent) satisfies z.ZodType<ZeropsServiceEnv, z.ZodTypeDef, unknown>
 
 export const importResultSchema = z.object({
 	projectId: idSchema,

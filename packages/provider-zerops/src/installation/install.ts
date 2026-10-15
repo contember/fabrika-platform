@@ -11,7 +11,7 @@ import {
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
-import { createZeropsApi, defaultSleep, type ZeropsNamespaceProxySource } from '../index'
+import { createZeropsApi, defaultSleep, readableContent, type ZeropsNamespaceProxySource } from '../index'
 import {
 	deployPlatformService,
 	deployPreparedPlatform,
@@ -38,6 +38,7 @@ import {
 	resolvePlatformServices,
 	serviceOf,
 } from './install-provisioning'
+import { renderSecretsFile, writeSecretsFile } from './install-secrets'
 import { explainMintFailure } from './install-token'
 import { prepareInstallationSource, prepareNamespaceProxySource, validateInstallationSetups } from './installation-source'
 import type { PreparedPlatformSource } from './platform-source'
@@ -69,7 +70,7 @@ const passOne = async (
 	await deployPlatformService(proxy, { source, dryRun: false }, collaborators)
 
 	const proxyEnv = await readServiceEnv(proxy.id, collaborators)
-	const subdomains = proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE)
+	const subdomains = readableContent(proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE))
 	if (subdomains === undefined || subdomains.trim() === '') {
 		throw new Error('the proxy published no Zerops subdomain after its first deploy — this installation has no address to be named by')
 	}
@@ -152,6 +153,13 @@ const installPreparedPlatform = async (
 	}
 	log.ok(`integration token ${token.id} minted, ${token.projects.length} project grant(s)`)
 
+	log.step('Store the credentials locally')
+	// BEFORE the first one is placed: Zerops keeps them sensitive and will not hand them back.
+	await collaborators.storeSecrets(
+		renderSecretsFile({ environment, projectId: project.id, clientId: input.clientId, secrets, zeropsAccessToken: token.token }),
+	)
+	log.ok(`wrote ${input.secretsFile} (mode 0600) — every credential this installation was created with; nothing else holds a readable copy`)
+
 	const hosts = await passOne(source, serviceOf(services, PLATFORM_PROXY_SERVICE), secrets, collaborators)
 	log.ok(`iam ${hosts.iam}`)
 	log.ok(`console ${hosts.control}`)
@@ -174,7 +182,7 @@ const installPreparedPlatform = async (
 		throw new Error(
 			'declined: the proxy is built but the installation is not configured. Its generated proxy key is already placed, so '
 				+ 're-running `platform install` is refused. Neither `platform deploy` nor `platform init` completes a partial bootstrap. '
-				+ 'Preserve the existing keys and arrange operator-owned recovery, or start a fresh installation in a separate empty project',
+				+ `Keep ${input.secretsFile} and arrange operator-owned recovery, or start a fresh installation in a separate empty project`,
 		)
 	}
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
@@ -182,9 +190,9 @@ const installPreparedPlatform = async (
 	}
 
 	log.step('Pass 2 — deploy the installation')
+	const withSecrets = (command: string): string => `( set -a && . ${shellQuoted(input.secretsFile)} && set +a && ${command} )`
 	log.info(
-		'Every bootstrap variable is placed. If this deploy fails, read FABRIKA_IAM_PROVISIONING_KEY from `iam` or `control` '
-			+ 'and FABRIKA_ZEROPS_ACCESS_TOKEN from `control` in Zerops, then run `fabrika platform deploy --provider=zerops` with this project and source checkout.',
+		`Every bootstrap variable is placed. If this deploy fails, finish it with \`platform deploy\`, which takes its credentials from ${input.secretsFile}.`,
 	)
 	log.info(
 		`\`platform deploy\` owns the whole ordered sequence: ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${
@@ -193,7 +201,7 @@ const installPreparedPlatform = async (
 	)
 	if (!(await prompts.confirm('Deploy the installation now? (about 15 minutes)', true))) {
 		log.action('OPERATOR ACTION — every variable is placed; the installation is one command from running', [
-			`FABRIKA_ZEROPS_ACCESS_TOKEN=… FABRIKA_IAM_PROVISIONING_KEY=… fabrika platform deploy --provider=zerops --source-dir=. --project-id=${project.id} --env=${environment}`,
+			withSecrets(`fabrika platform deploy --provider=zerops --source-dir=. --project-id=${project.id} --env=${environment}`),
 		])
 	} else {
 		await deployPreparedPlatform(
@@ -213,21 +221,18 @@ const installPreparedPlatform = async (
 	}
 
 	log.step('Hand off')
-	// The intentional secret-output exception: init needs the key IAM was seeded with, never a new value.
-	log.action('CAPTURE THIS NOW — the CLI keeps no copy; recover it from the `iam` or `control` service environment in Zerops', [
-		`FABRIKA_IAM_PROVISIONING_KEY=${secrets.provisioningKey}`,
-	])
-	log.info('`fabrika platform init --provider=zerops <installation>` asks for two required deployment secrets:')
-	log.info('  FABRIKA_IAM_PROVISIONING_KEY   the key above')
-	log.info('  FABRIKA_ZEROPS_ACCESS_TOKEN    the integration token just minted — read it back from the `control` service, never printed here')
+	log.info(`Every credential is in ${input.secretsFile}, and nothing prints one. Keep that file private and backed up:`)
+	log.info('it holds the vault key, whose loss is unrecoverable, and Zerops does not hand any of them back.')
+	log.info('`platform init` and `control key issue` read their credentials from it under the names it uses.')
 	log.info(`The console answers at ${platformOrigin(input.scheme, hosts.control)}, once someone can sign in: nobody can yet.`)
-	// Through the SAME boxed path as the key above, deliberately: `action` is already the one output
-	// that carries a secret value, so the ready-to-run command does not become a second place one is
-	// printed. `platform admin` is idempotent, so re-running it is safe.
+	// `platform admin` is idempotent, so re-running it is safe.
 	log.action('ADMIT YOURSELF — the console has no administrator until this runs', [
-		`FABRIKA_IAM_PROVISIONING_KEY=${secrets.provisioningKey} fabrika platform admin --provider=zerops --email=<you> --iam-host=${hosts.iam}`,
+		withSecrets(`fabrika platform admin --provider=zerops --email=<you> --iam-host=${hosts.iam}`),
 	])
 }
+
+/** A path as one shell word. */
+const shellQuoted = (path: string): string => `'${path.replaceAll("'", "'\\''")}'`
 
 /**
  * The confirmations stand between a stray invocation and an installation: this command generates six
@@ -262,5 +267,6 @@ export const consoleInstallCollaborators = (input: PlatformInstallInput, reconci
 		},
 		prompts,
 		signal: new AbortController().signal,
+		storeSecrets: (text) => writeSecretsFile(input.secretsFile, text),
 	}
 }

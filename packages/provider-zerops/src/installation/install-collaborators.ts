@@ -18,6 +18,8 @@ export interface InstallCollaborators {
 	readonly log: InitLog
 	readonly prompts: InstallPrompts
 	readonly signal: AbortSignal
+	/** Create the local secrets file (`--secrets-file`) with this text. Never logged. */
+	readonly storeSecrets: (text: string) => Promise<void>
 }
 
 export const assertRunning = (signal: AbortSignal): void => {

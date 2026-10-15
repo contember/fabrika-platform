@@ -31,7 +31,7 @@ interface Recorded {
 	externalIds: string[]
 	logs: string[]
 	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
-	envWrites: Array<{ serviceId: string; key: string; value: string }>
+	envWrites: Array<{ serviceId: string; key: string; value: string; sensitive: boolean }>
 	envDeletes: string[]
 	imports: Array<{ projectId: string; yaml: string }>
 }
@@ -147,7 +147,7 @@ const makeApi = (
 	status: () => ZeropsAppVersionStatus | undefined = () => 'ACTIVE',
 	freshService = false,
 ): ZeropsApi => {
-	const records: ZeropsServiceEnv[] = [{ id: 'env-1', key: 'TOKEN', content: 'blurred' }]
+	const records: ZeropsServiceEnv[] = [{ id: 'env-1', key: 'TOKEN', sensitive: true }]
 	const deleted = new Set<string>()
 	return {
 		importServices: async ({ projectId, yaml }) => {
@@ -222,13 +222,13 @@ const makeApi = (
 		createServiceEnv: async () => {
 			throw new Error('the control provider writes service variables only through putServiceEnv')
 		},
-		putServiceEnv: async ({ serviceId, key, value }) => {
-			recorded.envWrites.push({ serviceId, key, value })
+		putServiceEnv: async ({ serviceId, key, value, sensitive }) => {
+			recorded.envWrites.push({ serviceId, key, value, sensitive })
 		},
 		deleteServiceEnv: async ({ envId }) => {
 			recorded.envDeletes.push(envId)
 		},
-		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', content: 'value' }),
+		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', sensitive: false, content: 'value' }),
 		getLogAccess: async () => {
 			throw new Error('logs unavailable')
 		},
@@ -514,7 +514,7 @@ describe('Zerops ControlProvider registration', () => {
 		expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1', createdBuckets: ['bucket-1'] })
 		expect(recorded.envWrites).toEqual([])
 		expect(await control.deploy({ ...deployInput(recorded), environment: prepared.environment })).toEqual({ state: 'succeeded' })
-		expect(recorded.envWrites).toContainEqual({ serviceId: 'service-1', key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1' })
+		expect(recorded.envWrites).toContainEqual({ serviceId: 'service-1', key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false })
 	})
 
 	test('an adopted bucket gets no creation evidence and its deploy is refused', async () => {
@@ -976,7 +976,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await expect(control.deploy({ ...deployInput(recorded), signal: controller.signal })).rejects.toBe(reason)
 		expect(recorded.calls).toEqual(['importServices', 'createAppVersion:service-1'])
 		expect(sourceCalls).toEqual([])
-		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' }])
+		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret', sensitive: true }])
 	})
 	test('a lease lost at an await-version boundary neither cancels the build nor deletes the version', async () => {
 		const controller = new AbortController()
@@ -1424,8 +1424,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 			}),
 		).toEqual({ state: 'succeeded' })
 		expect(recorded.envWrites).toEqual([
-			{ serviceId: 'service-1', key: 'FABRIKA_OPERATIONS_DSN', value: dsn },
-			{ serviceId: 'service-1', key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' },
+			{ serviceId: 'service-1', key: 'FABRIKA_OPERATIONS_DSN', value: dsn, sensitive: true },
+			{ serviceId: 'service-1', key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret', sensitive: true },
 		])
 		expect(builds).toHaveLength(1)
 		expect(builds[0]).toContain(`FABRIKA_RELEASE: ${release}\n`)
@@ -1780,7 +1780,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		const stored = await control.secrets.put({ environment: environment(), name: 'TOKEN', value: 'secret-value' })
 		await control.secrets.delete({ environment: environment(), name: 'TOKEN' })
 		expect(stored).toEqual({ valueRef: 'zerops:service-1/TOKEN' })
-		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'TOKEN', value: 'secret-value' }])
+		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'TOKEN', value: 'secret-value', sensitive: true }])
 		expect(recorded.envDeletes).toEqual(['env-1'])
 	})
 
@@ -1813,9 +1813,9 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await control.secrets.put({ environment: environment(), name: 'DB', value: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING })
 		await control.secrets.put({ environment: environment(), name: 'PLAIN', value: 'pa$$word $notes_PORT ${}' })
 		expect(recorded.envWrites).toEqual([
-			{ serviceId: 'service-1', key: 'OWN', value: '${notes_PORT}' },
-			{ serviceId: 'service-1', key: 'DB', value: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING },
-			{ serviceId: 'service-1', key: 'PLAIN', value: 'pa$$word $notes_PORT ${}' },
+			{ serviceId: 'service-1', key: 'OWN', value: '${notes_PORT}', sensitive: true },
+			{ serviceId: 'service-1', key: 'DB', value: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, sensitive: true },
+			{ serviceId: 'service-1', key: 'PLAIN', value: 'pa$$word $notes_PORT ${}', sensitive: true },
 		])
 	})
 })

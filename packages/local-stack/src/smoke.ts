@@ -306,8 +306,8 @@ const activeOperationsConfig = async (): Promise<ActiveOperationsConfig> => {
 }
 
 /**
- * ADR-0044: four managed keys are sensitive service variables holding the deploy's values, and the release
- * is a version-bound `ENV` record of the active version — never a service variable.
+ * ADR-0044: the managed keys are service variables holding the deploy's values — the credentials sensitive, the
+ * rest readable — and the release is a version-bound `ENV` record of the active version, never a service variable.
  */
 const proveManagedOperationsEnvironment = async (
 	config: ActiveOperationsConfig,
@@ -317,17 +317,18 @@ const proveManagedOperationsEnvironment = async (
 	const snapshot = await emulatorSnapshot()
 	const serviceId = notesServiceId(snapshot)
 	const records = snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId)
-	const expected = new Map<string, string>([
-		[FABRIKA_OPERATIONS_DSN, config.dsn],
-		[FABRIKA_APP_ID, NOTES_APP_ID],
-		[FABRIKA_IAM_APP_ID, LOCAL_NOTES_IAM_APP_ID],
-		[FABRIKA_ENVIRONMENT, NOTES_ENVIRONMENT],
-		[FABRIKA_SERVICE_KEY, DEFAULT_OPERATIONS_SERVICE_KEY],
+	// Value and sensitivity: a credential is written sensitive, everything else readable.
+	const expected = new Map<string, readonly [string, boolean]>([
+		[FABRIKA_OPERATIONS_DSN, [config.dsn, true]],
+		[FABRIKA_APP_ID, [NOTES_APP_ID, false]],
+		[FABRIKA_IAM_APP_ID, [LOCAL_NOTES_IAM_APP_ID, false]],
+		[FABRIKA_ENVIRONMENT, [NOTES_ENVIRONMENT, false]],
+		[FABRIKA_SERVICE_KEY, [DEFAULT_OPERATIONS_SERVICE_KEY, true]],
 	])
-	for (const [key, expectedValue] of expected) {
+	for (const [key, [expectedValue, sensitive]] of expected) {
 		const matching = records.filter(record => record.key === key)
 		const record = matching[0]
-		if (matching.length !== 1 || record?.type !== 'USER' || record.content !== expectedValue || record.sensitive !== true) {
+		if (matching.length !== 1 || record?.type !== 'USER' || record.content !== expectedValue || record.sensitive !== sensitive) {
 			throw new Error(`Zerops emulator service variable ${key} does not match the deploy projection`)
 		}
 	}
@@ -364,6 +365,16 @@ const proveManagedOperationsEnvironment = async (
 	if (unexpected.length > 0) {
 		throw new Error(`Zerops emulator holds Fabrika records beyond the managed keys: ${unexpected.map((record) => record.key).join(', ')}`)
 	}
+}
+
+/** The one readable service variable `key` of `serviceId`. */
+const soleReadable = (snapshot: EmulatorSnapshot, serviceId: string, key: string, description: string): string => {
+	const matching = snapshot.serviceEnv.filter((record) => record.serviceStackId === serviceId && record.key === key)
+	const record = matching[0]
+	if (matching.length !== 1 || record?.type !== 'USER' || record.sensitive !== false || record.content === '') {
+		throw new Error(`Zerops emulator holds no single readable ${description}`)
+	}
+	return record.content
 }
 
 /** The one sensitive service variable `key` of `serviceId`; its value is compared, never printed. */
@@ -422,7 +433,7 @@ const proveContractApplicationEnvironment = async (
 	const buckets = snapshot.services.filter((service) => service.projectId === app?.projectId && service.name === NOTES_FILES_SERVICE)
 	const bucket = buckets[0]
 	if (buckets.length !== 1 || bucket === undefined) throw new Error('the Notes project holds no single attachments bucket')
-	if (soleSecret(snapshot, serviceId, STORAGE_PROVENANCE_VARIABLE, 'bucket provenance marker') !== bucket.id) {
+	if (soleReadable(snapshot, serviceId, STORAGE_PROVENANCE_VARIABLE, 'bucket provenance marker') !== bucket.id) {
 		throw new Error('the bucket provenance marker does not name the attachments bucket the import created')
 	}
 	const storage = {

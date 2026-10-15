@@ -1,27 +1,45 @@
 import { describe, expect, test } from 'bun:test'
-import { parseServiceEnvResponse } from '../api/service-env-response'
+import { parseServiceEnvResponse, readableContent } from '../api/service-env-response'
 
 describe('strict raw service-env observation', () => {
-	const valid = { id: 'record', key: 'KEY', content: '', serviceStackId: 'service', type: 'USER', sensitive: true }
+	const valid = { id: 'record', key: 'KEY', content: '', serviceStackId: 'service', type: 'USER', sensitive: false }
 
 	test('preserves empty values and unknown unrelated types while discarding unused wire fields', () => {
 		expect(parseServiceEnvResponse({ items: [{ ...valid, type: 'FUTURE_TYPE', unused: true }] }, 'service')).toEqual([{
 			...valid,
 			type: 'FUTURE_TYPE',
 		}])
-		expect(parseServiceEnvResponse({ items: [{ id: 'record', key: 'KEY', content: '' }] }, 'service')).toEqual([{
+		expect(parseServiceEnvResponse({ items: [{ id: 'record', key: 'KEY', content: '', sensitive: false }] }, 'service')).toEqual([{
 			id: 'record',
 			key: 'KEY',
 			content: '',
+			sensitive: false,
 		}])
 		expect(parseServiceEnvResponse({ items: [] }, 'service')).toEqual([])
-		expect(parseServiceEnvResponse({ items: [{ ...valid, sensitive: false }] }, 'service')).toEqual([{ ...valid, sensitive: false }])
 	})
 
-	test('sensitive is optional but must be a boolean when supplied', () => {
+	test('drops the content of a sensitive record, whatever the platform sent', () => {
+		for (const content of ['REDACTED', 'the-real-secret', '']) {
+			const [record] = parseServiceEnvResponse({ items: [{ ...valid, content, sensitive: true }] }, 'service')
+			expect(record).toEqual({ id: 'record', key: 'KEY', serviceStackId: 'service', type: 'USER', sensitive: true })
+			expect(record).not.toHaveProperty('content')
+			expect(readableContent(record)).toBeUndefined()
+		}
+	})
+
+	test('sensitive is required and must be a boolean', () => {
+		expect(() => parseServiceEnvResponse({ items: [{ id: 'record', key: 'KEY', content: '' }] }, 'service')).toThrow(
+			'invalid service environment response',
+		)
 		for (const sensitive of [undefined, null, 0, 1, 'true', 'false', {}, []]) {
 			expect(() => parseServiceEnvResponse({ items: [{ ...valid, sensitive }] }, 'service')).toThrow('invalid service environment response')
 		}
+	})
+
+	test('readableContent reads a readable record and nothing else', () => {
+		expect(readableContent({ id: 'record', key: 'KEY', sensitive: false, content: 'value' })).toBe('value')
+		expect(readableContent({ id: 'record', key: 'KEY', sensitive: true })).toBeUndefined()
+		expect(readableContent(undefined)).toBeUndefined()
 	})
 
 	test('malformed lists and records are not coerced to absence or empty content', () => {

@@ -8,6 +8,7 @@ import { type InstallationEndpointRow, requirementDigest } from '@fabrika/auth-c
 import {
 	type ContractProxyApp,
 	contractProxyTable,
+	FABRIKA_PROXY_MANIFEST_JSON,
 	type InstallationProxyApp,
 	type InstallationProxyTable,
 	type ProxyApp,
@@ -15,6 +16,7 @@ import {
 } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import type { ZeropsServiceEnv } from '../../index'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from '../manifest'
 
 const protocolRow = (id: string, path: string) => {
@@ -98,13 +100,20 @@ describe('merging', () => {
 })
 
 describe('reading the live value', () => {
+	const readable = (content: string): ZeropsServiceEnv => ({ id: 'env-1', key: FABRIKA_PROXY_MANIFEST_JSON, sensitive: false, content })
+
 	test('absent or empty means no manifest yet', () => {
 		expect(readLiveProxyManifest(undefined)).toBeNull()
-		expect(readLiveProxyManifest('   ')).toBeNull()
+		expect(readLiveProxyManifest(readable('   '))).toBeNull()
 	})
 
 	test('unparseable is refused, because the entries it holds cannot be read and must not be dropped', () => {
-		expect(() => readLiveProxyManifest('{"apps":[{"id":"notes"}]}')).toThrow('cannot be parsed by this build')
-		expect(() => readLiveProxyManifest('not json')).toThrow('cannot be parsed by this build')
+		expect(() => readLiveProxyManifest(readable('{"apps":[{"id":"notes"}]}'))).toThrow('cannot be parsed by this build')
+		expect(() => readLiveProxyManifest(readable('not json'))).toThrow('cannot be parsed by this build')
+	})
+
+	test('a sensitive one is refused too, naming why: Zerops hands back no value to merge', () => {
+		const sensitive: ZeropsServiceEnv = { id: 'env-1', key: FABRIKA_PROXY_MANIFEST_JSON, sensitive: true }
+		expect(() => readLiveProxyManifest(sensitive)).toThrow('stored as a SENSITIVE variable')
 	})
 })

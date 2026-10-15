@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
 	decodeZeropsNamespaceProxySource,
 	prepareZeropsDescriptor,
@@ -16,6 +17,9 @@ import { recordingInitLog } from '../log'
 import { uploadPlatformArchive, validatePlatformUploadUrl } from '../platform-upload'
 import { fakeNamespaceProxySource, fakePlatformSource, fakeSourceCollaborators } from './fake-platform-source'
 import { fakeZerops, importedLightServices, platformServices, SUBDOMAINS } from './fake-zerops'
+
+/** A path outside the checkout that does not exist; `storeSecrets` is faked, so nothing is written there. */
+const SECRETS_FILE = join(tmpdir(), `fabrika-install-test-${crypto.randomUUID()}.env`)
 
 const deployInput = {
 	project: { kind: 'id', projectId: 'project' },
@@ -164,9 +168,10 @@ describe('exact installation source', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
+			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			unattended: true,
-		}, { ...invalid, log: recordingInitLog(), prompts: { confirm: async () => true } })).rejects.toThrow()
+		}, { ...invalid, log: recordingInitLog(), prompts: { confirm: async () => true }, storeSecrets: async () => {} })).rejects.toThrow()
 		expect(zerops.calls).toEqual([])
 		expect(disposed).toBe(2)
 	})
@@ -177,6 +182,7 @@ describe('exact installation source', () => {
 			...collaborators,
 			log: recordingInitLog(),
 			prompts: { confirm: async () => true },
+			storeSecrets: async () => {},
 			prepareSource: async () => ({
 				...fakePlatformSource(),
 				descriptor: { ...fakePlatformSource().descriptor, contents: 'zerops:\n  - setup: proxy\n' },
@@ -189,6 +195,7 @@ describe('exact installation source', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
+			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			unattended: true,
 		}, install)).rejects.toThrow('selected setup')
@@ -214,12 +221,14 @@ describe('exact installation source', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
+			secretsFile: SECRETS_FILE,
 			tier: 'light',
 			unattended: true,
 		}, {
 			...fixture().collaborators,
 			log: recordingInitLog(),
 			prompts: { confirm: async () => true },
+			storeSecrets: async () => {},
 			prepareSource: async () => {
 				preparations++
 				return {

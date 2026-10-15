@@ -21,6 +21,7 @@ import {
 	runSteps,
 } from '@fabrika/provider-contract'
 import {
+	readableContent,
 	waitForProcess,
 	ZEROPS_ACTIVE,
 	ZEROPS_PROCESS_FINISHED,
@@ -47,9 +48,11 @@ import {
 	assertAuthoredManagedDocument,
 	assertAuthoredManagedInputs,
 	isFrameworkFamilyVariable,
+	isSensitiveFamilyVariable,
 	type ManagedValues,
 	overlayRelease,
 	parseManagedEnvironment,
+	SENSITIVE_MANAGED_KEYS,
 	SERVICE_MANAGED_KEYS,
 } from './managed-env'
 import {
@@ -452,8 +455,8 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 	const created = env.attempt.created ?? new Map<string, string>()
 	const buckets = artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
 	const records = buckets.length === 0 ? [] : await zerops.api.listServiceEnv({ serviceId: target.serviceId, signal })
-	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
-	const known = new Set([...parseStorageProvenance(marker?.content), ...(target.createdBuckets ?? [])])
+	const marker = readableContent(records.find((record) => record.key === STORAGE_PROVENANCE_KEY))
+	const known = new Set([...parseStorageProvenance(marker), ...(target.createdBuckets ?? [])])
 	const findings: ExposureFinding[] = []
 	const bucketIds: string[] = []
 	for (const hostname of manifestServiceHostnames(artifact)) {
@@ -517,9 +520,10 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	for (const key of SERVICE_MANAGED_KEYS) {
 		const value = managedValues[key]
 		const existing = records.find((record) => record.key === key)
+		const sensitive = SENSITIVE_MANAGED_KEYS.has(key)
 		assertRunning(signal)
-		if (value !== null && existing?.content !== value) {
-			await zerops.api.putServiceEnv({ serviceId, key, value, signal })
+		if (value !== null && (sensitive || readableContent(existing) !== value)) {
+			await zerops.api.putServiceEnv({ serviceId, key, value, sensitive, signal })
 			log(`  ${key}: updated`)
 		} else if (value === null && existing !== undefined) {
 			await zerops.api.deleteServiceEnv({ envId: existing.id, signal })
@@ -530,9 +534,10 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	}
 	const provenance = env.attempt.storageProvenance
 	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
-	if (typeof provenance === 'string' && marker?.content !== provenance) {
+	if (typeof provenance === 'string' && readableContent(marker) !== provenance) {
 		assertRunning(signal)
-		await zerops.api.putServiceEnv({ serviceId, key: STORAGE_PROVENANCE_KEY, value: provenance, signal })
+		// Not a credential, and the exposure read-back above reads it: it must stay readable.
+		await zerops.api.putServiceEnv({ serviceId, key: STORAGE_PROVENANCE_KEY, value: provenance, sensitive: false, signal })
 		log(`  ${STORAGE_PROVENANCE_KEY}: updated`)
 	} else if (provenance === null && marker !== undefined) {
 		assertRunning(signal)
@@ -542,9 +547,10 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	// A workload key is written like a managed key; one whose workload is gone is removed, so no stale key stays readable.
 	for (const [key, value] of Object.entries(familyVariables)) {
 		const existing = records.find((record) => record.key === key)
+		const sensitive = isSensitiveFamilyVariable(key)
 		assertRunning(signal)
-		if (existing?.content !== value) {
-			await zerops.api.putServiceEnv({ serviceId, key, value, signal })
+		if (sensitive || readableContent(existing) !== value) {
+			await zerops.api.putServiceEnv({ serviceId, key, value, sensitive, signal })
 			log(`  ${key}: updated`)
 		} else {
 			log(`  ${key}: unchanged`)

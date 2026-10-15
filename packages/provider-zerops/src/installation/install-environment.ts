@@ -194,18 +194,20 @@ export const GENERATED_SECRET_KEYS: ReadonlyMap<PlatformDeployService, readonly 
 /**
  * Write a set of variables, reporting the KEYS — never a value, not even in a debug line.
  *
- * Write-first and unconditional: half of these are generated secrets, and a read-compare-write over a
- * value the platform may or may not hand back verbatim would make the outcome depend on something
- * nobody has pinned. `PUT /user-data/{id}` replaces in place, so a repeat costs a call and nothing else.
+ * Write-first and unconditional: a generated secret cannot be read back to compare, and `PUT
+ * /user-data/{id}` replaces in place, so a repeat costs a call and nothing else. Exactly the generated
+ * secrets are written sensitive; everything else stays readable, because `platform deploy` compares
+ * and merges it later.
  */
 export const writeServiceEnv = async (
 	service: ResolvedService,
 	desired: ReadonlyMap<string, string>,
 	{ api, log, signal }: InstallCollaborators,
 ): Promise<void> => {
+	const secrets = GENERATED_SECRET_KEYS.get(service.hostname) ?? []
 	for (const [key, value] of desired) {
 		assertRunning(signal)
-		await api.putServiceEnv({ serviceId: service.id, key, value, signal })
+		await api.putServiceEnv({ serviceId: service.id, key, value, sensitive: secrets.includes(key), signal })
 	}
 	log.ok(`${service.hostname}: wrote ${[...desired.keys()].join(', ')}`)
 }

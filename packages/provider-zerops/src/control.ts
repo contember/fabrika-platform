@@ -463,6 +463,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					serviceId: target.serviceId,
 					key: input.name,
 					value: input.value,
+					sensitive: true,
 					signal: abortSignal(),
 				})
 				return { valueRef: `zerops:${target.serviceId}/${encodeURIComponent(input.name)}` }

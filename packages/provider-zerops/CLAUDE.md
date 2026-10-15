@@ -240,8 +240,12 @@ Invariants:
   an interrupted run resumes with `--project-id=<id>`.
 - Keep credentials out of generated artifacts. Do not claim real-account support from schema validation
   or dry runs. Preserve the import-without-code → write service secrets → deploy order; `install` is it.
-- **`install` GENERATES credentials** (six secrets plus a minted Zerops integration token) and prints exactly
-  ONE value — the provisioning key, once, at the end, for `init`. IAM and Control keep remote copies.
+- **`install` GENERATES credentials** (six secrets plus a minted Zerops integration token), prints none, and
+  writes all of them to `--secrets-file` (new, outside the checkout, `0600`) BEFORE placing the first one.
+- **No code reads a secret back from Zerops.** A sensitive value reads `REDACTED` outside sudo mode, so the
+  client drops its `content` (`api/service-env-response.ts`) and every `putServiceEnv` states `sensitive`.
+  A credential is written `true` and never compared; anything compared or merged later (the proxy manifest,
+  origins, the provenance marker) is written `false`.
 - **`install` refuses a non-terminal stdin unless `--yes` is passed** (`installPrompts`, before anything is
   contacted). Every confirmation defaults to yes, so a pipe of blank lines would consent to everything.
   `--yes` has no environment variable.

@@ -80,7 +80,8 @@ test("the active version's literal run variables are listed by /env as USER reco
 	expect(await envRecords(f.state)).toEqual({ APP_LABEL: 'a', FABRIKA_RELEASE: 'release-a' })
 	const listed = await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
 	expect(listed.map(({ key, type }) => ({ key, type }))).toEqual([{ key: 'APP_LABEL', type: 'USER' }, { key: 'FABRIKA_RELEASE', type: 'USER' }])
-	await expect(f.api.putServiceEnv({ serviceId: f.serviceId, key: 'FABRIKA_RELEASE', value: 'service-variable', signal: signal() })).rejects.toThrow()
+	await expect(f.api.putServiceEnv({ serviceId: f.serviceId, key: 'FABRIKA_RELEASE', value: 'service-variable', sensitive: false, signal: signal() }))
+		.rejects.toThrow()
 	const release = listed.find((record) => record.key === 'FABRIKA_RELEASE')
 	await expect(f.api.deleteServiceEnv({ envId: release?.id ?? '', signal: signal() })).rejects.toThrow('userDataDeleteForbidden')
 
@@ -349,9 +350,10 @@ test('deleting the service tombstones its reservations; non-HTTP builds never en
 
 test('a managed service variable is a sensitive USER record; codeless reimport demotes HTTP version', async () => {
 	const f = await fixture()
-	await f.api.putServiceEnv({ serviceId: f.serviceId, key: 'FABRIKA_APP_ID', value: 'demo', signal: signal() })
+	await f.api.putServiceEnv({ serviceId: f.serviceId, key: 'FABRIKA_APP_ID', value: 'demo', sensitive: true, signal: signal() })
 	const records = await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
-	expect(records).toEqual([expect.objectContaining({ key: 'FABRIKA_APP_ID', content: 'demo', type: 'USER', sensitive: true })])
+	expect(records).toEqual([expect.objectContaining({ key: 'FABRIKA_APP_ID', type: 'USER', sensitive: true })])
+	expect(records[0]).not.toHaveProperty('content')
 	await expect(f.api.enableSubdomainAccess({ serviceId: f.serviceId, signal: signal() })).rejects.toThrow('serviceStackIsNotHttp')
 	const reservation = await f.api.createAppVersion({ serviceId: f.serviceId, signal: signal() })
 	await f.upload(reservation.uploadUrl)

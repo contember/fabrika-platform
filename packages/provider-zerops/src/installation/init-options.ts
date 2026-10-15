@@ -138,9 +138,9 @@ export const parseInitArgs = (argv: readonly string[], env: CommandEnv, cwd: str
 		accessToken: credential(
 			env,
 			'FABRIKA_ZEROPS_ACCESS_TOKEN',
-			"the Zerops INTEGRATION token `platform install` minted, read from the `control` service's environment",
+			'the Zerops INTEGRATION token `platform install` minted, from its secrets file',
 		),
-		provisioningKey: credential(env, 'FABRIKA_IAM_PROVISIONING_KEY', 'the px_ key `platform install` printed'),
+		provisioningKey: credential(env, 'FABRIKA_IAM_PROVISIONING_KEY', 'the px_ key from the secrets file `platform install` wrote'),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(hosts === undefined ? {} : { hosts }),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),

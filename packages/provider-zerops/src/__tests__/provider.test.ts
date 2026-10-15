@@ -15,8 +15,8 @@ import {
 	type ZeropsLogAccess,
 	type ZeropsProcess,
 	type ZeropsService,
-	type ZeropsServiceEnv,
 } from '../api'
+import { withoutSensitiveContent } from '../api/service-env-response'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { parseZeropsCheckpoint } from '../control'
@@ -47,7 +47,7 @@ interface Recorded {
 	builds: Array<{ appVersionId: string; zeropsYaml: string; zeropsYamlSetup?: string }>
 	uploads: Array<{ uploadUrl: string; commitSha: string; descriptorSha256: string; archive: ZeropsSourceArchive }>
 	timeline: string[]
-	envWrites: Array<{ key: string; value: string }>
+	envWrites: Array<{ key: string; value: string; sensitive: boolean }>
 	envDeletes: string[]
 	alerts: ExposureAlert[]
 }
@@ -75,6 +75,15 @@ const fresh = (): Recorded => ({
 
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
 
+/** A variable as the platform stores it: the value of a sensitive one is kept, and `/env` withholds it. */
+interface StoredServiceEnv {
+	id: string
+	key: string
+	content: string
+	type?: string
+	sensitive: boolean
+}
+
 interface Overrides {
 	uploadUrl?: string
 	statuses?: Array<ZeropsAppVersion['status']>
@@ -87,7 +96,7 @@ interface Overrides {
 	versionErrors?: number
 	importProcesses?: { id: string; status: ZeropsProcess['status'] }[]
 	pipelineStart?: string
-	serviceEnv?: ZeropsServiceEnv[]
+	serviceEnv?: StoredServiceEnv[]
 	/** What `findService` answers per hostname; every service reads `subdomainAccess: false` by default. */
 	services?: Record<string, Partial<ZeropsService> | null>
 	/** The services the import reports, replacing the default one for `api`. */
@@ -111,7 +120,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let processPoll = 0
 	let versionErrors = overrides.versionErrors ?? 0
 	const deleted = new Set<string>()
-	const records: ZeropsServiceEnv[] = (overrides.serviceEnv ?? []).map((record) => ({ ...record }))
+	const records = overrides.serviceEnv ?? []
 	return {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
@@ -187,22 +196,22 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		listProjectServices: async () => [],
 		listServiceEnv: async () => {
 			recorded.calls.push('listServiceEnv')
-			return records.map((record) => ({ ...record }))
+			return records.map(withoutSensitiveContent)
 		},
 		createServiceEnv: async () => {
 			throw new Error('the deploy driver writes service variables only through putServiceEnv')
 		},
-		putServiceEnv: async ({ key, value }) => {
+		putServiceEnv: async ({ key, value, sensitive }) => {
 			recorded.calls.push(`putServiceEnv:${key}`)
 			recorded.timeline.push(`put:${key}`)
-			recorded.envWrites.push({ key, value })
+			recorded.envWrites.push({ key, value, sensitive })
 		},
 		deleteServiceEnv: async ({ envId }) => {
 			recorded.calls.push(`deleteServiceEnv:${envId}`)
 			recorded.timeline.push(`delete:${envId}`)
 			recorded.envDeletes.push(envId)
 		},
-		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', content: 'value' }),
+		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', sensitive: false, content: 'value' }),
 		getLogAccess: async () => LOG_ACCESS,
 		readBuildLog: overrides.logFetch === undefined
 			? async () => [{ message: 'building' }]
@@ -433,7 +442,11 @@ describe('Zerops provider', () => {
 			makeCollaborators(recorded, {
 				serviceEnv: [
 					{ id: 'env-dsn', key: 'FABRIKA_OPERATIONS_DSN', content: 'private-old-dsn', type: 'USER', sensitive: true },
-					{ id: 'env-app', key: 'FABRIKA_APP_ID', content: 'demo', type: 'USER', sensitive: true },
+					{ id: 'env-app', key: 'FABRIKA_APP_ID', content: 'demo', type: 'USER', sensitive: false },
+					// An older release wrote every variable sensitive; the same value is unreadable, so it is rewritten readable.
+					{ id: 'env-environment', key: 'FABRIKA_ENVIRONMENT', content: 'prod', type: 'USER', sensitive: true },
+					// A credential is never compared: the same value is written again.
+					{ id: 'env-service-key', key: 'FABRIKA_SERVICE_KEY', content: 'private-service-key', type: 'USER', sensitive: true },
 					{ id: 'env-issuer', key: 'FABRIKA_IAM_ISSUER', content: 'https://old-issuer.test', type: 'USER', sensitive: true },
 					// What `/env` reports for the previous version's descriptor variable; Zerops refuses to delete it.
 					{ id: 'env-release', key: 'FABRIKA_RELEASE', content: 'release-previous', type: 'USER', sensitive: false },
@@ -458,13 +471,13 @@ describe('Zerops provider', () => {
 		}, provider)
 
 		expect(recorded.envWrites).toEqual([
-			{ key: 'FABRIKA_OPERATIONS_DSN', value: 'private-new-dsn' },
-			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod' },
-			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
-			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
-			{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' },
-			{ key: 'FABRIKA_IAM_RPC_URL', value: 'https://iam.test' },
-			{ key: 'FABRIKA_IAM_RPC_KEY', value: 'px_private-membership-key' },
+			{ key: 'FABRIKA_OPERATIONS_DSN', value: 'private-new-dsn', sensitive: true },
+			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod', sensitive: false },
+			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod', sensitive: false },
+			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key', sensitive: true },
+			{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret', sensitive: true },
+			{ key: 'FABRIKA_IAM_RPC_URL', value: 'https://iam.test', sensitive: false },
+			{ key: 'FABRIKA_IAM_RPC_KEY', value: 'px_private-membership-key', sensitive: true },
 		])
 		expect(recorded.envDeletes).toEqual(['env-issuer'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
@@ -491,6 +504,8 @@ describe('Zerops provider', () => {
 		const log = recorded.logs.join('\n')
 		expect(log).toContain('FABRIKA_OPERATIONS_DSN: updated')
 		expect(log).toContain('FABRIKA_APP_ID: unchanged')
+		expect(log).toContain('FABRIKA_ENVIRONMENT: updated')
+		expect(log).toContain('FABRIKA_SERVICE_KEY: updated')
 		expect(log).toContain('FABRIKA_IAM_ISSUER: removed')
 		expect(log).not.toContain('FABRIKA_RELEASE')
 		expect(log).not.toContain('private-')
@@ -516,8 +531,9 @@ describe('Zerops provider', () => {
 				FABRIKA_WEBHOOK_GITHUB_KEY: 'px_private-github',
 			},
 		}, provider)
-		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_JOB_NIGHTLY_KEY', value: 'px_private-new-nightly' })
-		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_WEBHOOK_GITHUB_KEY')
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_JOB_NIGHTLY_KEY', value: 'px_private-new-nightly', sensitive: true })
+		// A workload key is a credential, so it is never compared and an unchanged one is written again.
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_WEBHOOK_GITHUB_KEY', value: 'px_private-github', sensitive: true })
 		expect(recorded.envDeletes).toEqual(['env-weekly'])
 		const log = recorded.logs.join('\n')
 		expect(log).toContain('FABRIKA_JOB_WEEKLY_KEY: removed')
@@ -550,8 +566,8 @@ describe('Zerops provider', () => {
 				FABRIKA_CONNECT_CATALOG_URL: 'https://catalog.example.com',
 			},
 		}, provider)
-		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_KEY', value: 'px_private-catalog' })
-		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_URL', value: 'https://catalog.example.com' })
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_KEY', value: 'px_private-catalog', sensitive: true })
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_URL', value: 'https://catalog.example.com', sensitive: false })
 		expect(recorded.envDeletes.sort()).toEqual(['env-crm-key', 'env-crm-url'])
 		expect(recorded.logs.join('\n')).not.toContain('private-')
 	})
@@ -589,7 +605,7 @@ describe('Zerops provider', () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		await execute(deployRun(recorded), provider)
 		expect(recorded.builds[0]?.zeropsYaml).not.toContain('FABRIKA_RELEASE')
-		expect(recorded.envWrites).toEqual([{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' }])
+		expect(recorded.envWrites).toEqual([{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret', sensitive: true }])
 		expect(recorded.envDeletes).toEqual([])
 	})
 
@@ -1111,22 +1127,37 @@ describe('the exposure read-back before activation', () => {
 			})
 		)
 		expect((await created(runOf([BUCKET, API]))).status).toBe('succeeded')
-		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1' })
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false })
 
 		recorded = fresh()
 		const marked = createZeropsDeployer(() =>
 			makeCollaborators(recorded, {
 				services: { files: { id: 'bucket-1' } },
-				serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1' }],
+				serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: false }],
 			})
 		)
 		expect((await marked(runOf([BUCKET, API]))).status).toBe('succeeded')
 		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_STORAGE_PROVENANCE')
 	})
 
+	test('a marker an older release wrote sensitive is no provenance; a created bucket of the stored target still is', async () => {
+		const legacyMarker: StoredServiceEnv = { id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: true }
+		const unproven = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } }, serviceEnv: [legacyMarker] }))
+		expect(stepError(await unproven(runOf([BUCKET, API])), 'verify-exposure')).toContain(
+			'service `files` is a bucket the platform did not create private (no provenance)',
+		)
+
+		recorded = fresh()
+		const registered = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } }, serviceEnv: [legacyMarker] }))
+		const run = { ...runOf([BUCKET, API]), target: target({ createdBuckets: ['bucket-1'] }) }
+		expect((await registered(run)).status).toBe('succeeded')
+		// Rewritten readable, so the next deploy reads it back.
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false })
+	})
+
 	test('a marker no bucket needs any more is removed', async () => {
 		const provider = createZeropsDeployer(() =>
-			makeCollaborators(recorded, { serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1' }] })
+			makeCollaborators(recorded, { serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: false }] })
 		)
 		expect((await provider(runOf([DB, API]))).status).toBe('succeeded')
 		expect(recorded.envDeletes).toContain('env-provenance')
@@ -1186,7 +1217,7 @@ describe('a contract application deploy', () => {
 		const result = await contractRun(true, approved)
 
 		expect(result.status).toBe('succeeded')
-		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' })
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret', sensitive: true })
 		expect(recorded.logs.join('\n')).not.toContain('private-proxy-secret')
 		const sent = recorded.builds[0]?.zeropsYaml ?? ''
 		expect(sent).toContain(`FABRIKA_CONTRACT_DIGEST: "${approved.contractDigest}"`)
@@ -1215,7 +1246,7 @@ describe('a contract application deploy', () => {
 	test("another application's bucket is refused before any version exists, so no storage variable reaches a build", async () => {
 		const result = await contractRun(true, approved, [BUCKET, API], {
 			services: { files: { id: 'bucket-of-other-app' } },
-			serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1' }],
+			serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: false }],
 		})
 
 		expect(stepError(result, 'verify-exposure')).toContain('service `files` is a bucket the platform did not create private (no provenance)')

@@ -1,6 +1,7 @@
 export { createZeropsApi, ZEROPS_API_BASE } from './api/client'
 export { ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from './api/errors'
 export { waitForProcess } from './api/polling'
+export { readableContent } from './api/service-env-response'
 export {
 	type FetchLike,
 	ZEROPS_ACTIVE,
@@ -24,6 +25,7 @@ export {
 	type ZeropsRoleCode,
 	type ZeropsService,
 	type ZeropsServiceEnv,
+	type ZeropsServiceEnvWrite,
 	type ZeropsServiceStatus,
 	type ZeropsTokenProjectGrant,
 	type ZeropsUserInfo,

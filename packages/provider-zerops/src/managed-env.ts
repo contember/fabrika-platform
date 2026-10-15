@@ -59,6 +59,17 @@ export const SERVICE_MANAGED_KEYS: readonly Exclude<ManagedKey, 'FABRIKA_RELEASE
 	'FABRIKA_IAM_RPC_KEY',
 ]
 
+/** The managed keys that carry a credential, written sensitive and therefore never compared. */
+export const SENSITIVE_MANAGED_KEYS: ReadonlySet<ManagedKey> = new Set<ManagedKey>([
+	'FABRIKA_OPERATIONS_DSN',
+	'FABRIKA_SERVICE_KEY',
+	'FABRIKA_PROXY_SECRET',
+	'FABRIKA_IAM_RPC_KEY',
+])
+
+/** A workload or connect key is a credential; a connect URL is an origin. */
+export const isSensitiveFamilyVariable = (name: string): boolean => !isConnectUrlVariable(name)
+
 export type ManagedValues = Record<ManagedKey, string | null>
 
 const managedValuesSchema = z.object({

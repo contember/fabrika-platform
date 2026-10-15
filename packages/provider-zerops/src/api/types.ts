@@ -246,19 +246,31 @@ export interface ZeropsUserInfo {
 /**
  * ONE service-level environment variable. VERIFIED: `OutDtoUserData`.
  *
- * UNVERIFIED BEHAVIOUR: whether `content` carries the real value for a variable Zerops stores as a
- * SECRET, or a blurred placeholder. `docs/backlog/06-can-zerops-secrets-be-read-back.md` is open on
- * exactly this; the dashboard UX depends on the answer. Never log `content`.
+ * A SENSITIVE record carries no `content`. Measured 2026-10-15: Zerops answers `REDACTED` to a token
+ * outside sudo mode and the value itself to one inside it, so nothing may depend on reading a secret
+ * back, and the reader drops it. Never log `content`.
  */
-export interface ZeropsServiceEnv {
+export type ZeropsServiceEnv = ZeropsServiceEnvRecord & ({ sensitive: false; content: string } | { sensitive: true })
+
+export interface ZeropsServiceEnvRecord {
 	id: string
 	key: string
-	content: string
 	serviceStackId?: string
 	/** Record classification, not a sensitivity or ownership guarantee; sensitive records can be USER. */
 	type?: string
-	/** Live service-env responses identify sensitive USER records independently of their type. */
-	sensitive?: boolean
+}
+
+/** One service-level variable to write. */
+export interface ZeropsServiceEnvWrite {
+	serviceId: string
+	key: string
+	value: string
+	/**
+	 * `true` for a credential, `false` for everything else. A sensitive value can never be read back
+	 * (see `ZeropsServiceEnv`), so a value fabrika compares or merges later must be written `false`.
+	 */
+	sensitive: boolean
+	signal: AbortSignal
 }
 
 /**
@@ -493,7 +505,7 @@ export interface ZeropsApi {
 	 * details are intentionally unavailable because both the request and an upstream response can contain
 	 * the secret value.
 	 */
-	createServiceEnv(input: { serviceId: string; key: string; value: string; signal: AbortSignal }): Promise<void>
+	createServiceEnv(input: ZeropsServiceEnvWrite): Promise<void>
 
 	/**
 	 * Create-or-update ONE service-level variable — the only way fabrika ever writes a secret, and it is
@@ -503,8 +515,9 @@ export interface ZeropsApi {
 	 *
 	 * WRITE FIRST, READ ONLY ON CONFLICT. A read before the write cannot be part of this: the create
 	 * must work on a service that has never been deployed, which is exactly ADR-0004's bring-up order.
+	 * An update also sets `sensitive`, so a record written sensitive by an older release becomes readable.
 	 */
-	putServiceEnv(input: { serviceId: string; key: string; value: string; signal: AbortSignal }): Promise<void>
+	putServiceEnv(input: ZeropsServiceEnvWrite): Promise<void>
 
 	/** Delete one service-level variable by its record id. VERIFIED: `DELETE /user-data/{id}`. */
 	deleteServiceEnv(input: { envId: string; signal: AbortSignal }): Promise<void>

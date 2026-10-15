@@ -23,14 +23,16 @@ const CHANGED: ProxyManifest = {
 
 function fixture() {
 	const calls: string[] = []
+	const sensitivity = new Map<string, boolean>()
 	let target: ZeropsNamespaceTarget = { proxyServiceId: 'proxy', projectId: 'project', proxySource: pin, ready: true }
 	let status: ZeropsAppVersionStatus = 'ACTIVE'
 	let sequence = 0
 	const deleted = new Set<string>()
 	const api: ZeropsProxyApi = {
-		listServiceEnv: async () => [{ id: 'issuer', key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, content: 'https://iam.stale.example' }],
+		listServiceEnv: async () => [{ id: 'issuer', key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, sensitive: false, content: 'https://iam.stale.example' }],
 		putServiceEnv: async input => {
 			calls.push(`env:${input.key}`)
+			sensitivity.set(input.key, input.sensitive)
 		},
 		createAppVersion: async () => {
 			sequence++
@@ -88,6 +90,7 @@ function fixture() {
 	})
 	return {
 		calls,
+		sensitivity,
 		api,
 		source,
 		controller,
@@ -207,6 +210,37 @@ test('writes every proxy secret before the version is reserved, and a changed se
 	expect(result.proxyDeployment?.appVersionId).toBe('v2')
 	expect(f.calls).toContain('build:v2')
 	expect(JSON.stringify(f.target())).not.toContain('secret-')
+})
+
+test('writes routing and the issuer readable and every credential sensitive', async () => {
+	const f = fixture()
+	await republishProxy({ ...f.input(), proxySecrets: new Map([['FABRIKA_PROXY_SECRET_A', 'secret-one']]) })
+	expect(Object.fromEntries(f.sensitivity)).toEqual({
+		[FABRIKA_PROXY_MANIFEST_JSON]: false,
+		FABRIKA_PROXY_SESSION_OWNER_JSON: false,
+		[ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE]: false,
+		[ZEROPS_NAMESPACE_IAM_KEY_VARIABLE]: true,
+		FABRIKA_PROXY_SECRET_A: true,
+	})
+})
+
+test('an issuer that cannot be read back is rewritten readable', async () => {
+	const f = fixture()
+	f.api.listServiceEnv = async () => [
+		{ id: 'issuer', key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, sensitive: true },
+		{ id: 'owner', key: 'FABRIKA_PROXY_SESSION_OWNER_JSON', sensitive: true },
+	]
+	await republishProxy({ ...f.input(), iamUrl: 'https://iam.stale.example' })
+	expect(f.calls).toContain(`env:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`)
+	expect(f.calls).toContain('env:FABRIKA_PROXY_SESSION_OWNER_JSON')
+	expect(f.sensitivity.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)).toBe(false)
+	expect(f.sensitivity.get('FABRIKA_PROXY_SESSION_OWNER_JSON')).toBe(false)
+})
+
+test('an issuer already readable at the requested value is not rewritten', async () => {
+	const f = fixture()
+	await republishProxy({ ...f.input(), iamUrl: 'https://iam.stale.example' })
+	expect(f.calls).not.toContain(`env:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`)
 })
 
 test('a lost build response stays a triggered attempt that is observed, never deleted or resubmitted', async () => {

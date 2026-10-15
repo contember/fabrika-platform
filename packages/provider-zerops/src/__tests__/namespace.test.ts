@@ -22,8 +22,8 @@ import {
 	type ZeropsImportResult,
 	type ZeropsProject,
 	type ZeropsService,
-	type ZeropsServiceEnv,
 } from '../api'
+import { withoutSensitiveContent } from '../api/service-env-response'
 import { useSharedPostgres } from '../authoring'
 import {
 	compileFabrikaManifest,
@@ -53,10 +53,20 @@ import type { ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
 import { approvedContract } from './fixtures/access'
 
+/** A variable as the platform stores it: the value of a sensitive one is kept, and `/env` withholds it. */
+interface StoredServiceEnv {
+	id: string
+	key: string
+	content: string
+	serviceStackId?: string
+	type?: string
+	sensitive: boolean
+}
+
 interface FakeState {
 	projects: Map<string, ZeropsProject>
 	services: Map<string, ZeropsService[]>
-	env: Map<string, Map<string, ZeropsServiceEnv>>
+	env: Map<string, Map<string, StoredServiceEnv>>
 	versions: Map<string, ZeropsAppVersion[]>
 	calls: string[]
 	importProjectCount: number
@@ -155,10 +165,10 @@ const postgres = (
 	autoscalingProfileId: profile,
 })
 
-const ensureServiceEnv = (state: FakeState, serviceId: string): Map<string, ZeropsServiceEnv> => {
+const ensureServiceEnv = (state: FakeState, serviceId: string): Map<string, StoredServiceEnv> => {
 	const found = state.env.get(serviceId)
 	if (found !== undefined) return found
-	const created = new Map<string, ZeropsServiceEnv>()
+	const created = new Map<string, StoredServiceEnv>()
 	state.env.set(serviceId, created)
 	return created
 }
@@ -331,9 +341,9 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		if (state.failServiceEnvListAfterPublish && published) {
 			throw new ZeropsApiError('zerops: list service env failed (403)', 403, 'insufficientPermissions')
 		}
-		return [...ensureServiceEnv(state, serviceId).values()]
+		return [...ensureServiceEnv(state, serviceId).values()].map(withoutSensitiveContent)
 	},
-	createServiceEnv: async ({ serviceId, key, value }) => {
+	createServiceEnv: async ({ serviceId, key, value, sensitive }) => {
 		state.calls.push(`create:${serviceId}:${key}`)
 		const environment = ensureServiceEnv(state, serviceId)
 		if (environment.has(key)) throw new Error('duplicate service environment key')
@@ -343,9 +353,10 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 			content: value,
 			serviceStackId: serviceId,
 			type: key === ZEROPS_NAMESPACE_IAM_KEY_VARIABLE ? 'SECRET' : 'EDITABLE',
+			sensitive,
 		})
 	},
-	putServiceEnv: async ({ serviceId, key, value }) => {
+	putServiceEnv: async ({ serviceId, key, value, sensitive }) => {
 		state.calls.push(`put:${serviceId}:${key}`)
 		if (state.serviceEnvError !== null) throw state.serviceEnvError
 		ensureServiceEnv(state, serviceId).set(key, {
@@ -354,10 +365,11 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 			content: value,
 			serviceStackId: serviceId,
 			type: key === ZEROPS_NAMESPACE_IAM_KEY_VARIABLE ? 'SECRET' : 'EDITABLE',
+			sensitive,
 		})
 	},
 	deleteServiceEnv: async () => {},
-	getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', content: 'value' }),
+	getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', sensitive: false, content: 'value' }),
 	getLogAccess: async () => {
 		throw new Error('not used')
 	},
@@ -1057,6 +1069,7 @@ describe('Zerops namespace lifecycle', () => {
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[]}')
 		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)?.content).toBe('https://iam.example.test')
 		expect(state.env.get(proxyId)?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')?.content).toBe('null')
+		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_KEY_VARIABLE)?.sensitive).toBe(true)
 		expect(state.calls.indexOf(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`)).toBeLessThan(
 			state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'),
 		)
@@ -1228,16 +1241,19 @@ describe('Zerops namespace lifecycle', () => {
 			id: 'manifest',
 			key: FABRIKA_PROXY_MANIFEST_JSON,
 			content: '{"apps":[]}',
+			sensitive: false,
 		})
 		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, {
 			id: 'iam-url',
 			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 			content: 'https://iam.example.test',
+			sensitive: false,
 		})
 		ensureServiceEnv(state, proxyId).set('FABRIKA_PROXY_SESSION_OWNER_JSON', {
 			id: 'session-owner',
 			key: 'FABRIKA_PROXY_SESSION_OWNER_JSON',
 			content: JSON.stringify({ issuer: 'https://iam.example.test', upstream: 'iam:3000' }),
+			sensitive: false,
 		})
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 		const ready = namespace({
@@ -1341,7 +1357,7 @@ describe('Zerops namespace lifecycle', () => {
 		})
 
 		const variable = proxySecretVariable('notes@prod')
-		expect(state.env.get(proxyId)?.get(variable)?.content).toBe('notes-proxy-secret')
+		expect(state.env.get(proxyId)?.get(variable)).toMatchObject({ content: 'notes-proxy-secret', sensitive: true })
 		expect(state.calls.indexOf(`put:${proxyId}:${variable}`)).toBeLessThan(state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'))
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).not.toContain('notes-proxy-secret')
 	})
@@ -1465,6 +1481,7 @@ describe('Zerops namespace presentation', () => {
 			content,
 			serviceStackId: proxyId,
 			type: 'SYSTEM',
+			sensitive: false,
 		})
 	}
 
