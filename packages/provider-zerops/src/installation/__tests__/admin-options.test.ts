@@ -32,7 +32,7 @@ describe('platform admin options', () => {
 			'--iam-host=<value> or FABRIKA_PLATFORM_IAM_HOST is required',
 		)
 		expect(() => parsePlatformAdminArgs(['--email=operator@example.test', '--iam-host=iam.example.test'], {})).toThrow(
-			'FABRIKA_IAM_PROVISIONING_KEY is required. It has no flag: the key platform install printed comes from the environment only.',
+			'FABRIKA_IAM_PROVISIONING_KEY is required. It has no flag: load it from the secrets file platform install wrote, into the environment only.',
 		)
 	})
 

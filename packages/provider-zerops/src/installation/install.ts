@@ -131,7 +131,7 @@ const installPreparedPlatform = async (
 	log.ok(
 		'IAM signing keys (1 × ES256), the IAM RPC key, the proxy key, the provisioning key, the Operations sync key and the vault key',
 	)
-	log.info('None of them is written to disk. Only the provisioning key is printed, once, at the end.')
+	log.info(`None of them is printed: every one goes to ${input.secretsFile} (mode 0600) before the first is placed.`)
 
 	log.step("Mint the control plane's Zerops token")
 	log.info('An INTEGRATION token, client role NO_ACCESS with ADMIN on this one project — never the personal token you authenticated with.')

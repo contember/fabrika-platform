@@ -19,7 +19,7 @@ export interface PlatformAdminInput {
 	readonly iamHost: string
 	/** The scheme a browser speaks to this installation. With `iamHost` it composes IAM's public origin. */
 	readonly scheme: 'http' | 'https'
-	/** The `px_` provisioning key `platform install` printed. Environment only. */
+	/** The `px_` provisioning key `platform install` wrote to its secrets file. Environment only. */
 	readonly provisioningKey: string
 	/** Replace an outstanding enrollment instead of reporting it. */
 	readonly reissue: boolean
@@ -78,7 +78,7 @@ const provisioningKey = (env: Record<string, string | undefined>): string => {
 	const value = readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY')
 	if (value === undefined) {
 		throw new Error(
-			'FABRIKA_IAM_PROVISIONING_KEY is required. It has no flag: the key platform install printed comes from the environment only.',
+			'FABRIKA_IAM_PROVISIONING_KEY is required. It has no flag: load it from the secrets file platform install wrote, into the environment only.',
 		)
 	}
 	return value

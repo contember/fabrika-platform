@@ -172,7 +172,7 @@ It writes TWO secrets into that Environment and GENERATES NEITHER — both alrea
 installation, so a value invented here would not be one it accepts. Both are environment only:
 
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   the INTEGRATION token install minted (the \`control\` service's env)
-	FABRIKA_IAM_PROVISIONING_KEY      required   the px_ key install printed
+	FABRIKA_IAM_PROVISIONING_KEY      required   the px_ key install wrote to its --secrets-file
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
 Each is sent to GitHub over \`gh\` stdin, and never printed and never written to disk.
@@ -278,7 +278,7 @@ Options (a flag beats the environment variable beside it):
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   ${REISSUE_FLAG}                                                         replace an outstanding enrollment
 
-  FABRIKA_IAM_PROVISIONING_KEY      required   the px_ admin key \`install\` printed, environment only
+  FABRIKA_IAM_PROVISIONING_KEY      required   the px_ admin key \`install\` wrote to its --secrets-file, environment only
 
 ── platform upgrade ──────────────────────────────────────────────────────────────────────────────
 
