@@ -58,6 +58,20 @@ export function landingUrl(presentation: AppPresentation): string | null {
 	return presentation.landing === null ? null : `${presentation.landing}/`
 }
 
+/**
+ * Where a completed action lands when its own application names no landing: the installation's console, the first
+ * admin audience with a registered origin, whose proxy then signs the browser in through the normal handoff. IAM's
+ * own origin serves no page at `/`, so an action that landed there left a person who had just set a password on an
+ * error. Without a registered console it is IAM's sign-in page.
+ */
+export async function installationLanding(services: Services): Promise<string> {
+	for (const app of services.config.adminAudiences) {
+		const landing = landingUrl(await presentationFor(services, app))
+		if (landing !== null) return landing
+	}
+	return new URL('/auth/login', services.config.issuer).toString()
+}
+
 /** The `?app=` query a link or a form carries so the next page speaks for the same application; empty for none. */
 export function appQuery(presentation: AppPresentation): string {
 	return presentation.app === null ? '' : `?app=${encodeURIComponent(presentation.app)}`

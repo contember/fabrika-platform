@@ -1,6 +1,6 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { type AppPresentation, INSTALLATION_PRESENTATION, landingUrl, presentationFor } from '../app-presentation'
+import { type AppPresentation, INSTALLATION_PRESENTATION, installationLanding, landingUrl, presentationFor } from '../app-presentation'
 import { type AuditEventInput } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 
@@ -318,14 +318,14 @@ export async function handlePasswordAction(
 	if (completed === null) return invalidActionPage(presentation)
 	const completedPrincipal = await services.repositories.principals.getPrincipalById(completed.principalId)
 	if (completedPrincipal === null || completedPrincipal.disabled_at !== null) return invalidActionPage(presentation)
-	// An action that keeps an application lands on its registered origin; the application's proxy then signs the
-	// browser in through the normal handoff, which the session issued here makes silent.
-	const landing = landingUrl(presentation)
+	// An action that keeps an application lands on its registered origin, any other on the installation's console;
+	// that application's proxy then signs the browser in through the normal handoff, which the session issued here
+	// makes silent.
 	return issueSession(request, services, ctx, {
 		principalId: completedPrincipal.id,
 		email: completedPrincipal.email,
 		authenticationMethod: 'password',
-		redirect: landing ?? services.config.issuer,
+		redirect: landingUrl(presentation) ?? await installationLanding(services),
 		reason: purpose === 'enrollment' ? 'password_enrollment' : 'password_reset',
 		requestId,
 	})

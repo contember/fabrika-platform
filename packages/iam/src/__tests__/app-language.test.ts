@@ -271,7 +271,7 @@ describe('the language falls back to the installation default', () => {
 		expect(html).toContain('<h1>Sign in</h1>')
 	})
 
-	test('an unknown application is IAM itself: English, no app kept, and the reset ends on IAM', async () => {
+	test('an unknown application is IAM itself: English, no app kept, and the reset ends on the sign-in page of IAM', async () => {
 		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' })
 		await partner(p)
 		const forgot = await p.send(new Request(`${ISSUER}/auth/forgot-password?app=nowhere%40prod`))
@@ -287,7 +287,7 @@ describe('the language falls back to the installation default', () => {
 		expect(url.search).toBe('')
 		expect(formAction(await p.send(new Request(url)))).toBe(`'self'`)
 		const reset = await p.send(post('/auth/password/reset', { token, password: PASSWORD }))
-		expect(reset.headers.get('location')).toBe(ISSUER)
+		expect(reset.headers.get('location')).toBe(`${ISSUER}/auth/login`)
 	})
 
 	test('a link naming another application changes words, never where the action lands', async () => {
@@ -297,10 +297,10 @@ describe('the language falls back to the installation default', () => {
 		await p.ctx.settle()
 		const { token } = linkOf(lastMail(p.email))
 		const reset = await p.send(post(`/auth/password/reset?app=${encodeURIComponent(PORTAL)}`, { token, password: PASSWORD }))
-		expect(reset.headers.get('location')).toBe(ISSUER)
+		expect(reset.headers.get('location')).toBe(`${ISSUER}/auth/login`)
 	})
 
-	test('an application with a name but no registered origin keeps its words and lands on IAM', async () => {
+	test('an application with a name but no registered origin keeps its words and lands on the sign-in page of IAM', async () => {
 		const p = await portal({ locale: 'cs', displayName: 'Partnerský portál' }, [])
 		await partner(p)
 		await p.send(post(`/auth/forgot-password?app=${encodeURIComponent(PORTAL)}`, { email: 'partner@example.test' }))
@@ -309,7 +309,7 @@ describe('the language falls back to the installation default', () => {
 		expect(lastMail(p.email).subject).toBe('Obnovení hesla pro aplikaci Partnerský portál')
 		expect(formAction(await p.send(new Request(url)))).toBe(`'self'`)
 		const reset = await p.send(post(`/auth/password/reset?app=${encodeURIComponent(PORTAL)}`, { token, password: PASSWORD }))
-		expect(reset.headers.get('location')).toBe(ISSUER)
+		expect(reset.headers.get('location')).toBe(`${ISSUER}/auth/login`)
 	})
 })
 

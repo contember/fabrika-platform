@@ -371,6 +371,8 @@ describe('forgot password and one-time actions', () => {
 			new TestContext(),
 		)
 		expect(complete.status).toBe(302)
+		// No application and no registered console: IAM's own sign-in page, never its bare origin, which serves nothing.
+		expect(complete.headers.get('Location')).toBe(`${ISSUER}/auth/login`)
 		expect(cookieValue(complete, SESSION_COOKIE)).not.toBeNull()
 		expect((await h.repositories.passwords.getAccount(principalId))?.state).toBe('enabled')
 		expect((await h.repositories.principals.getPrincipalById(principalId))?.activated_at).not.toBeNull()
@@ -382,6 +384,35 @@ describe('forgot password and one-time actions', () => {
 			new TestContext(),
 		)
 		expect(replay.status).toBe(400)
+	})
+})
+
+describe('an action of no application', () => {
+	test("lands on the installation's console once it has registered an origin", async () => {
+		const { h, services } = passwordServices()
+		const console = [...services.config.adminAudiences][0]
+		if (console === undefined) throw new Error('no admin audience configured')
+		await h.repositories.handoff.setReturnOrigins(console, ['https://console.example.test'])
+		const principalId = seedUser(h.sqlite, { sub: null, email: 'first-admin@example.test' })
+		await h.repositories.passwords.enableEnrollment(principalId)
+		const principal = await h.repositories.principals.getPrincipalById(principalId)
+		if (principal === null) throw new Error('missing seeded principal')
+		const action = await issuePasswordAction(services, { principal, purpose: 'enrollment', presentation: INSTALLATION_PRESENTATION }, {
+			audit: { requestId: 'seed', principalId: null, principalLabel: 'seed', app: 'propustka', action: 'seed.issue', resourceType: 'principal' },
+			enableEnrollment: false,
+		})
+		const token = new URLSearchParams(new URL(action.url).hash.slice(1)).get('token')
+		if (token === null) throw new Error('missing action token')
+
+		const complete = await handleAuth(
+			post('/auth/password/enroll', { token, password: 'a sufficiently long password' }),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+
+		expect(complete.status).toBe(302)
+		expect(complete.headers.get('Location')).toBe('https://console.example.test/')
 	})
 })
 

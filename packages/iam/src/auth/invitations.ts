@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
+import { type AppPresentation, installationLanding, landingUrl, presentationFor } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
@@ -137,7 +137,7 @@ async function createAndAccept(
 		principalId: outcome.principal.id,
 		email: outcome.principal.email,
 		authenticationMethod: 'password',
-		redirect: landingUrl(presentation) ?? services.config.issuer,
+		redirect: landingUrl(presentation) ?? await installationLanding(services),
 		reason: 'invitation_enrollment',
 		requestId: input.requestId,
 	})
