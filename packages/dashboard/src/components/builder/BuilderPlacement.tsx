@@ -1,7 +1,7 @@
-import { parseBuilderInstallationDiscovery } from '@fabrika/control-contract'
 import { useEffect, useState } from 'react'
 import { api, type BuilderConnectionEnvironmentDto, type DeploymentNamespaceDetailDto, type DeploymentNamespaceDto } from '../../lib/api'
 import { builderRequestError } from '../../lib/builder-authorization'
+import { installationDiscovery } from '../../lib/session'
 
 export function BuilderPlacement({ appId, existingNames, onSelect }: {
 	appId: string
@@ -23,11 +23,8 @@ export function BuilderPlacement({ appId, existingNames, onSelect }: {
 		setBusy(true)
 		setError(null)
 		try {
-			const response = await fetch('/.well-known/fabrika-builder', { redirect: 'error' })
-			if (!response.ok) throw new Error('discovery unavailable')
-			const raw: unknown = await response.json()
-			const discovery = parseBuilderInstallationDiscovery(raw)
-			if (!discovery) throw new Error('invalid discovery')
+			const discovery = await installationDiscovery()
+			if (!discovery) throw new Error('discovery unavailable')
 			setProvider(discovery.provider)
 			const result = await api.namespaces.list()
 			setNamespaces(result.items)

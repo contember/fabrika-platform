@@ -506,6 +506,16 @@ a:hover {
 	flex: none;
 }
 
+.signed-in {
+	max-width: 16rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--t-xs);
+	font-weight: 500;
+	color: var(--ink-2);
+}
+
 .workspace {
 	padding-block: var(--s-6) var(--s-7);
 }

@@ -33,6 +33,10 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   best-effort; the Access routes use the same contract (`src/access/lib/api.ts`) with normal auth bounce.
   Operations uses `OperationsRpcContract` through control's `/operations/api/rpc` gateway
   (`src/operations/client.ts`). Every client is a plain `createRpcClient` — no positional adapters.
+- **Sign-out is IAM's, not the console's** (`src/lib/session.ts`). The bar links to IAM's `GET /auth/logout`
+  confirmation, whose same-origin POST revokes the IAM login and so every app session derived from it; IAM refuses a
+  cross-site POST, so never post it from the console. IAM's origin comes from `/.well-known/fabrika-builder`. The
+  signed-in name is IAM's `me`, which answers installation administrators only, read with auth bounce disabled.
 
 - **`src/styles.css` is the console's ONLY design system.** `src/access/styles.css` holds styles for the
   Access-only widgets (pickers, grant grid, JSON view) written in these tokens. Do not put base, shell,

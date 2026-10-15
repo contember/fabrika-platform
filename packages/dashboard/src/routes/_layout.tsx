@@ -2,6 +2,7 @@ import { Link, Outlet, useRoute } from '@buzola/router'
 import { useEffect, useState } from 'react'
 import { BrandMark, Icon, type IconName } from '../components/Icon'
 import { RouteError } from '../components/RouteError'
+import { type ConsoleSession, readConsoleSession } from '../lib/session'
 import { effectiveTheme, pinTheme, type Theme } from '../lib/theme'
 
 type Page =
@@ -169,6 +170,7 @@ export default function RootLayout() {
 						<div className="bar-actions">
 							<Link to="builder/authorize" className="btn small">Your builder connections</Link>
 							<ThemeToggle />
+							<SessionControls />
 						</div>
 					</div>
 				</header>
@@ -196,6 +198,36 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 			<Icon name={item.icon} />
 			<span>{item.label}</span>
 		</Link>
+	)
+}
+
+/** Read once per console load; until it answers, the bar shows nothing rather than a guess. */
+function SessionControls() {
+	const [session, setSession] = useState<ConsoleSession | null>(null)
+
+	useEffect(() => {
+		let cancelled = false
+		void readConsoleSession().then((read) => {
+			if (!cancelled) setSession(read)
+		})
+		return () => {
+			cancelled = true
+		}
+	}, [])
+
+	return session === null ? null : <SignedIn session={session} />
+}
+
+export function SignedIn({ session }: { session: ConsoleSession }) {
+	return (
+		<>
+			{session.principal !== null && (
+				<span className="signed-in" title={`Signed in as ${session.principal.label} (${session.principal.id})`}>
+					{session.principal.label}
+				</span>
+			)}
+			{session.signOutUrl !== null && <a href={session.signOutUrl} className="btn small ghost">Sign out</a>}
+		</>
 	)
 }
 
