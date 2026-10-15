@@ -981,10 +981,11 @@ Measured from a throwaway `alpine/bun@1.3` service against one `postgresql:ha@18
 | `portTls` (6432), `sslmode=disable` | **Fails: `SSL required`**                         | **Fails: `SSL required`**  |
 | `portTls` (6432), `sslmode=require` | **Connects**, backend `inet_server_port() = 5432` | **Connects**, `ssl = true` |
 
-So `portTls` + `sslmode=require` is the ONE form that works on both, and it is what fabrika now writes
-everywhere: `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING`, the installation's `POSTGRES_URL`, and the
-example app's two descriptors. It matters beyond the example — the installation's `standard` tier runs
-`postgresql:ha@18` and would have failed the same way the first time anyone brought it up.
+So `portTls` + `sslmode=require` is the ONE form that works on both for the service's own users, and it is what the
+installation's `POSTGRES_URL` uses. It matters beyond the example — the installation's `standard` tier runs
+`postgresql:ha@18` and would have failed the same way the first time anyone brought it up. An application's database
+does not use it: pgBouncer on `portTls` refuses every role fabrika creates
+([2026-10-15 below](#verified-live-2026-10-15-account-prg1--an-applications-database-roles-and-the-two-ports)).
 
 On HA the TLS session terminates in front of PostgreSQL: the backend reports `pg_stat_ssl.ssl = false`
 and `inet_server_port() = 5432` on a connection made to 6432. The hop from that terminator to the
@@ -1211,14 +1212,29 @@ The build container has no database, so a contract application's start script ru
 `fabrika db codegen --verify`, then `fabrika db test-isolation`, then the server: a stale committed
 `schema.generated.ts` or a generated isolation case that did not pass fails the readiness check.
 
-`FABRIKA_APP_DATABASE_URL` carries the PostgreSQL service's own user (`db`), and fabrika uses it only as the
-provisioning credential of the application's role family
+`FABRIKA_APP_DATABASE_URL` carries the PostgreSQL service's superuser on the direct port:
+
+```
+postgresql://${<db>_superUser}:${<db>_superUserPassword}@${<db>_hostname}:${<db>_port}/${<db>_dbName}?sslmode=disable
+```
+
+fabrika uses it only as the provisioning credential of the application's role family
 ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)): `fabrika db migrate` creates `app_<id>` and
 `run_<id>` with it and applies the migrations as `app_<id>`, the server and the crontab's jobs relaunch themselves as
 `run_<id>` over the same host, port and options, and `fabrika db test-isolation` hands the generated tests a
-throwaway `CREATEROLE` provisioner instead of `db`, which it grants `CREATE` on the database and drops afterwards.
-The provider writes the same reference as before; nothing else changes on the Zerops side. The `db` user cannot
-create roles, so this fails on a service where nobody granted it `CREATEROLE` (measured below).
+throwaway `CREATEROLE` provisioner instead, which it grants `CREATE` on the database and drops afterwards. The
+superuser, because the service's own user `db` can neither create roles nor create a schema; the direct port, because
+pgBouncer on `portTls` refuses every role fabrika creates (both measured below). An application on a `cheap`
+namespace gets the same URL for the shared `postgres` service. The `useSharedPostgres()` binding's own
+`connectionString` is the `db` user's, `${postgres_connectionString}/${postgres_dbName}?sslmode=disable`, for an
+application that connects by itself; an artifact built with its earlier `portTls` form still decodes, as the current
+one.
+
+Zerops gives a service one environment: `run.initCommands`, the start script, the launcher and the application all
+start from it, so the superuser credential cannot be confined to `fabrika db migrate`. The launcher keeps it out of the
+application's process (ADR-0017). No application configuration may reference a `superUserPassword` variable: the
+manifest's services and `zerops.yaml`, a deploy-time variable and `secrets.put` each refuse it
+(`platformOnlyServiceReference`, `packages/provider-zerops/src/service-references.ts`).
 
 #### A contract with files sweeps hourly
 
@@ -1240,44 +1256,52 @@ otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service
 service is raised through Zerops itself. Not yet measured on a real account: that Alpine's `clamav` installs through
 `prepareCommands`, that `freshclam` reaches its mirror from the build and the runtime, and the peak memory there.
 
-#### Verified live (2026-10-15, account `prg1`) — the service's own user cannot create roles
+#### Verified live (2026-10-15, account `prg1`) — an application's database roles and the two ports
 
-Measured on a `postgresql:single@18` service that an application's private import created. The first deploy of a
-contract application with a database failed in `run.initCommands`, in `sh /var/www/fabrika/migrate.generated.sh`:
+Measured on a `postgresql:single@18` service that an application's private import created, after the first deploy of
+a contract application with a database failed in `run.initCommands`. `fabrika db migrate` connected as `db`, read
+`rolsuper` and `rolcreaterole` of `current_user`, found neither and stopped before anything ran as `db`. The rest was
+measured from a client inside the project.
 
-```
-fabrika: the provisioning credential connects as db, which is neither a superuser nor holds CREATEROLE, so it cannot
-create the application's database roles app_<id> and run_<id>; nothing runs as the provisioning credential instead
-```
+| Fact                                                                     | Result                                                                                    |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| The service's own user `db`                                              | **Neither a superuser nor `CREATEROLE`**                                                  |
+| The owner of the database `db`                                           | **`postgres`**, so `db` holds no `CREATE` on it and cannot create a schema                |
+| `superUser` / `superUserPassword`                                        | The superuser `postgres`; it logs in on `port` (5432) and on `portTls` (6432)             |
+| A login role created in the database, on `portTls` (6432)                | **Refused: `password authentication failed` (`08P01`)** — pgBouncer's user list is static |
+| The same role on `port` (5432)                                           | Connects                                                                                  |
+| Who logs in on `portTls`                                                 | Only `db`, `postgres` and `zps`                                                           |
+| `Bun.SQL` on `port` (5432) with `sslmode=require` / `prefer` / `disable` | Connects; `ssl = true` / `true` / `false`                                                 |
 
-`fabrika db migrate` reads `rolsuper` and `rolcreaterole` of `current_user` from `pg_roles` before it does anything
-else, so the service's own user `db` (the user of `${<db>_connectionString}`, and so of `FABRIKA_APP_DATABASE_URL`)
-holds neither. Nothing ran as `db`. `postgresql:ha@18` was not measured.
+So a contract application's provisioning credential is the superuser, and its database URL names the direct port with
+`sslmode=disable` (above): `postgresql:ha@18` offers no TLS there (2026-08-19), and `Bun.SQL` 1.3.14 with
+`sslmode=prefer` does not fall back to plaintext against a server without TLS — it waits out its 30 s connection
+timeout (measured locally against `postgres:18`, whose default has no TLS). The connection stays inside the project's
+network, as the proxy's plain-HTTP hop to an application does. On one installation the first deploy had been unblocked by hand, as `postgres`, with
+`ALTER ROLE db CREATEROLE` and `GRANT CREATE ON DATABASE db TO db`; nothing needs that now. There the role family that
+`db` created is taken over by the superuser at the next deploy: `fabrika db migrate` resets both passwords to the
+superuser's derivation, and `db` keeps `CREATEROLE`, `CREATE` on the database and its membership in the migration role
+until someone revokes them.
 
-So every contract application with a database fails its first deploy on Zerops. The service's
-`superUser`/`superUserPassword` variables name a credential that can create roles, but fabrika does not hand an
-application a superuser; that would be a decision of its own. Without a platform change, one PostgreSQL service gets
-past this with a one-off `ALTER ROLE db CREATEROLE`, run as that superuser over the Zerops VPN. A `CREATEROLE` role
-that is not a superuser is enough on Postgres 16 and later (ADR-0017).
+| Behaviour                                                                   | Row                                         |
+| --------------------------------------------------------------------------- | ------------------------------------------- |
+| The `db` user is neither a superuser nor holds `CREATEROLE`                 | `postgres-service-user-cannot-create-roles` |
+| The database `db` is owned by `postgres`, so `db` cannot create a schema    | `postgres-database-owned-by-superuser`      |
+| A login role fabrika creates is refused on `portTls` and connects on `port` | `postgres-new-role-only-on-direct-port`     |
+| The superuser `postgres` logs in on `port` and on `portTls`                 | `postgres-superuser-logs-in-on-both-ports`  |
 
-| Behaviour                                                   | Row                                         |
-| ----------------------------------------------------------- | ------------------------------------------- |
-| The `db` user is neither a superuser nor holds `CREATEROLE` | `postgres-service-user-cannot-create-roles` |
+#### UNVERIFIED: a role fabrika creates connects on the direct port of `postgresql:ha@18`
 
-#### UNVERIFIED: the service's own user grants `CREATE` on its database, and a new role connects through `portTls`
+The 2026-10-15 measurements were made on `postgresql:single@18`. On `ha` the service's own user connects to `port`
+with `sslmode=disable` (2026-08-19); a role created in the database was not tried there. If it is refused, a contract
+application on an `ha` service fails its first `fabrika db migrate` when the migration role connects.
 
-Neither has been measured; both are `not-probed` rows of the platform-facts table, because they need a PostgreSQL
-service and a client inside the project, as the TLS table above did.
+| Behaviour                                                             | Row                                              |
+| --------------------------------------------------------------------- | ------------------------------------------------ |
+| A login role fabrika creates connects to `port` on `postgresql:ha@18` | `unverified-postgres-ha-new-role-on-direct-port` |
 
-| Behaviour                                                                                     | Row                                                  |
-| --------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| The `db` user may grant `CREATE` on the database `db` (it owns it)                            | `unverified-postgres-user-grants-create-on-database` |
-| A login role created in the database authenticates on `portTls` (6432) with `sslmode=require` | `unverified-postgres-new-role-on-port-tls`           |
-
-If the first is false, `fabrika db test-isolation` cannot give its throwaway provisioner `CREATE` on the database,
-and the start script fails there. If the second is false, the migration role's first connection fails with the
-server's authentication error. A `SECURITY DEFINER` function the platform installed in the database and left callable
-by `PUBLIC` would stop every deploy too (ADR-0017); none is known, but none was looked for.
+A `SECURITY DEFINER` function the platform installed in the database and left callable by `PUBLIC` would stop every
+deploy (ADR-0017); none is known, but none was looked for.
 
 #### UNVERIFIED: a build lifts a SENSITIVE service variable through `${RUNTIME_…}`
 

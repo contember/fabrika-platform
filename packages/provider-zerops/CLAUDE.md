@@ -92,6 +92,9 @@ bun test
   hides a reference the text does not spell. Hostnames are never rewritten at deploy. The rule covers every
   app-supplied path into a service's env — the manifest, `interpolateManifest`, and `secrets.put`
   (`src/control.ts`), which lands on the same resolver.
+- **No application may reference a `superUserPassword` variable, of any host** (`platformOnlyServiceReference`,
+  `src/service-references.ts`, ADR-0017). The superuser is the provisioning credential, in the same container
+  environment as application code. The same three paths refuse it, and so does the source descriptor's executed setup.
 - **An application service cannot expose itself or choose its own build (ADR-0043), with no approval
   path.** `REFUSED_APPLICATION_SERVICE_FIELDS` (`src/manifest.ts`) refuses an `objectStoragePolicy` other
   than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml`, `mount` or `startWithoutCode`, and an
@@ -132,10 +135,13 @@ bun test
   case that did not pass fails the httpGet readiness check whether or not a failed `initCommands` stops
   activation (UNVERIFIED); the build has no database. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
-  references, so no credential passes through this package. That database URL is the service user's and only the
-  provisioning credential of the application's role family (ADR-0017): `fabrika db migrate` creates `app_<id>` and
-  `run_<id>` with it and the server and the jobs relaunch themselves as `run_<id>`. The `db` user cannot create roles (measured
-  2026-10-15), so the first deploy stops there with a message saying so until `db` is granted `CREATEROLE`. Never point it at the `superUser` variables; a second database or bucket is refused in
+  references, so no credential passes through this package. That database URL is the service's SUPERUSER on the direct
+  port (`zeropsProvisioningDatabaseUrl`, `src/manifest.ts`) and only the provisioning credential of the application's
+  role family (ADR-0017): `fabrika db migrate` creates `app_<id>` and `run_<id>` with it and the server and the jobs
+  relaunch themselves as `run_<id>`. The `db` user can neither create roles nor create a schema, and pgBouncer on
+  `portTls` refuses the roles fabrika creates (measured 2026-10-15), so never point it back at `db` or `portTls`. A
+  `cheap` application gets the same URL for the shared `postgres`; its binding's `connectionString` is the `db` user's
+  and is never the provisioning credential. A second database or bucket is refused in
   `parseFabrikaManifest`, and `verify-exposure` refuses a bucket without platform provenance before the build. Generated file lines go through
   `printf` single-quoted: they may hold no `'` and no `$`, which is why the app id must match
   `[a-z0-9][a-z0-9-]*` and the health path is a literal path.
@@ -332,8 +338,9 @@ Invariants:
 - Every managed service names its `profile` explicitly (omitting it buys `oltp-production` on HA).
 - Every setup declares `run.healthCheck` and `deploy.readinessCheck`, every duration a quoted Go duration
   in `[10s, 1h]` (`topology/installation-schemas.ts` declares the six probe fields as strings).
-- A PostgreSQL URL is always `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
-  port is the only one `postgresql:ha@18` offers, and it keeps the session state the migration lock needs.
+- An installation service's PostgreSQL URL is always `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the
+  TLS port is the only one `postgresql:ha@18` offers, and it keeps the session state the migration lock needs. It admits
+  only the service's own users, which is all an installation service connects as.
 - **The proxy manifest is a committed template plus a deploy-time placement.** The template is
   installation-independent and `gen:check` proves it matches the service contracts; hosts
   and scheme are arguments. `parseProxyManifest` refuses an app with no hosts, hence a separate template type.

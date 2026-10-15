@@ -361,8 +361,8 @@ of a deployment shares.
 
 | Where                     | The application database                                                                                       | The provisioning credential                                       |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Zerops, `cheap` namespace | One namespace-owned `postgres` service; every application of the namespace has its schema in its database `db` | The service's user `db`, the same for every application           |
-| Zerops, `mid` / `full`    | The application's own PostgreSQL service                                                                       | That service's user `db`                                          |
+| Zerops, `cheap` namespace | One namespace-owned `postgres` service; every application of the namespace has its schema in its database `db` | The service's superuser, the same for every application           |
+| Zerops, `mid` / `full`    | The application's own PostgreSQL service                                                                       | That service's superuser                                          |
 | Local stack               | `apps-db`, one Postgres for the `apps-prod` network (today Notes only)                                         | Its superuser                                                     |
 | Test backends             | One shared cluster, a throwaway schema and role family per test database                                       | Its superuser; a `test-isolation` run's tests get a throwaway one |
 
@@ -372,7 +372,27 @@ passwords, set itself to any migration role, and so read and change every
 application's schema. Each application's own roles reach only its schema;
 code that held the provisioning credential would reach all of them. In a
 `mid` or `full` namespace it reaches only the one application, but it can still
-create roles and undo every check above.
+create roles and undo every check above. Where it is a superuser it also reaches
+the server itself (`COPY … PROGRAM`).
+
+**On Zerops the provisioning credential is the PostgreSQL service's
+superuser.** The provider generates `FABRIKA_APP_DATABASE_URL` from the
+service's `superUser`, `superUserPassword`, `hostname`, `port` and `dbName`
+references, on the direct port with `sslmode=disable`; the shared core reads
+only the URL. The service's own user `db` can neither create roles nor create a
+schema in the database `db`, which `postgres` owns, and pgBouncer on `portTls`
+admits only `db`, `postgres` and `zps`, so the roles this URL's host and port
+are reused for must connect to the direct port (measured,
+[`zerops-platform.md`](../reference/zerops-platform.md)). Zerops gives a
+service one environment for `run.initCommands`, the start script and the
+server, so the credential cannot be confined to `fabrika db migrate`: the
+launcher is what keeps it from application code, as everywhere else. **Invariant:
+no application configuration on Zerops may reference a `superUserPassword`
+variable** — the manifest's services and `zerops.yaml`, a deploy-time variable
+and a secret are each refused (`platformOnlyServiceReference`,
+`packages/provider-zerops/src/service-references.ts`). The `db` user stays what
+an application without the contract framework connects as, through
+`useSharedPostgres()` or its own references.
 
 A view or a rule the migration role owns runs with its rights when the runtime
 role uses it, which is why such code is a reviewed deviation and `SECURITY
@@ -446,10 +466,18 @@ migration file is a widening in the approval diff
   witness of what the migration role created.
 - Every application database needs a provisioning credential that can create
   roles. One that cannot stops the deploy with a message saying so. On Zerops
-  the service's own user `db` cannot (measured on `postgresql:single@18`,
-  [`zerops-platform.md`](../reference/zerops-platform.md)), so an application
-  database there stops its first deploy until `db` is granted `CREATEROLE` by
-  the service's superuser.
+  the provider supplies the service's superuser, so no deploy needs a manual
+  grant. A role family a `CREATEROLE` provisioner created earlier is taken over
+  at the next deploy: both passwords are reset to the new credential's
+  derivation. The earlier provisioner keeps its attributes and its membership
+  in the migration role until someone revokes them.
+- On Zerops a process that escapes the launcher's protection (root, `sudo`,
+  `CAP_SYS_PTRACE`) holds a superuser of the PostgreSQL service, not only a role
+  administrator: it can run a program on the database server. In a `cheap`
+  namespace that is every consumer's database. A deploy rotates the runtime
+  role's password whenever the provisioning credential changes, so a version
+  still running on the old derivation cannot open new connections once the new
+  version has migrated.
 - A schema created before its roles existed is refused. Before 1.0 it is
   dropped and re-created by the next deploy (its rows are lost), or its owner
   and every object in it are moved to the migration role by hand.
@@ -541,6 +569,16 @@ One credential with `SET ROLE app_<id>` before each migration and `SET ROLE
 run_<id>` for the runtime needs no passwords, but `RESET ROLE` returns to the
 provisioning credential, and only a name rule refuses that statement. A
 separate login is the only boundary a statement cannot leave.
+
+### Give the Zerops service's own user `CREATEROLE`
+
+`ALTER ROLE db CREATEROLE` and `GRANT CREATE ON DATABASE db TO db`, run once as
+the superuser, would leave `db` as the provisioning credential. Something has
+to run them as the superuser: by hand on every new service, or by the deploy,
+which then holds the superuser's credential anyway. A dedicated `CREATEROLE`
+role that the superuser creates at each deploy is the same trade: the
+superuser must be in the container's environment to create it, and the
+launcher already derives every password from one credential.
 
 ### Store generated role passwords
 

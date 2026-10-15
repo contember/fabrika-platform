@@ -174,15 +174,16 @@ exclusive app owns the entire project.
 
 Cheap-mode consumers declare `useSharedPostgres()`. The manifest records a
 requirement for `service:postgres` and the cross-service reference
-`${postgres_connectionString}` instead of declaring a database service. Every
-consumer receives the same provider-issued service credential. Service-level
-environment isolation does not block explicit cross-service references, so a
-cheap namespace is one shared PostgreSQL credential trust domain for code. Each
-consumer's migrations and queries run as its own role family, which owns or
-reaches only its `app_<id>` schema
+`${postgres_connectionString}/${postgres_dbName}?sslmode=disable` instead of
+declaring a database service. Service-level environment isolation does not block
+explicit cross-service references, so a cheap namespace is one shared
+PostgreSQL credential trust domain for code. A contract application connects
+with neither: its `FABRIKA_APP_DATABASE_URL` is the shared service's superuser,
+the provisioning credential that creates its role family, and its migrations and
+queries run as that family, which owns or reaches only its `app_<id>` schema
 ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)), so one
-application's SQL cannot reach another's tables; the shared credential is only
-the provisioning credential that creates those roles.
+application's SQL cannot reach another's tables. No application may reference
+the superuser's password.
 
 ## Zerops lifecycle and routing
 

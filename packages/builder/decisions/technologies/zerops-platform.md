@@ -60,8 +60,8 @@ The default public config declares an app-owned PostgreSQL service. A cheap
 namespace can instead supply the typed shared PostgreSQL binding: consult
 `examples/zerops-app/fabrika.cheap.config.ts` before selecting that variant.
 Preserve the administrator's namespace assignment. A contract application has
-one PostgreSQL database: the platform writes `FABRIKA_APP_DATABASE_URL` (the TLS
-reference with the database name and `sslmode=require`) and `FABRIKA_APP_ID`, and
+one PostgreSQL database: the platform writes `FABRIKA_APP_DATABASE_URL` (the
+service superuser's reference, which only the platform's launcher holds) and `FABRIKA_APP_ID`, and
 the application's tables live in the schema `app_<id>`. The application names no
 connection string; `@fabrika/app/bun` opens the data layer for it.
 
