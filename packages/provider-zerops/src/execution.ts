@@ -291,14 +291,15 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
 
 /**
  * The generated build commands, in order; the authored SPA commands run before all of them. The application's tests
- * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again.
+ * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again. They run
+ * `--isolate`, as the application skill runs them: a test file's DOM globals otherwise leak into the next file.
  */
 export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
 	const database = execution.databaseUrl !== null
 	return [
 		INSTALL,
-		'bun test --pass-with-no-tests',
+		'bun test --isolate --pass-with-no-tests',
 		`rm -rf node_modules && ${INSTALL}`,
 		`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
 		`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check ${SOURCE_ROOT}`,

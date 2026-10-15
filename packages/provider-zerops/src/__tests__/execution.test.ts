@@ -88,7 +88,7 @@ describe('the generated execution descriptor of a contract application', () => {
 				buildCommands: [
 					'bun run build:spa',
 					'bun install --frozen-lockfile --ignore-scripts',
-					'bun test --pass-with-no-tests',
+					'bun test --isolate --pass-with-no-tests',
 					'rm -rf node_modules && bun install --frozen-lockfile --ignore-scripts',
 					`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
 					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
