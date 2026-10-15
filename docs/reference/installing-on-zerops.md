@@ -108,13 +108,13 @@ pinned merely by selecting this installation checkout.
 
 Three behaviours worth knowing before reading that file:
 
-- **The manifest is MERGED.** On the light tier an application shares the project and therefore the
-  platform proxy — the light-tier installation carried `notes` → `notesapi:3000` beside the three platform
-  apps. Its entry is held by the operator in the proxy's `FABRIKA_PROXY_MANIFEST_JSON` variable, which the
-  deploy reads and never writes; the composed manifest travels as the data file of the proxy's build archive
-  ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). Application entries
-  are carried through unchanged; an entry standing on one of the platform's own public hosts is superseded and
-  reported, because a host belongs to exactly one app.
+- **The manifest is the platform's own.** It names IAM, the console and Operations and nothing else: an
+  application lives in a namespace with its own proxy
+  ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)). It travels as the data file
+  of the proxy's build archive
+  ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). Releases up to 0.4.2
+  wrote it into the proxy's `FABRIKA_PROXY_MANIFEST_JSON` as a sensitive variable; the deploy deletes that
+  variable without reading it, because no token outside sudo mode can.
 - **Hosts come from `zeropsSubdomain` unless the operator names them.** That variable is a NAME and not
   a state (see the [platform facts](zerops-platform.md)), so it can be read one step before `enableSubdomainAccess`. Naming all three hosts
   instead marks the installation `custom-domain`, and no subdomain is published.
@@ -127,8 +127,8 @@ per-installation variables the command derives, only `ENVIRONMENT` on `operation
 `proxy` and the proxy manifest differ from what was placed by hand. Every origin — `ISSUER`,
 `FABRIKA_CONTROL_DOMAIN`, `OPERATIONS_ARTIFACT_ORIGIN`,
 `FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_ISSUER`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
-live value byte for byte, and the composed manifest reproduces `vozka`, `operations` and `notes`
-identically while replacing `iam-local` with `iam`.
+live value byte for byte, and the composed manifest reproduces `vozka` and `operations` identically while
+replacing `iam-local` with `iam`.
 
 ### The platform proxy manifest
 

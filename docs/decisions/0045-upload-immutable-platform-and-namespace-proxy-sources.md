@@ -55,7 +55,8 @@ identified by its sha256, which the upload reports and the provider checks. The 
 pinned commit byte for byte; a commit that holds that path, as a file, a directory or a link, is
 refused rather than overridden. A pinned descriptor whose proxy build still lifts
 `FABRIKA_PROXY_MANIFEST_JSON` gets the variable instead (`zeropsProxyManifestCarrier`), bound by the
-Zerops value limit. Recovery and ownership of a proxy rebuild follow
+Zerops value limit. The platform proxy is always built from the checkout being deployed, so `platform deploy`
+deletes the variable unread: earlier releases wrote it sensitive, and it carried only the platform's own entries. Recovery and ownership of a proxy rebuild follow
 [ADR-0044](0044-zerops-delivery-ownership-and-recovery.md). Registry-triggered rebuild requests may
 wait for a bounded archive upload before reporting that the build started. Ordinary reconciliation
 never backfills current HEAD or replaces a stored namespace pin.

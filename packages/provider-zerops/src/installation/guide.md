@@ -293,7 +293,9 @@ fabrika platform upgrade --provider=zerops --to=<newer tag> --sidecar=<sidecar c
 ```
 
 It commits the tag to the sidecar's `fabrika.ref`, pushes, and follows the workflow run it triggers. It
-needs only the `gh` login. Existing namespaces keep their proxy version. To move one to the proxy of the
+needs only the `gh` login. From 0.4.2 or earlier, skip 0.4.3: its deploy stops at "Compose the proxy manifest"
+because the proxy's `FABRIKA_PROXY_MANIFEST_JSON` is sensitive. Do not re-save that variable. Upgrade to a later
+tag: its deploy deletes the variable, and needs no sudo mode. Existing namespaces keep their proxy version. To move one to the proxy of the
 new release, after the run succeeded:
 
 ```bash

@@ -207,7 +207,6 @@ export const fakeZerops = (options: {
 		},
 		cancelBuild: NEVER('cancelBuild'),
 		configureAutoscaling: NEVER('configureAutoscaling'),
-		deleteServiceEnv: NEVER('deleteServiceEnv'),
 		getProjectEnv: NEVER('getProjectEnv'),
 		getLogAccess: NEVER('getLogAccess'),
 		readBuildLog: NEVER('readBuildLog'),
@@ -353,6 +352,17 @@ export const fakeZerops = (options: {
 			if (envOf(name).has(key)) throw new Error('zerops: create-only service env failed')
 			effect(`env:${name}:${key}`)
 			store(name, key, value, sensitive)
+		},
+
+		/** The record id `listServiceEnv` hands out is `<service>:<key>`. */
+		deleteServiceEnv: async ({ envId }) => {
+			const separator = envId.indexOf(':')
+			const name = envId.slice(0, separator)
+			const key = envId.slice(separator + 1)
+			if (separator < 0 || !envOf(name).has(key)) throw new ZeropsApiError('zerops: delete service env failed (400)', 400, 'userDataNotFound')
+			effect(`env-delete:${name}:${key}`)
+			envOf(name).delete(key)
+			sensitiveOf(name).delete(key)
 		},
 
 		putServiceEnv: async ({ serviceId, key, value, sensitive }) => {
