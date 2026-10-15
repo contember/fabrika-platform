@@ -29,8 +29,8 @@
 		"archiveSha256": "2040d69c8da442a88817c841359ece578e36fd25e1421cb4fdc7f781a95c9858"
 	},
 	"application": {
-		"commitSha": "36814b2d53d29c7ad01fd5b91f181b22e9225ca3",
-		"treeSha": "bbd5794beb94197a01d09f31869141a5abad8c01",
+		"commitSha": "8b3137eb8d7dad802aa22a501a9731d4ae8155ef",
+		"treeSha": "5f1e519959731d6c198e6968fdc8c31c32d64fb7",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -40,7 +40,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "505496e45c02ac6105d213472023618b2d40e2f2",
+				"sha": "e810a4ae278d75aa464df58232885b23a20082d4",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -124,7 +124,7 @@
 			},
 			{
 				"path": "package.json",
-				"sha": "270dbf18d5bb8799f1d2a1f2fd61660a30ba9618",
+				"sha": "b5e826202883f1ed87f3edd582502ddb1df80cc0",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -281,12 +281,12 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 99942,
-		"archiveSha256": "04d315b786f7c23569ea110d9afc3db0b8e52ebd5eae61018ac62289c82a5309"
+		"archiveBytes": 99939,
+		"archiveSha256": "0596b851c57ac855fa50ae27a1b323c4bb42034d6cd3b7c3f60d0db11a8e0c28"
 	},
 	"agentChange": {
-		"commitSha": "68e4058f8490381a69b176d8c75a96ac05fe7f99",
-		"treeSha": "92627848a61c8a355f7adb9e789a3811fdb1ef0a",
+		"commitSha": "381c2dce5a3a0c664ba494fa6aadc97467a59dfb",
+		"treeSha": "daf1e6d7caf5d38217bd2ba9f8b195f60f6cd6cb",
 		"tree": [
 			{
 				"path": ".gitignore",
@@ -296,7 +296,7 @@
 			},
 			{
 				"path": "AGENTS.md",
-				"sha": "505496e45c02ac6105d213472023618b2d40e2f2",
+				"sha": "e810a4ae278d75aa464df58232885b23a20082d4",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -392,7 +392,7 @@
 			},
 			{
 				"path": "package.json",
-				"sha": "270dbf18d5bb8799f1d2a1f2fd61660a30ba9618",
+				"sha": "b5e826202883f1ed87f3edd582502ddb1df80cc0",
 				"type": "blob",
 				"mode": "100644"
 			},
@@ -555,7 +555,7 @@
 		],
 		"descriptorContents": "# The build descriptor Zerops reads from the repository root. A contract application authors only `setup`,\n# `build.base`, `build.os` and an SPA's `build.buildCommands`: the platform generates the rest of the build (install,\n# tests, the checker, the type check), the deploy gate and the whole run section — the start script runs\n# `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server, and the\n# crontab runs `fabrika job run purge` (ADR-0043). Any other key is refused at build.\n#\n# `setup` is the runtime's hostname, which `zeropsSetup` in fabrika.config.ts selects. The SPA commands run first and\n# write `dist/web`, which the contract's `site` mount serves.\n\nzerops:\n  - setup: notesapi\n    build:\n      base: alpine/bun@1.3\n      buildCommands:\n        - bun install --frozen-lockfile\n        - bun run build:web\n",
 		"descriptorSha256": "be1c32fc6a36ec0c983e0de54fd079b67dfe81618cfe81a22d019107d58dfb27",
-		"archiveBytes": 100787,
-		"archiveSha256": "909f110ab00df5790eb86a669301de29a6c2d44d1923e85c3904705b39dad374"
+		"archiveBytes": 100777,
+		"archiveSha256": "c4e82582c20a7369a85b0f6db4a742ade6d4f39cc12938e3e0f3e6012feb758a"
 	}
 }

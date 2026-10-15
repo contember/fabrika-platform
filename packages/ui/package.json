@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/ui",
-	"version": "0.4.3",
+	"version": "0.4.5",
 	"type": "module",
 	"description": "React component kit for the paved road: accessible admin components styled through CSS custom properties.",
 	"license": "MIT",
