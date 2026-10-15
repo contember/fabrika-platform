@@ -79,10 +79,10 @@ export class GitHubMetadataClient {
 	 * Git trees retain gitlinks even when export attributes hide .gitmodules from the tarball. The check costs two
 	 * rate-limited requests, so a commit that passed is not read again in this process.
 	 */
-	async validatePlatformTree(repository: SourceRepository, commitSha: string, signal: AbortSignal): Promise<void> {
+	async validatePlatformTree(repository: SourceRepository, commitSha: string, token: string | undefined, signal: AbortSignal): Promise<void> {
 		const key = `${repository.owner.toLowerCase()}/${repository.name.toLowerCase()}@${commitSha}`
 		if (this.validatedPlatformTrees.has(key)) return
-		const paths = await this.readTree(repository, commitSha, undefined, signal, 'archive')
+		const paths = await this.readTree(repository, commitSha, token, signal, 'archive')
 		for (const path of paths.keys()) {
 			const separator = path.lastIndexOf('/')
 			if (separator !== -1 && paths.get(path.slice(0, separator))?.type !== 'tree') throw rejected('archive')

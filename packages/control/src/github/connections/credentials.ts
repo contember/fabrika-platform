@@ -14,6 +14,7 @@ import { vault as openVault } from '../../services'
 import type { Vault } from '../../vault'
 import { cancelled, SourceFailure } from '../source/failure'
 import type { SourcePrivateBinding, SourceRepository } from '../source/types'
+import type { GitHubSourceConnection } from './model'
 import { githubAppCredentialSecretLabel } from './secrets'
 
 const MAX_APP_CREDENTIAL_BYTES = 72 * 1024
@@ -86,9 +87,19 @@ export interface GitHubSourceCredentialRequest extends SourcePrivateBinding {
 	readonly signal: AbortSignal
 }
 
-/** Mints a repository-scoped installation token for exactly one bound connection. */
+export interface GitHubSourceOwnerRequest {
+	readonly repository: SourceRepository
+	readonly signal: AbortSignal
+}
+
 export interface GitHubSourceCredentials {
+	/** A repository-scoped installation token from exactly the bound connection; a failure fails the read. */
 	repositoryToken(input: GitHubSourceCredentialRequest): Promise<string>
+	/**
+	 * For a read no binding names: a repository-scoped token from the connection of the organization that owns the
+	 * repository, when that connection's installation can read it. `undefined` leaves the read anonymous.
+	 */
+	ownerConnectionToken(input: GitHubSourceOwnerRequest): Promise<string | undefined>
 }
 
 export interface VaultGitHubCredentialsOptions {
@@ -120,7 +131,33 @@ export async function readBoundAppCredential(
 /** Reads the vault on every operation; there is no in-memory key cache to go stale or leak. */
 export function vaultGitHubCredentials(env: Env, options: VaultGitHubCredentialsOptions = {}): GitHubSourceCredentials {
 	const createClient = options.createClient ?? gitHubAppClientFactory()
-	return {
+	const credentials: GitHubSourceCredentials = {
+		/**
+		 * Minting a token scoped to the repository is the access check: GitHub refuses one for a repository the
+		 * installation does not cover. It grants nothing a registrant could not take by binding the same connection.
+		 */
+		async ownerConnectionToken(input) {
+			const { owner, name } = input.repository
+			let connection: GitHubSourceConnection | null
+			try {
+				connection = await env.REPOSITORIES.githubConnections.getConnectionByOwner(owner)
+			} catch {
+				return undefined
+			}
+			if (connection === null || connection.installationAccountLogin.toLowerCase() !== owner.toLowerCase()) return undefined
+			try {
+				return await credentials.repositoryToken({
+					connectionId: connection.connectionId,
+					installationId: connection.installationId,
+					repository: input.repository,
+					signal: input.signal,
+				})
+			} catch (error) {
+				if (input.signal.aborted || (error instanceof SourceFailure && error.code === 'cancelled')) throw cancelled('credentials')
+				console.warn(`GitHub connection ${connection.connectionId} cannot read ${owner}/${name}; reading it anonymously`)
+				return undefined
+			}
+		},
 		async repositoryToken(input) {
 			const { installationId, credential } = await readBoundAppCredential(env, input, input.repository)
 			let client: SourceGitHubClient
@@ -143,4 +180,5 @@ export function vaultGitHubCredentials(env: Env, options: VaultGitHubCredentials
 			}
 		},
 	}
+	return credentials
 }

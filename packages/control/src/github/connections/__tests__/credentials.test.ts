@@ -41,8 +41,11 @@ interface Mint {
 	readonly repositories: unknown
 }
 
-/** A GitHub double that accepts a token request only when its JWT verifies against the issuing App's own key. */
-function githubDouble(apps: readonly TestApp[], installations: ReadonlyMap<number, string>) {
+/**
+ * A GitHub double that accepts a token request only when its JWT verifies against the issuing App's own key, and
+ * answers 422, as GitHub does, for a repository the installation does not cover.
+ */
+function githubDouble(apps: readonly TestApp[], installations: ReadonlyMap<number, string>, uncovered: ReadonlySet<string> = new Set()) {
 	const mints: Mint[] = []
 	let requests = 0
 	const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -63,6 +66,8 @@ function githubDouble(apps: readonly TestApp[], installations: ReadonlyMap<numbe
 		const installationId = Number(match[1])
 		if (installations.get(installationId) !== issuer) return new Response(null, { status: 404 })
 		const body: unknown = JSON.parse(String(init.body))
+		const repositories = typeof body === 'object' && body !== null && 'repositories' in body ? body.repositories : null
+		if (Array.isArray(repositories) && repositories.some((name) => uncovered.has(String(name)))) return new Response(null, { status: 422 })
 		mints.push({ issuer, installationId, repositories: typeof body === 'object' && body !== null && 'repositories' in body ? body.repositories : null })
 		return Response.json({ token: `ghs_${issuer}_${installationId}`, expires_at: new Date(Date.now() + 3_600_000).toISOString() })
 	}
@@ -118,7 +123,7 @@ async function twoConnections() {
 	const beta = await generateApp('2002')
 	const alphaRef = await connect(harness, vault, { connectionId: 'alpha', owner: 'acme', installationId: 11, app: alpha })
 	await connect(harness, vault, { connectionId: 'beta', owner: 'beta-org', installationId: 22, app: beta })
-	const github = githubDouble([alpha, beta], new Map([[11, alpha.appId], [22, beta.appId]]))
+	const github = githubDouble([alpha, beta], new Map([[11, alpha.appId], [22, beta.appId]]), new Set(['not-installed']))
 	const credentials = vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(github.fetch) })
 	return { harness, vault, alpha, beta, alphaRef, github, credentials }
 }
@@ -154,6 +159,29 @@ describe('vault-held keyed GitHub credentials', () => {
 			stage: 'credentials',
 		})
 		expect(f.github.requests()).toBe(0)
+	})
+
+	test("an unbound read gets a token from the owner's connection when its installation covers the repository", async () => {
+		const f = await twoConnections()
+
+		expect(await f.credentials.ownerConnectionToken({ repository: { owner: 'ACME', name: 'public-site' }, signal: signal() })).toBe('ghs_1001_11')
+		expect(f.github.mints).toEqual([{ issuer: '1001', installationId: 11, repositories: ['public-site'] }])
+	})
+
+	test('an unbound read stays anonymous when the owner has no connection or its installation does not cover the repository', async () => {
+		const f = await twoConnections()
+		const warned: string[] = []
+		const original = console.warn
+		console.warn = (...values: unknown[]) => warned.push(values.map(String).join(' '))
+		try {
+			expect(await f.credentials.ownerConnectionToken({ repository: { owner: 'stranger', name: 'site' }, signal: signal() })).toBeUndefined()
+			expect(f.github.requests()).toBe(0)
+			expect(await f.credentials.ownerConnectionToken({ repository: { owner: 'acme', name: 'not-installed' }, signal: signal() })).toBeUndefined()
+		} finally {
+			console.warn = original
+		}
+		expect(f.github.mints).toEqual([])
+		expect(warned).toEqual(['GitHub connection alpha cannot read acme/not-installed; reading it anonymously'])
 	})
 
 	test('refuses a key stored under another purpose', async () => {

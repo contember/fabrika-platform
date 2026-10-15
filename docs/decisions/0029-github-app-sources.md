@@ -93,8 +93,14 @@ connection's secret before reading the body, verifies the HMAC, requires the pay
 to equal the connection's, and triggers only applications bound to that pair and repository. There is
 no unscoped `/webhooks/github` route.
 
-**Public repositories** need no connection. They deploy anonymously, and the cron poller triggers them
-from the repository's Atom feed instead of a webhook.
+**Public repositories** need no connection, and the cron poller triggers them from the repository's Atom
+feed instead of a webhook. A read that names no binding still carries a token when it can: Control takes
+the connection of the organization that owns the repository and mints a token scoped to that repository.
+GitHub refuses that token for a repository the installation does not cover, so minting it is the access
+check, and the read falls back to anonymous. Anonymous reads share the per-IP limit with every tenant of a
+cloud's egress address; an installation token has its own. The fallback grants nothing new: any registrant
+could bind the same connection. Webhooks, the poller and the registration probe are unchanged: the probe
+asks whether the repository is readable WITHOUT a token, so it stays anonymous.
 
 **Cloudflare delivery.** For each deploy, Control resolves the requested ref to one exact commit with a
 repository-scoped, read-only installation token minted from the bound connection's vault key. It mints a
@@ -146,7 +152,10 @@ them.
 - Installations have no source service, no source RPC key and no GitHub credential in their
   environment, on either cloud. Source handling is Control code, testable in-process.
 - A fresh installation deploys public repositories only, until an administrator connects GitHub from
-  the console.
+  the console. Once an organization's App is connected and installed on a repository, every read of that
+  repository is authenticated, bound application or not; reads of other organizations' public
+  repositories stay anonymous. Not verified against a live App: whether an installation token reads a
+  public repository outside its installation. Control never relies on it.
 - Losing the vault KEK loses every connection; each must be recreated, which creates a new App.
 - Peak memory per upload is one chunk; no disk scales with repository size. A snapshot pass keeps at most
   32 MiB of wanted files.

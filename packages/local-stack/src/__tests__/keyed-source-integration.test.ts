@@ -190,12 +190,13 @@ async function resolveNotes(
 }
 
 describe.skipIf(POSTGRES_URL === undefined)('a keyed private deploy over the local GitHub double', () => {
-	test('an anonymous resolve cannot see the private repository, and a foreign connection is refused before any App call', async () => {
+	test("an unbound resolve reads through the owner's connection, and a foreign connection is refused before any App call", async () => {
 		const current = requireFixture()
-		const anonymous = await resolveNotes(current, undefined)
-		await expect(anonymous.result).rejects.toThrow('(ref_not_found)')
-		expect(anonymous.appCalls()).toBe(0)
-		await anonymous.shutdown()
+		// The owner's connection covers the repository, so the read is authenticated without a binding (ADR-0029).
+		const unbound = await resolveNotes(current, undefined)
+		expect(await unbound.result).toEqual({ commitSha: current.manifest.application.commitSha })
+		expect(unbound.appCalls()).toBe(1)
+		await unbound.shutdown()
 
 		const foreign = await resolveNotes(current, { connectionId: BETA.connectionId, installationId: BETA.installationId })
 		await expect(foreign.result).rejects.toThrow('(installation_not_found)')

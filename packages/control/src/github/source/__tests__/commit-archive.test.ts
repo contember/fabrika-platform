@@ -22,7 +22,7 @@ function commitSource(requests: string[]) {
 		},
 	})
 	const source = new TarballRepositorySource({
-		credentials: { repositoryToken: () => Promise.reject(new Error('no credential expected')) },
+		credentials: { repositoryToken: () => Promise.reject(new Error('no credential expected')), ownerConnectionToken: async () => undefined },
 		descriptor: DESCRIPTOR,
 		metadata,
 		downloadFetch: async (url) => {

@@ -163,7 +163,9 @@ other environment, before the provider prepares anything, and the write maps a r
   checkpoint transaction and read per operation; nothing caches them, and no App key is a Worker secret or
   env var. Both compositions manage connections from the console (`createSourceConnections`) and mint
   repository tokens with `vaultGitHubCredentials`. A private operation names `(connectionId,
-  installationId)` and never falls back to another connection. A registration without a connection is an anonymous
+  installationId)` and never falls back to another connection. A read without a binding asks
+  `ownerConnectionToken`: the repository owner's connection, when minting a token scoped to the repository succeeds,
+  else anonymous (ADR-0029). A registration without a connection is an anonymous
   source: `register` probes it once through `CommitSource.anonymousReadability` (`HEAD`, no token) and refuses a 404
   with 409, so a private repository is not found only at deploy as `ref_not_found`; an inconclusive probe registers. Origins are fixed; seams come only from code
   (the local stack's `control-server.ts`, tests), never from env. `source/archive.ts`, `source/repository.ts`,

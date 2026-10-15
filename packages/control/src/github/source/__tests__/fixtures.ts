@@ -188,7 +188,10 @@ export interface SourceOptions {
 
 export function sourceFor(fixture: Fixture, options: SourceOptions = {}): TarballRepositorySource {
 	return new TarballRepositorySource({
-		credentials: options.credentials ?? { repositoryToken: () => Promise.reject(new Error('no credential expected')) },
+		credentials: options.credentials ?? {
+			repositoryToken: () => Promise.reject(new Error('no credential expected')),
+			ownerConnectionToken: async () => undefined,
+		},
 		descriptor: DESCRIPTOR,
 		metadata: new GitHubMetadataClient({
 			fetch: async (input, init) => {

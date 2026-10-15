@@ -210,7 +210,8 @@ places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config 
 **Repository access decides how you register** (step 5.2). Check it first:
 `curl -s -o /dev/null -w '%{http_code}\n' https://api.github.com/repos/<owner>/<name>`.
 
-- `200`: the repository is public. Register it with `--installation-id=none`. Control reads it without a token.
+- `200`: the repository is public. Register it with `--installation-id=none`. Control reads it without a token,
+  or with the organization's GitHub App once that App is connected and installed on the repository.
 - `404`: GitHub hides it from an anonymous caller, so it is private (or the name is wrong). `register` refuses
   it with `--installation-id=none`. Ask the human to connect the GitHub App in the console first (Settings →
   Source, a browser flow), then register without `--installation-id`.

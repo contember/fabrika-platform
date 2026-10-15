@@ -48,7 +48,7 @@ const leakyError = (url: string): TypeError => new TypeError(`request to ${url} 
 
 function leakySource(failAt: 'metadata' | 'codeload' | 'put') {
 	return createGitHubSource({
-		credentials: { repositoryToken: async () => TOKEN },
+		credentials: { repositoryToken: async () => TOKEN, ownerConnectionToken: async () => TOKEN },
 		descriptor: DESCRIPTOR,
 		isUploadDestination: (url) => url === uploadUrl,
 		metadataFetch: async (input) => {

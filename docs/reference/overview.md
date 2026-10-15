@@ -80,8 +80,8 @@ GitHub organization, created and verified from the authenticated console
 connection's App id and private key live in control's vault next to that
 connection's webhook secret. `@fabrika/github-app` is the shared client: the least-authority manifest
 builder, the bounded manifest-code exchange, installation-token minting, and
-webhook configuration. A public repository is fetched anonymously and needs no
-App at all.
+webhook configuration. A public repository needs no App at all: it is fetched
+anonymously, or with the owning organization's App when that App is installed on it.
 
 ## The packages
 

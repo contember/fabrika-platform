@@ -208,7 +208,7 @@ export function cloudflareGitHubSource(
 	const metadata = new GitHubMetadataClient(seams.metadataFetch === undefined ? {} : { fetch: seams.metadataFetch })
 	const repositoryToken = (repository: SourceRepository, binding: ProviderSourceBinding | undefined, signal: AbortSignal) =>
 		binding === undefined
-			? Promise.resolve(undefined)
+			? credentials.ownerConnectionToken({ repository, signal })
 			: credentials.repositoryToken({ connectionId: binding.connectionId, installationId: binding.installationId, repository, signal })
 	return {
 		resolveSource: async (input) => {

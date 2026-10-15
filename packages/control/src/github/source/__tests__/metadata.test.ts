@@ -25,7 +25,7 @@ describe('platform Git tree preflight', () => {
 				],
 			})
 		)
-		await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).resolves.toBeUndefined()
+		await expect(client.validatePlatformTree(repository, commitSha, undefined, new AbortController().signal)).resolves.toBeUndefined()
 	})
 
 	test('binds a complete recursive tree to the exact commit and accepts symlink blobs', async () => {
@@ -40,7 +40,7 @@ describe('platform Git tree preflight', () => {
 					: Response.json({ ...treeResponse, tree: [blob, { ...blob, path: 'AGENTS.md', mode: '120000' }] })
 			},
 		})
-		await client.validatePlatformTree(repository, commitSha, new AbortController().signal)
+		await client.validatePlatformTree(repository, commitSha, undefined, new AbortController().signal)
 		expect(calls).toEqual([
 			`https://api.github.com/repos/contember/fabrika-platform/commits/${commitSha}`,
 			`https://api.github.com/repos/contember/fabrika-platform/git/trees/${treeSha}?recursive=1`,
@@ -59,7 +59,10 @@ describe('platform Git tree preflight', () => {
 				return Response.json(body)
 			},
 		})
-		await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({ code, stage: 'archive' })
+		await expect(client.validatePlatformTree(repository, commitSha, undefined, new AbortController().signal)).rejects.toMatchObject({
+			code,
+			stage: 'archive',
+		})
 		expect(calls).toBe(1)
 	})
 
@@ -82,7 +85,7 @@ describe('platform Git tree preflight', () => {
 		{ name: 'blob parent', body: { ...treeResponse, tree: [blob, { ...blob, path: 'CLAUDE.md/file' }] } },
 	])('fails closed on $name', async ({ body }) => {
 		const client = platformClient(() => Response.json(body))
-		await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({
+		await expect(client.validatePlatformTree(repository, commitSha, undefined, new AbortController().signal)).rejects.toMatchObject({
 			code: 'archive_rejected',
 			stage: 'archive',
 		})
@@ -101,7 +104,7 @@ describe('platform Git tree preflight', () => {
 		{ name: 'malformed JSON', response: () => new Response('{') },
 		{ name: 'invalid UTF-8', response: () => new Response(new Uint8Array([0xff])) },
 	])('bounds and rejects $name', async ({ response }) => {
-		await expect(platformClient(response).validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({
+		await expect(platformClient(response).validatePlatformTree(repository, commitSha, undefined, new AbortController().signal)).rejects.toMatchObject({
 			code: 'archive_rejected',
 			stage: 'archive',
 		})
@@ -133,7 +136,7 @@ describe('GitHub repository metadata', () => {
 				fetch: async () => Response.json({ sha: commitSha, commit, extension: 'ignored' }),
 			})
 			expect(await client.commit(repository, 'main', undefined, new AbortController().signal, 'resolve')).toBe(commitSha)
-			await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({
+			await expect(client.validatePlatformTree(repository, commitSha, undefined, new AbortController().signal)).rejects.toMatchObject({
 				code: 'archive_rejected',
 				stage: 'archive',
 			})

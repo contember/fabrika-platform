@@ -46,7 +46,7 @@ export function gitHubCommitSource(metadata: GitHubMetadataClient, credentials: 
 			const repository = repositoryOf(input.repoUrl)
 			const binding = input.sourceBinding
 			const token = binding === undefined
-				? undefined
+				? await credentials.ownerConnectionToken({ repository, signal: input.signal })
 				: await credentials.repositoryToken({
 					connectionId: binding.connectionId,
 					installationId: binding.installationId,

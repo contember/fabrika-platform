@@ -52,7 +52,10 @@ async function fixture() {
 	const fixtureDirectory = join(directory, 'source')
 	// Control's own in-process source, over the same fixture transports the local stack's Control uses.
 	const source = createGitHubSource({
-		credentials: { repositoryToken: () => Promise.reject(new Error('a platform archive is anonymous')) },
+		credentials: {
+			repositoryToken: () => Promise.reject(new Error('a platform archive names no binding')),
+			ownerConnectionToken: async () => undefined,
+		},
 		descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
 		isUploadDestination: isZeropsUploadDestination,
 		...createFixtureTransports([

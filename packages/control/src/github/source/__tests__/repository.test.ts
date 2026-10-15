@@ -113,6 +113,7 @@ describe('the GitHub tarball repository', () => {
 				requests.push(input)
 				return token
 			},
+			ownerConnectionToken: () => Promise.reject(new Error('a bound read never looks for the owner connection')),
 		}
 		const source = sourceFor(fixture, {
 			credentials,
@@ -144,16 +145,24 @@ describe('the GitHub tarball repository', () => {
 		])
 	})
 
-	test('a public repository and every platform archive ask for no credential', async () => {
+	test('an unbound read is anonymous when no connection of the owner can read the repository', async () => {
 		const fixture = await gitFixture()
-		let requests = 0
+		let bound = 0
+		const asked: string[] = []
+		const authorizations: Array<string | null> = []
 		const source = sourceFor(fixture, {
 			credentials: {
 				repositoryToken: async () => {
-					requests++
+					bound++
 					return 'unexpected'
 				},
+				ownerConnectionToken: async (input) => {
+					asked.push(`${input.repository.owner}/${input.repository.name}`)
+					return undefined
+				},
 			},
+			onMetadataAuthorization: (value) => authorizations.push(value),
+			onDownloadAuthorization: (_url, value) => authorizations.push(value),
 		})
 		const signal = new AbortController().signal
 		await source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal })
@@ -161,14 +170,47 @@ describe('the GitHub tarball repository', () => {
 		expect(
 			(await runArchive(source, { repository, commitSha: fixture.commitSha, descriptorSha256, archive: { kind: 'platform' }, signal })).failure,
 		).toBeUndefined()
-		expect(requests).toBe(0)
+		expect(bound).toBe(0)
+		expect(asked).toEqual(['contember/fixture', 'contember/fixture', 'contember/fixture'])
+		expect(authorizations.every((value) => value === null)).toBe(true)
+	})
+
+	test("an unbound read carries the owner connection's repository token to api.github.com, the tree check included", async () => {
+		const fixture = await gitFixture()
+		const token = 'ghs_owner_connection'
+		const authorizations: Array<[string, string | null]> = []
+		const source = sourceFor(fixture, {
+			credentials: {
+				repositoryToken: () => Promise.reject(new Error('an unbound read names no binding')),
+				ownerConnectionToken: async () => token,
+			},
+			onMetadataAuthorization: (value) => authorizations.push(['metadata', value]),
+			onDownloadAuthorization: (url, value) => authorizations.push([new URL(url).host, value]),
+		})
+		const signal = new AbortController().signal
+
+		await source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal })
+		const archived = await runArchive(source, { repository, commitSha: fixture.commitSha, descriptorSha256, archive: { kind: 'platform' }, signal })
+
+		expect(archived.failure).toBeUndefined()
+		expect(authorizations).toEqual([
+			['api.github.com', `Bearer ${token}`],
+			['codeload.github.com', null],
+			['metadata', `Bearer ${token}`],
+			['metadata', `Bearer ${token}`],
+			['api.github.com', `Bearer ${token}`],
+			['codeload.github.com', null],
+		])
 	})
 
 	test('fails closed without fetching when the bound connection has no credential', async () => {
 		const fixture = await gitFixture()
 		let metadata = 0
 		const source = sourceFor(fixture, {
-			credentials: { repositoryToken: () => Promise.reject(new SourceFailure('installation_not_found', 'credentials')) },
+			credentials: {
+				repositoryToken: () => Promise.reject(new SourceFailure('installation_not_found', 'credentials')),
+				ownerConnectionToken: () => Promise.reject(new Error('a bound read never looks for the owner connection')),
+			},
 			onMetadataRequest: () => metadata++,
 		})
 		await expect(source.resolve({

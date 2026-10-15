@@ -132,7 +132,8 @@ Custom compositions use `CloudflareCloneSource` for clone authorization. The
 The GitHub composition resolves the requested ref, or a recorded commit, with one
 `GET /commits/{ref}`; GitHub resolves branch-versus-tag names and peels annotated
 tags.
-Public resolution uses anonymous GitHub data requests; private resolution
+A public repository is read with a repository-scoped token from the connection of the organization that
+owns it, when that connection's installation covers the repository, and anonymously otherwise; private resolution
 uses a repository-scoped read-only token minted from the app's bound GitHub
 connection — its App key read from Control's vault (see
 [GitHub source connections](#github-source-connections)). The clone URL handed to

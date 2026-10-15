@@ -4,6 +4,7 @@ import { GitHubMetadataClient } from '../metadata'
 
 const credentials = {
 	repositoryToken: () => Promise.reject(new Error('an anonymous probe must not mint a repository token')),
+	ownerConnectionToken: () => Promise.reject(new Error('an anonymous probe must not mint a repository token')),
 }
 
 const probe = async (answer: () => Response): Promise<{ readability: string; calls: string[] }> => {

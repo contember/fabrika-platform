@@ -174,7 +174,7 @@ export class TarballRepositorySource {
 		const dataFile = input.archive.kind === 'platform' ? input.archive.dataFile : undefined
 		const binding = input.archive.kind === 'application' ? input.archive.privateBinding : undefined
 		const token = await this.token(input.repository, binding, input.signal, 'archive')
-		if (platform) await this.metadata.validatePlatformTree(input.repository, input.commitSha, input.signal)
+		if (platform) await this.metadata.validatePlatformTree(input.repository, input.commitSha, token, input.signal)
 		const download = linkedController(input.signal)
 		try {
 			const tarball = await this.tarball(
@@ -278,16 +278,20 @@ export class TarballRepositorySource {
 		}
 	}
 
-	/** A public repository needs no token; a private one names exactly one connection. */
+	/**
+	 * A bound read names exactly one connection. An unbound one uses the owning organization's connection when its
+	 * installation can read the repository, and is anonymous otherwise.
+	 */
 	private async token(
 		repository: SourceRepository,
 		binding: SourcePrivateBinding | undefined,
 		signal: AbortSignal,
 		stage: RepositoryStage,
 	): Promise<string | undefined> {
-		if (binding === undefined) return undefined
 		try {
-			return await this.options.credentials.repositoryToken({ ...binding, repository, signal })
+			return binding === undefined
+				? await this.options.credentials.ownerConnectionToken({ repository, signal })
+				: await this.options.credentials.repositoryToken({ ...binding, repository, signal })
 		} catch (error) {
 			if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw cancelled(stage)
 			if (error instanceof SourceFailure) throw error

@@ -69,7 +69,7 @@ async function streamUpload(payloadBytes: number): Promise<StreamedUpload> {
 	let peakRss = 0
 	const codeload = 'https://codeload.github.com/contember/fixture/legacy.tar.gz/aaaa?token=x'
 	const source = createGitHubSource({
-		credentials: { repositoryToken: () => Promise.reject(new Error('no credential expected')) },
+		credentials: { repositoryToken: () => Promise.reject(new Error('no credential expected')), ownerConnectionToken: async () => undefined },
 		descriptor: DESCRIPTOR,
 		isUploadDestination: (url) => url === uploadUrl,
 		downloadFetch: async (url) => {
