@@ -28,8 +28,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 	&& apt-get install -y --no-install-recommends nodejs \
 	&& rm -rf /var/lib/apt/lists/*
 
-# bun — both the runner's own runtime and the tool that installs target apps.
-RUN curl -fsSL https://bun.com/install | bash
+# bun — both the runner's own runtime and the tool that installs target apps. The exact release of
+# `.bun-version`, never the installer's default of the newest one: a newer Bun rewrites the lockfile.
+COPY .bun-version /tmp/.bun-version
+RUN curl -fsSL https://bun.com/install | bash -s "bun-v$(tr -d '[:space:]' < /tmp/.bun-version)"
 ENV PATH="/root/.bun/bin:${PATH}"
 
 # wrangler on PATH globally: the deploy step shells out to a bare `wrangler` (deploy-worker /
