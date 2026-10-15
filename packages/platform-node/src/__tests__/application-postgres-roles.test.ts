@@ -350,6 +350,27 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 		})
 	}
 
+	// A Zerops service whose `db` user was once granted CREATEROLE by hand, now provisioned by the service's superuser.
+	test('a family a CREATEROLE role created is taken over by a superuser: the passwords follow the new credential', async () => {
+		const previous = createRoleOnly()
+		await previous.setUp()
+		const appId = `roles-${hex()}`
+		const migrations = definePostgresApplicationMigrations({ appId, directory: '/unused' })
+		try {
+			await migrations.migrate(previous.url(), NOTES)
+			const before = applicationRuntimeUrl(previous.url(), appId)
+			await as(before, (sql) => sql.unsafe(`INSERT INTO ${migrations.schema}.notes (id, title) VALUES ('n1', 'Kept')`))
+			expect(await migrations.migrate(superuserUrl, NOTES)).toEqual([])
+			expect(await migrations.migrate(superuserUrl, NOTES)).toEqual([])
+			const runtime = applicationRuntimeUrl(superuserUrl, appId)
+			expect([...await as(runtime, (sql) => sql.unsafe(`SELECT id, title FROM ${migrations.schema}.notes`))]).toEqual([{ id: 'n1', title: 'Kept' }])
+			expect(await refusal(before, 'SELECT 1')).toContain('password authentication failed')
+		} finally {
+			await dropApplicationDatabase(superuserUrl, appId)
+			await previous.tearDown()
+		}
+	})
+
 	test('a provisioning credential that cannot create roles is refused, and nothing runs as it', async () => {
 		const name = `fabrika_plain_${hex()}`
 		const password = `pw${hex()}`
