@@ -81,7 +81,9 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   and the command prints their names), with
   `FABRIKA_TEST_POSTGRES_REQUIRED=1` and no framework variable, and every case name the scaffold wrote must be
   reported as passed with an assertion (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never
-  applies. **It prints none of the child's output**, only the counts and the failed case names, which come from the
+  applies. A database at its connection limit (SQLSTATE 53300) is waited for when the provisioner is made and dropped;
+  a failed run whose output names a refused connection (`reportsExhaustedConnections`) fails saying so, never as a
+  count of passed cases (ADR-0043). **It prints none of the child's output**, only the counts and the failed case names, which come from the
   scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
   the start script never passes it.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.

@@ -11,6 +11,8 @@ import {
 import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import {
+	CONNECTION_CAPACITY_MESSAGE,
+	ConnectionCapacityError,
 	createTestProvisioner,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
@@ -19,6 +21,8 @@ import {
 	PostgresMigrationError,
 	postgresMigrationResultMessage,
 	type TestProvisioner,
+	TOO_MANY_CONNECTIONS,
+	withConnectionCapacity,
 } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -52,7 +56,9 @@ one that is missing, edited or stale.
 \`test-isolation\` is the platform's run of them: with FABRIKA_APP_DATABASE_URL it creates a throwaway provisioner
 (CREATEROLE, CREATE on the database, nothing of any application) that the tests get instead, ignores the application's
 bunfig.toml, and checks the JUnit report against the case names the scaffold wrote. It first drops the provisioners
-that killed runs left behind: expired, and without a session of their own or of a role they created.
+that killed runs left behind: expired, and without a session of their own or of a role they created. A database at its
+connection limit (SQLSTATE ${TOO_MANY_CONNECTIONS}) is waited for; one that never frees a slot fails the run saying so,
+never as failed cases.
 `
 
 export interface DbCommandDependencies {
@@ -99,7 +105,7 @@ const reportable = (error: unknown): Error => {
 		const server = serverError(error.cause)
 		return new Error(server === undefined ? error.message : `${error.message}: ${server}`)
 	}
-	if (error instanceof CodegenError) return error
+	if (error instanceof CodegenError || error instanceof ConnectionCapacityError) return error
 	const server = serverError(error)
 	if (server !== undefined) return new Error(server)
 	return new Error('the database connection failed; check FABRIKA_APP_DATABASE_URL (the driver error is withheld: it may contain the URL)')
@@ -201,9 +207,20 @@ const testEnvironment = (source: DbCommandDependencies['source'], url: string): 
 }
 
 /**
- * Runs exactly the generated tests, with an empty `bunfig.toml` so that no preload, root or ignore pattern of the
- * application applies, and fails unless every case the scaffold wrote is reported as passed.
+ * The server's own words for a refused connection (SQLSTATE 53300) and the test kit's report of one it gave up on. A
+ * run whose tests met one says so instead of counting cases: a case that could not connect proved nothing.
  */
+const EXHAUSTED_CONNECTIONS = [
+	CONNECTION_CAPACITY_MESSAGE,
+	'remaining connection slots are reserved',
+	'too many clients already',
+	'too many connections for role',
+	'too many connections for database',
+]
+
+/** Whether the tests' output reports a connection the database refused for lack of a free slot. */
+export const reportsExhaustedConnections = (output: string): boolean => EXHAUSTED_CONNECTIONS.some((text) => output.includes(text))
+
 /**
  * Runs exactly the generated tests, with an empty `bunfig.toml` so that no preload, root or ignore pattern of the
  * application applies, and the platform's preload, which captures Bun's test functions before the application loads.
@@ -225,7 +242,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 	}
 	let provisioner: TestProvisioner
 	try {
-		provisioner = await createTestProvisioner(url)
+		provisioner = await withConnectionCapacity(() => createTestProvisioner(url))
 	} catch (error) {
 		throw reportable(error)
 	}
@@ -263,6 +280,11 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 				if (outcome !== 'passed') failed.push(`${path}: ${name} (${outcome})`)
 			}
 		}
+		if ((code !== 0 || failed.length > 0) && reportsExhaustedConnections(`${stdout}${stderr}`)) {
+			throw new Error(
+				`db test-isolation: ${CONNECTION_CAPACITY_MESSAGE} for the generated tests (SQLSTATE ${TOO_MANY_CONNECTIONS}), so they reached no verdict; other processes hold the database's connections: free them or give the database more, then run it again`,
+			)
+		}
 		if (code !== 0 || failed.length > 0) {
 			const rerun = verbose ? '' : '; rerun with --verbose locally to see the test output'
 			throw new Error(
@@ -274,7 +296,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 		deps.write(`${total} generated cases passed\n`)
 	} finally {
 		await rm(scratch, { recursive: true, force: true })
-		await provisioner.drop().catch((error: unknown) => {
+		await withConnectionCapacity(() => provisioner.drop()).catch((error: unknown) => {
 			throw reportable(error)
 		})
 	}
