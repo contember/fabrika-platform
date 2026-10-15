@@ -3,6 +3,7 @@ import type { AuditEventDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { JsonView } from '../../../access/components/JsonView'
 import { api } from '../../../access/lib/api'
+import { actorIdsToResolve, type AuditActor, auditActor, resolveActors } from '../../../access/lib/audit-actors'
 import { trimmedQueryValue } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
 import { EmptyState, Table } from '../../../components/Table'
@@ -37,7 +38,8 @@ export default createPage()
 			before: trimmedQueryValue(params.before),
 			limit: LIMIT,
 		})
-		return { page }
+		const actors = await resolveActors(actorIdsToResolve(page.items), (principalId) => api.principals.get({ principalId }))
+		return { page, actors }
 	})
 	.route('/access/audit')
 	.render(({ params, data }) => {
@@ -94,7 +96,7 @@ export default createPage()
 						</tr>
 					}
 				>
-					{events.map((event) => <AuditRow key={event.id} event={event} />)}
+					{events.map((event) => <AuditRow key={event.id} event={event} actor={auditActor(event, data.actors)} />)}
 				</Table>
 
 				<div className="pager">
@@ -161,7 +163,24 @@ function AuditFilters({ params, onApply }: { params: FilterParams; onApply: (nex
 	)
 }
 
-function AuditRow({ event }: { event: AuditEventDto }) {
+export function ActorCell({ actor }: { actor: AuditActor }) {
+	switch (actor.kind) {
+		case 'credential':
+			return (
+				<span title={actor.credentialId}>
+					credential <code className="small">{actor.credentialId}</code>
+				</span>
+			)
+		case 'principal':
+			return actor.isUser
+				? <Link to="access/users/detail" params={{ id: actor.principalId }} title={actor.principalId}>{actor.label}</Link>
+				: <span title={actor.principalId}>{actor.label}</span>
+		case 'label':
+			return <>{actor.label}</>
+	}
+}
+
+function AuditRow({ event, actor }: { event: AuditEventDto; actor: AuditActor }) {
 	const [open, setOpen] = useState(false)
 	const hasDetail = event.diff !== null && event.diff !== undefined
 		|| event.metadata !== null && event.metadata !== undefined
@@ -171,13 +190,7 @@ function AuditRow({ event }: { event: AuditEventDto }) {
 			<tr>
 				<td className="nowrap">{fmtDate(event.createdAt)}</td>
 				<td>
-					{event.credentialId
-						? (
-							<span title={event.credentialId}>
-								credential <code className="small">{event.credentialId}</code>
-							</span>
-						)
-						: event.principalLabel}
+					<ActorCell actor={actor} />
 				</td>
 				<td>{event.app}</td>
 				<td>
