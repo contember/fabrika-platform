@@ -764,6 +764,25 @@ states `sensitive` per key, credentials are written sensitive and never compared
 compares or merges is written readable. `platform install` writes the operator's copy of every credential it
 creates to `--secrets-file` before placing the first one.
 
+### Verified live (2026-10-15, account `prg1`) — a service variable value over ~32 KB is a bare 500
+
+Source: the measurement in [issue #3](https://github.com/contember/fabrika-platform/issues/3), a throwaway
+sensitive variable on a runtime service, written through the env API and deleted again. It was not re-measured
+for this document; the `user-data-value-*` rows of the platform-facts table re-check it in the live suite.
+
+| Value length (ASCII bytes)                 | Result                                                     |
+| ------------------------------------------ | ---------------------------------------------------------- |
+| 8,000 / 16,000 / 32,000                    | Created                                                    |
+| 32,768 / 32,769 / 33,000 / 40,000 / 65,000 | **`500 Internal Server Error`**, no error code, no message |
+
+The limit lies between 32,000 and 32,768 bytes; the sizes between were not probed, and neither was a value
+with multi-byte characters. The platform reports it as an internal error, not as a validation error, so it
+reads as an outage. The client refuses a value over `ZEROPS_SERVICE_ENV_VALUE_MAX_BYTES` (32,000 UTF-8 bytes,
+`api/service-env-limit.ts`) before it sends the write, with an error that names the variable, its size and the
+limit, never the value; a namespace lifecycle classifies it `serviceEnvValueTooLarge`, not retryable. The
+variable it hits first is the proxy's `FABRIKA_PROXY_MANIFEST_JSON`, which carries every endpoint table the
+proxy fronts.
+
 ### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — a missing service by name is a 400
 
 The first registration into a freshly provisioned namespace — one that holds only the proxy and the

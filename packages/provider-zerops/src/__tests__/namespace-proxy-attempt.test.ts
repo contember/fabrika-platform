@@ -2,11 +2,18 @@ import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { createZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
+import {
+	createZeropsApi,
+	ZEROPS_SERVICE_ENV_VALUE_TOO_LARGE,
+	ZeropsApiError,
+	type ZeropsAppVersionStatus,
+	ZeropsServiceEnvValueTooLargeError,
+} from '../api'
 import { createZeropsArtifactSourceDescriptor } from '../manifest'
 import { createZeropsNamespaceCapabilities } from '../namespace'
 import { zeropsNamespaceTargetCodec } from '../namespace/codec'
 import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE } from '../namespace/constants'
+import { asNamespaceError } from '../namespace/errors'
 import { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from '../namespace/proxy-attempt'
 import type { ZeropsNamespaceTarget } from '../namespace/types'
 import type { ZeropsSourcePort } from '../source/port'
@@ -354,6 +361,43 @@ test('resolution failure, an invalid descriptor digest and an unpinned target ca
 		target: { ...f.target(), proxySource: { ...pin, descriptor: { ...pin.descriptor, sha256: '0'.repeat(64) } } },
 	})).rejects.toThrow()
 	expect(effects(f.calls)).toEqual([])
+})
+
+test('a manifest over the service variable limit is refused before anything is written, and no retry can pass', async () => {
+	const f = fixture()
+	const requests: string[] = []
+	// The real client's write, over a platform that answers a bare 500 from 32,768 bytes (issue #3).
+	const platform = createZeropsApi({
+		token: 'unused',
+		baseUrl: 'https://zerops.test',
+		fetchImpl: async (url, init) => {
+			requests.push(`${init?.method ?? 'GET'} ${url}`)
+			return new Response(null, { status: 500 })
+		},
+	})
+	const large: ProxyManifest = {
+		apps: Array.from({ length: 10 }, (_, index) => ({
+			id: `app${index}@prod`,
+			hosts: [`app${index}.example.test`],
+			upstream: `app${index}:3000`,
+			scheme: 'https',
+			...contractProxyTable(notesArtifact),
+		})),
+	}
+
+	const error = await republishProxy({ ...f.input(), manifest: large, api: { ...f.api, putServiceEnv: platform.putServiceEnv } }).then(
+		() => null,
+		(cause: unknown) => cause,
+	)
+
+	expect(error).toBeInstanceOf(ZeropsServiceEnvValueTooLargeError)
+	expect(requests).toEqual([])
+	expect(effects(f.calls)).toEqual([])
+	expect(f.target().proxyBuild).toBeUndefined()
+	const classified = asNamespaceError(error, 'reconcile')
+	expect(classified.code).toBe(ZEROPS_SERVICE_ENV_VALUE_TOO_LARGE)
+	expect(classified.retryable).toBe(false)
+	expect(classified.message).toContain(`\`${FABRIKA_PROXY_MANIFEST_JSON}\``)
 })
 
 test('the republish capability refuses a namespace with no proxy or one that is not ready, before any platform call', async () => {

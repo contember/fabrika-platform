@@ -18,6 +18,9 @@ import {
 	type ZeropsServiceStatus,
 } from '../../index'
 
+/** The platform answers a value of 32,768 bytes or more with a bare 500 (issue #3); the client refuses it first. */
+const refusedBySize = (value: string): boolean => new TextEncoder().encode(value).byteLength >= 32_768
+
 export interface FakeServiceSpec {
 	readonly name: string
 	readonly id: string
@@ -332,6 +335,7 @@ export const fakeZerops = (options: {
 		createServiceEnv: async ({ serviceId, key, value, sensitive }) => {
 			const name = nameOf(serviceId)
 			if (failedWrites.delete(`${name}:${key}`)) throw new Error('zerops: create-only service env failed')
+			if (refusedBySize(value)) throw new Error('zerops: create-only service env failed')
 			if (envOf(name).has(key)) throw new Error('zerops: create-only service env failed')
 			effect(`env:${name}:${key}`)
 			store(name, key, value, sensitive)
@@ -341,6 +345,9 @@ export const fakeZerops = (options: {
 			const name = nameOf(serviceId)
 			if (failedWrites.delete(`${name}:${key}`)) {
 				throw new Error(`zerops: create service env failed (400)`)
+			}
+			if (refusedBySize(value)) {
+				throw new ZeropsApiError('zerops: create service env failed (500)', 500, '')
 			}
 			effect(`env:${name}:${key}`)
 			store(name, key, value, sensitive)

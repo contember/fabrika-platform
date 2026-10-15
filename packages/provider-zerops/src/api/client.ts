@@ -16,6 +16,7 @@ import {
 	serviceSchema,
 	userInfoSchema,
 } from './readers'
+import { assertServiceEnvValueFits } from './service-env-limit'
 import { parseServiceEnvResponse } from './service-env-response'
 import type { ZeropsApi, ZeropsApiOptions, ZeropsAppVersion, ZeropsLogLine } from './types'
 
@@ -396,6 +397,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		listServiceEnv,
 
 		createServiceEnv: async ({ serviceId, key, value, sensitive, signal }) => {
+			assertServiceEnvValueFits(key, value)
 			let started: unknown
 			try {
 				started = await request('create-only service env', 'POST', `/service-stack/${serviceId}/user-data`, {
@@ -411,6 +413,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		},
 
 		putServiceEnv: async ({ serviceId, key, value, sensitive, signal }) => {
+			assertServiceEnvValueFits(key, value)
 			const label = `the user-data sync on service ${serviceId}`
 			// `redactDetail` on both writes: this is the one place a secret VALUE is in the request body.
 			try {

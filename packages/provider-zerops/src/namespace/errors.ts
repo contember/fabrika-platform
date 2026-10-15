@@ -1,5 +1,5 @@
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
-import { ZeropsApiError } from '../api'
+import { ZeropsApiError, ZeropsServiceEnvValueTooLargeError } from '../api'
 
 /**
  * Lifecycle codes this provider defines where the platform has none of its own. They are an
@@ -41,6 +41,8 @@ const splitApiMessage = (message: string, code: string): { summary: string; deta
 /** Every namespace lifecycle failure leaves this provider as one typed, coded error. */
 export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile' | 'update'): ProviderNamespaceError => {
 	if (cause instanceof ProviderNamespaceError) return cause
+	// The same value is refused again on every retry; only a smaller manifest or a new carrier fixes it.
+	if (cause instanceof ZeropsServiceEnvValueTooLargeError) return namespaceError(cause.code, cause.message, false)
 	if (cause instanceof ZeropsApiError) {
 		const { summary, detail } = splitApiMessage(cause.message, cause.code)
 		return namespaceError(

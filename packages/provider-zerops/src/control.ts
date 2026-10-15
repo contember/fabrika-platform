@@ -20,7 +20,15 @@ import type {
 } from '@fabrika/provider-contract'
 import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion } from './api'
+import {
+	createZeropsApi,
+	waitForProcess,
+	ZEROPS_ACTIVE,
+	ZEROPS_TERMINAL,
+	type ZeropsApi,
+	type ZeropsAppVersion,
+	ZeropsServiceEnvValueTooLargeError,
+} from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
 import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference, parseManagedEnvironment } from './managed-env'
@@ -459,13 +467,18 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				assertNoFrameworkReference(input.value)
 				assertOwnReferencesOnly(input.environment, input.name, input.value)
 				const target = decodeEnvironment(input.environment).target
-				await api.putServiceEnv({
-					serviceId: target.serviceId,
-					key: input.name,
-					value: input.value,
-					sensitive: true,
-					signal: abortSignal(),
-				})
+				try {
+					await api.putServiceEnv({
+						serviceId: target.serviceId,
+						key: input.name,
+						value: input.value,
+						sensitive: true,
+						signal: abortSignal(),
+					})
+				} catch (cause) {
+					if (cause instanceof ZeropsServiceEnvValueTooLargeError) throw new ProviderSecretError(cause.message, cause.code)
+					throw cause
+				}
 				return { valueRef: `zerops:${target.serviceId}/${encodeURIComponent(input.name)}` }
 			},
 			delete: async (input) => {

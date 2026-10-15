@@ -4,9 +4,12 @@ import {
 	enableSubdomainAccessWhenHttp,
 	type FetchLike,
 	waitForProcess,
+	ZEROPS_SERVICE_ENV_VALUE_MAX_BYTES,
+	ZEROPS_SERVICE_ENV_VALUE_TOO_LARGE,
 	ZEROPS_SERVICE_NOT_HTTP,
 	ZeropsApiError,
 	type ZeropsLogAccess,
+	ZeropsServiceEnvValueTooLargeError,
 } from '../api'
 import type { Sleeper } from '../collaborators'
 
@@ -407,9 +410,18 @@ describe('Zerops API discovery', () => {
 	})
 })
 
+/** The smallest value the platform was measured to refuse, with a bare 500 (issue #3). */
+const PLATFORM_REFUSED_CONTENT_BYTES = 32_768
+
+const contentTooLarge = (body: unknown): boolean => {
+	const content = typeof body === 'object' && body !== null ? Reflect.get(body, 'content') : undefined
+	return typeof content === 'string' && new TextEncoder().encode(content).byteLength >= PLATFORM_REFUSED_CONTENT_BYTES
+}
+
 /**
  * A fake shaped like the live platform: the `user-data` LIST always answers 400 `serviceStackNotFound`,
- * a create conflicts on an existing key, and `/env` is the only reading that works.
+ * a create conflicts on an existing key, `/env` is the only reading that works, and a value of 32,768
+ * bytes or more is a bare 500.
  */
 const zeropsEnvDouble = (
 	stored: { id: string; key: string; content: string; sensitive: boolean }[],
@@ -425,6 +437,9 @@ async (url, init) => {
 	}
 	if (init?.method === 'GET' && path.endsWith('/env')) {
 		return jsonResponse({ items: stored.map((entry) => ({ ...entry, serviceStackId: 'service-1', type: 'SECRET' })) })
+	}
+	if ((init?.method === 'POST' || init?.method === 'PUT') && contentTooLarge(body)) {
+		return new Response(null, { status: 500 })
 	}
 	if (init?.method === 'POST' && path.endsWith('/user-data')) {
 		const key = typeof body === 'object' && body !== null && 'key' in body ? String(Reflect.get(body, 'key')) : ''
@@ -668,6 +683,65 @@ describe('Zerops service-level environment writes', () => {
 			'zerops: create service env failed (400) — userDataZeropsPrefixForbidden',
 		)
 		expect(log).toHaveLength(1)
+	})
+})
+
+describe('Zerops service variable value size', () => {
+	const refusal = async (write: Promise<void>): Promise<ZeropsServiceEnvValueTooLargeError> => {
+		const error = await write.then(() => null, (cause: unknown) => cause)
+		if (!(error instanceof ZeropsServiceEnvValueTooLargeError)) throw new Error('expected the size refusal')
+		return error
+	}
+
+	test('writes a value of exactly the limit', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: zeropsEnvDouble([], log) })
+
+		const value = 'x'.repeat(ZEROPS_SERVICE_ENV_VALUE_MAX_BYTES)
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_PROXY_MANIFEST_JSON', value, sensitive: false, signal: signal() })
+
+		expect(log.map((entry) => `${entry.method} ${entry.path}`)).toEqual(['POST /service-stack/service-1/user-data'])
+	})
+
+	test('refuses a larger value before any request, naming the variable, its size and the limit but never the value', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: zeropsEnvDouble([], log) })
+		const value = `secret-marker-${'x'.repeat(40_000)}`
+
+		const error = await refusal(
+			api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_PROXY_MANIFEST_JSON', value, sensitive: true, signal: signal() }),
+		)
+
+		expect(error.code).toBe(ZEROPS_SERVICE_ENV_VALUE_TOO_LARGE)
+		expect(error.message).toBe(
+			'zerops: service variable `FABRIKA_PROXY_MANIFEST_JSON` is 40014 bytes (UTF-8), over the 32000-byte limit of a Zerops service variable',
+		)
+		expect(error.message).not.toContain('secret-marker')
+		expect(log).toEqual([])
+	})
+
+	test('counts the value in UTF-8 bytes, not in characters', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: zeropsEnvDouble([], log) })
+		// 10,667 characters, 32,001 bytes.
+		const value = '€'.repeat(10_667)
+
+		const error = await refusal(api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_X', value, sensitive: false, signal: signal() }))
+
+		expect(error.bytes).toBe(32_001)
+		expect(log).toEqual([])
+	})
+
+	test('refuses a create-only write the same way', async () => {
+		const log: { method: string; path: string; body: unknown }[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: zeropsEnvDouble([], log) })
+
+		const error = await refusal(
+			api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_X', value: 'x'.repeat(32_001), sensitive: true, signal: signal() }),
+		)
+
+		expect(error.bytes).toBe(32_001)
+		expect(log).toEqual([])
 	})
 })
 

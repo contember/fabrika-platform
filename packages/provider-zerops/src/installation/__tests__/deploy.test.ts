@@ -496,6 +496,33 @@ describe('--dry-run', () => {
 	})
 })
 
+describe('a manifest over the Zerops variable limit', () => {
+	/** A light-tier live manifest: the platform plus enough application entries to pass 32,000 bytes once merged. */
+	const crowdedManifest = JSON.stringify({
+		apps: Array.from({ length: 8 }, (_, index) => ({
+			id: `notes${index}`,
+			hosts: [`notes${index}.example.test`],
+			upstream: `notes${index}api:3000`,
+			scheme: 'https',
+			...contractProxyTable(notesArtifact),
+		})),
+	})
+
+	test('a dry run reports it, naming the variable', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: crowdedManifest })
+		await expect(fixture.run({ dryRun: true, iamAdminKey: '' })).rejects.toThrow(`service variable \`${FABRIKA_PROXY_MANIFEST_JSON}\` is`)
+		expect(fixture.zerops.calls).toEqual([])
+	})
+
+	test('a real run refuses it before the proxy manifest is written or anything deploys', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: crowdedManifest })
+		await expect(fixture.run()).rejects.toThrow('over the 32000-byte limit of a Zerops service variable')
+		expect(fixture.zerops.calls).not.toContain(`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(fixture.zerops.calls.some((call) => call.startsWith('deploy:'))).toBe(false)
+		expect(manifestOf(fixture.zerops)).toBe(crowdedManifest)
+	})
+})
+
 describe('MCP authoring', () => {
 	const CLAUDE: McpClient = {
 		provider: 'claude',

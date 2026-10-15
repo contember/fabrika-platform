@@ -27,6 +27,16 @@ export const serviceStackNotFound = (): Response => error(400, 'serviceStackNotF
 /** The refusal every user-data write gets without `sensitive`, create and update alike. */
 export const sensitiveIsRequired = (): Response => error(400, 'invalidUserInput', 'sensitive: field is required')
 
+/**
+ * The smallest value size, in bytes, the platform was measured to refuse (issue #3: 32,000 created, 32,768 refused).
+ * It answers a bare 500 without an error code, create and update alike.
+ */
+export const USER_DATA_REFUSED_CONTENT_BYTES = 32_768
+
+export const userDataContentTooLarge = (content: string): boolean => new TextEncoder().encode(content).byteLength >= USER_DATA_REFUSED_CONTENT_BYTES
+
+export const bareInternalServerError = (): Response => new Response(null, { status: 500 })
+
 /** Zerops owns this key prefix and refuses a custom variable that uses it. */
 export const RESERVED_KEY_PREFIX = 'ZEROPS_'
 

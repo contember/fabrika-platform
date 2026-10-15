@@ -24,6 +24,7 @@ import {
 } from './zerops-emulator/model'
 import { asRoleCode, parseImportDocument, readGrant, readSnapshot } from './zerops-emulator/parsing'
 import {
+	bareInternalServerError,
 	error,
 	fakeIntegrationTokenValue,
 	id,
@@ -33,6 +34,7 @@ import {
 	RESERVED_KEY_PREFIX,
 	sensitiveIsRequired,
 	serviceStackNotFound,
+	userDataContentTooLarge,
 } from './zerops-emulator/protocol'
 import {
 	autoscalingRequestSchema,
@@ -432,8 +434,11 @@ class ZeropsEmulator {
 			if (this.state.serviceEnv.some((item) => item.serviceStackId === serviceId && item.key === key)) {
 				return error(400, 'userDataDuplicateKey', `UserData key '${key}' is not unique in service stack frame of reference.`)
 			}
-			const envId = id('env', this.state.nextEnv++)
 			if (body.content === undefined) throw new Error('invalid state field content')
+			if (userDataContentTooLarge(body.content)) {
+				return bareInternalServerError()
+			}
+			const envId = id('env', this.state.nextEnv++)
 			const record: ServiceEnvRecord = {
 				id: envId,
 				serviceStackId: serviceId,
@@ -474,6 +479,9 @@ class ZeropsEmulator {
 				}
 				if (body.sensitive === undefined) {
 					return sensitiveIsRequired()
+				}
+				if (userDataContentTooLarge(content)) {
+					return bareInternalServerError()
 				}
 				current.key = key
 				current.content = content

@@ -9,11 +9,11 @@ import type {
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { ProviderInvocationAbort, ProviderSecretError } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
+import { createZeropsApi, type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
 import type { ManagedValues } from '../managed-env'
@@ -1802,6 +1802,31 @@ describe('Zerops ControlProvider lifecycle', () => {
 			'references service `notesdb`',
 		)
 		expect(recorded.envWrites).toEqual([])
+	})
+
+	test('refuses a secret value Zerops cannot store as a 4xx that names the secret and its size, never the value', async () => {
+		const requests: string[] = []
+		const client = createZeropsApi({
+			token: 'unused',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async (url) => {
+				requests.push(url)
+				return new Response(null, { status: 500 })
+			},
+		})
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: { ...makeApi(recorded), putServiceEnv: client.putServiceEnv } })
+		if (control.secrets === undefined) {
+			throw new Error('expected Zerops managed secrets')
+		}
+
+		const refusal = await control.secrets
+			.put({ environment: environment(), name: 'CERTIFICATE', value: `sk-live-leakage${'x'.repeat(32_001)}` })
+			.catch((cause: unknown) => cause)
+
+		expect(refusal).toBeInstanceOf(ProviderSecretError)
+		expect(String(refusal)).toContain('`CERTIFICATE` is 32016 bytes')
+		expect(String(refusal)).not.toContain('sk-live-leakage')
+		expect(requests).toEqual([])
 	})
 
 	test('writes a secret that references only own services and the namespace postgres', async () => {

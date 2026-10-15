@@ -37,6 +37,7 @@
 import { FABRIKA_SERVICE_TABLE_DIGEST, readEnvironmentName } from '@fabrika/auth-core'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
+import { assertServiceEnvValueFits } from '../api'
 import {
 	enableSubdomainAccessWhenHttp,
 	prepareZeropsDescriptor,
@@ -365,6 +366,8 @@ const applyServiceEnv = async (
 			continue
 		}
 		written.push(key)
+		// The client refuses it too; checking here lets a dry run report what the real write would refuse.
+		assertServiceEnvValueFits(key, value)
 		if (input.dryRun) {
 			continue
 		}

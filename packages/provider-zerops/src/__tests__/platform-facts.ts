@@ -143,6 +143,7 @@ const SECTION_UNVERIFIED_AUTHORIZATION = 'UNVERIFIED: the balancer forwards `Aut
 const SECTION_UNVERIFIED_ACTIVATION =
 	'UNVERIFIED: what stops an activation besides an httpGet readiness check — docs/reference/zerops-platform.md:407'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
+const SECTION_VALUE_SIZE = 'Verified live (2026-10-15) — a service variable value over ~32 KB is a bare 500 — docs/reference/zerops-platform.md:767'
 const SECTION_ENV_ACTIVATION = 'Verified live (2026-09-23) — service variables across activation and rollback — docs/reference/zerops-platform.md:874'
 
 /** The keys the rows write. Literals, not credentials — nothing here is a secret and nothing is printed. */
@@ -151,6 +152,8 @@ const KEY_DUPLICATE = 'FABRIKA_FACT_DUPLICATE'
 const KEY_SENSITIVE = 'FABRIKA_FACT_SENSITIVE'
 const KEY_REPLACE = 'FABRIKA_FACT_REPLACE'
 const KEY_DELETE = 'FABRIKA_FACT_DELETE'
+const KEY_LARGE_CREATED = 'FABRIKA_FACT_LARGE_CREATED'
+const KEY_LARGE_REFUSED = 'FABRIKA_FACT_LARGE_REFUSED'
 
 /** A `zerops.yaml` the compiler would refuse to emit: it names a setup with no build source. */
 const IMPORT_ZEROPS_SETUP_WITHOUT_SOURCE = [
@@ -631,6 +634,40 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		request: { method: 'DELETE', path: '/user-data/{deleteEnvId}' },
 		expect: { status: 200, bodyShape: { actionName: { kind: 'equals', value: 'stack.updateUserData' } } },
 		awaitProcess: 'id',
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'user-data-value-of-32000-bytes-is-created',
+		section: SECTION_VALUE_SIZE,
+		request: {
+			method: 'POST',
+			path: '/service-stack/{serviceId}/user-data',
+			body: { key: KEY_LARGE_CREATED, content: 'x'.repeat(32_000), sensitive: true },
+		},
+		expect: { status: 200, bodyShape: { actionName: { kind: 'equals', value: 'stack.updateUserData' } } },
+		awaitProcess: 'id',
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'user-data-value-of-32768-bytes-is-a-bare-500',
+		section: SECTION_VALUE_SIZE,
+		request: {
+			method: 'POST',
+			path: '/service-stack/{serviceId}/user-data',
+			body: { key: KEY_LARGE_REFUSED, content: 'x'.repeat(32_768), sensitive: true },
+		},
+		expect: { status: 500 },
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'user-data-update-to-32768-bytes-is-a-bare-500',
+		section: SECTION_VALUE_SIZE,
+		setup: [{ method: 'GET', path: '/service-stack/{serviceId}/env', capture: { largeEnvId: `items[key=${KEY_LARGE_CREATED}].id` } }],
+		request: { method: 'PUT', path: '/user-data/{largeEnvId}', body: { key: KEY_LARGE_CREATED, content: 'x'.repeat(32_768), sensitive: true } },
+		expect: { status: 500 },
 		live: 'service',
 		emulator: true,
 	},
