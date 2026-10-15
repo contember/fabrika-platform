@@ -12,7 +12,7 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm, data-ergonomics (need FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm, data-ergonomics, testing-connections (need FABRIKA_TEST_POSTGRES_URL)
 ```
 
 | Module                 | What it owns                                                                                                                                                   |
@@ -28,7 +28,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                        |
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                         |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                 |
-| `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `InvocationTransaction`, `applicationSchema` (`app_<id>`).                               |
+| `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `InvocationTransaction`, `applicationSchema`, `openFirstConnection`.                     |
 | `sql.ts`               | `ctx.sql`: `classifySql` (the template's static text over `@fabrika/platform-node/sql`), the value binding, the row parse, `sqlTag`.                           |
 | `store.ts`             | `scoped(tables)` → `ScopedDatabase`; the stores (`defineStore`, framework tests only); the generated locator; every check.                                     |
 | `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                                       |
@@ -166,6 +166,15 @@ and the target `Ref`, so no handler can call it.
   cleanup step even when one throws. `FABRIKA_TEST_POSTGRES_URL` is a provisioning credential: it must be able to
   create roles (a superuser, or `CREATEROLE` with `CREATE` on the database); `fabrika db test-isolation` hands it a
   throwaway one. A family the kit cannot administer (another provisioner's) is left to its creator.
+- **A test database holds at most `TEST_DATABASE_CONNECTIONS` (4) and never fails a case for want of one** (ADR-0043).
+  One provisioning connection holds the lock and reads the CHECK constraints, the seeder has one, the runtime role two;
+  migrating, reading the catalog and the drop borrow one more each, one at a time. `openTestDatabase` opens the first
+  connection of every pool before the first case (`openFirstConnection`): Bun's pool then makes a statement wait for
+  an open connection when the database refuses another. A refusal while it opens (SQLSTATE 53300) closes everything it
+  opened and retries on a fresh schema (`withConnectionCapacity` of `@fabrika/platform-node`, up to
+  `connectionWaitMs`, 60 s); then the file fails with `CONNECTION_CAPACITY_MESSAGE`, which `fabrika db test-isolation`
+  recognises, and every later file of the process fails at once. `close` ends the runtime role's and the seeder's
+  connections before the drop, which waits the same way.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.
 - **A file row carries its owner's whole chain**, under a composite foreign key with `ON UPDATE CASCADE` and

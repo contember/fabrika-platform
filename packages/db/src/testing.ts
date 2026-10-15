@@ -3,14 +3,22 @@
 // its runtime role; the isolation fixtures seed rows in two disjoint containment chains, and the table probe reaches a
 // table by name with every runtime check of a store.
 
-import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
+import {
+	applicationRuntimeUrl,
+	ConnectionCapacityError,
+	DEFAULT_CONNECTION_WAIT_MS,
+	definePostgresApplicationMigrations,
+	dropApplicationDatabase,
+	isConnectionCapacityError,
+	withConnectionCapacity,
+} from '@fabrika/platform-node'
 import { type ReservedSQL, SQL } from 'bun'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
 import { inSet, namesOf } from './builtins'
 import { type CatalogColumn, introspectSchema } from './codegen'
-import { applicationSchema, Database } from './database'
+import { applicationSchema, Database, openFirstConnection } from './database'
 import type { Primitive } from './description'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from './migrations'
 import { type Container, type ForeignKey, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
@@ -37,7 +45,15 @@ export interface TestDatabaseOptions {
 	readonly migrations: string | URL
 	/** The test file, for the skip message. */
 	readonly label: string
+	/**
+	 * How long to wait for free connection slots, in ms, before the file fails saying so; `DEFAULT_CONNECTION_WAIT_MS` by
+	 * default. Once one file of a process gave up, every later one fails at once.
+	 */
+	readonly connectionWaitMs?: number
 }
+
+/** Set once a test database of this process gave up waiting for a connection slot. */
+let capacityExhausted: ConnectionCapacityError | undefined
 
 /** A value a test row holds in a column; `null` for a nullable column the fixture left empty. */
 export type SampleValue = Primitive | null
@@ -286,9 +302,9 @@ const lockRows = z.array(z.object({ locked: z.boolean() }))
  * the cluster's, so a family whose schema lives in another database, or that another provisioner created, is left to
  * whoever can drop it.
  */
-async function reclaimAbandonedSchemas(lock: ReservedSQL, admin: SQL, url: string): Promise<void> {
+async function reclaimAbandonedSchemas(lock: ReservedSQL, url: string): Promise<void> {
 	const found = nameRows.parse(
-		await admin.unsafe(
+		await lock.unsafe(
 			`SELECT nspname AS name FROM pg_namespace WHERE nspname LIKE 'app\\_test\\_%' UNION SELECT rolname FROM pg_roles WHERE rolname LIKE 'app\\_test\\_%' OR rolname LIKE 'run\\_test\\_%'`,
 		),
 	)
@@ -346,45 +362,23 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		console.warn(`${options.label} skipped: set ${TEST_POSTGRES_URL} to run the Postgres-backed tests`)
 		return null
 	}
-	const appId = `test-${randomHex()}${randomHex()}`
-	const schema = applicationSchema(appId)
-	// The framework's tables first, as `fabrika db migrate` applies them: a job's lease and a webhook's bindings live there.
-	const migrations = definePostgresApplicationMigrations({
-		appId,
-		directory: migrationsDirectory(options.migrations),
-		framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS },
-	})
-	const runtimeUrl = applicationRuntimeUrl(url, appId)
-	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
-	const holder = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
-	const seeder = new SQL({ url: runtimeUrl, adapter: 'postgres', max: 1, prepare: false })
-	const lock = await holder.reserve()
-	const releaseLock = async (): Promise<void> => {
-		try {
-			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [schemaLockKey(schema)])
-		} finally {
-			lock.release()
-		}
-	}
-	const cleanup = (): Promise<void> =>
-		settleAll([() => seeder.close(), () => dropApplicationDatabase(url, appId), releaseLock, () => holder.close(), () => admin.close()])
+	if (capacityExhausted !== undefined) throw new Error(`${options.label}: ${capacityExhausted.message}; its cases did not run`)
+	const waitMs = options.connectionWaitMs ?? DEFAULT_CONNECTION_WAIT_MS
+	let opened: OpenedTestDatabase
 	try {
-		await reclaimAbandonedSchemas(lock, admin, url)
-		// Held for the schema's whole life, before the schema and its roles exist: a schema whose lock is free is abandoned.
-		await lock.unsafe('SELECT pg_advisory_lock($1::bigint)', [schemaLockKey(schema)])
-		await migrations.migrate(url)
+		opened = await withConnectionCapacity(() => openTestDatabase(url, migrationsDirectory(options.migrations)), { waitMs })
 	} catch (error) {
-		// The roles, the schema and its ledger exist before a failing migration, so a failed start leaves them behind.
-		await cleanup()
-		throw error
+		if (!(error instanceof ConnectionCapacityError)) throw error
+		// The next file of this run would wait as long again for the same full database.
+		capacityExhausted = error
+		throw new Error(`${options.label}: ${error.message}; its cases did not run`)
 	}
-	const database = Database.postgres({ url: runtimeUrl, schema, max: 2 })
-	let catalog: Promise<readonly CatalogColumn[]> | undefined
+	const { schema, lock, seeder, catalog } = opened
 	let checks: Promise<readonly CheckConstraint[]> | undefined
 
 	/** The CHECK constraints that name `column` of `table`. */
 	async function checksOn(table: string, column: string): Promise<readonly CheckConstraint[]> {
-		checks ??= admin.unsafe(CHECK_QUERY, [schema]).then((rows: unknown) =>
+		checks ??= lock.unsafe(CHECK_QUERY, [schema]).then((rows: unknown) =>
 			checkRows.parse(rows).map((row) => ({
 				name: row.name,
 				table: row.table_name,
@@ -413,8 +407,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 
 	async function columnsOf(table: string): Promise<readonly CatalogColumn[]> {
-		catalog ??= introspectSchema(url, schema, migrations.objects())
-		const columns = (await catalog).filter((column) => column.table_name === table)
+		const columns = catalog.filter((column) => column.table_name === table)
 		if (columns.length === 0) {
 			throw new Error(`${table} is not a table of the migrated schema; write its migration first`)
 		}
@@ -625,7 +618,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 
 	return {
-		database,
+		database: opened.database,
 		schema,
 		async seedWorlds(tables, table, values = {}) {
 			const { models, model } = scopedModel(tables, table)
@@ -677,8 +670,96 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			}
 			return values
 		},
-		close: () => settleAll([() => database.close(), cleanup]),
+		// Its own connections end first, so the drop finds a slot even in a database at its limit.
+		close: () => closeTestDatabase(url, opened, (drop) => withConnectionCapacity(drop, { waitMs })),
 	}
+}
+
+/** The pools of one test database; `lock` is absent until its connection is reserved. */
+interface TestConnections {
+	readonly appId: string
+	readonly schema: string
+	readonly admin: SQL
+	readonly lock: ReservedSQL | undefined
+	readonly seeder: SQL
+	readonly database: Database
+}
+
+/** What `openTestDatabase` holds open for one test file. */
+interface OpenedTestDatabase extends TestConnections {
+	/** The provisioning credential's one connection: it holds the schema's lock and reads the CHECK constraints. */
+	readonly lock: ReservedSQL
+	readonly catalog: readonly CatalogColumn[]
+}
+
+/** The runtime role's connections of a test database: a job's fenced write and its cancellation each need one. */
+const RUNTIME_CONNECTIONS = 2
+
+/**
+ * The connections a test database holds once open: the provisioning connection, the seeder and the runtime role's.
+ * Migrating and reading the catalog each borrow one more for a moment, and so does the drop once the others ended.
+ */
+export const TEST_DATABASE_CONNECTIONS = 2 + RUNTIME_CONNECTIONS
+
+/**
+ * Creates, locks and migrates a fresh schema and opens the first connection of every pool the test file uses, so no case
+ * meets a pool that cannot connect: a refused connection there would read as a failed case. Whatever fails, nothing it
+ * opened stays open.
+ */
+async function openTestDatabase(url: string, directory: string): Promise<OpenedTestDatabase> {
+	const appId = `test-${randomHex()}${randomHex()}`
+	const schema = applicationSchema(appId)
+	// The framework's tables first, as `fabrika db migrate` applies them: a job's lease and a webhook's bindings live there.
+	const migrations = definePostgresApplicationMigrations({
+		appId,
+		directory,
+		framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS },
+	})
+	const runtimeUrl = applicationRuntimeUrl(url, appId)
+	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+	const seeder = new SQL({ url: runtimeUrl, adapter: 'postgres', max: 1, prepare: false })
+	const database = Database.postgres({ url: runtimeUrl, schema, max: RUNTIME_CONNECTIONS })
+	let lock: ReservedSQL | undefined
+	try {
+		lock = await admin.reserve()
+		await reclaimAbandonedSchemas(lock, url)
+		// Held for the schema's whole life, before the schema and its roles exist: a schema whose lock is free is abandoned.
+		await lock.unsafe('SELECT pg_advisory_lock($1::bigint)', [schemaLockKey(schema)])
+		await migrations.migrate(url)
+		const catalog = await introspectSchema(url, schema, migrations.objects())
+		await seeder.unsafe('SELECT 1')
+		await openFirstConnection(database)
+		return { appId, schema, admin, lock, seeder, database, catalog }
+	} catch (error) {
+		// The roles, the schema and its ledger exist before a failing migration, so a failed start leaves them behind.
+		try {
+			await closeTestDatabase(url, { appId, schema, admin, lock, seeder, database }, (drop) => drop())
+		} catch (cleanupError) {
+			// A refused connection is retried with a fresh schema; the next run reclaims this one once its lock is free.
+			if (!isConnectionCapacityError(error)) throw cleanupError
+		}
+		throw error
+	}
+}
+
+/** Ends every connection of a test database and drops its schema and roles, running each step even when one throws. */
+function closeTestDatabase(url: string, connections: TestConnections, dropping: (drop: () => Promise<void>) => Promise<void>): Promise<void> {
+	const { appId, schema, admin, lock, seeder, database } = connections
+	const releaseLock = async (): Promise<void> => {
+		if (lock === undefined) return
+		try {
+			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [schemaLockKey(schema)])
+		} finally {
+			lock.release()
+		}
+	}
+	return settleAll([
+		() => database.close(),
+		() => seeder.close(),
+		() => dropping(() => dropApplicationDatabase(url, appId)),
+		releaseLock,
+		() => admin.close(),
+	])
 }
 
 /**

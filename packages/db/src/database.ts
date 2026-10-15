@@ -65,6 +65,7 @@ export interface PostgresOptions {
 
 let openSession: (database: Database, readOnly: boolean) => Session
 let transactionBuilder: (database: Database) => TransactionBuilder<LooseDB>
+let firstConnection: (database: Database) => Promise<void>
 
 /** The connection the data layer runs on. It has no public query method: everything goes through a store. */
 export class Database {
@@ -80,6 +81,9 @@ export class Database {
 	static {
 		openSession = (database, readOnly) => new Session(database.#kysely, database.#kysely, readOnly)
 		transactionBuilder = (database) => database.#kysely.transaction()
+		firstConnection = async (database) => {
+			await database.#kysely.executeQuery(CompiledQuery.raw('SELECT 1'))
+		}
 	}
 
 	/**
@@ -111,6 +115,15 @@ export class Database {
 // Application modules load after this one: a replaced `postgres` would receive the database URL.
 Object.freeze(Database)
 Object.freeze(Database.prototype)
+
+/**
+ * Opens the pool's first connection, which stays open. A pool with one open connection makes a statement wait for it
+ * when the database refuses another (Bun 1.3.14), so only a pool with none fails on a database at its limit: the test
+ * kit opens it before a file's first case, where a refusal is waited out instead of failing a case.
+ */
+export function openFirstConnection(database: Database): Promise<void> {
+	return firstConnection(database)
+}
 
 /** The connection a session runs on, and whether the request running now may only read. */
 export interface SessionSource {
