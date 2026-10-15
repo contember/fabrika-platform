@@ -18,12 +18,26 @@ export interface TestProvisioner {
  */
 export const DATABASE_GRANT_LOCK_KEY: number = createHash('sha256').update('fabrika-db:database-grants', 'utf8').digest().readUIntBE(0, 6) + 1
 
-/** Grants (or revokes) CREATE on `database` to `role`, serialized with every other run that does so on the same server. */
+/**
+ * Grants (or revokes) CREATE on `database` to `role`, serialized with every other run that does so on the same server.
+ * Verified afterwards: a grantor that neither owns the database, is a superuser nor holds CREATE WITH GRANT OPTION only
+ * gets a WARNING, and the statement changes nothing.
+ */
 export async function changeCreateOnDatabase(admin: SqlDatabase, change: 'grant' | 'revoke', role: string, database: string): Promise<void> {
 	const statement = change === 'grant'
 		? `GRANT CREATE ON DATABASE ${quotedIdentifier(database)} TO ${quotedIdentifier(role)}`
 		: `REVOKE CREATE ON DATABASE ${quotedIdentifier(database)} FROM ${quotedIdentifier(role)}`
 	await admin.batch([admin.prepare(`SELECT pg_catalog.pg_advisory_xact_lock(${DATABASE_GRANT_LOCK_KEY})`), admin.prepare(statement)])
+	const held = await admin.prepare("SELECT pg_catalog.has_database_privilege(?, ?, 'CREATE') AS creates").bind(role, database).first<{
+		creates: boolean
+	}>()
+	if ((held?.creates ?? false) !== (change === 'grant')) {
+		throw new PostgresMigrationError(
+			`the provisioning credential could not ${change} CREATE on the database ${database} ${
+				change === 'grant' ? 'to' : 'from'
+			} ${role}: it must own the database, be a superuser, or hold CREATE on it WITH GRANT OPTION`,
+		)
+	}
 }
 
 /** Before Postgres 16, CREATEROLE may grant membership in any role that is not a superuser, `pg_execute_server_program` included. */
@@ -58,7 +72,12 @@ export async function createTestProvisioner(provisioningUrl: string): Promise<Te
 			)
 		}
 		await admin.prepare(`CREATE ROLE ${name} LOGIN CREATEROLE NOINHERIT PASSWORD '${scramVerifier(password)}'`).run()
-		await changeCreateOnDatabase(admin, 'grant', name, self.database)
+		try {
+			await changeCreateOnDatabase(admin, 'grant', name, self.database)
+		} catch (error) {
+			await admin.prepare(`DROP ROLE ${name}`).run()
+			throw error
+		}
 		const database = self.database
 		url.username = name
 		url.password = password

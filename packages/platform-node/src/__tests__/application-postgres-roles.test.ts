@@ -423,6 +423,36 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 		expect([...left]).toEqual([])
 	})
 
+	// A Zerops service's own user held CREATE without GRANT OPTION: Postgres warned and granted nothing.
+	test('a provisioning credential that cannot grant CREATE on the database is refused, not left to a later permission denied', async () => {
+		const previous = createRoleOnly()
+		await previous.setUp()
+		const bystander = `fabrika_bystander_${hex()}`
+		await as(superuserUrl, (sql) => sql.unsafe(`CREATE ROLE ${bystander}`))
+		await changeCreate('grant', bystander)
+		const admin = PostgresDatabase.connect(previous.url(), { max: 1 })
+		try {
+			const database = (await admin.prepare('SELECT current_database() AS name').first<{ name: string }>())?.name ?? ''
+			const refusal = 'it must own the database, be a superuser, or hold CREATE on it WITH GRANT OPTION'
+			await expect(createTestProvisioner(previous.url())).rejects.toThrow(`could not grant CREATE on the database ${database} to fabrika_tests_`)
+			await expect(createTestProvisioner(previous.url())).rejects.toThrow(refusal)
+			await expect(changeCreateOnDatabase(admin, 'revoke', bystander, database)).rejects.toThrow(
+				`could not revoke CREATE on the database ${database} from ${bystander}: ${refusal}`,
+			)
+			const created = await as(superuserUrl, (sql) =>
+				sql.unsafe(
+					"SELECT count(*)::int AS roles FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid WHERE m.member = to_regrole($1) AND r.rolname LIKE 'fabrika_tests_%'",
+					[new URL(previous.url()).username],
+				))
+			expect([...created]).toEqual([{ roles: 0 }])
+		} finally {
+			await admin.close()
+			await changeCreate('revoke', bystander)
+			await as(superuserUrl, (sql) => sql.unsafe(`DROP ROLE ${bystander}`))
+			await previous.tearDown()
+		}
+	})
+
 	test('concurrent grants and revokes on the one database row all succeed: each waits for the shared lock', async () => {
 		const names = Array.from({ length: 8 }, () => `fabrika_grant_${hex()}`)
 		await as(superuserUrl, async (sql) => {
