@@ -49,6 +49,13 @@ export function createFixtureTransports(
 	const privateUploadFetch = options.privateUploadFetch ?? ((url, init) => fetch(url, init))
 	const readable = (source: FixtureTransportSource, authorization: string | null): boolean =>
 		source.visibility === 'public' || access?.canRead(authorization, source.repository) === true
+	// The refs GitHub resolves to this fixture's commit: the commit itself and, while the branch points at it, the branch
+	// and `HEAD` (the default branch, which is the fixture branch).
+	const refsOf = (source: FixtureTransportSource): string[] => {
+		const head = options.branchHead?.(source.repository)
+		const branchRefs = head === undefined || head === source.fixture.commitSha ? [FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`, 'HEAD'] : []
+		return [source.fixture.commitSha, ...branchRefs].map(encodeURIComponent)
+	}
 	// Codeload authorizes a private download by the one-time query token of the API's redirect, never by the installation token.
 	// Each grant names the one repository and commit its redirect was issued for.
 	const codeloadGrants = new Map<string, string>()
@@ -67,11 +74,7 @@ export function createFixtureTransports(
 				const { repository, fixture } = source
 				const prefix = `https://api.github.com/repos/${repository.owner}/${repository.name}`
 				if (!url.startsWith(`${prefix}/`) || !readable(source, authorization)) continue
-				const head = options.branchHead?.(repository)
-				// GitHub resolves `HEAD` to the default branch, which is the fixture branch.
-				const branchRefs = head === undefined || head === fixture.commitSha ? [FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`, 'HEAD'] : []
-				const commitRefs = [fixture.commitSha, ...branchRefs].map(encodeURIComponent)
-				if (commitRefs.some((ref) => url === `${prefix}/commits/${ref}`)) {
+				if (refsOf(source).some((ref) => url === `${prefix}/commits/${ref}`)) {
 					return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })
 				}
 				if (url === `${prefix}/git/trees/${fixture.treeSha}?recursive=1`) {
@@ -93,8 +96,9 @@ export function createFixtureTransports(
 			for (const source of sources) {
 				const { repository, fixture, archive } = source
 				const codeload = `https://codeload.github.com/${repository.owner}/${repository.name}/legacy.tar.gz/${fixture.commitSha}`
+				const tarball = `https://api.github.com/repos/${repository.owner}/${repository.name}/tarball/`
 				if (
-					url === `https://api.github.com/repos/${repository.owner}/${repository.name}/tarball/${fixture.commitSha}` && init.redirect === 'manual'
+					refsOf(source).some((ref) => url === `${tarball}${ref}`) && init.redirect === 'manual'
 					&& readable(source, authorization)
 				) {
 					if (source.visibility === 'public') return new Response(null, { status: 302, headers: { location: codeload } })

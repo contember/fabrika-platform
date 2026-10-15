@@ -66,7 +66,7 @@ from an archive it is handed and its native GitHub integration cannot be driven
 by an installation's project-scoped token
 ([ADR-0029](../decisions/0029-github-app-sources.md)). Control resolves the
 requested ref to an exact commit and to the SHA-256 of the repository-root
-`zerops.yaml`, then streams GitHub's `git archive` tarball to the presigned Zerops
+`zerops.yaml` in one pass over the ref's archive, then streams GitHub's `git archive` tarball to the presigned Zerops
 upload URL — `gunzip → tar rewrite → gzip → PUT`, with no repository byte staged
 on disk. The rewrite keeps regular files only and refuses symlinks, `.gitmodules`,
 and trees above 50,000 entries or 512 MiB. Public platform uploads explicitly

@@ -1,6 +1,8 @@
 // Process-only: the archive rewrite hashes with `node:crypto`. The shared layer must not import this
 // file (`entrypoint-isolation.test.ts`).
 import type { GitHubSourceCredentials } from '../connections/credentials'
+import { archiveCommitSource } from './commit-archive'
+import type { CommitSource } from './commit-files'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './metadata'
 import { type SourceDownloadFetch, TarballRepositorySource } from './repository'
 import { SourceTransport, type SourceUploadFetch } from './transport'
@@ -29,9 +31,11 @@ export interface GitHubSourceOptions {
 export interface GitHubSource {
 	resolve(input: SourceResolveInput): Promise<SourceResolution>
 	upload(input: SourceUploadInput): Promise<SourceUploadResult>
+	/** A run's snapshot files, from the same archive reader, so both share what it remembers. */
+	readonly commits: CommitSource
 }
 
-/** Control's in-process GitHub source (ADR-0029): exact-commit resolution and a streamed upload. */
+/** Control's in-process GitHub source (ADR-0029): exact-commit resolution, a commit's files, and a streamed upload. */
 export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
 	const metadata = new GitHubMetadataClient(options.metadataFetch === undefined ? {} : { fetch: options.metadataFetch })
 	const repository = new TarballRepositorySource({
@@ -49,5 +53,6 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
 	return {
 		resolve: (input) => transport.resolve(input),
 		upload: (input) => transport.upload(input),
+		commits: archiveCommitSource(repository, metadata),
 	}
 }

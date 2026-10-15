@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
 import type { Env } from '../env'
 import { buildControlRpcDeps } from '../services'
-import { zeropsControlProvider, zeropsGitHubSource, zeropsNamespaceProcessConfig } from '../zerops/provider'
+import { zeropsControlProvider, zeropsGitHubSources, zeropsNamespaceProcessConfig } from '../zerops/provider'
 import { createRuntime } from '../zerops/runtime'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -94,7 +94,7 @@ describe('the Zerops namespace process configuration', () => {
 		const provider = zeropsControlProvider(env, {
 			...namespaceEnvironment(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
-		}, zeropsGitHubSource(env))
+		}, zeropsGitHubSources(env).port)
 
 		if (provider.namespaces === undefined) {
 			throw new Error('Zerops provider did not enable namespace capabilities')

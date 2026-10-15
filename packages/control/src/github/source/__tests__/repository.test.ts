@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../../connections/credentials'
-import { SourceFailure } from '../failure'
+import { SourceFailure, SourceRateLimited } from '../failure'
 import {
+	codeloadUrl,
 	descriptor,
 	descriptorSha256,
 	file,
@@ -10,6 +11,7 @@ import {
 	handPrefix,
 	handSource,
 	handTarball,
+	link,
 	removeFixtureRoots,
 	repository,
 	runArchive,
@@ -19,22 +21,85 @@ import {
 afterEach(removeFixtureRoots)
 
 describe('the GitHub tarball repository', () => {
-	test('resolves an exact commit and the registered descriptor digest through two bounded REST reads', async () => {
+	test('resolves a ref to the commit its archive names and checks the descriptor digest, with no rate-limited REST read', async () => {
 		const fixture = await gitFixture()
-		const requests: string[] = []
-		const source = sourceFor(fixture, { onMetadataRequest: (url) => requests.push(url) })
+		const metadata: string[] = []
+		const downloads: string[] = []
+		const source = sourceFor(fixture, {
+			onMetadataRequest: (url) => metadata.push(url),
+			onDownloadAuthorization: (url) => downloads.push(url),
+		})
 		expect(
 			await source.resolve({
 				repository,
-				requestedRef: 'main',
+				requestedRef: 'refs/heads/main',
 				descriptorSha256,
 				signal: new AbortController().signal,
 			}),
 		).toEqual({ commitSha: fixture.commitSha, descriptorSha256 })
-		expect(requests).toEqual([
-			'https://api.github.com/repos/contember/fixture/commits/main',
-			`https://api.github.com/repos/contember/fixture/contents/zerops.yaml?ref=${fixture.commitSha}`,
+		expect(metadata).toEqual([])
+		expect(downloads).toEqual(['https://api.github.com/repos/contember/fixture/tarball/refs%2Fheads%2Fmain', codeloadUrl])
+	})
+
+	test('an exact commit is resolved once per process for one descriptor digest', async () => {
+		const fixture = await gitFixture()
+		let downloads = 0
+		const source = sourceFor(fixture, { onDownload: () => downloads++ })
+		const resolve = () => source.resolve({ repository, requestedRef: fixture.commitSha, descriptorSha256, signal: new AbortController().signal })
+
+		expect(await resolve()).toEqual({ commitSha: fixture.commitSha, descriptorSha256 })
+		expect(await resolve()).toEqual({ commitSha: fixture.commitSha, descriptorSha256 })
+		expect(downloads).toBe(1)
+		await expect(source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal })).resolves
+			.toMatchObject({ commitSha: fixture.commitSha })
+		expect(downloads).toBe(2)
+	})
+
+	test('reads a commit once: every regular file, the wanted ones kept, an oversized one only named', async () => {
+		const source = handSource(handTarball([
+			file(`${handPrefix}zerops.yaml`, descriptor),
+			file(`${handPrefix}fabrika.contract.ts`, 'export const contract = 1\n'),
+			file(`${handPrefix}db/migrations/0001.sql`, 'create table notes ();\n'),
+			file(`${handPrefix}db/migrations/0002.sql`, 'x'.repeat(64)),
+			file(`${handPrefix}README.md`, 'not wanted'),
+			link('AGENTS.md', 'README.md'),
+		]))
+
+		const summary = await source.read({
+			repository,
+			ref: handCommitSha,
+			expectedCommitSha: handCommitSha,
+			collect: { keep: (path) => path !== 'README.md', maxFileBytes: 32, maxBytes: 1024 },
+			signal: new AbortController().signal,
+		})
+
+		expect(summary.commitSha).toBe(handCommitSha)
+		expect([...(summary.files?.paths ?? [])].sort()).toEqual([
+			'README.md',
+			'db/migrations/0001.sql',
+			'db/migrations/0002.sql',
+			'fabrika.contract.ts',
+			'zerops.yaml',
 		])
+		expect([...(summary.files?.contents.keys() ?? [])].sort()).toEqual(['db/migrations/0001.sql', 'fabrika.contract.ts', 'zerops.yaml'])
+		expect(new TextDecoder().decode(summary.files?.contents.get('fabrika.contract.ts'))).toBe('export const contract = 1\n')
+		expect([...(summary.files?.oversized ?? [])]).toEqual(['db/migrations/0002.sql'])
+	})
+
+	test('a tarball request GitHub refuses for its rate limit is a rate limit, not an internal failure', async () => {
+		const fixture = await gitFixture()
+		const source = sourceFor(fixture, {
+			redirectResponse: () => new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792101600' } }),
+		})
+
+		const resolved = source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal })
+
+		await expect(resolved).rejects.toBeInstanceOf(SourceRateLimited)
+		await expect(resolved).rejects.toMatchObject({
+			code: 'rate_limited',
+			stage: 'resolve',
+			message: 'GitHub rate limit for anonymous reads reached; resets at 2026-10-15T22:00:00.000Z; connect the GitHub App to avoid it',
+		})
 	})
 
 	test('mints a repository-scoped token for the bound connection and sends it only to api.github.com', async () => {
@@ -56,7 +121,7 @@ describe('the GitHub tarball repository', () => {
 		})
 		const signal = new AbortController().signal
 		const privateBinding = { connectionId: 'connection-1', installationId: 42 }
-		await source.resolve({ repository, requestedRef: fixture.commitSha, privateBinding, descriptorSha256, signal })
+		await source.resolve({ repository, requestedRef: 'main', privateBinding, descriptorSha256, signal })
 		const archived = await runArchive(source, {
 			repository,
 			commitSha: fixture.commitSha,
@@ -70,8 +135,13 @@ describe('the GitHub tarball repository', () => {
 			{ connectionId: 'connection-1', installationId: 42, repository, signal },
 			{ connectionId: 'connection-1', installationId: 42, repository, signal },
 		])
-		expect(metadataAuthorizations).toEqual([`Bearer ${token}`, `Bearer ${token}`])
-		expect(downloadAuthorizations).toEqual([['api.github.com', `Bearer ${token}`], ['codeload.github.com', null]])
+		expect(metadataAuthorizations).toEqual([])
+		expect(downloadAuthorizations).toEqual([
+			['api.github.com', `Bearer ${token}`],
+			['codeload.github.com', null],
+			['api.github.com', `Bearer ${token}`],
+			['codeload.github.com', null],
+		])
 	})
 
 	test('a public repository and every platform archive ask for no credential', async () => {
@@ -125,19 +195,17 @@ describe('the GitHub tarball repository', () => {
 	})
 
 	test.each([
-		{ name: 'a missing descriptor', descriptorStatus: 404, expected: { code: 'descriptor_missing' } },
-		{ name: 'a drifted descriptor digest', descriptorStatus: 200, expected: { code: 'descriptor_mismatch' } },
-	])('rejects $name before any archive byte is read', async ({ descriptorStatus, expected }) => {
-		const fixture = await gitFixture()
-		let downloads = 0
-		const source = sourceFor(fixture, {
-			descriptorResponse: () => descriptorStatus === 404 ? new Response(null, { status: 404 }) : new Response('zerops: drifted\n'),
-			onDownload: () => downloads++,
-		})
+		{ name: 'a missing descriptor', descriptorFile: [], expected: { code: 'descriptor_missing' } },
+		{
+			name: 'a drifted descriptor digest',
+			descriptorFile: [file(`${handPrefix}zerops.yaml`, 'zerops: drifted\n')],
+			expected: { code: 'descriptor_mismatch' },
+		},
+	])('resolution rejects $name', async ({ descriptorFile, expected }) => {
+		const source = handSource(handTarball([...descriptorFile, file(`${handPrefix}README.md`, 'readme')]))
 		await expect(
 			source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal }),
 		).rejects.toMatchObject({ ...expected, stage: 'resolve' })
-		expect(downloads).toBe(0)
 	})
 
 	test.each([

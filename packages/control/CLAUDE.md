@@ -168,7 +168,12 @@ other environment, before the provider prepares anything, and the write maps a r
   with 409, so a private repository is not found only at deploy as `ref_not_found`; an inconclusive probe registers. Origins are fixed; seams come only from code
   (the local stack's `control-server.ts`, tests), never from env. `source/archive.ts`, `source/repository.ts`,
   `source/transport.ts` are process-only; the Worker and the shared layer reach `connections/port.ts`,
-  `connections/credentials.ts`, and `source/metadata.ts`. On Cloudflare `cloudflareGitHubSource` (`src/platform-cf.ts`) resolves the commit and
+  `connections/credentials.ts`, and `source/metadata.ts`. **GitHub's anonymous REST limit (60 an hour) is shared by every
+  tenant behind a cloud's egress address**, so the Zerops path reads through the tarball endpoint, which that limit does
+  not count (ADR-0029): resolve is one archive pass of the requested ref (its pax header names the commit, the pass
+  hashes the descriptor), the snapshot is one archive pass of the commit, the upload a third. A ref that is already the
+  exact commit resolves once per process, and a platform commit's tree check (two counted reads) runs once per process.
+  Never add a per-file `/contents` or `/commits` read to these paths. On Cloudflare `cloudflareGitHubSource` (`src/platform-cf.ts`) resolves the commit and
   builds the runner's clone URL with a repository-scoped token as `x-access-token`. Every gzip stage goes through `pullThrough` (`src/github/source/streams.ts`):
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
   A platform archive may carry ONE generated data file (`SourceDataFile`, the Zerops proxy manifest, ADR-0045),
@@ -404,8 +409,9 @@ other environment, before the provider prepares anything, and the write maps a r
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
 - **Published access comes ONLY from `approvedSnapshot(app, env)` (ADR-0050, `src/approval/`).** Right after the
-  commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`, the
-  commit's tree and files through the GitHub metadata client; `contractReaderInputs` names the files), stores it
+  commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`;
+  `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,
+  `archiveCommitSource`; on Cloudflare the commit's tree and files through the GitHub metadata client), stores it
   on the run, classifies it against the active snapshot (`classifyAccess`, pure, conservative) and either parks
   the run in `awaiting_approval` (a widening on a `protected` environment without a matching approval) or
   publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` and `protection_revision`

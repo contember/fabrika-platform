@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
 import type { GitHubSourceCredentials } from '../connections/credentials'
-import { type ArchiveSummary, createTarRewrite, type SourceBytes } from './archive'
-import { cancelled, rateLimitFailure, SourceFailure, throwIfAborted } from './failure'
+import { type ArchiveSummary, createTarRewrite, type FileCollection, type SourceBytes } from './archive'
+import { atStage, cancelled, rateLimitFailure, SourceFailure, throwIfAborted } from './failure'
 import type { GitHubMetadataClient } from './metadata'
 import { pullThrough } from './streams'
 import type { SourceArchiveKind, SourceDescriptorRule, SourcePrivateBinding, SourceRepository, SourceResolution, SourceResolveInput } from './types'
@@ -15,6 +14,20 @@ const GITHUB_USER_AGENT = 'fabrika-control'
 const OBJECT_ID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const REDIRECT_TIMEOUT_MS = 30_000
+/** Resolutions of an exact commit remembered per process; a commit's content never changes, so neither does the verdict. */
+const MAX_VERIFIED_RESOLUTIONS = 1024
+
+/** One pass over an archive that uploads nothing. */
+export interface RepositoryReadInput {
+	readonly repository: SourceRepository
+	/** A branch, a tag or a commit: GitHub resolves it in the tarball request itself. */
+	readonly ref: string
+	readonly expectedCommitSha?: string
+	readonly descriptorSha256?: string
+	readonly privateBinding?: SourcePrivateBinding
+	readonly collect?: FileCollection
+	readonly signal: AbortSignal
+}
 
 export interface RepositoryArchiveInput {
 	readonly repository: SourceRepository
@@ -56,44 +69,97 @@ type RepositoryStage = 'resolve' | 'archive'
 export class TarballRepositorySource {
 	private readonly metadata: GitHubMetadataClient
 	private readonly downloadFetch: SourceDownloadFetch
+	private readonly verifiedResolutions = new Set<string>()
 
 	constructor(private readonly options: TarballRepositorySourceOptions) {
 		this.metadata = options.metadata
 		this.downloadFetch = options.downloadFetch ?? ((input, init) => fetch(input, init))
 	}
 
+	/**
+	 * Resolve a ref to the commit its archive names and check the descriptor's digest, before any platform state exists.
+	 * The tarball request resolves the ref, and GitHub's REST rate limit does not count it (ADR-0029). A ref that is
+	 * already an exact commit is checked once per process.
+	 */
 	async resolve(input: SourceResolveInput): Promise<SourceResolution> {
 		throwIfAborted(input.signal, 'resolve')
-		const token = await this.token(input.repository, input.privateBinding, input.signal, 'resolve')
-		const commitSha = await this.metadata.commit(
-			input.repository,
-			input.requestedRef,
-			token,
-			input.signal,
-			'resolve',
-		)
-		if (
-			input.expectedCommitSha !== undefined
-			&& commitSha !== input.expectedCommitSha
-		) {
-			throw new SourceFailure('commit_mismatch', 'resolve')
-		}
 		if (!SHA256_PATTERN.test(input.descriptorSha256)) {
 			throw new SourceFailure('descriptor_mismatch', 'resolve')
 		}
-		const descriptor = await this.metadata.descriptor(
-			input.repository,
-			this.options.descriptor,
-			commitSha,
-			token,
-			input.signal,
-			'resolve',
-		)
-		const digest = createHash('sha256').update(descriptor).digest('hex')
-		if (digest !== input.descriptorSha256) {
-			throw new SourceFailure('descriptor_mismatch', 'resolve')
+		const exact = OBJECT_ID_PATTERN.test(input.requestedRef) ? input.requestedRef : undefined
+		if (exact !== undefined && input.expectedCommitSha !== undefined && exact !== input.expectedCommitSha) {
+			throw new SourceFailure('commit_mismatch', 'resolve')
 		}
-		return { commitSha, descriptorSha256: digest }
+		const verified = exact === undefined
+			? undefined
+			: `${input.repository.owner.toLowerCase()}/${input.repository.name.toLowerCase()}@${exact}#${input.descriptorSha256}`
+		if (exact !== undefined && verified !== undefined && this.verifiedResolutions.has(verified)) {
+			return { commitSha: exact, descriptorSha256: input.descriptorSha256 }
+		}
+		let summary: ArchiveSummary
+		try {
+			summary = await this.read({
+				repository: input.repository,
+				ref: input.requestedRef,
+				...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
+				descriptorSha256: input.descriptorSha256,
+				...(input.privateBinding === undefined ? {} : { privateBinding: input.privateBinding }),
+				signal: input.signal,
+			})
+		} catch (error) {
+			throw atStage(error, 'resolve')
+		}
+		if (verified !== undefined) {
+			if (this.verifiedResolutions.size >= MAX_VERIFIED_RESOLUTIONS) this.verifiedResolutions.clear()
+			this.verifiedResolutions.add(verified)
+		}
+		return { commitSha: summary.commitSha, descriptorSha256: summary.descriptorSha256 }
+	}
+
+	/**
+	 * One pass over the archive of `ref` that uploads nothing: the commit it names, its descriptor's digest, and the files
+	 * `collect` keeps. It admits relative symbolic links, so it refuses nothing an application or a platform upload accepts.
+	 */
+	async read(input: RepositoryReadInput): Promise<ArchiveSummary> {
+		throwIfAborted(input.signal, 'archive')
+		const token = await this.token(input.repository, input.privateBinding, input.signal, 'archive')
+		const rewrite = createTarRewrite({
+			archiveKind: 'platform',
+			descriptor: this.options.descriptor,
+			...(input.expectedCommitSha === undefined ? {} : { commitSha: input.expectedCommitSha }),
+			...(input.descriptorSha256 === undefined ? {} : { descriptorSha256: input.descriptorSha256 }),
+			...(input.collect === undefined ? {} : { collect: input.collect }),
+		})
+		const download = linkedController(input.signal)
+		try {
+			const tarball = await this.tarball(input.repository, input.ref, token, download.signal, input.signal)
+			const inflated: ReadableStream<SourceBytes> = pullThrough(tarball, new DecompressionStream('gzip'))
+			// A refused archive breaks the pipe; its verdict, not the broken pipe, is the reason.
+			await inflated.pipeThrough(rewrite.transform).pipeTo(new WritableStream()).catch(() => {})
+			rewrite.abandon(input.signal.aborted ? cancelled('archive') : new SourceFailure('internal', 'archive'))
+			return await rewrite.completed
+		} catch (error) {
+			rewrite.abandon()
+			if (input.signal.aborted) throw cancelled('archive')
+			throw error
+		} finally {
+			download.abort()
+		}
+	}
+
+	/** One file of an exact commit through the contents API, for a reader that wants a file its archive pass did not keep. */
+	async readFile(
+		input: {
+			readonly repository: SourceRepository
+			readonly commitSha: string
+			readonly privateBinding?: SourcePrivateBinding
+			readonly signal: AbortSignal
+		},
+		path: string,
+		maxBytes: number,
+	): Promise<Uint8Array> {
+		const token = await this.token(input.repository, input.privateBinding, input.signal, 'resolve')
+		return await this.metadata.readFileAtCommit(input.repository, path, maxBytes, input.commitSha, token, input.signal, 'resolve')
 	}
 
 	async archive(input: RepositoryArchiveInput): Promise<RepositoryArchive> {
@@ -148,12 +214,12 @@ export class TarballRepositorySource {
 	 */
 	private async tarball(
 		repository: SourceRepository,
-		commitSha: string,
+		ref: string,
 		token: string | undefined,
 		signal: AbortSignal,
 		callerSignal: AbortSignal,
 	): Promise<ReadableStream<SourceBytes>> {
-		const path = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/tarball/${encodeURIComponent(commitSha)}`
+		const path = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/tarball/${encodeURIComponent(ref)}`
 		const timeout = AbortSignal.timeout(REDIRECT_TIMEOUT_MS)
 		const redirect = linkedController(signal, timeout)
 		let location: string

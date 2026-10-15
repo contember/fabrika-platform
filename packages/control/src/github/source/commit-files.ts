@@ -14,6 +14,8 @@ export interface CommitFilesInput {
 	readonly commitSha: string
 	/** Absent for a public repository (ADR-0029). */
 	readonly sourceBinding?: ProviderSourceBinding
+	/** The files the caller expects to read. A source that reads the whole commit at once keeps these in memory. */
+	readonly wanted?: (path: string) => boolean
 	readonly signal: AbortSignal
 }
 
@@ -64,18 +66,24 @@ export function gitHubCommitSource(metadata: GitHubMetadataClient, credentials: 
 				},
 			}
 		},
-		async anonymousReadability(input) {
-			try {
-				await metadata.commit(repositoryOf(input.repoUrl), 'HEAD', undefined, input.signal, 'resolve')
-				return 'readable'
-			} catch (error) {
-				return error instanceof SourceFailure && error.code === 'ref_not_found' ? 'unreadable' : 'unknown'
-			}
-		},
+		anonymousReadability: (input) => anonymousReadability(metadata, input),
 	}
 }
 
-function repositoryOf(repoUrl: string): SourceRepository {
+/** One resolution of `HEAD` without a token: only a 404 is a verdict, because GitHub hides a private repository so. */
+export async function anonymousReadability(
+	metadata: GitHubMetadataClient,
+	input: { readonly repoUrl: string; readonly signal: AbortSignal },
+): Promise<AnonymousReadability> {
+	try {
+		await metadata.commit(repositoryOf(input.repoUrl), 'HEAD', undefined, input.signal, 'resolve')
+		return 'readable'
+	} catch (error) {
+		return error instanceof SourceFailure && error.code === 'ref_not_found' ? 'unreadable' : 'unknown'
+	}
+}
+
+export function repositoryOf(repoUrl: string): SourceRepository {
 	const parsed = parseGitHubRepo(repoUrl)
 	if (parsed === null) throw new SourceFailure('invalid_request', 'resolve')
 	return { owner: parsed.owner, name: parsed.repo }

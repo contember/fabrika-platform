@@ -12,7 +12,7 @@ import { toAppEnvDto } from '../api/registry/registration'
 import { completeApprovalUseCase } from '../approval/api'
 import { type AccessChange, classifyAccess, snapshotDeviations } from '../approval/diff'
 import { parseClassification, type StoredClassification } from '../approval/publish'
-import { readAccessSnapshot, SnapshotRefused } from '../approval/read'
+import { readAccessSnapshot, snapshotReads, SnapshotRefused } from '../approval/read'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
@@ -290,6 +290,17 @@ describe('database code in the reviewed snapshot', () => {
 		// An edit of the settled file is classified again, as the runner refuses it again.
 		const edited = commitOf({}, [NOTES_MIGRATION, { ...legacy, sql: `${legacy.sql}\n` }])
 		await expect(snapshotOf(edited, settled)).rejects.toEqual(new SnapshotRefused('migrations-refused', 1))
+	})
+})
+
+describe('the files a snapshot may read', () => {
+	test('are the reader inputs and the migrations under the application root, nothing beside it', () => {
+		const reads = snapshotReads('apps/notes')
+		expect(
+			['apps/notes/fabrika.contract.ts', 'apps/notes/tsconfig.json', 'apps/notes/bunfig.toml', 'apps/notes/db/migrations/0001.sql'].every(reads),
+		).toBe(true)
+		expect(['apps/notes/README.md', 'apps/other/fabrika.contract.ts', 'fabrika.contract.ts'].some(reads)).toBe(false)
+		expect(snapshotReads('')('src/db/tables.ts')).toBe(true)
 	})
 })
 

@@ -8,7 +8,7 @@ import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { type AccessChange, type AccessOutcome, classifyAccess } from './diff'
-import { ContractMissing, readAccessSnapshot, SnapshotRefused } from './read'
+import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { type AccessSnapshot, type ActiveSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from './snapshot'
 
 /** What a run stores after classification: the diff, and the two digests an approval is bound to. */
@@ -144,6 +144,7 @@ async function readCandidate(
 		const commit = await deps.commits.open({
 			repoUrl: input.app.repo_url,
 			commitSha: input.commitSha,
+			wanted: snapshotReads(root),
 			...(input.sourceBinding === undefined ? {} : { sourceBinding: input.sourceBinding }),
 			signal: invocation.signal,
 		})

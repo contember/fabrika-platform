@@ -70,9 +70,21 @@ const privateBinding = { connectionId: 'connection-1', installationId: 42 }
 
 describe('no credential reaches an error or a log', () => {
 	test('resolve', async () => {
-		const raised = await leakySource('metadata')
+		const raised = await leakySource('codeload')
 			.resolve({ repository, requestedRef: 'main', privateBinding, descriptorSha256, signal: new AbortController().signal })
 			.then(() => undefined, (error: unknown) => error)
+		expect(raised).toMatchObject({ code: 'internal', stage: 'resolve' })
+		expectNoCredential([exposure(raised)])
+	})
+
+	test('a snapshot file read alone through the contents API', async () => {
+		const commit = await leakySource('metadata').commits.open({
+			repoUrl: 'github.com/contember/fixture',
+			commitSha: handCommitSha,
+			sourceBinding: privateBinding,
+			signal: new AbortController().signal,
+		})
+		const raised = await commit.read('zerops.yaml', 1024).then(() => undefined, (error: unknown) => error)
 		expect(raised).toMatchObject({ code: 'internal', stage: 'resolve' })
 		expectNoCredential([exposure(raised)])
 	})

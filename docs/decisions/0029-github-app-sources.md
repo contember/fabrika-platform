@@ -27,6 +27,14 @@ App is made public — which widens who can install it.
 GitHub's manifest flow returns an App's private key exactly once. Whatever receives it must store it
 durably before it reports success, or the App is unrecoverable.
 
+GitHub answers an anonymous caller 60 REST requests an hour per IP address. On Zerops every tenant in a
+region leaves through one egress address, so that budget is shared with strangers. A deploy that resolved
+the ref (`/commits`), read the descriptor and every snapshot file one by one (`/contents`, after
+`/commits` and `/git/trees`) and checked the proxy's tree spent 19 of them for the example application; a
+live acceptance run failed deploys and namespace reconciles on the limit. The tarball endpoint does not
+count against it: measured on 2026-10-15, `x-ratelimit-used` stayed `0` across tarball requests while
+`/commits` and `/contents` each spent one, and the archive's pax header names the commit a ref resolves to.
+
 ## Decision
 
 **Ownership.** Each installation uses GitHub Apps that its operator owns. There is no central
@@ -96,9 +104,12 @@ them.
 
 **Zerops delivery, in-process in Control.** For each deploy, Control:
 
-1. Resolves the requested ref to one exact commit and reads the root `zerops.yaml` (raw contents). Its
-   SHA-256 must equal the descriptor digest embedded in the registered provider artifact, or the run
-   fails before any Zerops or Operations state is created.
+1. Resolves the requested ref to one exact commit in one pass over the ref's archive: the pax global
+   header names the commit, and the root `zerops.yaml` hashed in passing must equal the descriptor digest
+   embedded in the registered provider artifact, or the run fails before any Zerops or Operations state is
+   created. The run's access snapshot is a second pass over the commit's archive, which keeps the files it
+   may read. No step reads the repository through a rate-counted REST request, except a file the snapshot
+   pass did not keep and the platform tree check below.
 2. Creates the Zerops application version and records its id
    ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md) owns recovery).
 3. Requests `GET /repos/{owner}/{repo}/tarball/{sha}` with `redirect: 'manual'`, requires the
@@ -137,7 +148,13 @@ them.
 - A fresh installation deploys public repositories only, until an administrator connects GitHub from
   the console.
 - Losing the vault KEK loses every connection; each must be recreated, which creates a new App.
-- Peak memory per upload is one chunk; no disk scales with repository size.
+- Peak memory per upload is one chunk; no disk scales with repository size. A snapshot pass keeps at most
+  32 MiB of wanted files.
+- A deploy downloads its archive three times (resolve, snapshot, upload), which costs bandwidth but no
+  rate-limited request. An exact-commit resolution and a platform commit's tree check are remembered per
+  Control process, so a namespace proxy rebuild downloads once and spends no request after the first.
+- A GitHub rate-limit refusal is its own failure (`rate_limited`) with the reset time; a namespace mutation
+  that meets it stays `provisioning` and is retried.
 - The tarball is `git archive` output, so `.gitattributes` `export-ignore` and `export-subst` apply. A
   path hidden from `git archive` is also missing from the deploy. Archives are not byte-deterministic;
   the descriptor digest, not the archive, binds a deploy.
@@ -175,6 +192,10 @@ them.
 - **Keep Cloudflare's single App in Worker secrets.** It needed a second webhook route with a static
   secret, a second application-binding mode keyed by installation id alone, and a second token-minting
   path. It also capped a Cloudflare installation at one organization's private repositories.
+- **Read the snapshot and the descriptor file by file through `/contents`.** Exact and cheap in bandwidth,
+  but each file spends one anonymous request of a budget that a cloud's tenants share.
+- **Download the archive once and keep it for all three passes.** Needs memory or disk that scales with the
+  repository; the extra downloads cost no rate-limited request.
 - **Assemble the archive from Git objects, or stage the tarball on disk.** Both keep a disk ceiling
   (and the first needs `git` subprocesses and a second tree read) to buy byte determinism or error
   ordering that nothing needs.

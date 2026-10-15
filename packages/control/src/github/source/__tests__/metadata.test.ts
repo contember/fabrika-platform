@@ -163,7 +163,9 @@ describe('GitHub repository metadata', () => {
 			const signal = new AbortController().signal
 
 			expect(await client.commit(repository, 'refs/heads/main', token, signal, 'resolve')).toBe(commitSha)
-			expect(new TextDecoder().decode(await client.descriptor(repository, DESCRIPTOR, commitSha, token, signal, 'resolve'))).toBe(descriptor)
+			expect(
+				new TextDecoder().decode(await client.readFileAtCommit(repository, DESCRIPTOR.path, DESCRIPTOR.maxBytes, commitSha, token, signal, 'resolve')),
+			).toBe(descriptor)
 			expect(calls.map((call) => call.url)).toEqual([
 				'https://api.github.com/repos/contember/fabrika-platform/commits/refs%2Fheads%2Fmain',
 				`https://api.github.com/repos/contember/fabrika-platform/contents/zerops.yaml?ref=${commitSha}`,
@@ -195,7 +197,7 @@ describe('GitHub repository metadata', () => {
 			missing.commit(repository, 'main', undefined, new AbortController().signal, 'resolve'),
 		).rejects.toMatchObject({ code: 'ref_not_found', stage: 'resolve' })
 		await expect(
-			missing.descriptor(repository, DESCRIPTOR, commitSha, undefined, new AbortController().signal, 'resolve'),
+			missing.readFileAtCommit(repository, DESCRIPTOR.path, DESCRIPTOR.maxBytes, commitSha, undefined, new AbortController().signal, 'resolve'),
 		).rejects.toMatchObject({ code: 'descriptor_missing', stage: 'resolve' })
 	})
 
@@ -203,7 +205,7 @@ describe('GitHub repository metadata', () => {
 		const secret = 'x'.repeat(300 * 1024)
 		const client = new GitHubMetadataClient({ fetch: async () => new Response(secret) })
 		const raised = await client
-			.descriptor(repository, DESCRIPTOR, commitSha, undefined, new AbortController().signal, 'archive')
+			.readFileAtCommit(repository, DESCRIPTOR.path, DESCRIPTOR.maxBytes, commitSha, undefined, new AbortController().signal, 'archive')
 			.then(() => undefined, (error: unknown) => error)
 
 		expect(raised).toMatchObject({ code: 'archive_rejected', stage: 'archive' })

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { cancelled, rateLimitFailure, SourceFailure } from './failure'
 import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './tree'
-import type { SourceDescriptorRule, SourceRepository } from './types'
+import type { SourceRepository } from './types'
 
 const GITHUB_COMMIT_MAX_RESPONSE_BYTES = 1024 * 1024
 const GITHUB_TREE_MAX_RESPONSE_BYTES = 7 * 1024 * 1024
@@ -48,6 +48,8 @@ export interface GitHubMetadataClientOptions {
 export class GitHubMetadataClient {
 	private readonly fetchImplementation: GitHubMetadataFetch
 	private readonly timeoutMs: number
+	/** Platform commits whose tree passed; a commit's tree never changes, and pins are few. */
+	private readonly validatedPlatformTrees = new Set<string>()
 
 	constructor(options: GitHubMetadataClientOptions) {
 		this.fetchImplementation = options.fetch ?? fetch
@@ -73,13 +75,19 @@ export class GitHubMetadataClient {
 		return (await this.readCommit(repository, ref, token, signal, stage)).sha
 	}
 
-	/** Git trees retain gitlinks even when export attributes hide .gitmodules from the tarball. */
+	/**
+	 * Git trees retain gitlinks even when export attributes hide .gitmodules from the tarball. The check costs two
+	 * rate-limited requests, so a commit that passed is not read again in this process.
+	 */
 	async validatePlatformTree(repository: SourceRepository, commitSha: string, signal: AbortSignal): Promise<void> {
+		const key = `${repository.owner.toLowerCase()}/${repository.name.toLowerCase()}@${commitSha}`
+		if (this.validatedPlatformTrees.has(key)) return
 		const paths = await this.readTree(repository, commitSha, undefined, signal, 'archive')
 		for (const path of paths.keys()) {
 			const separator = path.lastIndexOf('/')
 			if (separator !== -1 && paths.get(path.slice(0, separator))?.type !== 'tree') throw rejected('archive')
 		}
+		this.validatedPlatformTrees.add(key)
 	}
 
 	/** Every regular file of an exact commit (a symbolic link is not one), repository-relative. */
@@ -170,18 +178,6 @@ export class GitHubMetadataClient {
 		} catch {
 			throw rejected(stage)
 		}
-	}
-
-	/** Read the repository-root descriptor at an exact commit, bounded, without any other repository content. */
-	async descriptor(
-		repository: SourceRepository,
-		rule: SourceDescriptorRule,
-		commitSha: string,
-		token: string | undefined,
-		signal: AbortSignal,
-		stage: GitHubMetadataStage,
-	): Promise<Uint8Array> {
-		return await this.readFileAtCommit(repository, rule.path, rule.maxBytes, commitSha, token, signal, stage)
 	}
 
 	/** Read one file at an exact commit, bounded; a missing file is `descriptor_missing`. */

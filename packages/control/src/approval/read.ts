@@ -30,6 +30,22 @@ export const SNAPSHOT_LIMITS = {
 
 const MIGRATION_READS_AT_ONCE = 8
 
+/** What the contract reader may ask for: modules, the JSON configurations beside them, `bunfig.toml`. */
+const READER_INPUT = /\.(?:[cm]?[jt]s|[jt]sx|json|toml)$/
+
+/**
+ * The repository paths a snapshot of the application at `root` may read: the reader's inputs and the migrations. A source
+ * that reads the whole commit at once keeps these; `readAccessSnapshot` still asks for exactly what it needs.
+ */
+export function snapshotReads(root: string): (path: string) => boolean {
+	const prefix = root === '' ? '' : `${root}/`
+	return (path) => {
+		if (!path.startsWith(prefix)) return false
+		const relative = path.slice(prefix.length)
+		return relative.startsWith(MIGRATIONS_DIR) || READER_INPUT.test(relative)
+	}
+}
+
 /** Why a commit cannot be read as an access snapshot. A fixed code, never text from the checkout. */
 export type SnapshotRefusalCode =
 	| 'root-invalid'

@@ -40,7 +40,7 @@ import { vault } from '../services'
 import { HttpIamAdminGateway } from './iam-admin'
 import { controlMcpRoute } from './mcp'
 import { HttpOperationsService } from './operations'
-import { type GitHubSourceSeams, zeropsCommitSource, zeropsControlProvider, zeropsGitHubSource } from './provider'
+import { type GitHubSourceSeams, zeropsControlProvider, zeropsGitHubSources } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -153,11 +153,12 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	}
-	const env: Env = { ...baseEnv, COMMITS: zeropsCommitSource(baseEnv, sourceSeams) }
+	const github = zeropsGitHubSources(baseEnv, sourceSeams)
+	const env: Env = { ...baseEnv, COMMITS: github.commits }
 
 	return {
 		env,
-		provider: zeropsControlProvider(env, source, zeropsGitHubSource(env, sourceSeams)),
+		provider: zeropsControlProvider(env, source, github.port),
 		sourceConnection: createSourceConnections({
 			provider: 'zerops',
 			vault: () => vault(env),

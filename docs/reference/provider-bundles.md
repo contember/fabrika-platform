@@ -204,9 +204,19 @@ repository and registered application pair to match it. There is no generic `/we
 
 Production origins are fixed to `api.github.com` and `codeload.github.com`. There is no operator-facing
 GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected test seams only.
-Resolve reads two bounded REST responses: the commit for the requested ref, then the root `zerops.yaml`
-through `/contents` with `Accept: application/vnd.github.raw+json`, whose SHA-256 must equal the digest
-registered in the provider artifact.
+Resolve is one pass over the archive of the requested ref, uploaded nowhere: GitHub resolves the ref in
+the tarball request, the pax global header names the commit, and the root `zerops.yaml` must hash to the
+digest registered in the provider artifact. A ref that is already the exact commit, as a namespace proxy pin
+is, resolves once per Control process. A run's access snapshot (ADR-0050) is a second pass over the archive of
+the resolved commit, which keeps the files the snapshot may read in memory (at most 1 MiB each and 32 MiB
+together); a file it did not keep is read alone through `/contents`.
+
+GitHub answers an anonymous caller 60 REST requests an hour per IP address, and every tenant behind a
+cloud's egress address shares that budget. The tarball endpoint does not count against it (measured
+2026-10-15: `x-ratelimit-used` stayed `0` across tarball requests while `/commits` and `/contents` each
+spent one), so a Zerops deploy of a public repository spends none of it. The platform tree check below
+spends two, once per Control process and commit. A 403 or 429 that GitHub sends for its limit fails the
+operation as `rate_limited`, with a message that names the reset time.
 
 Archive and upload are one streamed operation. Control requests
 [`/repos/{owner}/{repo}/tarball/{sha}`](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-tar)
@@ -229,7 +239,7 @@ drifted descriptor fails the operation. Because the tarball is `git archive` out
 depends on that.
 
 A public archive may be uploaded as kind `platform`, which takes no credential. Before downloading it,
-control checks the exact commit's Git tree: the commit and root tree identities must match, the tree
+control checks the exact commit's Git tree, once per process: the commit and root tree identities must match, the tree
 must explicitly be complete, and gitlinks are refused even without `.gitmodules`. Metadata is bounded
 to 7 MiB and 50,000 entries; truncated or malformed trees fail before download or upload.
 

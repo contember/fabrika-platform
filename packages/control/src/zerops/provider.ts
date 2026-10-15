@@ -28,8 +28,7 @@ import {
 import type { Env } from '../env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
 import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, SourceRateLimited, type SourceUploadFetch } from '../github/source'
-import { type CommitSource, gitHubCommitSource } from '../github/source/commit-files'
-import { GitHubMetadataClient } from '../github/source/metadata'
+import type { CommitSource } from '../github/source/commit-files'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]
@@ -76,10 +75,11 @@ export interface GitHubSourceSeams {
 }
 
 /**
- * Control's in-process source: keys from the vault, the repository-root `zerops.yaml` as the descriptor. A rate limit
- * leaves as the provider's own error, which keeps a namespace mutation retryable.
+ * Control's in-process source: keys from the vault, the repository-root `zerops.yaml` as the descriptor. The provider's
+ * port and a run's snapshot read share one archive reader. A rate limit leaves the port as the provider's own error,
+ * which keeps a namespace mutation retryable.
  */
-export function zeropsGitHubSource(env: Env, seams: GitHubSourceSeams = {}): ZeropsSourcePort {
+export function zeropsGitHubSources(env: Env, seams: GitHubSourceSeams = {}): { readonly port: ZeropsSourcePort; readonly commits: CommitSource } {
 	const source = createGitHubSource({
 		credentials: vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
 		descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
@@ -89,8 +89,11 @@ export function zeropsGitHubSource(env: Env, seams: GitHubSourceSeams = {}): Zer
 		...(seams.uploadFetch === undefined ? {} : { uploadFetch: seams.uploadFetch }),
 	})
 	return {
-		resolve: (input) => providerRateLimit(() => source.resolve(input)),
-		upload: (input) => providerRateLimit(() => source.upload(input)),
+		port: {
+			resolve: (input) => providerRateLimit(() => source.resolve(input)),
+			upload: (input) => providerRateLimit(() => source.upload(input)),
+		},
+		commits: source.commits,
 	}
 }
 
@@ -101,14 +104,6 @@ async function providerRateLimit<T>(operation: () => Promise<T>): Promise<T> {
 		if (error instanceof SourceRateLimited) throw new ZeropsSourceRateLimitedError(error.message)
 		throw error
 	}
-}
-
-/** The files of a run's commit, for its access snapshot (ADR-0050), over the same GitHub transport as the source. */
-export function zeropsCommitSource(env: Env, seams: GitHubSourceSeams = {}): CommitSource {
-	return gitHubCommitSource(
-		new GitHubMetadataClient(seams.metadataFetch === undefined ? {} : { fetch: seams.metadataFetch }),
-		vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
-	)
 }
 
 /** Compose the only provider available in the process installation. */

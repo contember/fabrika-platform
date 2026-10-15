@@ -11,6 +11,7 @@ const BLOCK_BYTES = 512
 const MAX_PAX_PAYLOAD_BYTES = 64 * 1024
 const END_OF_ARCHIVE_BLOCKS = 2
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
+const OBJECT_ID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const DECIMAL_PATTERN = /^(?:0|[1-9][0-9]*)$/
 
 /** Bun types a stream element as an `ArrayBuffer`-backed view; naming it once keeps the pipe cast-free. */
@@ -22,23 +23,43 @@ export interface ArchiveSummary {
 	dataFileSha256?: string
 	entryCount: number
 	expandedBytes: number
+	/** What `collect` asked for; absent without it. */
+	files?: CollectedFiles
+}
+
+/** Which regular files of the commit a pass keeps in memory, and how much it may keep. */
+export interface FileCollection {
+	keep(path: string): boolean
+	/** A wanted file larger than this is listed in `oversized`, not kept. */
+	readonly maxFileBytes: number
+	/** Wanted files beyond this total are neither kept nor listed: their reader fetches them on its own. */
+	readonly maxBytes: number
+}
+
+export interface CollectedFiles {
+	/** Every regular file of the commit; a symbolic link is not one. */
+	readonly paths: ReadonlySet<string>
+	readonly contents: ReadonlyMap<string, SourceBytes>
+	readonly oversized: ReadonlySet<string>
 }
 
 export interface TarRewriteInput {
 	archiveKind?: 'platform'
-	/** The exact commit the tarball must name in its pax global header. */
-	commitSha: string
+	/** The exact commit the tarball must name in its pax global header; absent, the pass reports the one it names. */
+	commitSha?: string
 	descriptor: SourceDescriptorRule
-	descriptorSha256: string
+	/** The digest the descriptor must have; absent, the pass reports the one it has. */
+	descriptorSha256?: string
 	/** Appended after the commit's entries; platform archives only. */
 	dataFile?: SourceDataFile
+	collect?: FileCollection
 }
 
 export interface TarRewrite {
 	readonly transform: TransformStream<SourceBytes, SourceBytes>
 	readonly completed: Promise<ArchiveSummary>
-	/** Settle a still-pending outcome once the destination has stopped reading. */
-	abandon(): void
+	/** Settle a still-pending outcome once the destination has stopped reading; by default as a failed upload. */
+	abandon(reason?: SourceFailure): void
 }
 
 /**
@@ -48,9 +69,10 @@ export interface TarRewrite {
  * through chunk by chunk. Platform mode also retains bounded namespace metadata for link validation.
  */
 export function createTarRewrite(input: TarRewriteInput): TarRewrite {
-	if (!SHA256_PATTERN.test(input.descriptorSha256)) {
+	if (input.descriptorSha256 !== undefined && !SHA256_PATTERN.test(input.descriptorSha256)) {
 		throw new SourceFailure('descriptor_mismatch', 'archive')
 	}
+	if (input.commitSha !== undefined && !OBJECT_ID_PATTERN.test(input.commitSha)) throw commitMismatch()
 	if (input.dataFile !== undefined && input.archiveKind !== 'platform') throw archiveRejected()
 	const outcome = Promise.withResolvers<ArchiveSummary>()
 	// The caller reads this only after the PUT settles; keep an early rejection from looking unhandled.
@@ -77,7 +99,7 @@ export function createTarRewrite(input: TarRewriteInput): TarRewrite {
 	return {
 		transform,
 		completed: outcome.promise,
-		abandon: () => outcome.reject(new SourceFailure('upload_failed', 'upload')),
+		abandon: (reason = new SourceFailure('upload_failed', 'upload')) => outcome.reject(reason),
 	}
 }
 
@@ -115,6 +137,7 @@ class TarRewriter {
 	private pendingPath: string | undefined
 	private pendingSize: number | undefined
 	private pendingLinkpath: string | undefined
+	private commitSha: string | undefined
 	private commitConfirmed = false
 	private started = false
 	private zeroBlocks = 0
@@ -128,6 +151,10 @@ class TarRewriter {
 	private readonly namespace = new Map<string, NamespaceEntry>()
 	private readonly resolvedLinks = new Map<string, string>()
 	private metadataBytes = 0
+	private collecting: { path: string; bytes: SourceBytes; filled: number } | undefined
+	private collectedBytes = 0
+	private readonly collected = new Map<string, SourceBytes>()
+	private readonly oversized = new Set<string>()
 
 	constructor(private readonly input: TarRewriteInput) {}
 
@@ -142,6 +169,11 @@ class TarRewriter {
 				const take = Math.min(phase.remaining, chunk.byteLength - offset)
 				const slice = chunk.subarray(offset, offset + take)
 				this.descriptorHash?.update(slice)
+				const collecting = this.collecting
+				if (collecting !== undefined) {
+					collecting.bytes.set(slice, collecting.filled)
+					collecting.filled += take
+				}
 				controller.enqueue(slice)
 				phase.remaining -= take
 				offset += take
@@ -192,7 +224,8 @@ class TarRewriter {
 		) {
 			throw archiveRejected()
 		}
-		if (!this.commitConfirmed) throw commitMismatch()
+		const commitSha = this.commitSha
+		if (!this.commitConfirmed || commitSha === undefined) throw commitMismatch()
 		if (this.pendingPath !== undefined || this.pendingSize !== undefined || this.pendingLinkpath !== undefined) throw archiveRejected()
 		for (const [path, entry] of this.namespace) {
 			if (entry.kind === 'symlink') this.validateLink(path)
@@ -205,11 +238,14 @@ class TarRewriter {
 		const dataFileSha256 = dataFile === undefined ? undefined : this.appendDataFile(dataFile, controller)
 		controller.enqueue(new Uint8Array(BLOCK_BYTES * END_OF_ARCHIVE_BLOCKS))
 		return {
-			commitSha: this.input.commitSha,
+			commitSha,
 			descriptorSha256,
 			...(dataFileSha256 === undefined ? {} : { dataFileSha256 }),
 			entryCount: this.entryCount,
 			expandedBytes: this.expandedBytes,
+			...(this.input.collect === undefined
+				? {}
+				: { files: { paths: this.paths, contents: this.collected, oversized: this.oversized } }),
 		}
 	}
 
@@ -340,6 +376,7 @@ class TarRewriter {
 			}
 			this.descriptorHash = createHash('sha256')
 		}
+		this.beginCollecting(path, size)
 		this.writeParentDirectories(path, controller)
 		this.writeEntryHeader(path, mode, size, controller)
 		if (size === 0) {
@@ -350,12 +387,29 @@ class TarRewriter {
 		this.phase = { kind: 'content', remaining: size, padding: paddingFor(size) }
 	}
 
+	private beginCollecting(path: string, size: number): void {
+		const collect = this.input.collect
+		if (collect === undefined || !collect.keep(path)) return
+		if (size > collect.maxFileBytes) {
+			this.oversized.add(path)
+			return
+		}
+		if (this.collectedBytes + size > collect.maxBytes) return
+		this.collectedBytes += size
+		this.collecting = { path, bytes: new Uint8Array(size), filled: 0 }
+	}
+
 	private completeEntry(): void {
+		const collecting = this.collecting
+		if (collecting !== undefined) {
+			this.collecting = undefined
+			this.collected.set(collecting.path, collecting.bytes)
+		}
 		const hash = this.descriptorHash
 		if (hash === undefined) return
 		this.descriptorHash = undefined
 		const digest = hash.digest('hex')
-		if (digest !== this.input.descriptorSha256) {
+		if (this.input.descriptorSha256 !== undefined && digest !== this.input.descriptorSha256) {
 			throw new SourceFailure('descriptor_mismatch', 'archive')
 		}
 		this.descriptorDigest = digest
@@ -499,7 +553,10 @@ class TarRewriter {
 		const linkpath = records.get('linkpath')
 		if (linkpath !== undefined && (global || this.input.archiveKind !== 'platform' || !safeLinkTarget(linkpath))) throw archiveRejected()
 		if (global) {
-			if (records.get('comment') !== this.input.commitSha) throw commitMismatch()
+			const comment = records.get('comment')
+			const expected = this.input.commitSha
+			if (comment === undefined || !OBJECT_ID_PATTERN.test(comment) || (expected !== undefined && comment !== expected)) throw commitMismatch()
+			this.commitSha = comment
 			this.commitConfirmed = true
 			return
 		}

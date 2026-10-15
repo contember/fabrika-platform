@@ -71,6 +71,13 @@ export function rateLimitFailure(
 	return new SourceRateLimited(stage, anonymous, resetAt)
 }
 
+/** A failure of one step, reported at the stage of the operation that took it. Anything else passes unchanged. */
+export function atStage(error: unknown, stage: SourceFailureStage): unknown {
+	if (error instanceof SourceRateLimited) return new SourceRateLimited(stage, error.anonymous, error.resetAt)
+	if (error instanceof SourceFailure) return new SourceFailure(error.code, stage)
+	return error
+}
+
 export function cancelled(stage: SourceFailureStage): SourceFailure {
 	return new SourceFailure('cancelled', stage)
 }

@@ -14,10 +14,11 @@ import { controlServiceDigest } from '../../../../fabrika.service'
 import { hasPostgres, postgresUrl, skipReason } from '../../../__tests__/helpers/postgres'
 import { Vault } from '../../../vault'
 import { applyMigrations } from '../../../zerops/migrate'
-import { zeropsGitHubSource } from '../../../zerops/provider'
+import { zeropsGitHubSources } from '../../../zerops/provider'
 import { createRuntime } from '../../../zerops/runtime'
 import { encodeGitHubAppCredential } from '../../connections/credentials'
 import { githubAppCredentialSecretLabel, githubWebhookSecretLabel } from '../../connections/secrets'
+import { file, handPrefix, handTarball } from './fixtures'
 
 const COMMIT_SHA = 'a'.repeat(40)
 const DESCRIPTOR = 'zerops:\n  - setup: notes\n'
@@ -88,9 +89,14 @@ interface RecordedRequest {
 	readonly authorization: string | null
 }
 
+/** The archive of `refs/heads/main`: the commit and its registered descriptor. */
+const MAIN_ARCHIVE = Bun.gzipSync(handTarball([file(`${handPrefix}zerops.yaml`, DESCRIPTOR)], { commitSha: COMMIT_SHA }))
+const MAIN_CODELOAD = `https://codeload.github.com/${REPOSITORY.owner}/${REPOSITORY.name}/legacy.tar.gz/refs/heads/main?token=grant`
+
 /**
  * Stands in for the network behind the global `fetch` — the transport production uses — and plays GitHub at
- * GitHub's origins only. `tarballLocation` is where the tarball API redirects.
+ * GitHub's origins only. `tarballLocation` is where the tarball API redirects for the exact commit; the archive of
+ * `refs/heads/main` is served.
  */
 function githubNetwork(
 	tarballLocation = `https://codeload.github.com/${REPOSITORY.owner}/${REPOSITORY.name}/legacy.tar.gz/${COMMIT_SHA}?token=grant`,
@@ -105,8 +111,10 @@ function githubNetwork(
 		if (request.method === 'POST' && request.url === `https://api.github.com/app/installations/${BINDING.installationId}/access_tokens`) {
 			return Response.json({ token: INSTALLATION_TOKEN, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, { status: 201 })
 		}
-		if (keyed && request.url === `${api}/commits/${encodeURIComponent('refs/heads/main')}`) return Response.json({ sha: COMMIT_SHA })
-		if (keyed && request.url === `${api}/contents/zerops.yaml?ref=${COMMIT_SHA}`) return new Response(DESCRIPTOR)
+		if (keyed && request.url === `${api}/tarball/${encodeURIComponent('refs/heads/main')}`) {
+			return new Response(null, { status: 302, headers: { location: MAIN_CODELOAD } })
+		}
+		if (authorization === null && request.url === MAIN_CODELOAD) return new Response(MAIN_ARCHIVE)
 		if (keyed && request.url === `${api}/tarball/${COMMIT_SHA}`) return new Response(null, { status: 302, headers: { location: tarballLocation } })
 		return new Response(null, { status: 404 })
 	}
@@ -125,7 +133,7 @@ test("the Zerops composition's anonymous resolve addresses api.github.com whatev
 		await expect(resolveSource({ runId: 'run-1', app: notesApp, environment: notesEnvironment(), signal: AbortSignal.timeout(5_000) }))
 			.rejects.toThrow('(ref_not_found)')
 		expect(network.requested.map((request) => request.url)).toEqual([
-			`https://api.github.com/repos/acme/notes/commits/${encodeURIComponent('refs/heads/main')}`,
+			`https://api.github.com/repos/acme/notes/tarball/${encodeURIComponent('refs/heads/main')}`,
 		])
 	} finally {
 		network.restore()
@@ -198,10 +206,13 @@ describe.skipIf(!hasPostgres)('the keyed path of the Zerops composition', () => 
 					signal: AbortSignal.timeout(10_000),
 				}),
 			).toEqual({ commitSha: COMMIT_SHA })
-			expect(network.requested.map((request) => request.url)).toEqual([
-				`https://api.github.com/app/installations/${BINDING.installationId}/access_tokens`,
-				`https://api.github.com/repos/acme/notes/commits/${encodeURIComponent('refs/heads/main')}`,
-				`https://api.github.com/repos/acme/notes/contents/zerops.yaml?ref=${COMMIT_SHA}`,
+			expect(network.requested).toEqual([
+				{ url: `https://api.github.com/app/installations/${BINDING.installationId}/access_tokens`, authorization: expect.stringMatching(/^Bearer /) },
+				{
+					url: `https://api.github.com/repos/acme/notes/tarball/${encodeURIComponent('refs/heads/main')}`,
+					authorization: `Bearer ${INSTALLATION_TOKEN}`,
+				},
+				{ url: MAIN_CODELOAD, authorization: null },
 			])
 		} finally {
 			network.restore()
@@ -210,7 +221,7 @@ describe.skipIf(!hasPostgres)('the keyed path of the Zerops composition', () => 
 	})
 
 	const upload = (runtime: ReturnType<typeof createRuntime>) =>
-		zeropsGitHubSource(runtime.env).upload({
+		zeropsGitHubSources(runtime.env).port.upload({
 			repository: REPOSITORY,
 			commitSha: COMMIT_SHA,
 			descriptorSha256: descriptor.sha256,
