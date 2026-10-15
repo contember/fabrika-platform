@@ -74,8 +74,8 @@ interface FakeState {
 	uploadSequence: number
 	failImportAfterMutation: boolean
 	failTriggerAfterMutation: boolean
-	/** The platform's answer before a service has deployed an HTTP port. */
-	subdomainNotHttp: boolean
+	/** How many more times the platform answers `serviceStackIsNotHttp`: its HTTP ports lag the ACTIVE version. */
+	subdomainNotHttpAnswers: number
 	/** The 2xx-then-nothing case: the call is accepted and the flag never moves. */
 	subdomainStaysDisabled: boolean
 	/** A platform refusal of the project import, e.g. a token that may not create projects. */
@@ -103,7 +103,7 @@ const freshState = (): FakeState => ({
 	uploadSequence: 0,
 	failImportAfterMutation: false,
 	failTriggerAfterMutation: false,
-	subdomainNotHttp: false,
+	subdomainNotHttpAnswers: 0,
 	subdomainStaysDisabled: false,
 	importProjectError: null,
 	serviceEnvError: null,
@@ -298,7 +298,8 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	},
 	enableSubdomainAccess: async ({ serviceId }) => {
 		state.calls.push(`enableSubdomain:${serviceId}`)
-		if (state.subdomainNotHttp) {
+		if (state.subdomainNotHttpAnswers > 0) {
+			state.subdomainNotHttpAnswers -= 1
 			throw new ZeropsApiError('zerops: enable subdomain access failed (400)', 400, ZEROPS_SERVICE_NOT_HTTP)
 		}
 		if (state.subdomainStaysDisabled) return
@@ -1396,9 +1397,21 @@ describe('Zerops namespace lifecycle', () => {
 		await expect(run(capabilities, subdomainNamespace(), [])).rejects.toThrow('no public entry point')
 	})
 
+	test('waits for the HTTP ports that lag the ACTIVE version, then publishes', async () => {
+		const state = freshState()
+		state.subdomainNotHttpAnswers = 3
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const result = await run(capabilities, subdomainNamespace(), [])
+
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
+		expect(state.calls.filter((call) => call === `enableSubdomain:${proxyId}`)).toHaveLength(4)
+		expect((state.services.get(projectId) ?? []).find((service) => service.name === 'proxy')?.subdomainAccess).toBe(true)
+	})
+
 	test('names the missing HTTP port when the platform refuses to publish an undeployed proxy', async () => {
 		const state = freshState()
-		state.subdomainNotHttp = true
+		state.subdomainNotHttpAnswers = Number.POSITIVE_INFINITY
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 
 		await expect(run(capabilities, subdomainNamespace(), [])).rejects.toThrow('no deployed HTTP port')
@@ -1691,7 +1704,7 @@ describe('Zerops namespace failure classes', () => {
 
 	test('names the missing HTTP port with the platform code the subdomain call answered', async () => {
 		const state = freshState()
-		state.subdomainNotHttp = true
+		state.subdomainNotHttpAnswers = Number.POSITIVE_INFINITY
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 
 		const error = await failure(run(capabilities, provisionNamespace('zerops-subdomain'), []))

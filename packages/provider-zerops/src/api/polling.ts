@@ -1,4 +1,5 @@
 import type { Sleeper } from '../collaborators'
+import { ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from './errors'
 import { ZEROPS_PROCESS_FINISHED, ZEROPS_PROCESS_TERMINAL, type ZeropsApi, type ZeropsProcess } from './types'
 
 // ── waiting on a process ────────────────────────────────────────────────────────
@@ -53,6 +54,47 @@ export const waitForProcess = async (input: {
 		}
 		if (attempt >= attempts) {
 			throw new Error(`zerops: ${label} did not finish in time`)
+		}
+		await input.sleep(intervalMs, input.signal)
+	}
+}
+
+// ── waiting for a service's HTTP ports ──────────────────────────────────────────
+
+/** How often `enableSubdomainAccessWhenHttp` asks again while the platform still answers `serviceStackIsNotHttp`. */
+const HTTP_PORT_POLL_INTERVAL_MS = 5_000
+
+/** ~3 minutes. The live lag measured between ACTIVE and the HTTP ports was under a minute. */
+const HTTP_PORT_POLL_ATTEMPTS = 36
+
+/**
+ * `enableSubdomainAccess`, repeated while the service does not yet publish an HTTP port.
+ *
+ * Live-verified: right after a service's first app version reads ACTIVE the platform still answers
+ * `serviceStackIsNotHttp`, and a minute later the same call is accepted. The ports lag ACTIVE, so that
+ * answer means "not yet" for a bounded window. Past it the last refusal is rethrown unchanged, so a caller
+ * still names the missing port. Any other failure is rethrown at once. The 2xx still proves nothing: the
+ * caller decides by reading `subdomainAccess` back.
+ */
+export const enableSubdomainAccessWhenHttp = async (input: {
+	api: Pick<ZeropsApi, 'enableSubdomainAccess'>
+	serviceId: string
+	sleep: Sleeper
+	signal: AbortSignal
+	intervalMs?: number
+	attempts?: number
+}): Promise<void> => {
+	const intervalMs = input.intervalMs ?? HTTP_PORT_POLL_INTERVAL_MS
+	const attempts = input.attempts ?? HTTP_PORT_POLL_ATTEMPTS
+	for (let attempt = 0;; attempt += 1) {
+		input.signal.throwIfAborted()
+		try {
+			await input.api.enableSubdomainAccess({ serviceId: input.serviceId, signal: input.signal })
+			return
+		} catch (error) {
+			if (!(error instanceof ZeropsApiError) || error.code !== ZEROPS_SERVICE_NOT_HTTP || attempt >= attempts) {
+				throw error
+			}
 		}
 		await input.sleep(intervalMs, input.signal)
 	}

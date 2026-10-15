@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { createZeropsApi, type FetchLike, waitForProcess, ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError, type ZeropsLogAccess } from '../api'
+import {
+	createZeropsApi,
+	enableSubdomainAccessWhenHttp,
+	type FetchLike,
+	waitForProcess,
+	ZEROPS_SERVICE_NOT_HTTP,
+	ZeropsApiError,
+	type ZeropsLogAccess,
+} from '../api'
 import type { Sleeper } from '../collaborators'
 
 const jsonResponse = (body: unknown, status = 200): Response =>
@@ -691,6 +699,58 @@ describe('Zerops subdomain access', () => {
 
 		expect(error).toBeInstanceOf(ZeropsApiError)
 		expect(error instanceof ZeropsApiError ? error.code : '').toBe(ZEROPS_SERVICE_NOT_HTTP)
+	})
+
+	const notHttp = (): ZeropsApiError => new ZeropsApiError('zerops: enable subdomain access failed (400)', 400, ZEROPS_SERVICE_NOT_HTTP)
+
+	test('asks again while the HTTP ports lag the ACTIVE version', async () => {
+		let refusals = 2
+		const sleeps: number[] = []
+		await enableSubdomainAccessWhenHttp({
+			api: {
+				enableSubdomainAccess: async () => {
+					if (refusals-- > 0) throw notHttp()
+				},
+			},
+			serviceId: 'service-1',
+			sleep: async (ms) => void sleeps.push(ms),
+			signal: signal(),
+		})
+
+		expect(sleeps).toEqual([5_000, 5_000])
+	})
+
+	test('rethrows the refusal past its window, and any other failure at once', async () => {
+		let calls = 0
+		const always = await enableSubdomainAccessWhenHttp({
+			api: {
+				enableSubdomainAccess: async () => {
+					calls += 1
+					throw notHttp()
+				},
+			},
+			serviceId: 'service-1',
+			sleep: async () => {},
+			signal: signal(),
+			attempts: 3,
+		}).catch((cause: unknown) => cause)
+		expect(always instanceof ZeropsApiError ? always.code : '').toBe(ZEROPS_SERVICE_NOT_HTTP)
+		expect(calls).toBe(4)
+
+		calls = 0
+		const other = await enableSubdomainAccessWhenHttp({
+			api: {
+				enableSubdomainAccess: async () => {
+					calls += 1
+					throw new ZeropsApiError('zerops: enable subdomain access failed (403)', 403, 'insufficientPermissions')
+				},
+			},
+			serviceId: 'service-1',
+			sleep: async () => {},
+			signal: signal(),
+		}).catch((cause: unknown) => cause)
+		expect(other instanceof ZeropsApiError ? other.code : '').toBe('insufficientPermissions')
+		expect(calls).toBe(1)
 	})
 })
 

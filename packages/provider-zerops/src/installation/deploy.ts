@@ -38,6 +38,7 @@ import { FABRIKA_SERVICE_TABLE_DIGEST, readEnvironmentName } from '@fabrika/auth
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import {
+	enableSubdomainAccessWhenHttp,
 	prepareZeropsDescriptor,
 	readableContent,
 	type Sleeper,
@@ -512,7 +513,8 @@ const deployConcurrently = async (
  * The decision is the READ-BACK and never the call returning: on an already-published service the
  * platform answers 2xx and then fails the process it hands back, and a freshly-enabled one can still
  * read `false` on the next read. Both live-verified. Runs on every deploy, so a subdomain someone
- * turned off in the GUI comes back, and throws rather than leaving the installation unreachable.
+ * turned off in the GUI comes back, and throws rather than leaving the installation unreachable. The
+ * HTTP ports lag a fresh ACTIVE version, so `serviceStackIsNotHttp` is retried for a bounded window first.
  */
 const ensureSubdomainAccess = async (
 	proxy: ResolvedService,
@@ -529,11 +531,11 @@ const ensureSubdomainAccess = async (
 		return
 	}
 	try {
-		await api.enableSubdomainAccess({ serviceId: proxy.id, signal })
+		await enableSubdomainAccessWhenHttp({ api, serviceId: proxy.id, sleep, signal })
 	} catch (error) {
 		if (error instanceof ZeropsApiError && error.code === ZEROPS_SERVICE_NOT_HTTP) {
 			throw new Error(
-				`the proxy cannot be published on a zerops.app subdomain: it exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP})`,
+				`the proxy cannot be published on a zerops.app subdomain: it still exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP}) minutes after its deploy`,
 			)
 		}
 		throw error

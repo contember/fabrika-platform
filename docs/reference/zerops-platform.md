@@ -711,6 +711,12 @@ The last one is worth stating plainly, because it contradicts the natural readin
 sufficient. The published HTTP ports lag it, so a namespace provision must tolerate one retry rather
 than treat the error as terminal.
 
+Seen again on 2026-10-15, on a fresh light-tier installation following the operator guide: the namespace
+proxy's version read `ACTIVE`, the enable answered `serviceStackIsNotHttp`, and `control namespaces
+reconcile` about a minute later published it. So both the namespace lifecycle and `platform deploy` send the
+enable through `enableSubdomainAccessWhenHttp` (`packages/provider-zerops/src/api/polling.ts`), which asks
+again every 5 s for about 3 minutes while the answer is `serviceStackIsNotHttp`, and only then fails.
+
 Grants are fixed at mint time and the update API replaces the grant set WHOLESALE, so an operator
 repairing a live token must re-pass every existing project grant in the same call or silently remove
 it.

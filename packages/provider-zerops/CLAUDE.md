@@ -66,7 +66,8 @@ bun test
 - **An import document CANNOT establish a `.zerops.app` subdomain** — `enableSubdomainAccess` is accepted
   and dropped, on a service the document creates as much as on one `override` leaves alone. Only
   `PUT /service-stack/{id}/enable-subdomain-access` does, and only once the service publishes a DEPLOYED
-  HTTP port (`400 serviceStackIsNotHttp` before that). Its 2xx proves nothing — on an already-published
+  HTTP port (`400 serviceStackIsNotHttp` before that — and for up to a minute after the first version reads
+  ACTIVE, so `enableSubdomainAccessWhenHttp` retries that answer for ~3 minutes). Its 2xx proves nothing — on an already-published
   service it returns a process that then fails — so decide by reading `subdomainAccess` back.
   `ensureSubdomainAccess` in `src/namespace/provisioning.ts` is the one place that does this; it runs after the proxy
   deploy, on reconcile too, and throws rather than leaving a namespace with no public entry point.

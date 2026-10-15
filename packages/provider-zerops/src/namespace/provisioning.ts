@@ -7,6 +7,7 @@ import {
 	type ProviderNamespaceRepublishResult,
 } from '@fabrika/provider-contract'
 import {
+	enableSubdomainAccessWhenHttp,
 	readableContent,
 	waitForProcess,
 	ZEROPS_SERVICE_NOT_HTTP,
@@ -272,6 +273,9 @@ const republishNamespace = async (
  *
  * The decision is the READ-BACK, never the call returning. On an already-published service the platform
  * answers 2xx and then fails the process it handed back — live-verified — so a 2xx proves nothing.
+ *
+ * The HTTP ports lag the proxy's ACTIVE version, so `serviceStackIsNotHttp` is retried for a bounded
+ * window (`enableSubdomainAccessWhenHttp`) before it fails the namespace.
  */
 const ensureSubdomainAccess = async (
 	target: NormalizedZeropsNamespaceTarget,
@@ -287,12 +291,12 @@ const ensureSubdomainAccess = async (
 		return
 	}
 	try {
-		await options.api.enableSubdomainAccess({ serviceId: proxyServiceId, signal })
+		await enableSubdomainAccessWhenHttp({ api: options.api, serviceId: proxyServiceId, sleep: options.sleep ?? defaultSleep, signal })
 	} catch (error) {
 		if (error instanceof ZeropsApiError && error.code === ZEROPS_SERVICE_NOT_HTTP) {
 			throw namespaceError(
 				ZEROPS_SERVICE_NOT_HTTP,
-				`Zerops namespace proxy ${proxyServiceId} cannot be published on a zerops.app subdomain: it exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP})`,
+				`Zerops namespace proxy ${proxyServiceId} cannot be published on a zerops.app subdomain: it still exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP}) minutes after its deploy`,
 				false,
 			)
 		}

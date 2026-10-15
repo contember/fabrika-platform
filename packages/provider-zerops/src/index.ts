@@ -1,5 +1,6 @@
 export {
 	createZeropsApi,
+	enableSubdomainAccessWhenHttp,
 	readableContent,
 	waitForProcess,
 	ZEROPS_ACTIVE,
