@@ -122,6 +122,18 @@ export class SessionRepository {
 	}
 
 	/**
+	 * Whether the IAM login `parentSessionId` holds a live session bound to `app` — whether this login already chose that
+	 * application. The parent's own validity is the caller's: it reads the login it asks about first.
+	 */
+	async hasActiveChild(parentSessionId: string, app: string): Promise<boolean> {
+		const row = await this.db
+			.prepare('SELECT id FROM sessions WHERE parent_session_id = ? AND app = ? AND revoked_at IS NULL AND expires_at > ? LIMIT 1')
+			.bind(parentSessionId, app, unixNow())
+			.first<{ id: string }>()
+		return row !== null
+	}
+
+	/**
 	 * Revoke a session by the cookie's hash (logout). Idempotent — already-revoked → false. A logout passes its
 	 * `auth_log` row, written in the same transaction and only for the session this call ended, with that session's
 	 * principal: one statement on Postgres, `changes()` right after the revocation on SQLite (see `AuditWriter`).

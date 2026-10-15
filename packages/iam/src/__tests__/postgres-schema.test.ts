@@ -822,6 +822,23 @@ describe.skipIf(!hasPostgres)('HandoffRepository on Postgres — the ADR-0022 pe
 		expect(await db.sessions.getActiveSessionById(child)).toBeNull()
 	})
 
+	test('hasActiveChild answers whether a login holds a live session at one app', async () => {
+		// It decides whether a handoff asks which account to use, so a revoked or expired child must not count.
+		await reset()
+		const { principalId, sessionId } = await login('chose-app')
+		expect(await db.sessions.hasActiveChild(sessionId, 'notes')).toBe(false)
+		const child = (tokenHash: string, app: string, expiresAt: number) =>
+			db.sessions.createSession({ tokenHash, principalId, idpSub: 'sub-chose-app', expiresAt, app, parentSessionId: sessionId })
+		await child('chose-other', 'other', now() + 3600)
+		await child('chose-expired', 'notes', now() - 1)
+		const revoked = await child('chose-revoked', 'notes', now() + 3600)
+		await db.sessions.revokeSessionById(revoked)
+		expect(await db.sessions.hasActiveChild(sessionId, 'notes')).toBe(false)
+		await child('chose-live', 'notes', now() + 3600)
+		expect(await db.sessions.hasActiveChild(sessionId, 'notes')).toBe(true)
+		expect(await db.sessions.hasActiveChild('no-such-session', 'notes')).toBe(false)
+	})
+
 	test('a code dies with the login it was issued against — ON DELETE CASCADE, on this engine too', async () => {
 		await reset()
 		const { principalId, sessionId } = await login('cascade')

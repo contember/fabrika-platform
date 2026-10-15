@@ -87,6 +87,25 @@ only the initiating browser holds.
 same admin credential a deploy uses. IAM and the proxy have no local-only branch. The browser suite
 plants an IAM login on IAM's host and runs one `/auth/login?app=…&redirect=…` per app host.
 
+### 6. A held login continues only into an application it already chose
+
+A browser that holds an IAM login reaches `/auth/login` only when an app's proxy has no app session for
+it. The proxy re-mints access tokens from the app session server-side, so a renewal never comes here.
+IAM then asks for no password and answers in one of two ways:
+
+- **It hands off at once** when the login already chose the app. The login holds a live child session
+  for that app (the browser lost the app's cookie), or the login is less than 60 seconds old. A completed
+  password action, an invitation enrollment and a sign-in on IAM's own page each issue a login and land
+  on an app, whose proxy starts the handoff moments later.
+- **It asks `Continue as <label>` or `Use another account`** otherwise. The page issues no code. Each
+  answer is a same-origin `POST` that reads the handoff fields and the login again. Continue issues the
+  code from the login the browser holds at that moment. Another account ends the login like a sign-out,
+  and with it every app session made from it, which the page states. It then returns the browser to the
+  sign-in page of the same handoff, whose verifier the proxy still holds.
+
+The question is the person's choice of account, not a security boundary: §4 binds the code to the
+browser either way.
+
 ## Consequences
 
 - **One extra redirect on first sign-in for an app that shares a domain with IAM**, once per app per
@@ -100,6 +119,11 @@ plants an IAM login on IAM's host and runs one `/auth/login?app=…&redirect=…
 - **A copied callback URL cannot create or replace another browser's session.** A thief of a live code
   can still consume it and make that login fail; the code was already a short-lived bearer credential.
 - **Login start writes a transient cookie.** Abandoned attempts expire after ten minutes.
+- **The first handoff of a login to an app costs one click**, unless the login is moments old. A lost app
+  cookie, a token renewal and the landing after a completed password action ask nothing.
+- **`Use another account` signs the browser out of every application**, because an app session does not
+  outlive the login it came from. A browser holds one login on IAM's host, so there is no account
+  switching that keeps the first one.
 - **The code format carries the challenge, but storage is still one hash.** No schema change.
 - **A parent IAM session still mints for any app if presented on an app host.** Nothing puts it there,
   and the local fixture seeders rely on it. Refusing it buys nothing: an IAM login can obtain a code for
@@ -118,6 +142,12 @@ plants an IAM login on IAM's host and runs one `/auth/login?app=…&redirect=…
 - **Apply `__Host-` outside `local` only.** The suite would test a cookie production does not set.
 - **A state cookie with no verifier.** Stops a copied URL in the common case, but the check stays
   proxy-local; a verifier makes IAM enforce the browser proof and keeps the secret out of every URL.
+- **Hand off from a held login without asking.** A shared or forgotten browser signed every app in as
+  whoever last signed in to IAM, and showed nobody whose account it used.
+- **Ask on every handoff from a held login.** Asks again after a lost app cookie, and right after a
+  completed password reset or invitation that has just named the account.
+- **Record the choice in a cookie or a column.** The live child session already records it, and it ends
+  with the login.
 - **Store the challenge in a new column.** Binding it into the hashed code gives the same authenticated
   input without a migration or a second lookup key.
 - **Keep a browser JWT cookie as a fallback.** Another ambient credential and another branch in the proxy's decision; the

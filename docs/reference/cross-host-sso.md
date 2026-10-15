@@ -19,7 +19,7 @@ design.
 | - | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1 | app host | The proxy creates `(state, verifier)`, stores the verifier in `__Host-px_handoff_<state>`, and sends `app`, `redirect`, `state`, and the verifier's S256 `code_challenge` to IAM.  |
 | 2 | IAM      | The public handoff fields are read against that app's registered return origins — two ways it can go, below.                                                                       |
-| 3 | IAM      | The human authenticates — password, OIDC, or an IAM session the browser already holds, in which case there is no prompt.                                                           |
+| 3 | IAM      | The human authenticates — password, OIDC, or an IAM session the browser already holds, which hands off at once or first asks which account to use (below).                         |
 | 4 | IAM      | A single-use code bound to `(session, app, return URL, challenge)` is issued; 302 to `<app origin>/__fabrika/auth/callback?code=…&state=…`.                                        |
 | 5 | app host | The proxy selects the verifier cookie by state and privately redeems `(code, verifier)`. IAM atomically consumes the code before checking the proof.                               |
 | 6 | app host | The proxy sets the returned app session as a **host-only** cookie, clears the verifier cookie, and 302s to the stored return URL.                                                  |
@@ -49,8 +49,34 @@ would produce a login that succeeds and lands the browser on a host where it has
 session, i.e. a loop with nothing logged anywhere.
 
 The reading is redone at every step that could act on it — the login page, the OIDC
-start, the password `POST`, and the return from the IdP. The form is a hint, never a
-permission.
+start, the password `POST`, the account question's `POST`, and the return from the IdP.
+The form is a hint, never a permission.
+
+### Step 3 with an IAM login the browser already holds
+
+The browser reaches step 3 only when the app's proxy has no app session for it; the proxy renews access
+tokens from the app session server-side. A login held on IAM's host, of an active user, needs no
+password, and IAM answers in one of two ways:
+
+| The held login                                                  | Outcome                                                          |
+| --------------------------------------------------------------- | ---------------------------------------------------------------- |
+| holds a live app session for this app (the app cookie was lost) | The code, at once.                                               |
+| was issued less than 60 seconds ago                             | The code, at once.                                               |
+| neither                                                         | A page: `Continue as <label>` or `Use another account`. No code. |
+
+A completed password action, an invitation enrollment and a sign-in on IAM's own page each issue a login
+and land on an app whose proxy starts a handoff moments later; that is what the 60 seconds cover.
+
+Both answers post to `/auth/login/account`, same-origin only, and the `POST` reads the handoff fields and
+the login again:
+
+- **Continue** issues the code from the login the browser holds at that moment, or returns to the
+  sign-in page of the same handoff when that login has ended.
+- **Use another account** ends the login like a sign-out, and with it every app session made from it;
+  the page says so. It then returns to IAM's sign-in page with the same `app`, `redirect`, `state` and
+  `code_challenge`, so the new sign-in completes the same handoff while the proxy's verifier cookie lives.
+
+The page widens `form-action` by the handoff's registered origin, like the login page (below).
 
 ## The cookies
 

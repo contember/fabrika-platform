@@ -2,7 +2,7 @@ import { permits, SESSION_COOKIE } from '@fabrika/auth-core'
 import { ADMIN_ACTION, IAM_APP } from '../admin/router'
 import { INSTALLATION_PRESENTATION, installationLanding } from '../app-presentation'
 import { sessionUsable } from '../auth'
-import { type AuthenticationMethod } from '../db'
+import { type AuthenticationMethod, type PrincipalRow, principalStatus, type SessionRow } from '../db'
 import { type RequestContext } from '../env'
 import { logError } from '../log'
 import { randomToken } from '../oidc'
@@ -36,6 +36,21 @@ export async function currentSession(request: Request, services: Services) {
 	}
 	// And a session whose method is no longer enabled must not silently father a handoff.
 	return sessionUsable(session, services.config) ? session : null
+}
+
+/** A login a handoff may continue: the browser's IAM session and its principal, an active user. */
+export interface CurrentLogin {
+	readonly session: SessionRow
+	readonly principal: PrincipalRow
+}
+
+/** The caller's IAM login when its principal is an active user, else null — which signs in afresh. */
+export async function currentLogin(request: Request, services: Services): Promise<CurrentLogin | null> {
+	const session = await currentSession(request, services)
+	if (session === null) return null
+	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
+	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
+	return { session, principal }
 }
 
 /**
@@ -87,8 +102,8 @@ export async function issueSession(
 		return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'login_unavailable' }, 503)
 	}
 
-	// The IAM cookie is set either way: it is what makes the NEXT handoff, to this or any other app,
-	// silent. What changes is where the browser goes — its own destination, or the app's callback.
+	// The IAM cookie is set either way: it is what spares the NEXT handoff, to this or any other app, a
+	// password. What changes is where the browser goes — its own destination, or the app's callback.
 	const location = input.handoff == null
 		? input.redirect ?? await installationLanding(services)
 		: await handoffLocation(services, input.handoff, sessionId)
@@ -157,17 +172,30 @@ async function isInstallationAdmin(services: Services, principalId: string): Pro
 export async function handleLogout(request: Request, services: Services, requestId: string): Promise<Response> {
 	// Logout names no application, like its confirmation page: these answers speak the installation's language.
 	if (!sameOrigin(request, services.config)) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'cross_origin' }, 403)
-	const cookie = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
-	if (cookie) {
-		try {
-			await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie), { requestId, app: IAM_APP, reason: 'logout' })
-		} catch (err) {
-			logError(`logout could not be recorded for request '${requestId}'`, err)
-			return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'logout_unavailable' }, 503)
-		}
-	}
+	if (!await endLogin(request, services, requestId)) return authFailurePage(INSTALLATION_PRESENTATION, { kind: 'logout_unavailable' }, 503)
 	const url = new URL(request.url)
-	const headers = redirectHeaders(safeRedirect(url.searchParams.get('redirect'), services.config) ?? await installationLanding(services))
+	return signedOutRedirect(safeRedirect(url.searchParams.get('redirect'), services.config) ?? await installationLanding(services))
+}
+
+/**
+ * End the browser's IAM login, and with it every app session derived from it. The revocation and its `logout` row are
+ * one batch; false when that batch could not be written, and the login stands. The caller checks `sameOrigin` first.
+ */
+export async function endLogin(request: Request, services: Services, requestId: string): Promise<boolean> {
+	const cookie = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
+	if (!cookie) return true
+	try {
+		await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie), { requestId, app: IAM_APP, reason: 'logout' })
+	} catch (err) {
+		logError(`logout could not be recorded for request '${requestId}'`, err)
+		return false
+	}
+	return true
+}
+
+/** The 302 out of an ended login, which clears its cookie. */
+export function signedOutRedirect(location: string): Response {
+	const headers = redirectHeaders(location)
 	headers.append('Set-Cookie', clearCookie(SESSION_COOKIE, { path: '/' }))
 	return new Response(null, { status: 302, headers })
 }

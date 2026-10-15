@@ -21,6 +21,16 @@ export interface PageText {
 		readonly singleSignOn: string
 		readonly invalidCredentials: string
 	}
+	/** A handoff a browser already signed in here may continue, or end to sign in with another account. */
+	readonly chooseAccount: {
+		readonly title: (appName: string | null) => string
+		/** Followed by the account's label. */
+		readonly signedInAs: string
+		readonly continueAs: (label: string) => string
+		readonly another: string
+		/** Another account ends this login, and every app session made from it. */
+		readonly anotherNote: string
+	}
 	readonly forgot: {
 		readonly title: string
 		readonly intro: (appName: string | null) => string

@@ -5,13 +5,13 @@
 import { installationConsole } from '../app-presentation'
 import type { RequestContext } from '../env'
 import { INVITATION_ACCEPT_PATH } from '../membership'
-import { logoutPage } from '../password-pages'
+import { ACCOUNT_CHOICE_PATH, logoutPage } from '../password-pages'
 import { generateRequestId } from '../request-id'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { methodNotAllowed, safeRedirect } from './http'
 import { handleInvitation } from './invitations'
-import { handleLogin } from './login'
+import { handleAccountChoice, handleLogin } from './login'
 import { handleCallback, handleOidcStart } from './oidc'
 import type { AuthEnv } from './oidc-flight'
 import { handleForgotPassword, handlePasswordAction, handlePasswordLogin } from './password'
@@ -44,6 +44,9 @@ export async function handleAuth(
 		if (request.method === 'POST') return handlePasswordLogin(request, services, ctx, clientAddress, requestId)
 		if (request.method === 'GET') return handleLogin(request, services, env, ctx, requestId)
 		return methodNotAllowed()
+	}
+	if (url.pathname === ACCOUNT_CHOICE_PATH) {
+		return request.method === 'POST' ? handleAccountChoice(request, services, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/oidc/start') {
 		return request.method === 'GET' ? handleOidcStart(request, services, env) : methodNotAllowed()

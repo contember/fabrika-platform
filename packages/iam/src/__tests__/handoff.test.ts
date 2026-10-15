@@ -34,7 +34,7 @@ class TestContext implements RequestContext {
 }
 
 /** A harness with one registered app, one user, and a live IAM session for that user. */
-async function scenario(options: { origins?: string[] } = {}) {
+async function scenario(options: { origins?: string[]; label?: string } = {}) {
 	const harness = createHarness()
 	// Both methods on: the session below is an OIDC one, and a session whose method the installation
 	// has since disabled is refused everywhere it is used (`sessionUsable`).
@@ -44,7 +44,11 @@ async function scenario(options: { origins?: string[] } = {}) {
 		authentication: { oidc: true, password: true },
 	})
 	await services.repositories.handoff.setReturnOrigins('notes', options.origins ?? [APP_ORIGIN])
-	const principalId = seedUser(harness.sqlite, { email: 'human@contember.com', sub: 'sub-1' })
+	const principalId = seedUser(harness.sqlite, {
+		email: 'human@contember.com',
+		sub: 'sub-1',
+		...(options.label === undefined ? {} : { label: options.label }),
+	})
 	const sessionToken = await harness.signSession(principalId, { email: 'human@contember.com' })
 	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))
 	if (session === null) throw new Error('harness session did not persist')
@@ -59,6 +63,35 @@ async function codeFor(services: Services, sessionId: string, returnUrl = `${APP
 		challenge: HANDOFF_CHALLENGE,
 	})
 	return issued.code
+}
+
+/** Age a login past the moment in which it counts as the choice of the application it lands on. */
+function ageLogin(harness: Harness, sessionId: string): void {
+	harness.sqlite.run('UPDATE sessions SET created_at = created_at - 3600 WHERE id = ?', [sessionId])
+}
+
+function issuedCodes(harness: Harness): number {
+	return harness.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM auth_codes').get()?.n ?? 0
+}
+
+/** The answer the account question posts: the handoff's fields, a decision, and the browser's own headers. */
+function accountChoice(decision: string, options: { cookie?: string; fetchSite?: string; redirect?: string } = {}): Request {
+	return new Request(`${ISSUER}/auth/login/account`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			'Sec-Fetch-Site': options.fetchSite ?? 'same-origin',
+			Origin: 'null',
+			...(options.cookie === undefined ? {} : { Cookie: `${SESSION_COOKIE}=${options.cookie}` }),
+		},
+		body: new URLSearchParams({
+			app: 'notes',
+			redirect: options.redirect ?? `${APP_ORIGIN}/private`,
+			[AUTH_HANDOFF_STATE_PARAM]: HANDOFF_STATE,
+			[AUTH_HANDOFF_CHALLENGE_PARAM]: HANDOFF_CHALLENGE,
+			decision,
+		}),
+	})
 }
 
 function handoffLoginUrl(returnUrl: string): string {
@@ -266,27 +299,206 @@ describe('the child session', () => {
 	})
 })
 
-describe('GET /auth/login as a handoff', () => {
-	test('an existing IAM session is handed off with no prompt', async () => {
-		const { services, sessionToken } = await scenario()
-		const response = await handleAuth(
-			new Request(handoffLoginUrl(`${APP_ORIGIN}/private?x=1`), {
-				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
-			}),
-			services,
-			AUTH_ENV,
-			new TestContext(),
-		)
+describe('a handoff for a browser already signed in to IAM', () => {
+	async function loginRequest(sessionToken: string): Promise<Request> {
+		return new Request(handoffLoginUrl(`${APP_ORIGIN}/private?x=1`), { headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` } })
+	}
+
+	function expectCallback(response: Response): string {
 		expect(response.status).toBe(302)
 		const location = new URL(response.headers.get('location') ?? '')
 		expect(location.origin).toBe(APP_ORIGIN)
 		expect(location.pathname).toBe(AUTH_CALLBACK_PATH)
-		expect(location.searchParams.get('code')).toBeTruthy()
 		expect(location.searchParams.get(AUTH_HANDOFF_STATE_PARAM)).toBe(HANDOFF_STATE)
 		// The destination is NOT in the redirect — it was stored with the code.
 		expect(location.searchParams.get('redirect')).toBeNull()
+		expect(response.headers.get('cache-control')).toBe('no-store')
+		const code = location.searchParams.get('code')
+		if (code === null) throw new Error('the callback carries no code')
+		return code
+	}
+
+	function expectSignIn(response: Response): void {
+		expect(response.status).toBe(302)
+		const location = new URL(response.headers.get('location') ?? '')
+		expect(`${location.origin}${location.pathname}`).toBe(`${ISSUER}/auth/login`)
+		expect(location.searchParams.get('app')).toBe('notes')
+		expect(location.searchParams.get('redirect')).toBe(`${APP_ORIGIN}/private`)
+		expect(location.searchParams.get(AUTH_HANDOFF_STATE_PARAM)).toBe(HANDOFF_STATE)
+		expect(location.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM)).toBe(HANDOFF_CHALLENGE)
+	}
+
+	test('asks which account to use when the login holds no session at the app, and mints no code', async () => {
+		const { harness, services, sessionToken, sessionId } = await scenario({ label: 'Human <b>&</b>' })
+		ageLogin(harness, sessionId)
+		const response = await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext())
+		expect(response.status).toBe(200)
+		expect(issuedCodes(harness)).toBe(0)
+		const csp = response.headers.get('content-security-policy') ?? ''
+		// Continuing answers the 302 to the app's callback, which Chromium checks against `form-action`.
+		expect(csp).toContain(`form-action 'self' ${APP_ORIGIN};`)
+		expect(csp).toContain(`frame-ancestors 'none'`)
+		expect(response.headers.get('x-frame-options')).toBe('DENY')
+		const html = await response.text()
+		expect(html).toContain('action="/auth/login/account"')
+		expect(html).toContain('Continue as Human &lt;b&gt;&amp;&lt;/b&gt;')
+		expect(html).not.toContain('<b>')
+		expect(html).toContain('name="decision" value="another"')
+		expect(html).toContain(`name="redirect" value="${APP_ORIGIN}/private?x=1"`)
+		expect(html).toContain(`name="code_challenge" value="${HANDOFF_CHALLENGE}"`)
 	})
 
+	test("speaks the application's language and names it", async () => {
+		const { harness, services, sessionToken, sessionId } = await scenario()
+		harness.sqlite.run("INSERT INTO app_presentation (app, locale, display_name) VALUES ('notes', 'cs', 'Poznámky')")
+		ageLogin(harness, sessionId)
+		const html = await (await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext())).text()
+		expect(html).toContain('<html lang="cs">')
+		expect(html).toContain('Pokračovat do aplikace Poznámky')
+		expect(html).toContain('Pokračovat jako human@contember.com')
+	})
+
+	test('continues with no prompt when the login already holds a live session at the app', async () => {
+		// The browser lost the app's cookie, but this login already chose the app.
+		const { harness, services, sessionToken, sessionId } = await scenario()
+		ageLogin(harness, sessionId)
+		const first = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: await codeFor(services, sessionId),
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
+		expect(first.result.ok).toBe(true)
+		const code = expectCallback(await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext()))
+		expect((await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r2' })).result.ok).toBe(true)
+	})
+
+	test('a revoked app session is no longer the choice of the app', async () => {
+		const { harness, services, sessionToken, sessionId } = await scenario()
+		ageLogin(harness, sessionId)
+		const first = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: await codeFor(services, sessionId),
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
+		if (!first.result.ok) throw new Error('exchange failed')
+		await services.repositories.sessions.revokeSessionByHash(await hashToken(first.result.session))
+		expect((await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext())).status).toBe(200)
+	})
+
+	test('a session at ANOTHER app is not the choice of this one', async () => {
+		const { harness, services, sessionToken, sessionId, principalId } = await scenario()
+		ageLogin(harness, sessionId)
+		await services.repositories.sessions.createSession({
+			tokenHash: 'other-app-child',
+			principalId,
+			idpSub: 'sub-1',
+			expiresAt: Math.floor(Date.now() / 1000) + 3600,
+			app: 'other',
+			parentSessionId: sessionId,
+		})
+		expect(await services.repositories.sessions.hasActiveChild(sessionId, 'other')).toBe(true)
+		expect(await services.repositories.sessions.hasActiveChild(sessionId, 'notes')).toBe(false)
+		expect((await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext())).status).toBe(200)
+	})
+
+	test('continues with no prompt for a login issued moments ago', async () => {
+		// A completed password action or a sign-in on IAM's own page lands on the app, whose proxy starts this handoff.
+		const { services, sessionToken } = await scenario()
+		expectCallback(await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext()))
+	})
+
+	test('a login of a principal that is not an active user gets the sign-in form, not the question', async () => {
+		const { harness, services, sessionToken, sessionId, principalId } = await scenario()
+		ageLogin(harness, sessionId)
+		harness.sqlite.run('UPDATE principals SET disabled_at = 1 WHERE id = ?', [principalId])
+		const response = await handleAuth(await loginRequest(sessionToken), services, AUTH_ENV, new TestContext())
+		expect(response.status).toBe(200)
+		expect(await response.text()).toContain('name="password"')
+		expect(issuedCodes(harness)).toBe(0)
+	})
+
+	test('"continue" hands off from the login the browser holds', async () => {
+		const { harness, services, sessionToken, sessionId } = await scenario()
+		ageLogin(harness, sessionId)
+		const code = expectCallback(await handleAuth(accountChoice('continue', { cookie: sessionToken }), services, AUTH_ENV, new TestContext()))
+		const { result } = await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r1' })
+		expect(result.ok).toBe(true)
+		if (!result.ok) return
+		expect(result.returnUrl).toBe(`${APP_ORIGIN}/private`)
+		expect((await services.repositories.sessions.getActiveSessionByHash(await hashToken(result.session)))?.parent_session_id).toBe(sessionId)
+	})
+
+	test('a cross-site answer is refused, and neither hands off nor signs out', async () => {
+		const { harness, services, sessionToken, sessionId } = await scenario()
+		for (const decision of ['continue', 'another']) {
+			const response = await handleAuth(
+				accountChoice(decision, { cookie: sessionToken, fetchSite: 'cross-site' }),
+				services,
+				AUTH_ENV,
+				new TestContext(),
+			)
+			expect(response.status).toBe(403)
+		}
+		expect(issuedCodes(harness)).toBe(0)
+		expect(await services.repositories.sessions.getActiveSessionById(sessionId)).not.toBeNull()
+	})
+
+	test('the posted handoff is read again: an unregistered return address is a 400 and mints nothing', async () => {
+		const { harness, services, sessionToken } = await scenario()
+		const response = await handleAuth(
+			accountChoice('continue', { cookie: sessionToken, redirect: 'https://evil.test/' }),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(response.status).toBe(400)
+		expect(issuedCodes(harness)).toBe(0)
+	})
+
+	test('an unknown decision is a 400', async () => {
+		const { harness, services, sessionToken } = await scenario()
+		expect((await handleAuth(accountChoice('approve', { cookie: sessionToken }), services, AUTH_ENV, new TestContext())).status).toBe(400)
+		expect(issuedCodes(harness)).toBe(0)
+	})
+
+	test('"continue" after the login ended returns to the sign-in page of the same handoff', async () => {
+		const { harness, services, sessionToken } = await scenario()
+		await services.repositories.sessions.revokeSessionByHash(await hashToken(sessionToken))
+		expectSignIn(await handleAuth(accountChoice('continue', { cookie: sessionToken }), services, AUTH_ENV, new TestContext()))
+		expect(issuedCodes(harness)).toBe(0)
+	})
+
+	test('"another" ends the login and every app session under it, and signs in afresh for the same handoff', async () => {
+		const { harness, services, sessionToken, sessionId } = await scenario()
+		const child = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: await codeFor(services, sessionId),
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
+		if (!child.result.ok) throw new Error('exchange failed')
+		const response = await handleAuth(accountChoice('another', { cookie: sessionToken }), services, AUTH_ENV, new TestContext())
+		expectSignIn(response)
+		expect(response.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=; Path=/; Max-Age=0`)
+		expect(await services.repositories.sessions.getActiveSessionById(sessionId)).toBeNull()
+		expect(await services.repositories.sessions.getActiveSessionByHash(await hashToken(child.result.session))).toBeNull()
+		const logout = harness.sqlite.query<{ kind: string; reason: string }, []>("SELECT kind, reason FROM auth_log WHERE kind = 'logout'").get()
+		expect(logout).toEqual({ kind: 'logout', reason: 'logout' })
+		// The sign-in page it lands on asks for a password: there is no login left to continue.
+		const page = await handleAuth(new Request(response.headers.get('location') ?? ''), services, AUTH_ENV, new TestContext())
+		expect(page.status).toBe(200)
+		expect(await page.text()).toContain('name="password"')
+	})
+
+	test('the question answers only POST', async () => {
+		const { services } = await scenario()
+		expect((await handleAuth(new Request(`${ISSUER}/auth/login/account`), services, AUTH_ENV, new TestContext())).status).toBe(405)
+	})
+})
+
+describe('GET /auth/login as a handoff', () => {
 	test('an EMPTY registry is a 400 naming the address, not a fallback (ADR-0023)', async () => {
 		// This used to be the shared-cookie opt-out: an app with no registry "had not opted in" and the
 		// browser took the ordinary login, which worked whenever IAM and the app shared a domain. With
@@ -538,6 +750,7 @@ describe('registering return origins', () => {
 			environment: 'stage',
 			authentication: { oidc: true, password: true },
 		})
+		// The login was issued moments ago, so the handoff continues with no account question.
 		const response = await handleAuth(
 			new Request(handoffLoginUrl(`${APP_ORIGIN}/private?page=2`), {
 				headers: { Cookie: `${SESSION_COOKIE}=${stack.session}` },

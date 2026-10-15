@@ -90,8 +90,10 @@ async function sessionIsValid(browser: Browser, state: StorageState, role: Brows
  *
  * The seeded login is planted on IAM's host only. Each protected app navigation first reaches the
  * proxy, which creates the browser-bound handoff attempt. IAM then takes its "already signed in
- * HERE" path, issues a code, and redirects to the app's reserved callback. The proxy redeems it,
- * writes that app's own host-only session, and returns to the original URL.
+ * HERE" path: a login seeded moments ago continues at once, an older one first asks which account
+ * to use, and the fixture answers "Continue". IAM issues a code and redirects to the app's reserved
+ * callback. The proxy redeems it, writes that app's own host-only session, and returns to the
+ * original URL.
  *
  * The chain is followed by a real PAGE rather than by `context.request`. That is partly the point —
  * the browser is what a handoff is designed for — and partly forced: Playwright's Node-side fetch
@@ -120,6 +122,10 @@ async function signIn(browser: Browser, identity: BrowserIdentity): Promise<Stor
 			const response = await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' })
 			if (response !== null && !response.ok()) {
 				throw new Error(`handoff to ${app} failed with status ${response.status()} — is the app registered in IAM?`)
+			}
+			if (new URL(page.url()).origin === new URL(IAM_ORIGIN).origin) {
+				await page.locator('button[name="decision"][value="continue"]').click()
+				await page.waitForURL((url) => url.origin === origin)
 			}
 			if (!page.url().startsWith(origin)) {
 				throw new Error(`the handoff to ${app} ended on ${page.url()} instead of ${origin}`)

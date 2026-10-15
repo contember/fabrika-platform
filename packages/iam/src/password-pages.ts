@@ -1,6 +1,7 @@
 import { DEFAULT_LOCALE, type Locale } from '@fabrika/auth-core'
 import { type AppPresentation, appQuery, landingUrl } from './app-presentation'
 import type { AuthFailure } from './auth/failure'
+import type { Handoff } from './auth/handoff'
 import { catalogFor, type PageText } from './catalog'
 import { escapeHtml } from './html'
 import { PAGE_STYLE } from './page-style'
@@ -57,6 +58,42 @@ export function loginPage(input: {
 		}
 		${input.oidcEnabled ? `<hr><p><a class="button" href="${escapeHtml(oidcUrl)}">${escapeHtml(text.signIn.singleSignOn)}</a></p>` : ''}`,
 		status: input.invalidCredentials === true ? 401 : 200,
+		formActionOrigin: input.redirectOrigin,
+	})
+}
+
+/** Where the account question posts its answer, with the handoff's fields and a `decision`. */
+export const ACCOUNT_CHOICE_PATH = '/auth/login/account'
+
+/**
+ * The question a handoff asks a browser already signed in here, before its login is used for an application it has
+ * not chosen yet. Both answers post the handoff back, and the POST reads it again: the form is a hint, never a
+ * permission. Continuing answers a 302 to the application's callback, so `form-action` admits `redirectOrigin`, the
+ * handoff's registered origin (`loginDestinationFields`).
+ */
+export function chooseAccountPage(input: {
+	readonly presentation: AppPresentation
+	/** The signed-in principal's label. */
+	readonly label: string
+	readonly handoff: Handoff
+	readonly redirectOrigin?: string
+}): Response {
+	const text = catalogFor(input.presentation.locale).pages.chooseAccount
+	const title = text.title(input.presentation.displayName)
+	const { handoff } = input
+	return htmlPage({
+		locale: input.presentation.locale,
+		title,
+		content: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(text.signedInAs)} <strong>${escapeHtml(input.label)}</strong>.</p>
+		<form method="post" action="${ACCOUNT_CHOICE_PATH}">
+			<input type="hidden" name="app" value="${escapeHtml(handoff.app)}">
+			<input type="hidden" name="redirect" value="${escapeHtml(handoff.returnUrl)}">
+			<input type="hidden" name="state" value="${escapeHtml(handoff.state)}">
+			<input type="hidden" name="code_challenge" value="${escapeHtml(handoff.challenge)}">
+			<button type="submit" name="decision" value="continue">${escapeHtml(text.continueAs(input.label))}</button>
+			<button type="submit" name="decision" value="another">${escapeHtml(text.another)}</button>
+		</form>
+		<p>${escapeHtml(text.anotherNote)}</p>`,
 		formActionOrigin: input.redirectOrigin,
 	})
 }

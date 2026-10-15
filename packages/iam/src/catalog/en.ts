@@ -15,6 +15,13 @@ export const en: Catalog = {
 			singleSignOn: 'Continue with single sign-on',
 			invalidCredentials: 'Invalid email or password.',
 		},
+		chooseAccount: {
+			title: (appName) => (appName === null ? 'Continue to the application' : `Continue to ${appName}`),
+			signedInAs: 'You are signed in as',
+			continueAs: (label) => `Continue as ${label}`,
+			another: 'Use another account',
+			anotherNote: 'Using another account signs this browser out of every application it is signed in to with this account.',
+		},
 		forgot: {
 			title: 'Reset password',
 			intro: (appName) =>

@@ -423,7 +423,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   the 302 to `<app>/__fabrika/auth/callback` — the login succeeds, a code is issued and spent, and the
   browser never leaves the form. `loginDestinationFields` widens the directive by exactly one origin, and
   that origin comes from the REGISTERED return URL, so widening the CSP can never widen where a
-  browser may be sent. A page rendered for no handoff stays at `'self'`, unless it has no return address
+  browser may be sent. The account question (`chooseAccountPage`) takes the same origin. A page rendered for no handoff stays at `'self'`, unless it has no return address
   either and lands on the console, whose registered origin it then admits. The set-password and
   invitation-password pages widen it the same way, by the one registered origin the completed action lands on
   (`actionLandingOrigin`: the application's, else the console's), and so does the sign-out confirmation that
@@ -459,8 +459,8 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A PASSWORD ACTION AND AN INVITATION THAT KEEP AN APPLICATION END IN IT.** A forgot-password request carries the
   sign-in's app; the issued action stores it, its link names it, and the completed action's 302 goes to the app's
   first registered return origin (`landingUrl`), never an address the request gave. An accepted invitation does the
-  same for its app. The application's proxy then signs the browser in through the normal handoff, which the IAM
-  session just issued makes silent; `readHandoff` and `safeRedirect` are unchanged. An action without its own
+  same for its app. The application's proxy then signs the browser in through the normal handoff, which asks nothing
+  because the IAM session is moments old (`JUST_SIGNED_IN_SECONDS`); `readHandoff` and `safeRedirect` are unchanged. An action without its own
   registered origin lands on the installation's landing, below. An invitation without one answers its outcome page.
 - **A FLOW THAT NAMES NO DESTINATION LANDS ON THE INSTALLATION'S LANDING, NEVER ON IAM'S BARE ORIGIN**
   (`installationLanding`), which serves no page and which the Zerops proxy answers with 403. That is the console (the
@@ -475,6 +475,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   `Domain`. A session reaches an application through the one-time code and nothing else, so an app
   sharing a domain with IAM is not a special case any more — it pays one extra redirect on first
   sign-in and gets the same cookie every other app gets.
+- **A HELD LOGIN HANDS OFF AT ONCE ONLY TO AN APP IT ALREADY CHOSE** (`auth/login.ts`, ADR-0023 §6). `GET /auth/login`
+  with a valid handoff and `currentLogin` (an active user's IAM session) issues the code only when
+  `sessions.hasActiveChild(login, app)` or the login is younger than `JUST_SIGNED_IN_SECONDS`. Otherwise it answers
+  `chooseAccountPage` and issues NO code. `POST /auth/login/account` is `sameOrigin`, reads the handoff
+  (`readHandoff`) and the login (`currentLogin`) again, then issues the code (`continue`) or ends the login through
+  `endLogin`, the same revocation as `/auth/logout`, and 302s to IAM's sign-in page of the same handoff (`another`).
+  Never issue a code from the GET, and never act on a posted session or label. The page's `form-action` admits the
+  handoff's registered origin, below. Token renewal never reaches this: the proxy re-mints from its app session.
 - **`readHandoff` has TWO outcomes once `?app=` is named**: the return address is in that app's
   registry and the browser gets a code, or it is not and this is a 400 NAMING THE ADDRESS. An empty
   registry is the second case, not an opt-out. Restoring a fallback recreates the login loop SEC-6

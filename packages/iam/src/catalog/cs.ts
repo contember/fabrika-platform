@@ -15,6 +15,13 @@ export const cs: Catalog = {
 			singleSignOn: 'Pokračovat přes jednotné přihlášení',
 			invalidCredentials: 'Neplatný e-mail nebo heslo.',
 		},
+		chooseAccount: {
+			title: (appName) => (appName === null ? 'Pokračovat do aplikace' : `Pokračovat do aplikace ${appName}`),
+			signedInAs: 'Jste přihlášeni jako',
+			continueAs: (label) => `Pokračovat jako ${label}`,
+			another: 'Použít jiný účet',
+			anotherNote: 'Přechodem na jiný účet se tento prohlížeč odhlásí ze všech aplikací, do kterých je tímto účtem přihlášen.',
+		},
 		forgot: {
 			title: 'Obnovení hesla',
 			intro: (appName) =>

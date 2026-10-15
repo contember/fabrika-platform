@@ -1,4 +1,4 @@
-import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 
 import { installationConsole } from '../app-presentation'
 import { issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
@@ -115,6 +115,16 @@ export async function handoffLocation(services: Services, handoff: Handoff, pare
 	callback.searchParams.set(AUTH_CODE_PARAM, issued.code)
 	callback.searchParams.set(AUTH_HANDOFF_STATE_PARAM, handoff.state)
 	return callback.toString()
+}
+
+/** IAM's own sign-in page for the same handoff, which signs a browser in afresh and then continues it. */
+export function handoffLoginUrl(services: Services, handoff: Handoff): string {
+	const login = new URL('/auth/login', services.config.issuer)
+	login.searchParams.set('app', handoff.app)
+	login.searchParams.set('redirect', handoff.returnUrl)
+	login.searchParams.set(AUTH_HANDOFF_STATE_PARAM, handoff.state)
+	login.searchParams.set(AUTH_HANDOFF_CHALLENGE_PARAM, handoff.challenge)
+	return login.toString()
 }
 
 function validHandoffState(value: string | null): value is string {

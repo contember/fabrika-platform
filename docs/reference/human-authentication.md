@@ -56,6 +56,14 @@ while its parent is — the lookup joins to the parent on every use, so it is on
 statement rather than a sweep. An access token already minted stays valid for the
 rest of its TTL; that bound is what local verification buys.
 
+## A browser already signed in
+
+A browser that holds an IAM login opens an application its login has not used yet: IAM asks `Continue
+as <label>` or `Use another account` before it hands the login to that application. It does not ask
+when the login already holds a session there, or when the login is less than a minute old. `Use another
+account` signs the browser out of every application, then shows the sign-in page for the same
+application. See [Session handoff](cross-host-sso.md) for the rules.
+
 ## Enrollment and reset
 
 Enrollment and reset share one action-token flow:
@@ -74,8 +82,8 @@ Enrollment and reset share one action-token flow:
    password sessions.
 6. The answer signs the browser in to IAM. An action that keeps an application
    (below) then lands on that application's registered return origin, whose
-   proxy completes the sign-in through the normal handoff. Any other action
-   lands on IAM's own origin.
+   proxy completes the sign-in through the normal handoff without asking which
+   account, because the login is new. Any other action lands on IAM's own origin.
 
 Reset requests from `/auth/forgot-password` always return the same browser
 response. They do not reveal whether the address exists, is disabled, has a
