@@ -43,6 +43,14 @@ function emptySourceStatus(deps: SourceConnectionWorkflowDeps): GitHubSourceConn
 
 export const MANIFEST_PATH = '/api/source/github/manifest'
 
+/** The App's setup URL; GitHub sends the installer here after an install or an installation update. */
+export const SETUP_PATH = '/api/source/github/setup'
+
+/** GitHub's installation page of a verified App, whose `htmlUrl` is `https://github.com/apps/<slug>`. */
+export function installationUrl(appHtmlUrl: string): string {
+	return `${appHtmlUrl}/installations/new`
+}
+
 export function workflowDto(provider: string, attempt: GitHubSetupAttempt): GitHubSourceConnectionWorkflowDto {
 	if (attempt.status === 'repair_required') {
 		const app = attemptAppDto(attempt)
@@ -65,7 +73,7 @@ export function workflowDto(provider: string, attempt: GitHubSetupAttempt): GitH
 			state: 'installation-required',
 			connectionId: attempt.id,
 			app,
-			installationUrl: `${attempt.appHtmlUrl}/installations/new`,
+			installationUrl: installationUrl(attempt.appHtmlUrl),
 		}
 	}
 	if (attempt.phase === 'connected') throw new SourceConnectionWorkflowError(500)

@@ -100,6 +100,14 @@ export interface GitHubSourceConnectionInstallationRequiredDto extends GitHubSou
 	readonly installationUrl: string
 }
 
+/**
+ * The query parameter Control's GitHub setup URL adds when it sends the browser to the console's source page. It reports
+ * what that one return from GitHub found; the page still reads the connection state from the API.
+ */
+export const GITHUB_SETUP_OUTCOME_PARAM = 'github-setup'
+
+export type GitHubSetupOutcome = 'connected' | 'approval-requested' | 'unverified'
+
 export interface GitHubSourceConnectionConnectedDto extends GitHubSourceConnectionBaseDto {
 	readonly state: 'connected'
 	readonly connectionId: string

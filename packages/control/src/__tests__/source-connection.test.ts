@@ -2,7 +2,7 @@ import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import type { Env } from '../env'
 import { readGitHubAppCredential } from '../github/connections/credentials'
-import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from '../github/connections/installation'
+import { installationSetup, reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from '../github/connections/installation'
 import { manifestCallback, manifestHandoff, startSourceConnection } from '../github/connections/manifest'
 import {
 	type GitHubSetupAttempt,
@@ -163,7 +163,7 @@ function deps(env: Env, source: SourceConnectionPort, request: Request, caller =
 }
 
 describe('GitHub source connection workflow', () => {
-	test('persists encrypted one-use state and emits a secure plain-submit handoff', async () => {
+	test('persists encrypted one-use state and emits a secure handoff that submits itself under a nonce', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const started = await startSourceConnection(
@@ -193,10 +193,17 @@ describe('GitHub source connection workflow', () => {
 		const body = await response.text()
 		expect(response.headers.get('cache-control')).toBe('no-store')
 		expect(response.headers.get('referrer-policy')).toBe('no-referrer')
-		expect(response.headers.get('content-security-policy')).toContain('form-action https://github.com')
+		const csp = response.headers.get('content-security-policy') ?? ''
+		expect(csp).toContain('form-action https://github.com')
+		expect(csp).not.toContain('unsafe-inline')
 		expect(body).toContain('method="post"')
 		expect(body).toContain('https://github.com/organizations/acme/settings/apps/new')
-		expect(body).not.toContain('<script')
+		const nonce = /script-src 'nonce-([A-Za-z0-9_-]+)'/.exec(csp)?.[1]
+		expect(nonce).toBeDefined()
+		expect(csp).toContain(`style-src 'nonce-${nonce}'`)
+		expect(body).toContain(`<script nonce="${nonce}">`)
+		expect(body).toContain(`<style nonce="${nonce}">`)
+		expect(body.match(/<script/g)?.length).toBe(1)
 	})
 
 	test('uses the configured public origin behind a TLS-terminating proxy', async () => {
@@ -211,7 +218,9 @@ describe('GitHub source connection workflow', () => {
 			started.connectionId,
 		)
 		expect(response.status).toBe(200)
-		expect(await response.text()).toContain(`${ORIGIN}/api/source/github/callback`)
+		const body = await response.text()
+		expect(body).toContain(`${ORIGIN}/api/source/github/callback`)
+		expect(body).toContain(`${ORIGIN}/api/source/github/setup/${started.connectionId}`)
 	})
 
 	test('keeps the manifest handoff resumable when post-commit audit delivery fails', async () => {
@@ -404,6 +413,7 @@ describe('GitHub source connection workflow', () => {
 			exchangeManifest: () => Promise.resolve(createdApp()),
 		})
 		expect(response.status).toBe(303)
+		expect(response.headers.get('location')).toBe('/settings/source')
 		const repair = await afterEnv.REPOSITORIES.githubConnections.getAttempt(afterStarted.connectionId)
 		expect(repair?.status).toBe('repair_required')
 		if (repair === null || repair.appCredentialRef === null) throw new Error('repair fixture is incomplete')
@@ -425,6 +435,7 @@ describe('GitHub source connection workflow', () => {
 			exchangeManifest: () => Promise.resolve(createdApp()),
 		})
 		expect(callback.status).toBe(303)
+		expect(callback.headers.get('location')).toBe('https://github.com/apps/fabrika-source/installations/new')
 		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
 		if (attempt === null || attempt.appCredentialRef === null) throw new Error('credential checkpoint missing')
 		// Every remote step authenticated with the stored key, never with the value the callback held.
@@ -731,6 +742,125 @@ describe('GitHub source connection workflow', () => {
 		await expect(sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`), auth('service')), {})).rejects.toThrow(
 			'source connection request failed',
 		)
+	})
+})
+
+describe("GitHub's return to the App's setup URL", () => {
+	async function awaitingInstallation(env: Env, source: FakeSourceConnection): Promise<string> {
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		source.calls.splice(0)
+		return started.connectionId
+	}
+
+	const setup = (env: Env, source: SourceConnectionPort, connectionId: string, query: string, caller = auth()) =>
+		installationSetup(deps(env, source, new Request(`${ORIGIN}/api/source/github/setup/${connectionId}${query}`), caller), connectionId)
+
+	test('verifies the installation with the App key and lands on the console connected', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await awaitingInstallation(env, source)
+		const response = await setup(env, source, connectionId, '?installation_id=456&setup_action=install')
+		expect(response.status).toBe(303)
+		expect(response.headers.get('location')).toBe('/settings/source?github-setup=connected')
+		expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+		expect(source.calls).toEqual(['installation'])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toMatchObject({ installationId: 456 })
+
+		const again = await setup(env, source, connectionId, '?installation_id=456&setup_action=update')
+		expect(again.headers.get('location')).toBe('/settings/source?github-setup=connected')
+		expect(source.calls).toEqual(['installation'])
+	})
+
+	test('publishes nothing when the query names an installation the App key does not find', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await awaitingInstallation(env, source)
+		const response = await setup(env, source, connectionId, '?installation_id=999&setup_action=install')
+		expect(response.headers.get('location')).toBe('/settings/source?github-setup=unverified')
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toBeNull()
+		expect(await env.REPOSITORIES.githubConnections.getAttempt(connectionId)).toMatchObject({ phase: 'installation_required' })
+	})
+
+	test('publishes nothing when GitHub has no installation of the App for the organization', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await awaitingInstallation(env, source)
+		source.installation = { status: 'missing' }
+		expect((await setup(env, source, connectionId, '?installation_id=456&setup_action=install')).headers.get('location')).toBe(
+			'/settings/source?github-setup=unverified',
+		)
+		source.installation = { status: 'installed', installationId: 456, accountLogin: 'other', repositorySelection: 'all' }
+		expect((await setup(env, source, connectionId, '?installation_id=456&setup_action=install')).headers.get('location')).toBe(
+			'/settings/source?github-setup=unverified',
+		)
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toBeNull()
+	})
+
+	test('reports an installation waiting for an owner without asking GitHub', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await awaitingInstallation(env, source)
+		const response = await setup(env, source, connectionId, '?setup_action=request')
+		expect(response.headers.get('location')).toBe('/settings/source?github-setup=approval-requested')
+		expect(source.calls).toEqual([])
+	})
+
+	test.each([
+		['no query', ''],
+		['no setup action', '?installation_id=456'],
+		['no installation id', '?setup_action=install'],
+		['an unknown setup action', '?installation_id=456&setup_action=delete'],
+		['a non-numeric installation id', '?installation_id=45x&setup_action=install'],
+		['a repeated installation id', '?installation_id=456&installation_id=457&setup_action=install'],
+		['an unsafe installation id', '?installation_id=99999999999999999&setup_action=install'],
+	])('refuses %s before any effect', async (_name, query) => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await awaitingInstallation(env, source)
+		await expect(setup(env, source, connectionId, query)).rejects.toMatchObject({ httpStatus: 400 })
+		expect(source.calls).toEqual([])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toBeNull()
+	})
+
+	test('refuses a connection id with no setup behind it', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		await awaitingInstallation(env, source)
+		await expect(setup(env, source, 'another-connection', '?installation_id=456&setup_action=install')).rejects.toMatchObject({ httpStatus: 404 })
+		expect(source.calls).toEqual([])
+	})
+
+	test('leaves a setup that is not waiting for its installation to the console', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const response = await setup(env, source, started.connectionId, '?installation_id=456&setup_action=install')
+		expect(response.headers.get('location')).toBe('/settings/source')
+		expect(source.calls).toEqual([])
+	})
+
+	test('requires a person who manages source connections', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await awaitingInstallation(env, source)
+		await expect(setup(env, source, connectionId, '?installation_id=456&setup_action=install', auth('service'))).rejects.toMatchObject({
+			httpStatus: 403,
+		})
+		await expect(setup(env, source, connectionId, '?installation_id=456&setup_action=install', auth('user', false))).rejects.toMatchObject({
+			httpStatus: 403,
+		})
+		expect(source.calls).toEqual([])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toBeNull()
 	})
 })
 

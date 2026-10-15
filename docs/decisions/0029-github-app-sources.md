@@ -63,8 +63,13 @@ A user principal with `source.connection.manage` (service tokens are refused) cr
    `/webhooks/github/:connectionId`, and verifies the App identity (owner, visibility, permissions,
    events) with the stored key. GitHub masks the secret, so readback proves only URL, JSON content
    type and TLS verification.
-5. The administrator installs the App. Control verifies the installation for the organization or the
-   requested repositories with App-JWT endpoints, then publishes the connection.
+5. The callback sends the browser straight on to the App's installation page. The manifest names
+   `/api/source/github/setup/:connectionId` as the App's setup URL, with redirect on update, so GitHub
+   returns the installer to Control. Control treats the returned `installation_id` as a hint: anyone can
+   send that URL. It requires an authenticated principal with `source.connection.manage`, verifies the
+   installation for the organization or the requested repositories with App-JWT endpoints, refuses a
+   returned id that names another installation, and publishes the connection named by the path. The
+   console's verify action runs the same check when GitHub does not bring the browser back.
 
 **Recovery.** Every setup step resumes from its durable checkpoint, so an interrupted setup is
 repaired by re-running the remaining steps. A stable connection can be reconciled: Control

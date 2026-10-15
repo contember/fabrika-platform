@@ -124,7 +124,9 @@ function authFailureResponse(path: string, failure: AuthFailure): Response {
 		return Response.json({ error: { type, message: failure.reason } }, { status: failure.status })
 	}
 	const response = error(failure.status, failure.reason)
-	if (path === '/api/source/github/callback' || path.startsWith('/api/source/github/manifest/')) {
+	if (
+		path === '/api/source/github/callback' || path.startsWith('/api/source/github/manifest/') || path.startsWith('/api/source/github/setup/')
+	) {
 		response.headers.set('cache-control', 'no-store')
 		response.headers.set('referrer-policy', 'no-referrer')
 		response.headers.set('x-content-type-options', 'nosniff')

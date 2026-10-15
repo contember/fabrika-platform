@@ -6,6 +6,7 @@ import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
 import type { Env } from './env'
 import { SourceConnectionWorkflowError } from './github/connections/errors'
+import { installationSetup } from './github/connections/installation'
 import { manifestCallback, manifestHandoff } from './github/connections/manifest'
 import type { SourceConnectionPort } from './github/connections/port'
 import { handleWebhook } from './github/triggers/webhook'
@@ -59,6 +60,7 @@ export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppE
 		'webhooks-root': notFound,
 		'github-manifest': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params['connectionId'] ?? ''))),
 		'github-callback': authenticated((ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
+		'github-setup': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => installationSetup(deps, params['connectionId'] ?? ''))),
 		'rpc': authenticated((ctx) => dispatchRpcRequest({ router: controlRpcRouter, ctx, request: ctx.request })),
 		'api-root': notFound,
 		'iam-admin-rpc': serve(iamAdmin),

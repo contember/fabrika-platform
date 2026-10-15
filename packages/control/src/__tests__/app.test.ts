@@ -246,6 +246,14 @@ describe('controlApp', () => {
 		const machine = await fetch(apiRequest('https://control.test/api/source/github/manifest/connection', service))
 		expect(machine.status).toBe(403)
 		expect(machine.headers.get('cache-control')).toBe('no-store')
+		const anonymousSetup = await fetch(new Request('https://control.test/api/source/github/setup/connection?installation_id=1&setup_action=install'))
+		expect(anonymousSetup.status).toBe(401)
+		expect(anonymousSetup.headers.get('referrer-policy')).toBe('no-referrer')
+		const machineSetup = await fetch(
+			apiRequest('https://control.test/api/source/github/setup/connection?installation_id=1&setup_action=install', service),
+		)
+		expect(machineSetup.status).toBe(403)
+		expect(machineSetup.headers.get('cache-control')).toBe('no-store')
 	})
 
 	test('mounts scoped webhooks with their exact vault secret and no unscoped route', async () => {

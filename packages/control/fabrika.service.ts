@@ -46,6 +46,7 @@ export function controlServiceContract(options: ControlServiceOptions) {
 			'webhooks-root': s.service('*', '/webhooks', { callers: ['human'] }),
 			'github-manifest': s.service('GET', '/api/source/github/manifest/:connectionId', { callers: ['human'] }),
 			'github-callback': s.service('GET', '/api/source/github/callback', { callers: ['human'] }),
+			'github-setup': s.service('GET', '/api/source/github/setup/:connectionId', { callers: ['human'] }),
 			'rpc': s.service('POST', '/api/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),
 			'api-root': s.service('*', '/api', { callers: ['human'] }),
 			'iam-admin-rpc': s.service('POST', '/iam/admin/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),

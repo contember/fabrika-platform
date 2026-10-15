@@ -286,10 +286,13 @@ connection-count limit. Setup accepts an optional same-owner repository set. Con
 same-origin continuation path; no private key, webhook secret, manifest code or opaque state enters a
 browser DTO, URL log or error.
 
-The continuation submits a least-authority manifest directly to `github.com`. The callback requires
-the same authenticated human principal, exact Control origin and one-use encrypted state. It rejects
-unknown or duplicate query fields, bounds the GitHub response and redirects to a clean
-`/settings/source` URL. Before the browser can observe success, Control stores GitHub's one-time App id
+The continuation is a page that submits a least-authority manifest directly to `github.com` by itself;
+its CSP admits only that page's nonce'd style and script, and form posts only to `https://github.com`.
+The manifest names the App's setup URL, `/api/source/github/setup/:connectionId`, with redirect on
+update. The callback requires the same authenticated human principal, exact Control origin and one-use
+encrypted state. It rejects unknown or duplicate query fields, bounds the GitHub response and, once the
+App is configured, redirects to the App's installation page on GitHub (to a clean `/settings/source`
+URL when the setup needs repair). Before the browser can observe success, Control stores GitHub's one-time App id
 and private key in its encrypted platform vault, in the same transaction as the setup checkpoint. The
 setup state stores only nonsecret phases, hashes, verified identities and vault references.
 
@@ -299,8 +302,18 @@ For every new connection, Control then (`packages/control/src/github/connections
    `push` event with the vault key;
 2. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
    verifies the returned URL, JSON content type and TLS setting;
-3. asks the administrator to install the App, then verifies the organization or every requested
-   repository through App-JWT endpoints before publishing the connection.
+3. verifies the organization or every requested repository through App-JWT endpoints before
+   publishing the connection, when GitHub returns the installer to the setup URL.
+
+The setup URL takes `installation_id` and `setup_action` as hints only. It needs a human principal with
+`source.connection.manage`, verifies the installation with the App's vault key exactly as the console's
+verify action does, refuses a query id that names another installation, and publishes only the
+connection its path names. It lands on `/settings/source?github-setup=<outcome>`: `connected`,
+`unverified` (nothing published) or `approval-requested` (`setup_action=request`: an organization
+owner still has to approve; GitHub sends no id). The console shows that notice only when the
+connection state it reads agrees with it. When the browser does not come back (another tab, an owner's
+approval, an App created before the setup URL existed), the console shows two steps: open the
+installation on GitHub, then verify it. It polls while the App waits for its installation.
 
 GitHub masks the webhook secret, so the structural readback cannot compare that value. Control starts
 using the new vault-backed secret after structural webhook verification, including while installation

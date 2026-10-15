@@ -2,6 +2,7 @@ import type { StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionRes
 import { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from '@fabrika/github-app'
 import { uuidv7 } from '@fabrika/platform'
 import { vault } from '../../services'
+import { cleanRedirect, consoleRedirect } from './browser'
 import { advanceWithDeadline, errorForPhase } from './configuration'
 import {
 	abortable,
@@ -16,13 +17,12 @@ import {
 } from './context'
 import { encodeGitHubAppCredential } from './credentials'
 import { SourceConnectionWorkflowError } from './errors'
+import { manifestHandoffCsp, manifestHandoffHtml } from './handoff-page'
 import { type GitHubSetupAttempt } from './model'
 import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel } from './secrets'
-import { MANIFEST_PATH } from './status'
+import { installationUrl, MANIFEST_PATH, SETUP_PATH } from './status'
 
 const CALLBACK_PATH = '/api/source/github/callback'
-
-const DASHBOARD_PATH = '/settings/source'
 
 const SETUP_TTL_SECONDS = 10 * 60
 
@@ -37,6 +37,8 @@ const FAILURE_SETTLE_ATTEMPTS = 10
 const FAILURE_SETTLE_DELAY_MS = 25
 
 const STATE_BYTES = 32
+
+const NONCE_BYTES = 16
 
 export async function startSourceConnection(
 	deps: SourceConnectionWorkflowDeps,
@@ -117,8 +119,17 @@ export async function manifestHandoff(deps: SourceConnectionWorkflowDeps, connec
 	}
 	if (await sha256(state) !== attempt.stateHash) throw new SourceConnectionWorkflowError(409)
 	const manifest = buildManifest(attempt.desiredOwner, attempt.desiredAppName, origin, attempt.id)
-	const action = `https://github.com/organizations/${encodeURIComponent(attempt.desiredOwner)}/settings/apps/new?state=${encodeURIComponent(state)}`
-	return secureHtml(manifestForm(action, JSON.stringify(manifest)))
+	const nonce = randomToken(NONCE_BYTES, deps.randomBytes)
+	return secureHtml(
+		manifestHandoffHtml({
+			action: `https://github.com/organizations/${encodeURIComponent(attempt.desiredOwner)}/settings/apps/new?state=${encodeURIComponent(state)}`,
+			manifest: JSON.stringify(manifest),
+			organization: attempt.desiredOwner,
+			appName: attempt.desiredAppName,
+			nonce,
+		}),
+		manifestHandoffCsp(nonce),
+	)
 }
 
 export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Promise<Response> {
@@ -179,8 +190,14 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 		const disposition = await settleCallbackFailure(deps, claimed)
 		throwIfAborted(deps.request.signal)
 		if (disposition === 'failed') throw new SourceConnectionWorkflowError(503)
+		return consoleRedirect()
 	}
-	return cleanRedirect(DASHBOARD_PATH)
+	// Straight on to the installation: GitHub returns the installer to the App's setup URL, where Control verifies it.
+	const configured = await deps.env.REPOSITORIES.githubConnections.getAttempt(claimed.id).catch(() => null)
+	if (configured === null || configured.status !== 'active' || configured.phase !== 'installation_required' || configured.appHtmlUrl === null) {
+		return consoleRedirect()
+	}
+	return cleanRedirect(installationUrl(configured.appHtmlUrl))
 }
 
 function exactQueryValue(request: Request, key: string, maxLength: number): string | null {
@@ -207,12 +224,6 @@ function canonicalRepositories(
 	return [...unique.values()].sort((left, right) => `${left.owner}/${left.name}`.localeCompare(`${right.owner}/${right.name}`))
 }
 
-function manifestForm(action: string, manifest: string): string {
-	return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Connect GitHub</title></head><body><form method="post" action="${
-		html(action)
-	}"><input type="hidden" name="manifest" value="${html(manifest)}"><button type="submit">Continue to GitHub</button></form></body></html>`
-}
-
 function buildManifest(organization: string, appName: string, origin: string, connectionId: string) {
 	try {
 		return buildGitHubAppManifest({
@@ -221,6 +232,7 @@ function buildManifest(organization: string, appName: string, origin: string, co
 			homepageUrl: origin,
 			webhookUrl: `${origin}/webhooks/github/${encodeURIComponent(connectionId)}`,
 			redirectUrl: `${origin}${CALLBACK_PATH}`,
+			setupUrl: `${origin}${SETUP_PATH}/${encodeURIComponent(connectionId)}`,
 			public: false,
 		})
 	} catch {
@@ -265,29 +277,14 @@ function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
-function html(value: string): string {
-	return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;')
-}
-
-function secureHtml(body: string): Response {
+function secureHtml(body: string, contentSecurityPolicy: string): Response {
 	return new Response(body, {
 		headers: {
 			'cache-control': 'no-store',
-			'content-security-policy': "default-src 'none'; form-action https://github.com; base-uri 'none'; frame-ancestors 'none'",
+			'content-security-policy': contentSecurityPolicy,
 			'content-type': 'text/html; charset=utf-8',
 			'referrer-policy': 'no-referrer',
 			'x-content-type-options': 'nosniff',
-		},
-	})
-}
-
-function cleanRedirect(location: string): Response {
-	return new Response(null, {
-		status: 303,
-		headers: {
-			'cache-control': 'no-store',
-			location,
-			'referrer-policy': 'no-referrer',
 		},
 	})
 }
