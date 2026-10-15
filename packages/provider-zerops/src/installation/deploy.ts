@@ -19,9 +19,9 @@
 //
 // ── What this command writes, and what it deliberately does not ───────────────────────────────────
 //
-// It writes the composed proxy manifest, the exact namespace planning source default, and the
-// per-installation configuration derived from the resolved public hosts (each service's own origin,
-// the origins it must know about, and the installation's environment name). **It writes no credential at all** — every
+// It composes the proxy manifest and ships it in the proxy's build archive. It writes the exact namespace
+// planning source default and the per-installation configuration derived from the resolved public hosts
+// (each service's own origin, the origins it must know about, and the installation's environment name). **It writes no credential at all** — every
 // secret an installation holds is `platform init`'s to place, and a deploy that cannot write one cannot
 // leak one. The two credentials this command HOLDS are the Zerops access token and the IAM admin key,
 // both from the environment, neither ever logged.
@@ -68,7 +68,6 @@ import {
 	validateInstallationSetups,
 } from './installation-source'
 import type { DeployLog } from './log'
-import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
 import { type IamOAuthConfig, platformIamOAuthConfig } from './mcp'
 import { archiveWithDataFile } from './platform-archive'
 import type { PreparedPlatformSource } from './platform-source'
@@ -388,6 +387,26 @@ const applyServiceEnv = async (
 	return written
 }
 
+/**
+ * Delete, unread, the manifest copy older releases wrote sensitive: nothing reads it, as each proxy version serves
+ * the file its own build wrote, and the platform proxy fronts only the platform's apps (ADR-0034). True if one existed.
+ */
+const removeLegacyProxyManifest = async (
+	proxyEnv: LiveServiceEnv,
+	input: PlatformDeployInput,
+	collaborators: PlatformDeployCollaborators,
+): Promise<boolean> => {
+	const legacy = proxyEnv.get(FABRIKA_PROXY_MANIFEST_JSON)
+	if (legacy === undefined) {
+		return false
+	}
+	if (!input.dryRun) {
+		assertRunning(collaborators.signal)
+		await collaborators.api.deleteServiceEnv({ envId: legacy.id, signal: collaborators.signal })
+	}
+	return true
+}
+
 /** Only a known rejection permits another request against the same reservation. */
 const triggerPipeline = async (
 	service: ResolvedService,
@@ -647,18 +666,7 @@ export const deployPreparedPlatform = async (
 			? 'MCP authoring: off'
 			: `MCP authoring: on, ${oauthConfig.clients.length} client(s), resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
 	)
-	// The variable is the application entries the platform proxy carries, held by the operator; nothing here writes it.
-	const merged = mergePlatformProxyManifest(platformManifest, readLiveProxyManifest(proxyEnv.get(FABRIKA_PROXY_MANIFEST_JSON)))
-	log.info(`${merged.manifest.apps.length} app(s): ${merged.manifest.apps.map((app) => app.id).join(', ')}`)
-	if (merged.carried.length > 0) {
-		log.info(`carried through from the live manifest: ${merged.carried.join(', ')}`)
-	}
-	for (const displaced of merged.superseded) {
-		log.warn(
-			`the live manifest entry \`${displaced.id}\` stood on the platform host ${displaced.host} and was replaced — `
-				+ 'that host now answers for the platform app that owns it',
-		)
-	}
+	log.info(`${platformManifest.apps.length} app(s): ${platformManifest.apps.map((app) => app.id).join(', ')}`)
 
 	log.step('Write the service environment')
 	const controlTableDigest = platformServiceTableDigest(platformManifest, platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id)
@@ -679,13 +687,19 @@ export const deployPreparedPlatform = async (
 				: `${hostname}: ${input.dryRun ? 'would write' : 'wrote'} ${written.join(', ')}`,
 		)
 	}
+	if (await removeLegacyProxyManifest(proxyEnv, input, collaborators)) {
+		log.info(
+			`${PLATFORM_PROXY_SERVICE}: ${input.dryRun ? 'would remove' : 'removed'} ${FABRIKA_PROXY_MANIFEST_JSON}, the copy of the manifest a `
+				+ 'release before this one kept there',
+		)
+	}
 
 	// EVERY deploy is after EVERY write, and the manifest rides in the proxy's own archive. That is what makes
 	// the sequence fail closed: a proxy build that does not go ACTIVE leaves the previous manifest in front of
 	// the previous code, because control builds only after it — and `ENVIRONMENT` is in place before any
 	// service that refuses `local` restarts.
 	log.step(`Deploy ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')}`)
-	const buildInput = { source, dryRun: input.dryRun, proxyManifest: encodeProxyManifestJson(merged.manifest) }
+	const buildInput = { source, dryRun: input.dryRun, proxyManifest: encodeProxyManifestJson(platformManifest) }
 	await deployConcurrently(services, buildInput, collaborators)
 	for (const hostname of PLATFORM_SEQUENTIAL_DEPLOY) {
 		await deployPlatformService(serviceOf(services, hostname), buildInput, collaborators)

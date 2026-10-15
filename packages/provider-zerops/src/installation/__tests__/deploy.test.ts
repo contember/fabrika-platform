@@ -39,10 +39,9 @@ const IAM_HOST = 'proxy-292c-8080.prg1.zerops.app'
 const CONSOLE_HOST = 'proxy-292c-8082.prg1.zerops.app'
 const OPERATIONS_HOST = 'proxy-292c-8083.prg1.zerops.app'
 
-/** The live manifest on `fabrika-test`: the three platform apps plus one APPLICATION the deploy must keep. */
-const liveManifest = JSON.stringify({
+/** The manifest copy an older release left in the proxy's variable, with stale platform entries and a hand-placed one. */
+const legacyManifest = JSON.stringify({
 	apps: [
-		// Stale platform entries: the deploy replaces each with its current table.
 		{ id: 'iam-local', hosts: [IAM_HOST], upstream: 'iam:3000', scheme: 'https', installation: true, endpoints: [], reservedPrefixes: [] },
 		{ id: 'vozka', hosts: [CONSOLE_HOST], upstream: 'control:3000', scheme: 'https', installation: true, endpoints: [], reservedPrefixes: [] },
 		{
@@ -161,7 +160,7 @@ describe('the order', () => {
 		// Neither calls a sibling at boot and none reads a variable another's build needs, so the
 		// order among them was arbitrary — and paying for it sequentially cost about 3 min 45 s of a
 		// ~9 min 35 s warm roll (two measured runs, 2026-08-21).
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await runWithGatedBuilds(fixture)
 		const deploys = fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))
 		expect([...deploys.slice(0, 2)].sort()).toEqual(['deploy:iam', 'deploy:operations'])
@@ -171,7 +170,7 @@ describe('the order', () => {
 	})
 
 	test('a failure in the concurrent stage names that service, and the other build is still followed to its end', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.failDeploy('operations')
 		// operations fails on its first poll; iam needs several more, each behind a timer hop. An
 		// abandoned build keeps writing app versions after the command has exited — `allSettled` prevents it.
@@ -184,7 +183,7 @@ describe('the order', () => {
 	test('TWO failures are both reported, and the command dies of the first in the stage order', async () => {
 		// `allSettled` collects a second rejection that `all` would drop on the floor: a run that named one
 		// broken service and stayed silent about the other buys the operator a second failed roll.
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.failDeploy('iam')
 		fixture.zerops.failDeploy('operations')
 		await expect(runWithGatedBuilds(fixture)).rejects.toThrow('`iam` deploy iam-v5 finished as DEPLOY_FAILED')
@@ -196,7 +195,7 @@ describe('the order', () => {
 		const zerops = fakeZerops({
 			...PROJECT,
 			services: [
-				...platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } }),
+				...platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest } }),
 				{ name: 'source', id: 'svc-source', sequence: 4, env: { GITHUB_APP_CREDENTIALS_V2_LEFTOVER: 'must-not-be-read' } },
 			],
 		})
@@ -221,7 +220,7 @@ describe('the order', () => {
 	test('publishes the public entry point BEFORE it registers the console', async () => {
 		const zerops = fakeZerops({
 			...PROJECT,
-			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } })
+			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest } })
 				.map((service) => service.name === 'proxy' ? { ...service, subdomainAccess: false } : service),
 		})
 		let publishedFirst: boolean | undefined
@@ -238,7 +237,7 @@ describe('the order', () => {
 	})
 
 	test('puts the PROXY ahead of control, because the application enforces nothing (ADR-0022)', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const proxy = fixture.zerops.calls.indexOf('deploy:proxy')
 		const control = fixture.zerops.calls.indexOf('deploy:control')
@@ -247,7 +246,7 @@ describe('the order', () => {
 	})
 
 	test('writes EVERY variable before it deploys ANY service', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const writes = fixture.zerops.calls.flatMap((call, index) => (call.startsWith('env:') ? [index] : []))
 		const lastWrite = Math.max(...writes)
@@ -260,14 +259,14 @@ describe('the order', () => {
 		// WU3's ordering constraint: `control` on the live installation pairs ENVIRONMENT=local with a
 		// public host, so the next deploy of the refusal would fail its readiness gate unless the correct
 		// name is already in place.
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		expect(fixture.zerops.calls.indexOf('env:control:ENVIRONMENT')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:control'))
 		expect(fixture.zerops.calls.indexOf('env:iam:ENVIRONMENT')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
 	})
 
 	test('registers the console and IAM, and ensures the entry point only after the sequence has landed', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.env('proxy').delete('zeropsSubdomain')
 		fixture.zerops.env('proxy').set('zeropsSubdomain', SUBDOMAINS)
 		await fixture.run()
@@ -282,7 +281,7 @@ describe('the order', () => {
 	})
 
 	test('refuses `local` when the console serves a public origin, before it writes anything', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await expect(fixture.run({ environment: 'local' })).rejects.toThrow('ENVIRONMENT=local is refused')
 		expect(fixture.zerops.calls).toEqual([])
 	})
@@ -290,11 +289,10 @@ describe('the order', () => {
 
 describe('fail closed', () => {
 	test('a manifest that cannot be applied never lets new code reach the previous manifest', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const previous = await manifestOf(fixture.zerops)
 		fixture.zerops.calls.length = 0
-		fixture.zerops.env('proxy').set(FABRIKA_PROXY_MANIFEST_JSON, JSON.stringify({ apps: [] }))
 		fixture.zerops.failDeploy('proxy')
 		await expect(fixture.run()).rejects.toThrow('finished as DEPLOY_FAILED')
 		expect(fixture.zerops.calls).not.toContain('deploy:control')
@@ -302,17 +300,11 @@ describe('fail closed', () => {
 	})
 
 	test('a failed deploy stops the sequence, so control never lands behind an unbuilt proxy', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.failDeploy('proxy')
 		await expect(fixture.run()).rejects.toThrow('finished as DEPLOY_FAILED')
 		expect(fixture.zerops.calls).not.toContain('deploy:control')
 		expect(fixture.reconciled).toEqual([])
-	})
-
-	test('a live manifest this build cannot parse is refused rather than replaced', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: '{"apps":[{"id":"notes"}]}' })
-		await expect(fixture.run()).rejects.toThrow('cannot be parsed by this build')
-		expect(fixture.zerops.calls).toEqual([])
 	})
 
 	test('a missing platform service is an error naming all of them, not a silent partial deploy', async () => {
@@ -335,14 +327,14 @@ describe('fail closed', () => {
 
 describe('idempotence', () => {
 	test('a second run writes nothing, publishes nothing, and leaves the manifest byte-identical', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const afterFirst = await manifestOf(fixture.zerops)
 		expect(fixture.zerops.calls.some((call) => call.startsWith('env:'))).toBe(true)
 
 		fixture.zerops.calls.length = 0
 		await fixture.run()
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([])
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env'))).toEqual([])
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('subdomain:'))).toEqual([])
 		expect(await manifestOf(fixture.zerops)).toBe(afterFirst)
 		// Deploying IS what a re-run does; it is the configuration that must not move.
@@ -350,13 +342,13 @@ describe('idempotence', () => {
 	})
 
 	test('a subdomain someone turned off comes back, and one already on is left alone', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		expect(fixture.zerops.calls).not.toContain('subdomain:proxy')
 
 		const off = fakeZerops({
 			...PROJECT,
-			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } })
+			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest } })
 				.map((service) => (service.name === 'proxy' ? { ...service, subdomainAccess: false } : service)),
 		})
 		await deployPlatform(input(), {
@@ -373,21 +365,34 @@ describe('idempotence', () => {
 })
 
 describe('what it writes', () => {
-	test('the merged manifest keeps the application entry and adopts the platform tables', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+	test('the proxy serves the platform apps alone, and the variable an older release wrote is deleted before it builds', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const manifest = parseProxyManifestJson(await manifestOf(fixture.zerops))
-		expect(manifest?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations', 'notes'])
-		// The archive carries it; the variable stays the operator's list of carried entries.
-		expect(fixture.zerops.calls).not.toContain(`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
-		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(liveManifest)
+		expect(manifest?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations'])
 		// The drift backlog 58 exists for: the live console was one `public` rule.
 		expect(tableAppOf(manifest, 'vozka')?.endpoints.length).toBeGreaterThan(1)
-		expect(manifest?.apps.find((app) => app.id === 'notes')?.upstream).toBe('notesapi:3000')
+		expect(fixture.zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+		expect(fixture.zerops.calls).not.toContain(`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(fixture.zerops.calls.indexOf(`env-delete:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)).toBeGreaterThanOrEqual(0)
+		expect(fixture.zerops.calls.indexOf(`env-delete:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
+	})
+
+	test('a variable this build cannot parse is deleted unread', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: '{"apps":[{"id":"notes"}]}' })
+		await fixture.run()
+		expect(parseProxyManifestJson(await manifestOf(fixture.zerops))?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations'])
+		expect(fixture.zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+	})
+
+	test('a proxy without the variable deletes nothing', async () => {
+		const fixture = harness()
+		await fixture.run()
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env-delete:'))).toEqual([])
 	})
 
 	test('the per-installation origins every service needs, and no credential', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		expect(fixture.zerops.env('iam').get('ISSUER')).toBe(`https://${IAM_HOST}`)
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_ADMIN_ORIGINS')).toBeUndefined()
@@ -412,7 +417,7 @@ describe('what it writes', () => {
 	test('explicit hosts make it a custom-domain installation, which publishes no subdomain', async () => {
 		const zerops = fakeZerops({
 			...PROJECT,
-			services: platformServices({ proxy: { [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } })
+			services: platformServices({ proxy: { [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest } })
 				.map((service) => (service.name === 'proxy' ? { ...service, subdomainAccess: false } : service)),
 		})
 		await deployPlatform(
@@ -436,7 +441,7 @@ describe('an installation an older release wrote, every variable sensitive', () 
 		fakeZerops({
 			...PROJECT,
 			services: platformServices({
-				proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest, ENVIRONMENT: 'stage' },
+				proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest, ENVIRONMENT: 'stage' },
 				control: { ENVIRONMENT: 'stage' },
 			}).map((service) => {
 				const sensitive = Object.keys(service.env ?? {}).filter((key) => key !== 'zeropsSubdomain')
@@ -449,6 +454,7 @@ describe('an installation an older release wrote, every variable sensitive', () 
 	const deploy = (zerops: FakeZerops) =>
 		deployPlatform(input(), {
 			...fakeSourceCollaborators,
+			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
 			sleep: async () => {},
@@ -467,11 +473,19 @@ describe('an installation an older release wrote, every variable sensitive', () 
 		expect(zerops.sensitive('control').has('ENVIRONMENT')).toBe(false)
 	})
 
-	test('refuses a manifest it cannot read, naming why, before anything is written', async () => {
+	test('deletes the manifest copy it cannot read, without sudo mode, and leaves no manifest variable behind', async () => {
 		const zerops = olderInstallation(true)
 
-		await expect(deploy(zerops)).rejects.toThrow('stored as a SENSITIVE variable')
-		expect(zerops.calls).toEqual([])
+		await deploy(zerops)
+
+		expect(zerops.calls).toContain(`env-delete:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+		expect(zerops.sensitive('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+		expect(parseProxyManifestJson(await zerops.servedFile('proxy', 'proxy.manifest.json') ?? '')?.apps.map((app) => app.id)).toEqual([
+			'iam',
+			'vozka',
+			'operations',
+		])
 	})
 })
 
@@ -480,7 +494,7 @@ describe('the write→deploy race', () => {
 		// Live-recorded: a deploy racing an env write dies on `userDataSyncRunning` and leaves the app
 		// version stuck UPLOADING, which nothing recovers from. This command writes and then deploys, so
 		// it is exactly the caller that race was recorded against.
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.blockTrigger('iam', 2)
 		await fixture.run()
 		expect(fixture.zerops.calls.filter((call) => call === 'blocked:iam')).toHaveLength(2)
@@ -488,7 +502,7 @@ describe('the write→deploy race', () => {
 	})
 
 	test('but only a bounded number of times, so a genuine failure still fails', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		fixture.zerops.blockTrigger('iam', 99)
 		await expect(fixture.run()).rejects.toThrow('variable synchronisation still running')
 		// Operations shares iam's stage and are triggered whatever iam does — what a failure
@@ -500,40 +514,14 @@ describe('the write→deploy race', () => {
 
 describe('--dry-run', () => {
 	test('reads everything and changes nothing', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ dryRun: true, iamAdminKey: '' })
 		expect(fixture.zerops.calls).toEqual([])
 		expect(fixture.reconciled).toEqual([])
 		expect(await manifestOf(fixture.zerops)).toBe('')
-		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(liveManifest)
+		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(legacyManifest)
 		expect(fixture.log.lines.some((line) => line.includes('would write'))).toBe(true)
-	})
-})
-
-describe('a manifest past the Zerops variable limit', () => {
-	/** A light-tier installation: the platform plus enough application entries to pass 32,000 bytes once merged. */
-	const crowdedManifest = JSON.stringify({
-		apps: Array.from({ length: 8 }, (_, index) => ({
-			id: `notes${index}`,
-			hosts: [`notes${index}.example.test`],
-			upstream: `notes${index}api:3000`,
-			scheme: 'https',
-			...contractProxyTable(notesArtifact),
-		})),
-	})
-
-	test('travels in the proxy archive and is served whole, with nothing written to the environment', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: crowdedManifest })
-		await fixture.run()
-		const served = await manifestOf(fixture.zerops)
-		expect(new TextEncoder().encode(served).byteLength).toBeGreaterThan(32_000)
-		expect(parseProxyManifestJson(served)?.apps.map((app) => app.id)).toEqual([
-			'iam',
-			'vozka',
-			'operations',
-			...Array.from({ length: 8 }, (_, index) => `notes${index}`),
-		])
-		expect(fixture.zerops.calls).not.toContain(`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(fixture.log.lines.some((line) => line.includes(`would remove ${FABRIKA_PROXY_MANIFEST_JSON}`))).toBe(true)
 	})
 })
 
@@ -546,7 +534,7 @@ describe('MCP authoring', () => {
 	const MCP_RESOURCE = `https://${CONSOLE_HOST}/mcp`
 
 	test('enabled: the console admits OAuth bearers on `/mcp` and registers the resource IAM issues for', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
 		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
 		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toEqual([['/mcp', ['authoring']]])
@@ -559,7 +547,7 @@ describe('MCP authoring', () => {
 	})
 
 	test('enabled: IAM gets an OAuth config for exactly that resource, before it deploys', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
 		expect(JSON.parse(fixture.zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')).toEqual({
 			clients: [CLAUDE],
@@ -583,7 +571,7 @@ describe('MCP authoring', () => {
 	})
 
 	test('enabled: the value is never logged', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
 		expect(fixture.log.lines.some((line) => line.includes('redirectUris') || line.includes(CLAUDE.redirectUris[0] ?? '-'))).toBe(false)
 	})
@@ -591,7 +579,7 @@ describe('MCP authoring', () => {
 	test('enabled or off: Control gets the digest of the table the proxy publishes, before it deploys', async () => {
 		const digests: string[] = []
 		for (const overrides of [{ mcpClients: [CLAUDE] }, {}]) {
-			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 			await fixture.run(overrides)
 			const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
 			if (console_ === undefined) throw new Error('the console has no table')
@@ -604,7 +592,7 @@ describe('MCP authoring', () => {
 	})
 
 	test('off: no OAuth row, no registered resource, and no IAM OAuth config written', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
 		expect(console_).toBeDefined()
@@ -617,7 +605,7 @@ describe('MCP authoring', () => {
 		const zerops = fakeZerops({
 			...PROJECT,
 			services: platformServices({
-				proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest },
+				proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest },
 				iam: { FABRIKA_IAM_OAUTH_CONFIG: 'operator-owned' },
 			}),
 		})
@@ -636,7 +624,7 @@ describe('MCP authoring', () => {
 	})
 
 	test('off and never set: no warning', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
 		expect(fixture.log.lines.some((line) => line.includes('FABRIKA_IAM_OAUTH_CONFIG'))).toBe(false)
 	})
@@ -644,7 +632,7 @@ describe('MCP authoring', () => {
 	test('a mixed-case custom host yields the resource Control derives from its own domain', async () => {
 		const zerops = fakeZerops({
 			...PROJECT,
-			services: platformServices({ proxy: { [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } }),
+			services: platformServices({ proxy: { [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest } }),
 		})
 		const parsed = parsePlatformDeployArgs(
 			[

@@ -764,6 +764,15 @@ states `sensitive` per key, credentials are written sensitive and never compared
 compares or merges is written readable. `platform install` writes the operator's copy of every credential it
 creates to `--secrets-file` before placing the first one.
 
+Releases up to 0.4.2 wrote every variable sensitive, the platform proxy's `FABRIKA_PROXY_MANIFEST_JSON` included.
+`platform deploy` rewrites each value it owns readable, and deletes that manifest copy unread
+(`DELETE /user-data/{id}`), because nothing reads it any more.
+
+Measured live 2026-10-15 with an installation's integration token (not in sudo mode), on a runtime service of a real
+project: `POST /service-stack/{id}/user-data` with `sensitive: true` answered 200; `GET /service-stack/{id}/env` read
+the record as `sensitive: true`, content `REDACTED`; `DELETE /user-data/{id}` answered 200; a re-read listed no record
+of that key. **Deleting a sensitive variable needs no sudo mode.**
+
 ### Verified live (2026-10-15, account `prg1`) — a service variable value over ~32 KB is a bare 500
 
 Source: the measurement in [issue #3](https://github.com/contember/fabrika-platform/issues/3), a throwaway

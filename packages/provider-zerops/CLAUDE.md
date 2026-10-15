@@ -240,9 +240,8 @@ Layout (under `src/installation/`):
   provisioning. `install-collaborators.ts`, `install-options.ts`, `secrets.ts` (the six generated values).
 - `init.ts` — the sidecar-repository flow. `sidecar.ts` + `templates/` — what the sidecar contains + the tag rule.
 - `admin.ts` + `admin-options.ts` — the first administrator. `machine-key.ts` — the block `admin` and `init` end with.
-- `manifest.ts` — composing platform apps with application entries. `hosts.ts` — where an installation
-  answers. `log.ts` — progress, with no secret-taking helper. `proxy-manifest.ts` — the manifest TEMPLATE
-  type and `resolvePlatformProxyManifest`.
+- `hosts.ts` — where an installation answers. `log.ts` — progress, with no secret-taking helper.
+  `proxy-manifest.ts` — the manifest TEMPLATE type and `resolvePlatformProxyManifest`.
 - `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it.
 - `checker-release.ts` — the npm lookup of `@fabrika/check` at this checkout's version.
 - `topology/` — `setups.ts` (typed setups), `topology.ts` + `invariants.ts`, `artifacts.ts` (every
@@ -297,11 +296,11 @@ Invariants:
   `oauthResource` is generated from `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`; `platform-artifacts`'
   `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp })`.
 - **There is no `source` service (ADR-0029).** A leftover one is ignored with one warning and never deleted.
-- **`platform deploy` MERGES the proxy manifest, never replaces it, and ships it in the proxy's archive.** An
-  application on the light tier shares the platform proxy; its entry is held by the operator in the proxy's
-  `FABRIKA_PROXY_MANIFEST_JSON`, which `platform deploy` reads and never writes. An entry on a platform host is
-  superseded and reported. `install` pass 1 and `deploy` append the manifest to the snapshot archive
-  (`platform-archive.ts`); only the proxy's archive carries one.
+- **The platform proxy's manifest is the platform's composition alone, shipped in the proxy's archive.** No
+  application shares the platform proxy (ADR-0034). `install` pass 1 and `deploy` append the manifest to the
+  snapshot archive (`platform-archive.ts`); only the proxy's archive carries one. `deploy` DELETES, unread, a
+  `FABRIKA_PROXY_MANIFEST_JSON` left on the proxy: releases up to 0.4.2 wrote the manifest there SENSITIVE, and only
+  sudo mode reads one back. Never read it, merge it or ask the operator for its value.
 - **`platform deploy` writes no credential and reads every credential from the environment.** No `--token`,
   no `--admin-key`; an unknown flag is an error.
 - **`platform init` keeps deployment credentials off disk and writes nothing to Zerops.** It reads
