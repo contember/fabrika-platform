@@ -41,7 +41,8 @@
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/email": "workspace:*",
-		"@fabrika/iam": "workspace:*"
+		"@fabrika/iam": "workspace:*",
+		"@fabrika/iam-contract": "workspace:*"
 	},
 	"devDependencies": {
 		"@fabrika/check": "workspace:*",

@@ -21,6 +21,7 @@ import { reconcileSchema } from '@fabrika/auth'
 import type { AppSchema } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
+import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
 import { readStateEnv } from './machine-key'
@@ -37,7 +38,8 @@ export interface LocalApp {
 
 /**
  * Every app in the local composition a HUMAN can reach. IAM is absent on purpose: it authenticates on
- * its own host and never needs a code to reach itself.
+ * its own host and never needs a code to reach itself. Its own vocabulary registers without a return
+ * origin, beside the console's, in `registerLocalApps` (ADR-0058).
  *
  * Operations is absent too, and that is not an oversight: its own hostname serves ingest and the
  * source-map upload, both `public`, and every operator surface is reached through the console's
@@ -64,5 +66,6 @@ export const registerLocalApps = async (): Promise<void> => {
 	for (const app of localApps) {
 		await reconcileSchema({ url: IAM_ORIGIN, app: app.id, schema: app.schema, returnOrigins: app.returnOrigins, adminKey })
 	}
-	console.info(`Local apps registered with IAM: ${localApps.map((app) => app.id).join(', ')}`)
+	await reconcileSchema({ url: IAM_ORIGIN, app: IAM_APP_ID, schema: IAM_APP_SCHEMA, adminKey })
+	console.info(`Local apps registered with IAM: ${[...localApps.map((app) => app.id), IAM_APP_ID].join(', ')}`)
 }
