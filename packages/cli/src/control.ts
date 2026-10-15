@@ -88,7 +88,8 @@ GitHub hides: a private repository needs the GitHub App connected in the console
 
 Namespace placement options, each defaulting to what the preset would choose:
 
-  --project=<name>                  the provider project the namespace owns
+  --project=<name>                  the provider project the namespace owns; on Zerops the default is
+                                    fabrika-<env>-<namespace id>, beside the installation's fabrika-<env>
   --core-package=<LIGHT|SERIOUS>    defaults to LIGHT on every environment, \`prod\` included (ADR-0038).
                                     SERIOUS is a deliberate choice: a project cannot be downgraded again
   --public-access=<custom-domain|zerops-subdomain>

@@ -27,7 +27,8 @@ Options:
   --preset=<cheap|mid|full>      Provider-owned namespace preset.
   --exclusive-app=<id>           App reserved by a full namespace.
   --project-id=<id>              Existing Zerops project id for adoption.
-  --project-name=<name>          Zerops project name (default: namespace id).
+  --project-name=<name>          Zerops project name (create: default fabrika-<env>-<id>;
+                                 adopt: the existing project's name, default the namespace id).
   --core-package=<tier>          LIGHT or SERIOUS.
   --public-access=<mode>         custom-domain or zerops-subdomain.
   --postgres-type=<type>         Cheap-tier PostgreSQL type.
@@ -204,6 +205,8 @@ export const runZeropsNamespaceCommand = async (
 			version: zeropsNamespaceTargetCodec.version,
 			payload: zeropsNamespaceTargetCodec.encode({
 				...decoded,
+				// An adopted project keeps its own name, so the plan's default for a created one does not apply.
+				projectName: args.projectName ?? planned.namespace.id,
 				managed: false,
 				projectId,
 				ready: false,

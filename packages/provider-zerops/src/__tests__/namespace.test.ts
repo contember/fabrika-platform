@@ -937,11 +937,13 @@ describe('Zerops namespace policy and topology', () => {
 		const mid = operator.plan({ id: 'apps-stage', env: 'stage', preset: 'mid' })
 		const full = operator.plan({ id: 'billing-prod', env: 'prod', preset: 'full', exclusiveAppId: 'billing' })
 		expect(zeropsNamespaceTargetCodec.decode(cheap.namespace.target.payload)).toMatchObject({
-			projectName: 'apps-prod',
+			projectName: 'fabrika-prod-apps-prod',
 			corePackage: 'LIGHT',
 			postgres: { type: 'postgresql:single@18' },
 		})
 		expect(zeropsNamespaceTargetCodec.decode(mid.namespace.target.payload).postgres).toBeUndefined()
+		const named = operator.plan({ id: 'apps-stage', env: 'stage', preset: 'mid', options: { projectName: 'apps' } })
+		expect(zeropsNamespaceTargetCodec.decode(named.namespace.target.payload).projectName).toBe('apps')
 		expect(full.namespace.exclusiveAppId).toBe('billing')
 		expect(full.presentation.facts).toContainEqual({ label: 'Placement', value: 'Exclusive to billing' })
 		expect(cheap.presentation.instructions.join(' ')).toContain('shares its physical service')
@@ -1496,7 +1498,7 @@ describe('Zerops namespace presentation', () => {
 		const planned = operator.plan({ id: 'apps-prod', env: 'prod', preset: 'mid' })
 
 		expect(planned.presentation.facts.some((fact) => fact.resource === true)).toBe(false)
-		expect(planned.presentation.facts).toContainEqual({ label: 'Project', value: 'apps-prod' })
+		expect(planned.presentation.facts).toContainEqual({ label: 'Project', value: 'fabrika-prod-apps-prod' })
 	})
 
 	// The hosts an operator has to name as `--domain`. Before this they were read by hand off the proxy

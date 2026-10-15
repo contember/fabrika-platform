@@ -75,7 +75,7 @@ describe('fabrika namespace commands', () => {
 			presentation: { preset: string }
 		} = JSON.parse(output.join(''))
 		expect(plan.namespace.target.payload).toMatchObject({
-			projectName: 'apps-prod',
+			projectName: 'fabrika-prod-apps-prod',
 			corePackage: 'LIGHT',
 			postgres: { type: 'postgresql:single@18' },
 			proxySource,
@@ -141,7 +141,7 @@ describe('fabrika namespace commands', () => {
 			)
 		expect(adopted.method).toBe('namespaces.adopt')
 		expect(adopted.input.namespaceId).toBe('legacy-prod')
-		expect(adopted.input.namespace.target.payload).toMatchObject({ managed: false, projectId: 'project-1', proxySource })
+		expect(adopted.input.namespace.target.payload).toMatchObject({ managed: false, projectId: 'project-1', projectName: 'legacy-prod', proxySource })
 		expect(JSON.parse(calls[1]?.body ?? '')).toEqual({ method: 'namespaces.reconcile', input: { namespaceId: 'legacy-prod' } })
 	})
 

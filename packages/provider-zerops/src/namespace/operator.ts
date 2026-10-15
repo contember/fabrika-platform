@@ -103,6 +103,13 @@ const namespacePresentation = (
 	}
 }
 
+/**
+ * The Zerops project a namespace creates when the plan names none: `fabrika-<env>-<id>`, beside the `fabrika-<env>` that
+ * `platform install` creates for the installation, so a namespace reads as fabrika's in the Zerops GUI.
+ */
+export const defaultZeropsNamespaceProjectName = (namespace: { readonly id: string; readonly env: string }): string =>
+	`fabrika-${namespace.env}-${namespace.id}`
+
 /** Build the provider-owned namespace planning surface without any network collaborators. */
 export const createZeropsNamespaceOperator = (
 	options: ZeropsNamespaceOperatorOptions,
@@ -130,7 +137,7 @@ export const createZeropsNamespaceOperator = (
 			const target = zeropsNamespacePreset({
 				preset: input.preset,
 				env: input.env,
-				projectName: planOptions.projectName ?? input.id,
+				projectName: planOptions.projectName ?? defaultZeropsNamespaceProjectName(input),
 				proxySource: options.proxySource,
 				...(planOptions.corePackage === undefined ? {} : { corePackage: planOptions.corePackage }),
 				...(planOptions.publicAccess === undefined ? {} : { publicAccess: planOptions.publicAccess }),
