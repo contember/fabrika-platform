@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { CommitSource } from '../github/source/commit-files'
-import { SourceFailure } from '../github/source/failure'
+import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { type AccessChange, type AccessOutcome, classifyAccess } from './diff'
 import { ContractMissing, readAccessSnapshot, SnapshotRefused } from './read'
@@ -153,7 +153,8 @@ async function readCandidate(
 		invocation.signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)
 		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; ${refusalHint(error)}`)
-		if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
+		if (error instanceof SourceRateLimited) input.log(`access: the commit's files cannot be read: ${error.message}`)
+		else if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error
 	}
 	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))

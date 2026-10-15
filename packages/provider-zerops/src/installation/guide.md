@@ -275,7 +275,11 @@ Check with `bun pm ls | grep @fabrika/cli`.
    ```
 
    A failed run's log ends with `deploy failed: <reason>`. For example, `source resolve failed
-   (ref_not_found)` means control could not read the repository or the ref. A run that ends with
+   (ref_not_found)` means control could not read the repository or the ref. `GitHub rate limit for
+   anonymous reads reached; resets at <time>` means GitHub refused control's tokenless reads: every tenant
+   behind the cloud's egress address shares that limit. Deploy again after the reset, or connect the GitHub
+   App in the console so reads of that organization's repositories carry a token. A namespace that hits the
+   limit stays `provisioning` and retries on its own. A run that ends with
    `deploy interrupted: …; run the deploy again` lost Control mid-run, typically to step 3's workflow
    redeploying it: deploy again once Control is back.
 

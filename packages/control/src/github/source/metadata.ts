@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { cancelled, SourceFailure } from './failure'
+import { cancelled, rateLimitFailure, SourceFailure } from './failure'
 import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './tree'
 import type { SourceDescriptorRule, SourceRepository } from './types'
 
@@ -244,7 +244,7 @@ export class GitHubMetadataClient {
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => {})
 				if (response.status === 404) throw notFound()
-				throw new SourceFailure('internal', stage)
+				throw rateLimitFailure(response, stage, token === undefined) ?? new SourceFailure('internal', stage)
 			}
 			return await readBounded(
 				response,

@@ -23,7 +23,7 @@ import {
 	type ProviderSourceBinding,
 	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { redactNamespaceErrorText, republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
+import { namespaceNotReady, redactNamespaceErrorText, republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, type ProviderAccessFields } from './approval/snapshot'
@@ -256,7 +256,7 @@ export const providerEnvironment = async (
 			throw new Error(unconfirmedUpdateRefusal(stored.id))
 		}
 		if (options.requireReadyNamespace === true && stored.state !== 'ready') {
-			throw new Error(`deployment namespace "${stored.id}" is not ready`)
+			throw new Error(namespaceNotReady(stored))
 		}
 		namespace = providerNamespace(stored)
 	}

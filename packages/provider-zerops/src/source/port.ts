@@ -55,3 +55,14 @@ export interface ZeropsSourcePort {
 	resolve(input: ZeropsSourceResolveInput): Promise<ZeropsSourceResolution>
 	upload(input: ZeropsSourceUploadInput): Promise<ZeropsSourceUploadResult>
 }
+
+/**
+ * The source refused a read for GitHub's rate limit. The read succeeds again once the limit resets, so a namespace
+ * mutation that hits it stays retryable. The message is the user's: whose limit, when it resets, how to avoid it.
+ */
+export class ZeropsSourceRateLimitedError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = 'ZeropsSourceRateLimitedError'
+	}
+}

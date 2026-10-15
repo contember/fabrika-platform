@@ -108,6 +108,7 @@ export { ZEROPS_PROXY_MANIFEST_PATH, type ZeropsProxyManifestCarrier, zeropsProx
 export type * from './schema.generated'
 export { isZeropsUploadDestination, normalizeZeropsSourceRepository } from './source'
 export type { ZeropsSourceRepository } from './source'
+export { ZeropsSourceRateLimitedError } from './source/port'
 export type {
 	ZeropsSourceArchive,
 	ZeropsSourcePort,

@@ -530,7 +530,7 @@ export async function republishUnderLease(
 		await deps.repositories.registry.requeueDeploymentNamespace(namespaceId)
 		throw new Error(`${unconfirmedUpdateRefusal(namespaceId)}; the proxy republishes once it completes`)
 	}
-	if (row.state === 'failed') throw new Error(`Namespace ${namespaceId} is not ready`)
+	if (row.state === 'failed') throw new Error(namespaceNotReady(row))
 	let current = toProviderNamespace(row)
 	const members = await namespaceMembers(deps, row.id)
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
@@ -732,6 +732,19 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 const RETRY_UPDATE_ADVICE = 'retry namespaces.update with the planned target in unconfirmedTarget'
 
 /** Why a marked namespace refuses a deploy, a republish, a reconcile or a removal, and the one way out. */
+/**
+ * Why a namespace takes no deploy or republish now, with its last recorded failure: a refusal that only said "not ready"
+ * left the operator to find the cause. A settling one retries on its own; a failed one needs the operator's reconcile.
+ */
+export function namespaceNotReady(row: DeploymentNamespaceRow): string {
+	const { lastError, lastErrorCode } = decodeNamespaceError(row.last_error)
+	const cause = lastError === null ? '' : ` — last error: ${lastErrorCode === null ? '' : `${lastErrorCode}: `}${lastError}`
+	const next = row.state === 'failed'
+		? `repair it with \`fabrika control namespaces reconcile --namespace=${row.id}\``
+		: 'it settles on its own; deploy again once it is ready'
+	return `deployment namespace "${row.id}" is not ready (${row.state}${cause}); ${next}`
+}
+
 export function unconfirmedUpdateRefusal(namespaceId: string): string {
 	return `deployment namespace ${namespaceId} has an unconfirmed update — ${RETRY_UPDATE_ADVICE}`
 }

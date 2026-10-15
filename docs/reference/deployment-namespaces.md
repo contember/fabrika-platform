@@ -72,6 +72,15 @@ generic message. The full cause is logged, redacted the same way: userinfo,
 signed query strings, API keys, and signed tokens never reach the row or the log.
 A row written before the codes existed carries a message and no code.
 
+A failure the provider marks retryable leaves the namespace `provisioning` with
+its error recorded, and every maintenance pass queues a `reconcile` for it, so
+it settles on its own once the cause clears. A GitHub rate limit on the proxy
+source is one (`githubRateLimited`, whose message names the reset time). A
+deploy or republish that finds the namespace not `ready` is refused with its
+state and last error: a `failed` one names the
+`fabrika control namespaces reconcile --namespace=<id>` repair, a settling one
+asks for a later deploy.
+
 An application environment may be assigned only to a namespace with the same
 provider and environment. An exclusive namespace accepts only its named app. A
 new assignment requires a `ready` namespace. The assignment cannot change while

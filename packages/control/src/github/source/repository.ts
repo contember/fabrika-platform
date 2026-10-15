@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { GitHubSourceCredentials } from '../connections/credentials'
 import { type ArchiveSummary, createTarRewrite, type SourceBytes } from './archive'
-import { cancelled, SourceFailure, throwIfAborted } from './failure'
+import { cancelled, rateLimitFailure, SourceFailure, throwIfAborted } from './failure'
 import type { GitHubMetadataClient } from './metadata'
 import { pullThrough } from './streams'
 import type { SourceArchiveKind, SourceDescriptorRule, SourcePrivateBinding, SourceRepository, SourceResolution, SourceResolveInput } from './types'
@@ -167,7 +167,7 @@ export class TarballRepositorySource {
 				timeout,
 			)
 			try {
-				location = codeloadLocation(response)
+				location = codeloadLocation(response, token === undefined)
 			} finally {
 				await response.body?.cancel().catch(() => {})
 			}
@@ -183,7 +183,7 @@ export class TarballRepositorySource {
 		)
 		if (!archive.ok) {
 			await archive.body?.cancel().catch(() => {})
-			throw responseFailure(archive.status)
+			throw responseFailure(archive, token === undefined)
 		}
 		const body = archive.body
 		if (body === null) throw new SourceFailure('archive_rejected', 'archive')
@@ -231,9 +231,9 @@ export class TarballRepositorySource {
 }
 
 /** The only redirect target we follow, checked before any repository byte is read. */
-function codeloadLocation(response: Response): string {
+function codeloadLocation(response: Response, anonymous: boolean): string {
 	if (response.status < 300 || response.status >= 400) {
-		throw responseFailure(response.status)
+		throw responseFailure(response, anonymous)
 	}
 	const location = response.headers.get('location')
 	if (location === null) throw new SourceFailure('archive_rejected', 'archive')
@@ -255,11 +255,11 @@ function codeloadLocation(response: Response): string {
 	return url.href
 }
 
-function responseFailure(status: number): SourceFailure {
-	if (status === 404) {
+function responseFailure(response: Response, anonymous: boolean): SourceFailure {
+	if (response.status === 404) {
 		return new SourceFailure('ref_not_found', 'archive')
 	}
-	return new SourceFailure('internal', 'archive')
+	return rateLimitFailure(response, 'archive', anonymous) ?? new SourceFailure('internal', 'archive')
 }
 
 function linkedController(...signals: AbortSignal[]): AbortController {

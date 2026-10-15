@@ -8,7 +8,7 @@ import type { SourceDescriptorRule, SourceResolution, SourceResolveInput, Source
 
 export { encodeGitHubAppCredential, type GitHubAppCredential } from '../connections/credentials'
 export { type ArchiveSummary, createTarRewrite, type SourceBytes, type TarRewrite, type TarRewriteInput } from './archive'
-export { SourceFailure, type SourceFailureCode, type SourceFailureStage } from './failure'
+export { SourceFailure, type SourceFailureCode, type SourceFailureStage, SourceRateLimited } from './failure'
 export type { GitHubMetadataFetch } from './metadata'
 export type { SourceDownloadFetch } from './repository'
 export type { SourceUploadFetch, SourceUploadRequestInit } from './transport'

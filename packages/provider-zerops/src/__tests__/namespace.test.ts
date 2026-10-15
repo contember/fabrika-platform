@@ -48,9 +48,10 @@ import {
 	zeropsNamespaceTargetCodec,
 } from '../namespace'
 import { envelope } from '../namespace/codec'
+import { ZEROPS_SOURCE_RATE_LIMITED } from '../namespace/errors'
 import { decodeZeropsNamespaceProxySource } from '../namespace/proxy-source'
 import type { ZeropsNamespaceProxySource } from '../namespace/types'
-import type { ZeropsSourceUploadInput } from '../source/port'
+import { ZeropsSourceRateLimitedError, type ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
 import { approvedContract } from './fixtures/access'
 
@@ -1802,6 +1803,24 @@ describe('Zerops namespace failure classes', () => {
 		const error = await failure(run(capabilities, provisionNamespace(), []))
 
 		expect(error.code).toBe('zeropsHttp503')
+		expect(error.retryable).toBe(true)
+	})
+
+	test("a GitHub rate limit on the proxy source is retryable and keeps the source's message", async () => {
+		const state = freshState()
+		const base = options(state)
+		const source = base.source
+		if (source === undefined) throw new Error('source missing')
+		const message = 'GitHub rate limit for anonymous reads reached; resets at 2026-10-15T21:00:00.000Z; connect the GitHub App to avoid it'
+		const capabilities = createZeropsNamespaceCapabilities({
+			...base,
+			source: { ...source, resolve: () => Promise.reject(new ZeropsSourceRateLimitedError(message)) },
+		})
+
+		const error = await failure(run(capabilities, provisionNamespace(), []))
+
+		expect(error.code).toBe(ZEROPS_SOURCE_RATE_LIMITED)
+		expect(error.message).toBe(message)
 		expect(error.retryable).toBe(true)
 	})
 })

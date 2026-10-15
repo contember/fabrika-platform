@@ -1,5 +1,6 @@
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
 import { ZeropsApiError, ZeropsServiceEnvValueTooLargeError } from '../api'
+import { ZeropsSourceRateLimitedError } from '../source/port'
 
 /**
  * Lifecycle codes this provider defines where the platform has none of its own. They are an
@@ -15,6 +16,8 @@ export const ZEROPS_PROXY_DEPLOY_TIMEOUT = 'proxyDeployTimeout'
 export const ZEROPS_PROXY_DEPLOY_FAILED = 'proxyDeployFailed'
 
 export const ZEROPS_SUBDOMAIN_NOT_PUBLISHED = 'subdomainNotPublished'
+
+export const ZEROPS_SOURCE_RATE_LIMITED = 'githubRateLimited'
 
 export const namespaceError = (code: string, message: string, retryable: boolean, detail?: string): ProviderNamespaceError =>
 	new ProviderNamespaceError(message, code, retryable, detail)
@@ -43,6 +46,8 @@ export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile'
 	if (cause instanceof ProviderNamespaceError) return cause
 	// The same value is refused again on every retry; only a smaller manifest or a new carrier fixes it.
 	if (cause instanceof ZeropsServiceEnvValueTooLargeError) return namespaceError(cause.code, cause.message, false)
+	// The limit resets on its own: the namespace stays `provisioning` and the cron's reconcile retries it.
+	if (cause instanceof ZeropsSourceRateLimitedError) return namespaceError(ZEROPS_SOURCE_RATE_LIMITED, cause.message, true)
 	if (cause instanceof ZeropsApiError) {
 		const { summary, detail } = splitApiMessage(cause.message, cause.code)
 		return namespaceError(

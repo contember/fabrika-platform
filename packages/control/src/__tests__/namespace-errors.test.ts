@@ -10,7 +10,7 @@
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope } from '@fabrika/provider-contract'
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { decodeNamespaceError, encodeNamespaceError, redactNamespaceErrorText, runNamespaceJob } from '../api/namespaces'
+import { decodeNamespaceError, encodeNamespaceError, namespaceNotReady, redactNamespaceErrorText, runNamespaceJob } from '../api/namespaces'
 import type { ControlRepositories, DeploymentNamespaceRow } from '../db'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
@@ -82,6 +82,20 @@ describe('namespace failure projection', () => {
 		expect(row?.state).toBe('provisioning')
 		expect(row?.last_error).toBe('proxyAttemptUnresolved: version v1 remains unresolved')
 	})
+	test('a GitHub rate limit keeps the namespace settling, and a deploy refusal says why and what to do', async () => {
+		const message = 'GitHub rate limit for anonymous reads reached; resets at 2026-10-15T21:00:00.000Z; connect the GitHub App to avoid it'
+		const { row } = await failNamespace(new ProviderNamespaceError(message, 'githubRateLimited', true))
+		if (row === null) throw new Error('namespace row missing')
+
+		expect(row.state).toBe('provisioning')
+		expect(namespaceNotReady(row)).toBe(
+			`deployment namespace "apps-prod" is not ready (provisioning — last error: githubRateLimited: ${message}); it settles on its own; deploy again once it is ready`,
+		)
+		expect(namespaceNotReady({ ...row, state: 'failed', last_error: null })).toBe(
+			'deployment namespace "apps-prod" is not ready (failed); repair it with `fabrika control namespaces reconcile --namespace=apps-prod`',
+		)
+	})
+
 	test('records a denied import, a refused write, and an unpublishable subdomain as three different failures', async () => {
 		const denied = await failNamespace(
 			new ProviderNamespaceError('zerops: project import failed (403)', 'insufficientPermissions', false, 'client may not create projects'),

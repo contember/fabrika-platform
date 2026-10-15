@@ -23,10 +23,11 @@ import {
 	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 	type ZeropsNamespaceProxySource,
 	type ZeropsSourcePort,
+	ZeropsSourceRateLimitedError,
 } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
-import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, type SourceUploadFetch } from '../github/source'
+import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, SourceRateLimited, type SourceUploadFetch } from '../github/source'
 import { type CommitSource, gitHubCommitSource } from '../github/source/commit-files'
 import { GitHubMetadataClient } from '../github/source/metadata'
 
@@ -74,9 +75,12 @@ export interface GitHubSourceSeams {
 	readonly githubAppFetch?: GitHubAppFetch
 }
 
-/** Control's in-process source: keys from the vault, the repository-root `zerops.yaml` as the descriptor. */
+/**
+ * Control's in-process source: keys from the vault, the repository-root `zerops.yaml` as the descriptor. A rate limit
+ * leaves as the provider's own error, which keeps a namespace mutation retryable.
+ */
 export function zeropsGitHubSource(env: Env, seams: GitHubSourceSeams = {}): ZeropsSourcePort {
-	return createGitHubSource({
+	const source = createGitHubSource({
 		credentials: vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
 		descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
 		isUploadDestination: isZeropsUploadDestination,
@@ -84,6 +88,19 @@ export function zeropsGitHubSource(env: Env, seams: GitHubSourceSeams = {}): Zer
 		...(seams.downloadFetch === undefined ? {} : { downloadFetch: seams.downloadFetch }),
 		...(seams.uploadFetch === undefined ? {} : { uploadFetch: seams.uploadFetch }),
 	})
+	return {
+		resolve: (input) => providerRateLimit(() => source.resolve(input)),
+		upload: (input) => providerRateLimit(() => source.upload(input)),
+	}
+}
+
+async function providerRateLimit<T>(operation: () => Promise<T>): Promise<T> {
+	try {
+		return await operation()
+	} catch (error) {
+		if (error instanceof SourceRateLimited) throw new ZeropsSourceRateLimitedError(error.message)
+		throw error
+	}
 }
 
 /** The files of a run's commit, for its access snapshot (ADR-0050), over the same GitHub transport as the source. */
