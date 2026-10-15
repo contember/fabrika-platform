@@ -1253,9 +1253,29 @@ signatures older than three days, so a container that cannot refresh them scans 
 with stale ones. Measured locally with `clamav/clamav:1.4` (2026-10-12): one `clamscan` over 21 small files took 11 s
 and peaked at 0.99 GB resident, almost all of it the signatures. A scanning application's deploy service must
 therefore declare `verticalAutoscaling: { minRam: 2 }` (`ZEROPS_SCAN_MIN_RAM_GB`); the build and the deploy refuse it
-otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import, so an existing
-service is raised through Zerops itself. Not yet measured on a real account: that Alpine's `clamav` installs through
+otherwise. Zerops ignores a changed `verticalAutoscaling` of an existing service on a re-import, so the deploy raises
+an existing service (below). Not yet measured on a real account: that Alpine's `clamav` installs through
 `prepareCommands`, that `freshclam` reaches its mirror from the build and the runtime, and the peak memory there.
+
+#### UNVERIFIED: a deploy raises the deploy service's minimum RAM
+
+Observed live (2026-10-15, v0.4.5 and v0.4.6 on a fresh installation): with the runtime's 0.125 GB floor, the start
+script's `fabrika db test-isolation` was killed (`memory limit exceeded`, exit 137) and the version went to
+`DEPLOY_FAILED` on 2 of 3 first deploys onto a new container; the restarted process then passed. Measured locally the
+same day, as the summed anonymous RSS of the CLI and its `bun test` child: 161 MiB for the Notes example (38 cases) and
+225 MiB for the CRM example (133 cases), within about 1.5 s, beside some 45 MiB of Bun's mapped binary. `--smol` on the
+child saved 7 %, a forced collection in the CLI nothing. The serving pair (launcher and application) of Notes holds
+about 105 MiB anonymous. Vertical autoscaling reacts in 10–20 s, so a spike this fast is killed before it scales.
+
+So a deploy raises the deploy service's minimum RAM (`raise-start-memory`, `packages/provider-zerops/src/provider.ts`)
+to `zeropsStartMinRam` (`src/execution.ts`): 0.5 GB for an application with a database, 2 GB for one that scans, before
+it reserves the version. It reads `customAutoscaling` and `currentAutoscaling` of `GET /service-stack/{id}`, and when
+the current minimum is lower, sends the custom object back whole, with only `minResource.memoryGBytes` changed, as
+`PUT /service-stack/{id}/autoscaling` `{ customAutoscaling: { verticalAutoscalingNullable, horizontalAutoscalingNullable } }`
+(`BaseCustomAutoscaling` of the published OpenAPI: a field left out is reset). It awaits the process and reads the
+current minimum back; anything short of it fails the deploy before a version exists. It never lowers a minimum. Not
+yet measured on a real account: the body shape, whether a field sent `null` keeps the service type's value, and how
+soon `currentAutoscaling` shows the change (the `custom-autoscaling-raises-min-ram` fact row probes it).
 
 #### Verified live (2026-10-15, account `prg1`) — an application's database roles and the two ports
 

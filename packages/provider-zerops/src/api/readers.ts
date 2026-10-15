@@ -12,6 +12,7 @@ import type {
 	ZeropsProjectStatus,
 	ZeropsRoleCode,
 	ZeropsService,
+	ZeropsServiceAutoscaling,
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
 	ZeropsUserInfo,
@@ -121,6 +122,38 @@ export const processSchema = z.object({
 	appVersion: nestedIdSchema,
 }).transform(({ appVersion, ...process }): ZeropsProcess => ({ ...process, appVersionId: appVersion?.id }))
 
+const nullableNumber = z.number().nullish().transform((value) => value ?? null)
+
+const scalingResourceSchema = z.object({ cpuCoreCount: nullableNumber, memoryGBytes: nullableNumber, diskGBytes: nullableNumber }).nullish()
+	.transform((resource) => resource ?? { cpuCoreCount: null, memoryGBytes: null, diskGBytes: null })
+
+const scalingFreeResourceSchema = z.object({
+	cpuCoreCount: nullableNumber,
+	cpuCorePercent: nullableNumber,
+	memoryGBytes: nullableNumber,
+	memoryPercent: nullableNumber,
+}).nullish().transform((resource) => resource ?? { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null })
+
+/**
+ * Strict where `optional` is lenient: the custom autoscaling is sent back whole, so a field read as absent would be
+ * reset. One that does not parse makes the whole object absent, and nothing is sent.
+ */
+const serviceAutoscalingSchema = z.object({
+	verticalAutoscaling: z.object({
+		cpuMode: z.enum(['DEDICATED', 'SHARED']).nullish().transform((value) => value ?? null),
+		minResource: scalingResourceSchema,
+		maxResource: scalingResourceSchema,
+		minFreeResource: scalingFreeResourceSchema,
+		startCpuCoreCount: nullableNumber,
+		swapEnabled: z.boolean().nullish().transform((value) => value ?? null),
+	}),
+	horizontalAutoscaling: z.object({ minContainerCount: nullableNumber, maxContainerCount: nullableNumber }).nullish()
+		.transform((horizontal) => horizontal ?? { minContainerCount: null, maxContainerCount: null }),
+}).transform(({ verticalAutoscaling, horizontalAutoscaling }): ZeropsServiceAutoscaling => ({
+	vertical: verticalAutoscaling,
+	horizontal: horizontalAutoscaling,
+}))
+
 export const serviceSchema = z.object({
 	id: idSchema,
 	name: z.string(),
@@ -130,6 +163,8 @@ export const serviceSchema = z.object({
 	activeAppVersion: nestedIdSchema,
 	subdomainAccess: optional(z.boolean()),
 	autoscalingProfileId: optional(z.string()),
+	customAutoscaling: optional(serviceAutoscalingSchema),
+	currentAutoscaling: optional(serviceAutoscalingSchema),
 }).transform(({ activeAppVersion, ...service }): ZeropsService => ({ ...service, activeAppVersionId: activeAppVersion?.id }))
 
 export const projectSchema = z.object({

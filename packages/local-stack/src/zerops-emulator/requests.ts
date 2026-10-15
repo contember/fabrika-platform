@@ -3,7 +3,15 @@ import { z } from 'zod'
 export const importRequestSchema = z.object({ yaml: z.string() })
 export const triggerRequestSchema = z.object({ buildFromGit: z.string() })
 export const reservationRequestSchema = z.object({ name: z.string().optional() })
-export const autoscalingRequestSchema = z.object({ autoscalingProfileId: z.string().min(1) })
+/** A profile, or a custom autoscaling of which the double reads the minimum RAM only. */
+export const autoscalingRequestSchema = z.union([
+	z.object({ autoscalingProfileId: z.string().min(1) }),
+	z.object({
+		customAutoscaling: z.object({
+			verticalAutoscalingNullable: z.object({ minResource: z.object({ memoryGBytes: z.number().positive().nullable() }) }),
+		}),
+	}),
+])
 export const buildRequestSchema = z.object({ zeropsYaml: z.string(), zeropsYamlSetup: z.string().optional() })
 const descriptorSchema = z.object({
 	zerops: z.array(z.object({

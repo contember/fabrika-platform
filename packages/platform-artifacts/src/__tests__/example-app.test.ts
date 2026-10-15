@@ -24,6 +24,7 @@ import {
 	type ZeropsCollaborators,
 	type ZeropsDeployRun,
 	type ZeropsRuntimeTarget,
+	type ZeropsServiceAutoscaling,
 	type ZeropsServiceEnv,
 	type ZeropsSourcePort,
 } from '@fabrika/provider-zerops'
@@ -62,7 +63,22 @@ interface Recorded {
 	/** The key of every service variable written, never its value. */
 	envWrites: string[]
 	logs: string[]
+	/** The minimum RAM in GB of each custom autoscaling the deploy sent. */
+	minRams: Array<number | null>
 }
+
+/** The deploy service's autoscaling with its minimum RAM; everything else inherits the service type's. */
+const autoscaling = (minRam: number | null): ZeropsServiceAutoscaling => ({
+	vertical: {
+		cpuMode: null,
+		minResource: { cpuCoreCount: null, memoryGBytes: minRam, diskGBytes: null },
+		maxResource: { cpuCoreCount: null, memoryGBytes: null, diskGBytes: null },
+		minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
+		startCpuCoreCount: null,
+		swapEnabled: null,
+	},
+	horizontal: { minContainerCount: 1, maxContainerCount: 4 },
+})
 
 const fresh = (): Recorded => ({
 	calls: [],
@@ -77,6 +93,7 @@ const fresh = (): Recorded => ({
 	schemas: [],
 	envWrites: [],
 	logs: [],
+	minRams: [],
 })
 
 /** Statuses handed back by successive polls; the last one repeats. */
@@ -84,6 +101,8 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 	let poll = 0
 	// The deploy service's variables persist across the run's steps, so a later read sees an earlier write.
 	const serviceEnv: ZeropsServiceEnv[] = []
+	// A service the import created starts at the platform's 0.125 GB, until the deploy raises it.
+	let minRam: number | null = null
 	const record = <T>(name: string, value: T): T => {
 		rec.calls.push(name)
 		return value
@@ -130,8 +149,19 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		getUserInfo: () => Promise.reject(new Error('an application deploy must not read the token identity')),
 		createIntegrationToken: () => Promise.reject(new Error('an application deploy must not mint a Zerops token')),
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
-		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change autoscaling')),
-		getService: ({ serviceId }) => Promise.resolve(record('getService', { id: serviceId, name: NOTES_SERVICE })),
+		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change a profile')),
+		configureCustomAutoscaling: ({ autoscaling: sent }) => {
+			rec.minRams.push(sent.vertical.minResource.memoryGBytes)
+			minRam = sent.vertical.minResource.memoryGBytes
+			return Promise.resolve(record('configureCustomAutoscaling', { id: 'proc-autoscaling' }))
+		},
+		getService: ({ serviceId }) =>
+			Promise.resolve(record('getService', {
+				id: serviceId,
+				name: NOTES_SERVICE,
+				customAutoscaling: autoscaling(minRam),
+				currentAutoscaling: autoscaling(minRam ?? 0.125),
+			})),
 		findService: ({ hostname }) =>
 			Promise.resolve(record('findService', { id: hostname === NOTES_FILES_SERVICE ? 'svc-files' : 'svc-api', name: hostname, subdomainAccess: false })),
 		getProject: ({ projectId }) => Promise.resolve(record('getProject', { id: projectId, name: 'apps-prod' })),
@@ -399,6 +429,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			'apply-import',
 			'verify-exposure',
 			'write-service-env',
+			'raise-start-memory',
 			'reserve-version',
 			'upload-source',
 			'trigger-build',
@@ -422,6 +453,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			'[dry-run] would read back subdomain access and bucket provenance of every declared service',
 			`[dry-run] would write service variables on ${TARGET.serviceId}: FABRIKA_PROXY_SECRET`,
 			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_IAM_RPC_URL, FABRIKA_IAM_RPC_KEY, FABRIKA_SOURCE_MAP_UPLOAD_KEY`,
+			`[dry-run] would raise the minimum RAM of ${NOTES_SERVICE} to 0.5 GB where it is lower`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
 			'[dry-run] would trigger build+deploy with the generated run section and build checks',
@@ -467,11 +499,16 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// 4. write the managed service variables, read once: the proxy secret; the marker already holds the bucket.
 			'listServiceEnv',
 			'putServiceEnv',
-			// 5. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
+			// 5. raise the service's minimum RAM to what its start script's isolation tests need, and read it back.
+			'getService',
+			'configureCustomAutoscaling',
+			'getProcess',
+			'getService',
+			// 6. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
 			'createAppVersion',
 			'sourceUpload',
 			'buildAndDeployAppVersion',
-			// 6-N. Watch it. Build and deploy are ONE platform-side operation.
+			// 7-N. Watch it. Build and deploy are ONE platform-side operation.
 			'getLogAccess',
 			'getProcess',
 			'getAppVersion',
@@ -487,6 +524,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// N+1. the one portable step: reconcile the authz vocabulary into IAM
 			'reconcileSchema',
 		])
+		expect(rec.minRams).toEqual([0.5])
 		expect(rec.resolves).toEqual([{ requestedRef: 'refs/heads/main', descriptorSha256: SOURCE_DESCRIPTOR.sha256 }])
 		expect(rec.creates).toEqual([{ serviceId: TARGET.serviceId, name: RUN_ID }])
 		expect(rec.uploads).toEqual([{

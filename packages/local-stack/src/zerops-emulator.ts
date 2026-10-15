@@ -49,6 +49,10 @@ import {
 import { activateRunEnvironment } from './zerops-emulator/runtime-environment'
 import { capabilityDigest, matchesCapability, readUploadedSource } from './zerops-emulator/upload'
 
+/** A runtime service's RAM bounds in GB when nothing custom is set (`docs/reference/zerops-platform.md`). */
+const PLATFORM_MIN_RAM_GB = 0.125
+const PLATFORM_MAX_RAM_GB = 48
+
 export interface ZeropsEmulatorOptions {
 	token: string
 	stateFile?: string
@@ -281,9 +285,15 @@ class ZeropsEmulator {
 			}
 			const body = autoscalingRequestSchema.safeParse(await parseJsonBody(request))
 			if (!body.success) {
-				return error(400, 'invalidUserInput', 'autoscalingProfileId is required')
+				return error(400, 'invalidUserInput', 'autoscalingProfileId or customAutoscaling is required')
 			}
-			found.autoscalingProfileId = body.data.autoscalingProfileId
+			if ('autoscalingProfileId' in body.data) {
+				found.autoscalingProfileId = body.data.autoscalingProfileId
+			} else {
+				const minRam = body.data.customAutoscaling.verticalAutoscalingNullable.minResource.memoryGBytes
+				if (minRam === null) delete found.minRamGB
+				else found.minRamGB = minRam
+			}
 			const started = this.createProcess('stack.autoscaling', { serviceStackId: found.id })
 			await this.persist()
 			return json({ process: this.processResponse(started) })
@@ -614,9 +624,15 @@ class ZeropsEmulator {
 	}
 
 	private serviceResponse(service: ServiceRecord): unknown {
+		const { minRamGB, ...fields } = service
 		return {
-			...service,
+			...fields,
 			...(service.activeAppVersionId === undefined ? {} : { activeAppVersion: { id: service.activeAppVersionId } }),
+			customAutoscaling: { verticalAutoscaling: { minResource: { memoryGBytes: minRamGB ?? null } }, horizontalAutoscaling: {} },
+			currentAutoscaling: {
+				verticalAutoscaling: { minResource: { memoryGBytes: minRamGB ?? PLATFORM_MIN_RAM_GB }, maxResource: { memoryGBytes: PLATFORM_MAX_RAM_GB } },
+				horizontalAutoscaling: {},
+			},
 		}
 	}
 

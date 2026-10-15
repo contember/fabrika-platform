@@ -19,6 +19,8 @@ export interface ServiceRecord {
 	activeAppVersionId?: string
 	subdomainAccess?: boolean
 	autoscalingProfileId?: string
+	/** The custom minimum RAM in GB, the one autoscaling field the double models; absent inherits the platform's 0.125. */
+	minRamGB?: number
 }
 
 export interface ServiceEnvRecord {

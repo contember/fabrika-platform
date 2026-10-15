@@ -46,6 +46,7 @@ export type FactFieldCheck =
 	| { kind: 'equals'; value: string }
 	| { kind: 'oneOf'; values: readonly string[] }
 	| { kind: 'boolean'; value: boolean }
+	| { kind: 'number'; value: number }
 	| { kind: 'array' }
 	| { kind: 'emptyArray' }
 	| { kind: 'nonEmptyArray' }
@@ -146,6 +147,7 @@ const SECTION_UNVERIFIED_ACTIVATION =
 	'UNVERIFIED: what stops an activation besides an httpGet readiness check — docs/reference/zerops-platform.md:407'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
 const SECTION_VALUE_SIZE = 'Verified live (2026-10-15) — a service variable value over ~32 KB is a bare 500 — docs/reference/zerops-platform.md:767'
+const SECTION_START_MEMORY = "UNVERIFIED: a deploy raises the deploy service's minimum RAM — docs/reference/zerops-platform.md"
 const SECTION_ENV_ACTIVATION = 'Verified live (2026-09-23) — service variables across activation and rollback — docs/reference/zerops-platform.md:874'
 
 /** The keys the rows write. Literals, not credentials — nothing here is a secret and nothing is printed. */
@@ -216,6 +218,23 @@ const COUNT_IMPORT_DOCUMENT = [
 ].join('\n')
 
 /** The same document with the flag the platform accepts and drops. */
+/** The custom autoscaling a deploy sends for a service with none: the minimum RAM its start needs, everything else inherited. */
+const RAISED_MIN_RAM_GB = 0.5
+const inheritedResource = { cpuCoreCount: null, memoryGBytes: null, diskGBytes: null }
+const RAISED_MIN_RAM_AUTOSCALING = {
+	customAutoscaling: {
+		verticalAutoscalingNullable: {
+			cpuMode: null,
+			minResource: { ...inheritedResource, memoryGBytes: RAISED_MIN_RAM_GB },
+			maxResource: inheritedResource,
+			minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
+			startCpuCoreCount: null,
+			swapEnabled: null,
+		},
+		horizontalAutoscalingNullable: { minContainerCount: null, maxContainerCount: null },
+	},
+}
+
 const IMPORT_WITH_SUBDOMAIN_FLAG = [
 	'services:',
 	'  - hostname: {hostname}',
@@ -440,6 +459,26 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		// `horizontalAutoscaling.maxContainerCount` unmoved at 10), which the reference doc records — a row
 		// cannot assert a default without asserting the default itself.
 		expect: { status: 200, bodyShape: { 'serviceStacks[name={noopHostname}].processes': { kind: 'emptyArray' } } },
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'custom-autoscaling-raises-min-ram',
+		section: SECTION_START_MEMORY,
+		request: { method: 'PUT', path: '/service-stack/{noopServiceId}/autoscaling', body: RAISED_MIN_RAM_AUTOSCALING },
+		expect: { status: 200 },
+		awaitProcess: 'process.id',
+		then: [{
+			method: 'GET',
+			path: '/service-stack/{noopServiceId}',
+			expect: {
+				status: 200,
+				bodyShape: {
+					'customAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: RAISED_MIN_RAM_GB },
+					'currentAutoscaling.verticalAutoscaling.minResource.memoryGBytes': { kind: 'number', value: RAISED_MIN_RAM_GB },
+				},
+			},
+		}],
 		live: 'service',
 		emulator: true,
 	},
@@ -1302,6 +1341,8 @@ const checkField = (found: unknown, check: FactFieldCheck, context: FactContext)
 			return check.values.some((value) => value === found) ? null : `expected one of ${check.values.join(', ')}, found ${render(found)}`
 		case 'boolean':
 			return found === check.value ? null : `expected ${String(check.value)}, found ${render(found)}`
+		case 'number':
+			return found === check.value ? null : `expected ${check.value}, found ${render(found)}`
 		case 'array':
 			return Array.isArray(found) ? null : `expected an array, found ${render(found)}`
 		case 'emptyArray':

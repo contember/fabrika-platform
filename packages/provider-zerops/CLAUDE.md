@@ -155,6 +155,13 @@ bun test
   log (`readSourceMapUploadReport`): a succeeded run reports `artifactState: 'complete'` only when that line said so, else
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
+- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** The start
+  script's `fabrika db test-isolation` peaks above the runtime's 0.125 GB faster than vertical autoscaling reacts, so
+  `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. An import
+  cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only
+  `minResource.memoryGBytes` changed (a field left out is reset), awaits the process and decides by reading
+  `currentAutoscaling` back. The reader reads an autoscaling with any unreadable field as absent, and the step then
+  refuses rather than reset a field. It only raises. UNVERIFIED live (`docs/reference/zerops-platform.md`).
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`

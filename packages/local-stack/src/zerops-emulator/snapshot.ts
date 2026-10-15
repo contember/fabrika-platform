@@ -32,6 +32,7 @@ const serviceSchema = z.object({
 	activeAppVersionId: z.string().optional(),
 	subdomainAccess: z.boolean().optional(),
 	autoscalingProfileId: z.string().optional(),
+	minRamGB: z.number().optional(),
 })
 const envSchema = z.object({
 	id: z.string(),

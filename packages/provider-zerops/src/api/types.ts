@@ -162,6 +162,40 @@ export type ZeropsServiceStatus =
 	| 'SCALING'
 	| 'REPAIR_FAILED'
 
+/** One bound of vertical autoscaling. `null` inherits the service type's value. */
+export interface ZeropsScalingResource {
+	cpuCoreCount: number | null
+	memoryGBytes: number | null
+	diskGBytes: number | null
+}
+
+/** The free capacity below which vertical autoscaling scales up. `null` inherits the service type's value. */
+export interface ZeropsScalingFreeResource {
+	cpuCoreCount: number | null
+	cpuCorePercent: number | null
+	memoryGBytes: number | null
+	memoryPercent: number | null
+}
+
+/**
+ * A service's autoscaling, as `ResponseServiceStack.customAutoscaling` (what was set) and `.currentAutoscaling` (what
+ * applies) carry it: `OutDtoCustomAutoscaling` of Zerops' published OpenAPI, every field nullable. UNVERIFIED live.
+ */
+export interface ZeropsServiceAutoscaling {
+	vertical: {
+		cpuMode: 'DEDICATED' | 'SHARED' | null
+		minResource: ZeropsScalingResource
+		maxResource: ZeropsScalingResource
+		minFreeResource: ZeropsScalingFreeResource
+		startCpuCoreCount: number | null
+		swapEnabled: boolean | null
+	}
+	horizontal: {
+		minContainerCount: number | null
+		maxContainerCount: number | null
+	}
+}
+
 /** One service. VERIFIED: `ResponseServiceStack` (narrowed to the fields fabrika reads). */
 export interface ZeropsService {
 	id: string
@@ -175,6 +209,10 @@ export interface ZeropsService {
 	subdomainAccess?: boolean
 	/** Provider profile identifier, e.g. `oltp-production`. VERIFIED: `ResponseServiceStack.autoscalingProfileId`. */
 	autoscalingProfileId?: string
+	/** The autoscaling set on the service; absent when the platform sent none or one this client cannot read whole. */
+	customAutoscaling?: ZeropsServiceAutoscaling
+	/** The autoscaling that applies, the service type's values included; absent like `customAutoscaling`. */
+	currentAutoscaling?: ZeropsServiceAutoscaling
 }
 
 /** One project. VERIFIED: `ResponseProject` (narrowed). */
@@ -446,6 +484,14 @@ export interface ZeropsApi {
 	 * resets custom overrides, and how soon `getService().autoscalingProfileId` reads the new value.
 	 */
 	configureAutoscaling(input: { serviceId: string; autoscalingProfileId: string; signal: AbortSignal }): Promise<ZeropsProcess | null>
+
+	/**
+	 * Replace a service's custom autoscaling: the same `PUT /service-stack/{id}/autoscaling`, body
+	 * `{ customAutoscaling }` (`BaseCustomAutoscaling`). The platform takes the whole object, so a field left out is reset
+	 * to the service type's value: the caller sends what `getService().customAutoscaling` read, changed where it means
+	 * to. UNVERIFIED live: the body shape, and how soon `currentAutoscaling` reads the change.
+	 */
+	configureCustomAutoscaling(input: { serviceId: string; autoscaling: ZeropsServiceAutoscaling; signal: AbortSignal }): Promise<ZeropsProcess | null>
 
 	// ── service-stack / project: reading state ────────────────────────────────────
 

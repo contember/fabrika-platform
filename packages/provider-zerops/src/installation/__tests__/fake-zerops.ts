@@ -207,6 +207,7 @@ export const fakeZerops = (options: {
 		},
 		cancelBuild: NEVER('cancelBuild'),
 		configureAutoscaling: NEVER('configureAutoscaling'),
+		configureCustomAutoscaling: NEVER('configureCustomAutoscaling'),
 		getProjectEnv: NEVER('getProjectEnv'),
 		getLogAccess: NEVER('getLogAccess'),
 		readBuildLog: NEVER('readBuildLog'),

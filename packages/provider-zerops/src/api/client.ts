@@ -354,6 +354,16 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			return readResponse('configure autoscaling', processNilSchema, payload).process ?? null
 		},
 
+		configureCustomAutoscaling: async ({ serviceId, autoscaling, signal }) => {
+			const payload = await request('configure custom autoscaling', 'PUT', `/service-stack/${serviceId}/autoscaling`, {
+				body: {
+					customAutoscaling: { verticalAutoscalingNullable: autoscaling.vertical, horizontalAutoscalingNullable: autoscaling.horizontal },
+				},
+				signal,
+			})
+			return readResponse('configure custom autoscaling', processNilSchema, payload).process ?? null
+		},
+
 		getService: async ({ serviceId, signal }) =>
 			readResponse('get service', serviceSchema, await request('get service', 'GET', `/service-stack/${serviceId}`, { signal })),
 

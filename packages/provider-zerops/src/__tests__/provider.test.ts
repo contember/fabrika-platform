@@ -15,12 +15,13 @@ import {
 	type ZeropsLogAccess,
 	type ZeropsProcess,
 	type ZeropsService,
+	type ZeropsServiceAutoscaling,
 } from '../api'
 import { withoutSensitiveContent } from '../api/service-env-response'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { parseZeropsCheckpoint } from '../control'
-import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION } from '../execution'
+import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, ZEROPS_SCAN_MIN_RAM_GB, ZEROPS_START_MIN_RAM_GB } from '../execution'
 import type { ExposureAlert } from '../exposure'
 import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
@@ -50,6 +51,8 @@ interface Recorded {
 	envWrites: Array<{ key: string; value: string; sensitive: boolean }>
 	envDeletes: string[]
 	alerts: ExposureAlert[]
+	/** Each custom autoscaling the deploy sent. */
+	autoscaling: ZeropsServiceAutoscaling[]
 }
 
 const fresh = (): Recorded => ({
@@ -71,6 +74,7 @@ const fresh = (): Recorded => ({
 	envWrites: [],
 	envDeletes: [],
 	alerts: [],
+	autoscaling: [],
 })
 
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
@@ -109,7 +113,32 @@ interface Overrides {
 	logFetch?: FetchLike
 	/** The build log lines the fake log reader answers. */
 	buildLog?: readonly string[]
+	/** The deploy service's custom minimum RAM in GB, null for the platform's 0.125 GB; by default what its start needs. */
+	minRam?: number | null
+	/** Its custom maximum RAM in GB; by default the platform's 48 GB. */
+	maxRam?: number
+	/** The autoscaling change fails with this error. */
+	autoscalingError?: Error
+	/** The deploy service reports no autoscaling. */
+	noAutoscaling?: true
+	/** The change is accepted and does not apply. */
+	autoscalingIgnored?: true
 }
+
+const AUTOSCALING_PROCESS = 'process-autoscaling'
+
+/** A service's autoscaling with only its RAM bounds set; every other field inherits. */
+const autoscalingWith = (minRam: number | null, maxRam: number | null): ZeropsServiceAutoscaling => ({
+	vertical: {
+		cpuMode: null,
+		minResource: { cpuCoreCount: null, memoryGBytes: minRam, diskGBytes: null },
+		maxResource: { cpuCoreCount: null, memoryGBytes: maxRam, diskGBytes: null },
+		minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
+		startCpuCoreCount: null,
+		swapEnabled: null,
+	},
+	horizontal: { minContainerCount: 1, maxContainerCount: 4 },
+})
 
 const LOG_ACCESS: ZeropsLogAccess = {
 	url: 'https://logs.test/all',
@@ -126,6 +155,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let versionErrors = overrides.versionErrors ?? 0
 	const deleted = new Set<string>()
 	const records = overrides.serviceEnv ?? []
+	let customMinRam = overrides.minRam === undefined ? ZEROPS_START_MIN_RAM_GB : overrides.minRam
 	return {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
@@ -173,6 +203,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push('cancelBuild')
 		},
 		getProcess: async ({ processId }) => {
+			if (processId === AUTOSCALING_PROCESS) return { id: processId, status: 'FINISHED' }
 			recorded.calls.push('getProcess')
 			const statuses = overrides.processStatuses ?? ['FINISHED']
 			const status = statuses[Math.min(processPoll, statuses.length - 1)]
@@ -188,8 +219,22 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		enableSubdomainAccess: async () => {
 			recorded.calls.push('enableSubdomainAccess')
 		},
-		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change autoscaling')),
-		getService: async ({ serviceId }) => ({ id: serviceId, name: 'api' }),
+		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change a profile')),
+		configureCustomAutoscaling: async ({ autoscaling }) => {
+			recorded.calls.push('configureCustomAutoscaling')
+			if (overrides.autoscalingError !== undefined) throw overrides.autoscalingError
+			recorded.autoscaling.push(autoscaling)
+			if (overrides.autoscalingIgnored !== true) customMinRam = autoscaling.vertical.minResource.memoryGBytes
+			return { id: AUTOSCALING_PROCESS }
+		},
+		getService: async ({ serviceId }) => ({
+			id: serviceId,
+			name: 'api',
+			...(overrides.noAutoscaling === true ? {} : {
+				customAutoscaling: autoscalingWith(customMinRam, overrides.maxRam ?? null),
+				currentAutoscaling: autoscalingWith(customMinRam ?? 0.125, overrides.maxRam ?? 48),
+			}),
+		}),
 		findService: async ({ hostname }) => {
 			recorded.calls.push(`findService:${hostname}`)
 			const answer = overrides.services?.[hostname]
@@ -396,6 +441,7 @@ describe('Zerops provider', () => {
 			'apply-import',
 			'verify-exposure',
 			'write-service-env',
+			'raise-start-memory',
 			'reserve-version',
 			'upload-source',
 			'trigger-build',
@@ -893,6 +939,7 @@ describe('Zerops provider', () => {
 			'succeeded',
 			'succeeded',
 			'succeeded',
+			'succeeded',
 			'failed',
 			'skipped',
 		])
@@ -1001,6 +1048,68 @@ describe('Zerops provider', () => {
 			'  │ 2026-08-21T10:00:12.000000000Z zerops@zerops notes-api listening',
 		])
 		expect(recorded.logs.some((line) => line.includes('stale'))).toBe(false)
+	})
+})
+
+// The start script runs `fabrika db test-isolation`, which the platform's 0.125 GB floor kills (ADR-0043).
+describe("the deploy service's minimum RAM", () => {
+	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deployRun(recorded)) =>
+		createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
+
+	test('a service at the platform floor is raised before the version is reserved, every other field sent back as read', async () => {
+		const result = await deploy({ minRam: null })
+		expect(result.status).toBe('succeeded')
+		expect(recorded.autoscaling).toEqual([autoscalingWith(ZEROPS_START_MIN_RAM_GB, null)])
+		const calls = recorded.calls
+		expect(calls.indexOf('configureCustomAutoscaling')).toBeLessThan(calls.indexOf('createAppVersion:service-1'))
+		expect(recorded.logs).toContain(`  minimum RAM of api: 0.125 → ${ZEROPS_START_MIN_RAM_GB} GB`)
+	})
+
+	test('a service at or above what its start needs is left alone, whatever an earlier release set', async () => {
+		for (const minRam of [ZEROPS_START_MIN_RAM_GB, ZEROPS_SCAN_MIN_RAM_GB]) {
+			expect((await deploy({ minRam })).status).toBe('succeeded')
+		}
+		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
+	})
+
+	test('an application without a database needs no more than the platform floor', async () => {
+		const run = { ...deployRun(recorded), artifact: compileFabrikaManifest(app([API]), 'prod', SOURCE_DESCRIPTOR) }
+		expect((await deploy({ minRam: null }, run)).status).toBe('succeeded')
+		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
+		expect(recorded.logs).toContain("  api needs no more than the platform's minimum RAM")
+	})
+
+	test('a dry run reads and changes nothing', async () => {
+		expect((await deploy({ minRam: null }, deployRun(recorded, target(), true))).status).toBe('succeeded')
+		expect(recorded.calls).not.toContain('configureCustomAutoscaling')
+		expect(recorded.logs).toContain(`  [dry-run] would raise the minimum RAM of api to ${ZEROPS_START_MIN_RAM_GB} GB where it is lower`)
+	})
+
+	test('the deploy stops before reserving a version when the RAM cannot be raised', async () => {
+		const cases: Array<[Overrides, string]> = [
+			[
+				{ minRam: null, autoscalingError: new ZeropsApiError('zerops: configure custom autoscaling failed (400)', 400, 'invalidUserInput') },
+				`zerops: raising the minimum RAM of api to ${ZEROPS_START_MIN_RAM_GB} GB was refused (invalidUserInput)`,
+			],
+			[
+				{ minRam: null, autoscalingIgnored: true },
+				`zerops: api reads back a minimum RAM of 0.125 GB after it was raised to ${ZEROPS_START_MIN_RAM_GB} GB`,
+			],
+			[
+				{ minRam: null, maxRam: 0.25 },
+				`zerops: api may use at most 0.25 GB of RAM and its start needs ${ZEROPS_START_MIN_RAM_GB} GB; raise verticalAutoscaling.maxRam`,
+			],
+			[
+				{ noAutoscaling: true },
+				`zerops: api did not report its autoscaling whole, so its minimum RAM cannot be raised to ${ZEROPS_START_MIN_RAM_GB} GB`,
+			],
+		]
+		for (const [overrides, error] of cases) {
+			recorded = fresh()
+			const result = await deploy(overrides)
+			expect(stepError(result, 'raise-start-memory')).toBe(error)
+			expect(recorded.creates).toEqual([])
+		}
 	})
 })
 
@@ -1308,7 +1417,7 @@ describe('a contract application deploy', () => {
 	test('an environment Control approved nothing for is refused before the build, whatever the artifact claims', async () => {
 		for (const contract of [true, false]) {
 			const result = await contractRun(contract, 'none')
-			expect(stepError(result, 'trigger-build')).toBe('zerops: Control approved no access for this environment')
+			expect(stepError(result, 'raise-start-memory')).toBe('zerops: Control approved no access for this environment')
 		}
 		expect(recorded.builds).toEqual([])
 		expect(recorded.schemaBodies).toEqual([])

@@ -104,6 +104,17 @@ generated isolation tests therefore run at container start: the start script run
 throwaway schema, then the server, under `set -eu`. A stale `schema.generated.ts` or a generated case that
 did not pass leaves nothing that answers the readiness check, and the previous version keeps serving.
 
+**A container starts with the memory its start script needs.** The isolation tests run as `fabrika db
+test-isolation` and its `bun test` child, which together peak at 161 MiB of anonymous memory for the Notes example
+and 225 MiB for the CRM example, within about 1.5 s. A Zerops runtime starts at 0.125 GB, and vertical autoscaling
+reacts in 10–20 s, so the platform killed the run on 2 of 3 first deploys and marked the version `DEPLOY_FAILED`
+(measured 2026-10-15, [platform facts](../reference/zerops-platform.md)). Each deploy therefore raises the deploy
+service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
+`raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
+`verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it
+back, and never lowers it. The tests still run at every container start, so the readiness check still proves that
+they passed for the version that serves.
+
 The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).
 
@@ -185,6 +196,10 @@ execution document carries the generated `run` and `build`.
   isolation tests.
 - The authored descriptor loses freedom: no custom start command, no custom `run` section, no package
   overrides of `@fabrika/*`.
+- A contract application with a database costs at least 0.5 GB of RAM per container. An existing installation
+  converges on `fabrika platform upgrade` and the application's next deploy: the step is Control's code, not the
+  application's, so no package update of the application is needed. Until then the earlier release's deploys can
+  still be killed at start.
 - An application is reachable only through the namespace proxy. A bucket policy changed outside
   Fabrika is not detected, because Zerops has no API to read a policy back.
 - Evidence can still be lost when the import step itself dies between the import's answer and the
@@ -218,3 +233,13 @@ execution document carries the generated `run` and `build`.
   no contract could describe what it exposes. Only CSP extensions are approvable.
 - **`FABRIKA_CONTRACT_DIGEST` as a service variable.** Rejected: a service variable is mutable across
   restarts and rollbacks, so older code could start with a newer digest.
+- **Run the isolation tests with less memory.** Rejected: `--smol` on the test child saved 7 % and a forced
+  collection in the CLI nothing, and the test child alone holds more than 0.125 GB.
+- **Run the isolation tests once per version (`zsc execOnce ${ZEROPS_appVersionId}`).** Rejected: the run they
+  start on still needs the same memory, which is what failed, and the command is not established to work in a
+  start script. Running at every start costs about two seconds and keeps the check on every container.
+- **Make the application declare `verticalAutoscaling.minRam`, as a scanning one does.** Rejected as the only
+  mechanism: an import does not change an existing service, so an installation would not converge, and every
+  application would carry a platform number. The build still refuses a scanning application without its 2 GB.
+- **Raise the RAM for a moment from the start script (`zsc scale ram`).** Rejected: it takes effect in about
+  10 s, so the script would have to wait for it, and a restart outside a deploy would repeat it.

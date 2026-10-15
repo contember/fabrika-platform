@@ -8,7 +8,15 @@ import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseZeropsDescriptor } from '../descriptor'
-import { renderLockedExecutionDescriptor, ZEROPS_FILE_SCAN_JOB, ZEROPS_FILE_SWEEP_JOB, ZEROPS_SCAN_MIN_RAM_GB, zeropsContractRun } from '../execution'
+import {
+	renderLockedExecutionDescriptor,
+	ZEROPS_FILE_SCAN_JOB,
+	ZEROPS_FILE_SWEEP_JOB,
+	ZEROPS_SCAN_MIN_RAM_GB,
+	ZEROPS_START_MIN_RAM_GB,
+	zeropsContractRun,
+	zeropsStartMinRam,
+} from '../execution'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
@@ -103,5 +111,23 @@ describe('a scanning contract on Zerops', () => {
 		).toThrow(
 			'needs 2 GB of RAM',
 		)
+	})
+})
+
+describe('the minimum RAM a deploy raises the deploy service to', () => {
+	const minRamOf = (manifest: FabrikaManifest): number | null => {
+		const execution = lockedExecutionOf(manifest)
+		if (execution === null) throw new Error('expected a contract application')
+		return zeropsStartMinRam(execution)
+	}
+
+	test("what the start script's isolation tests need with a database, what a scan needs with a scanner, nothing without either", async () => {
+		expect(minRamOf(await compile(app(notesArtifact, null)))).toBe(ZEROPS_START_MIN_RAM_GB)
+		expect(minRamOf(await compile(app(SCANNING, ZEROPS_SCAN_MIN_RAM_GB)))).toBe(ZEROPS_SCAN_MIN_RAM_GB)
+		const withoutDatabase: ZeropsAppConfig = {
+			...app(notesArtifact, null),
+			target: { ...app(notesArtifact, null).target, services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3' }] },
+		}
+		expect(minRamOf(await compile(withoutDatabase))).toBeNull()
 	})
 })

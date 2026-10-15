@@ -33,10 +33,11 @@ import {
 	type ZeropsAppVersion,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
+	type ZeropsServiceAutoscaling,
 } from './api'
 import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
-import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, renderLockedExecutionDescriptor } from './execution'
+import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, renderLockedExecutionDescriptor, zeropsStartMinRam } from './execution'
 import {
 	createdServices,
 	type ExposureFinding,
@@ -642,6 +643,67 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	}
 }
 
+/** The custom autoscaling with its minimum RAM raised to `minRam`; every other field is sent back as it was read. */
+const withMinRam = (custom: ZeropsServiceAutoscaling, minRam: number): ZeropsServiceAutoscaling => ({
+	...custom,
+	vertical: { ...custom.vertical, minResource: { ...custom.vertical.minResource, memoryGBytes: minRam } },
+})
+
+/**
+ * Raises the deploy service's minimum RAM to what the generated start script needs (`zeropsStartMinRam`), before the
+ * version's containers start. An import cannot: Zerops ignores a changed `verticalAutoscaling` of an existing service,
+ * so an existing service converges here, on every deploy. It only raises, and decides by reading the service back.
+ */
+const raiseStartMemory = async (env: StepEnv): Promise<void> => {
+	const { run, zerops, log, signal, dryRun } = env
+	const locked = lockedExecutionFor(run.artifact, run, dryRun)
+	const minRam = locked === null ? null : zeropsStartMinRam(locked)
+	const hostname = run.artifact.target.deployService
+	if (minRam === null) {
+		log(`  ${hostname} needs no more than the platform's minimum RAM`)
+		return
+	}
+	if (dryRun) {
+		log(`  [dry-run] would raise the minimum RAM of ${hostname} to ${minRam} GB where it is lower`)
+		return
+	}
+	const serviceId = run.target.serviceId
+	assertRunning(signal)
+	const service = await zerops.api.getService({ serviceId, signal })
+	const custom = service.customAutoscaling
+	const current = service.currentAutoscaling
+	if (custom === undefined || current === undefined) {
+		throw new Error(`zerops: ${hostname} did not report its autoscaling whole, so its minimum RAM cannot be raised to ${minRam} GB`)
+	}
+	const before = current.vertical.minResource.memoryGBytes
+	if (before !== null && before >= minRam) {
+		log(`  minimum RAM of ${hostname}: ${before} GB, unchanged (its start needs ${minRam} GB)`)
+		return
+	}
+	const maxRam = current.vertical.maxResource.memoryGBytes
+	if (maxRam !== null && maxRam < minRam) {
+		throw new Error(`zerops: ${hostname} may use at most ${maxRam} GB of RAM and its start needs ${minRam} GB; raise verticalAutoscaling.maxRam`)
+	}
+	assertRunning(signal)
+	let process: ZeropsProcess | null
+	try {
+		process = await zerops.api.configureCustomAutoscaling({ serviceId, autoscaling: withMinRam(custom, minRam), signal })
+	} catch (error) {
+		if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500 && error.status !== 408) {
+			throw new Error(`zerops: raising the minimum RAM of ${hostname} to ${minRam} GB was refused (${error.code === '' ? error.status : error.code})`)
+		}
+		throw error
+	}
+	if (process !== null) {
+		await waitForProcess({ api: zerops.api, processId: process.id, sleep: zerops.sleep, signal, label: `the autoscaling change of ${hostname}` })
+	}
+	const after = (await zerops.api.getService({ serviceId, signal })).currentAutoscaling?.vertical.minResource.memoryGBytes ?? null
+	if (after === null || after < minRam) {
+		throw new Error(`zerops: ${hostname} reads back a minimum RAM of ${after ?? 'nothing'} GB after it was raised to ${minRam} GB`)
+	}
+	log(`  minimum RAM of ${hostname}: ${before ?? 'the platform default'} → ${after} GB`)
+}
+
 /** Run one step's effect. Resolves on success, throws on failure (caught + recorded by `runSteps`). */
 const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 	const { run, zerops, compiled, log, signal, dryRun, attempt } = env
@@ -693,6 +755,11 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 
 		case 'write-service-env': {
 			await writeServiceEnv(env)
+			return
+		}
+
+		case 'raise-start-memory': {
+			await raiseStartMemory(env)
 			return
 		}
 

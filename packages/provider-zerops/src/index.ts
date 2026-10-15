@@ -29,6 +29,7 @@ export type {
 	ZeropsProjectStatus,
 	ZeropsRoleCode,
 	ZeropsService,
+	ZeropsServiceAutoscaling,
 	ZeropsServiceEnv,
 	ZeropsServiceEnvWrite,
 	ZeropsServiceStatus,

@@ -5,6 +5,7 @@ export type ZeropsStepKind =
 	| 'apply-import'
 	| 'verify-exposure'
 	| 'write-service-env'
+	| 'raise-start-memory'
 	| 'reserve-version'
 	| 'upload-source'
 	| 'trigger-build'
@@ -43,6 +44,11 @@ export const buildZeropsPlan = (manifest: FabrikaManifest, target: ZeropsRuntime
 		description: 'Read back that no service has subdomain access and every bucket is one the platform created private',
 	})
 	steps.push({ id: 'write-service-env', kind: 'write-service-env', description: 'Write the managed service variables' })
+	steps.push({
+		id: 'raise-start-memory',
+		kind: 'raise-start-memory',
+		description: "Raise the deploy service's minimum RAM to what its start script needs",
+	})
 	steps.push({ id: 'reserve-version', kind: 'reserve-version', description: 'Reserve a Zerops app version' })
 	steps.push({ id: 'upload-source', kind: 'upload-source', description: 'Upload the resolved repository snapshot' })
 	steps.push({ id: 'trigger-build', kind: 'trigger-build', description: 'Trigger the Zerops build+deploy pipeline' })

@@ -212,6 +212,7 @@ const makeApi = (
 			recorded.calls.push(`enableSubdomainAccess:${serviceId}`)
 		},
 		configureAutoscaling: () => Promise.reject(new Error('the control provider must not change autoscaling')),
+		configureCustomAutoscaling: () => Promise.reject(new Error('the control provider must not change autoscaling')),
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes', projectId: 'project-1', activeAppVersionId: 'bootstrap-1' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname, subdomainAccess: false }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),

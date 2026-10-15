@@ -55,6 +55,20 @@ const FILE_SWEEP_SCHEDULE = '41 * * * *'
  */
 export const ZEROPS_SCAN_MIN_RAM_GB = 2
 
+/**
+ * The RAM in GB a container of an application with a database starts with. Its start script runs `fabrika db
+ * test-isolation`, whose CLI and `bun test` child together peak at 161 MiB of anonymous memory for the Notes example
+ * and 225 MiB for the CRM example (measured locally, 2026-10-15), beside Bun's own mapped binary. Zerops' 0.125 GB
+ * floor kills that within a second, faster than vertical autoscaling reacts.
+ */
+export const ZEROPS_START_MIN_RAM_GB = 0.5
+
+/** The minimum RAM in GB the deploy service's containers need to start, or null when Zerops' floor suffices. */
+export function zeropsStartMinRam(execution: ZeropsLockedExecution): number | null {
+	if (execution.contract.scan === true) return ZEROPS_SCAN_MIN_RAM_GB
+	return execution.databaseUrl === null ? null : ZEROPS_START_MIN_RAM_GB
+}
+
 /** What a scanning application adds: ClamAV in the image with its first signatures, refreshed at start and daily. */
 const SCANNER_PACKAGE = 'clamav'
 const FRESHCLAM = 'sudo freshclam --stdout --quiet'
@@ -113,7 +127,7 @@ export function zeropsContractRun(artifact: ContractArtifact): ZeropsContractRun
 /**
  * A scanning application's deploy service must start its containers with `ZEROPS_SCAN_MIN_RAM_GB`: below it the
  * scanner is killed for memory, and every upload stays quarantined. Zerops ignores a changed `verticalAutoscaling` of
- * an existing service on a re-import, so an existing service is raised through Zerops itself.
+ * an existing service on a re-import, so the deploy's `raise-start-memory` step raises an existing service.
  */
 export function assertScanMemory(services: readonly { readonly [key: string]: JsonValue }[], deployService: string, run: ZeropsContractRun): void {
 	if (run.scan !== true) return

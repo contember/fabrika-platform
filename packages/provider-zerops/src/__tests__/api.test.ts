@@ -9,6 +9,7 @@ import {
 	ZEROPS_SERVICE_NOT_HTTP,
 	ZeropsApiError,
 	type ZeropsLogAccess,
+	type ZeropsServiceAutoscaling,
 	ZeropsServiceEnvValueTooLargeError,
 } from '../api'
 import type { Sleeper } from '../collaborators'
@@ -1044,6 +1045,54 @@ describe('Zerops upload-backed app versions', () => {
 		}])
 	})
 
+	test('reads a service autoscaling whole and sends a custom one back under the request keys of `RequestAutoscaling`', async () => {
+		const vertical: ZeropsServiceAutoscaling['vertical'] = {
+			cpuMode: 'SHARED',
+			minResource: { cpuCoreCount: 1, memoryGBytes: 0.125, diskGBytes: null },
+			maxResource: { cpuCoreCount: null, memoryGBytes: 48, diskGBytes: 100 },
+			minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: 0.0625, memoryPercent: null },
+			startCpuCoreCount: 2,
+			swapEnabled: false,
+		}
+		const requests: { method: string; url: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			requests.push({ method: init?.method ?? 'GET', url, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
+			if (init?.method === 'PUT') return jsonResponse({ process: { id: 'process-1', status: 'PENDING' } })
+			return jsonResponse({
+				id: 'service-1',
+				name: 'api',
+				customAutoscaling: { verticalAutoscaling: { minResource: { memoryGBytes: null } }, horizontalAutoscaling: { maxContainerCount: 4 } },
+				currentAutoscaling: { verticalAutoscaling: vertical, horizontalAutoscaling: { minContainerCount: 1, maxContainerCount: 4 } },
+			})
+		}
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+		const service = await api.getService({ serviceId: 'service-1', signal: signal() })
+		const inherited = { cpuCoreCount: null, memoryGBytes: null, diskGBytes: null }
+		const custom: ZeropsServiceAutoscaling = {
+			vertical: {
+				cpuMode: null,
+				minResource: inherited,
+				maxResource: inherited,
+				minFreeResource: { cpuCoreCount: null, cpuCorePercent: null, memoryGBytes: null, memoryPercent: null },
+				startCpuCoreCount: null,
+				swapEnabled: null,
+			},
+			horizontal: { minContainerCount: null, maxContainerCount: 4 },
+		}
+		expect(service.customAutoscaling).toEqual(custom)
+		expect(service.currentAutoscaling).toEqual({ vertical, horizontal: { minContainerCount: 1, maxContainerCount: 4 } })
+
+		await expect(api.configureCustomAutoscaling({ serviceId: 'service-1', autoscaling: custom, signal: signal() })).resolves.toEqual({
+			id: 'process-1',
+			status: 'PENDING',
+		})
+		expect(requests[1]).toEqual({
+			method: 'PUT',
+			url: 'https://zerops.test/service-stack/service-1/autoscaling',
+			body: { customAutoscaling: { verticalAutoscalingNullable: custom.vertical, horizontalAutoscalingNullable: custom.horizontal } },
+		})
+	})
+
 	test('accepts a documented process without appVersion, omits zeropsYamlSetup, and deletes with a bodiless request', async () => {
 		const requests: { method: string; url: string; body: unknown }[] = []
 		const fetchImpl: FetchLike = async (url, init) => {
@@ -1535,5 +1584,16 @@ describe('Zerops response readers', () => {
 				signal: signal(),
 			}),
 		).resolves.toEqual({ id: 'service-1', name: 'proxy' })
+	})
+
+	test('reads an autoscaling with a field it cannot read as absent whole, since one sent back would reset that field', async () => {
+		const service = await apiAnswering({
+			id: 'service-1',
+			name: 'api',
+			customAutoscaling: { verticalAutoscaling: { cpuMode: 'TURBO' } },
+			currentAutoscaling: { verticalAutoscaling: { minResource: { memoryGBytes: '0.125' } } },
+		}).getService({ serviceId: 'service-1', signal: signal() })
+		expect(service.customAutoscaling).toBeUndefined()
+		expect(service.currentAutoscaling).toBeUndefined()
 	})
 })
