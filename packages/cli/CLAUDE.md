@@ -20,7 +20,8 @@ label the envelope a registration carries.
   reachable from both clients or neither.
 - Output contract, as in `zops`: stdout carries DATA ONLY, progress and errors go
   to stderr, `--json` prints the result verbatim. An empty list prints no row and says
-  so on stderr.
+  so on stderr. A `failed` namespace or run is an answer, not an error: the exit code
+  stays 0 and stderr names the command that follows up (`namespaces reconcile`, `runs log`).
 - Credentials come from the ENVIRONMENT ONLY and have no flag, so they cannot
   reach a CI log or a process listing. The origin is not a credential and takes both.
 - `control key issue` is the bootstrap: a fresh installation's provisioning key is

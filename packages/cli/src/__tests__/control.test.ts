@@ -134,6 +134,20 @@ describe('control output contract', () => {
 		}
 	})
 
+	test('a failed run points at its log on stderr', async () => {
+		const run = { id: 'r1', appId: 'notes', env: 'prod', status: 'failed', ref: 'refs/heads/main' }
+		captureFetch({ result: run })
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() => runControlCli('runs', ['get', '--run=r1'], undefined, CONTROL_ENV))
+		})
+		expect(out).toBe('r1\tnotes\tprod\tfailed\trefs/heads/main')
+		expect(err).toBe('why it failed: fabrika control runs log --run=r1')
+
+		captureFetch({ result: { ...run, status: 'succeeded' } })
+		expect(await captureStderr(() => runControlCli('runs', ['get', '--run=r1'], undefined, CONTROL_ENV).then(() => {}))).toBe('')
+	})
+
 	test('an RPC denial keeps its type so a caller can tell it from an outage', async () => {
 		globalThis.fetch = asFetch(async () =>
 			new Response(JSON.stringify({ error: { type: 'forbidden', message: 'deploy.trigger required' } }), {
@@ -487,7 +501,27 @@ describe('control namespaces', () => {
 
 		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.get', input: { namespaceId: 'notes-prod' } })
 		expect(out).toBe('notes-prod\tprod\tfailed\t-')
-		expect(err).toBe('insufficientPermissions: zerops: project import failed (403) — client may not create projects')
+		expect(err).toBe([
+			'insufficientPermissions: zerops: project import failed (403) — client may not create projects',
+			'resume it with: fabrika control namespaces reconcile --namespace=notes-prod',
+		].join('\n'))
+	})
+
+	test('get names no reconcile for an unconfirmed update, which only retrying the update clears', async () => {
+		captureFetch({
+			result: {
+				id: 'notes-prod',
+				env: 'prod',
+				state: 'failed',
+				exclusiveAppId: null,
+				lastError: 'an update started and is not confirmed — retry namespaces.update with the planned target in unconfirmedTarget',
+				lastErrorCode: 'namespaceUpdateUnconfirmed',
+				unconfirmedTarget: { provider: 'zerops', version: 1, payload: {} },
+			},
+		})
+		const err = await captureStderr(() => runControlCli('namespaces', ['get', '--namespace=notes-prod'], undefined, CONTROL_ENV).then(() => {}))
+
+		expect(err).not.toContain('reconcile --namespace')
 	})
 
 	test('remove frees the id and names the provider resources it did not delete', async () => {

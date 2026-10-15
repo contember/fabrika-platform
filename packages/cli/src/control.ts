@@ -583,6 +583,7 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 	}
 	if (verb === 'get') {
 		const result = await client.runs.get({ runId: required(flags, 'run') })
+		if (result.status === 'failed') console.warn(`why it failed: fabrika control runs log --run=${result.id}`)
 		emit(flags, result, () => runLine(result))
 		return
 	}
@@ -635,11 +636,17 @@ const namespacePlanLines = (plan: PlanDeploymentNamespaceResponse): string[] => 
 	...plan.presentation.instructions.map((instruction) => `presentation.instruction\t${cell(instruction)}`),
 ]
 
-/** The failure is a DIAGNOSTIC, so it goes to stderr and leaves the data columns above untouched. */
+/**
+ * The failure is a DIAGNOSTIC, so it goes to stderr and leaves the data columns above untouched. A `failed` state is an
+ * answer, not a command failure, so the exit code stays 0, and the line names the verb that resumes it. An unconfirmed
+ * update is the exception: only retrying that update clears it, and its message says so.
+ */
 const warnNamespaceFailure = (namespace: DeploymentNamespaceDto): void => {
 	// Falsy, not `=== null`: a control plane that omits the field must not print an empty diagnostic.
-	if (!namespace.lastError) return
-	console.warn(`${namespace.lastErrorCode ?? 'unknown'}: ${namespace.lastError}`)
+	if (namespace.lastError) console.warn(`${namespace.lastErrorCode ?? 'unknown'}: ${namespace.lastError}`)
+	if (namespace.state === 'failed' && namespace.unconfirmedTarget === undefined) {
+		console.warn(`resume it with: fabrika control namespaces reconcile --namespace=${namespace.id}`)
+	}
 }
 
 /** Placement flags are the preset's overrides, so only the ones actually given are sent. */
