@@ -6,7 +6,7 @@ import { type RequestContext } from '../env'
 import { authFailurePage, loginPage } from '../password-pages'
 import { resolveUserPrincipal } from '../resolve'
 import { type Services } from '../services'
-import { type Handoff, handoffLocation, handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
+import { type Handoff, handoffLocation, handoffOf, handoffRedirectOr, loginDestinationFields, readHandoff } from './handoff'
 import { redirectHeaders } from './http'
 
 import { startOidc } from './oidc'
@@ -35,7 +35,7 @@ export async function handleLogin(
 	const presentation = await presentationFor(services, handoff?.app ?? null)
 	// A handoff's destination is already validated against the app's registry, so `safeRedirect` must
 	// not get a say: it admits IAM's own origin only, which by definition excludes the app host this
-	// exists for. Passing its fallback to the form would strand the login on IAM.
+	// exists for. Passing its refusal to the form would send the login to the installation's landing.
 	const redirect = handoffRedirectOr(handoff, url.searchParams.get('redirect'), services)
 
 	// Already signed in HERE? Then a handoff needs no prompt — mint the code off the existing login and
@@ -56,7 +56,7 @@ export async function handleLogin(
 			redirect,
 			oidcEnabled: services.config.authentication.oidc.enabled,
 			forgotEnabled: services.email !== null,
-			...loginHandoffFields(handoff),
+			...await loginDestinationFields(services, handoff, redirect),
 		})
 	}
 	return startOidc(services, env, redirect, handoff)
@@ -67,7 +67,7 @@ async function handleLocalLogin(
 	services: Services,
 	ctx: RequestContext,
 	requestId: string,
-	redirect: string,
+	redirect: string | null,
 	handoff: Handoff | null,
 	presentation: AppPresentation,
 ): Promise<Response> {

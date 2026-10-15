@@ -98,7 +98,7 @@ describe('GET /auth/login', () => {
 		)
 		// It used to be admitted, because the shared cookie could reach it. Now the browser would land
 		// there with no session at all, so it goes nowhere but IAM — a `?app=` handoff is the only way.
-		expect(res.headers.get('location')).toBe(issuer)
+		expect(res.headers.get('location')).toBe(`${issuer}/auth/login`)
 	})
 
 	test('302s to the IdP with PKCE and sets the in-flight cookie', async () => {
@@ -169,6 +169,27 @@ describe('login → callback (end to end with a fake IdP)', () => {
 		expect(principal?.email).toBe('user@contember.com')
 		const session = await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken ?? ''))
 		expect(session?.principal_id).toBe(principal?.id)
+	})
+
+	test("a login with no return address lands on the installation's console, never on IAM's bare origin", async () => {
+		for (const consoleOrigin of ['https://console.example.test', null]) {
+			const h = createHarness()
+			const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'g-43', email: 'user@contember.com' }) })
+			const console = [...services.config.adminAudiences][0]
+			if (console === undefined) throw new Error('no admin audience configured')
+			if (consoleOrigin !== null) await h.repositories.handoff.setReturnOrigins(console, [consoleOrigin])
+			const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
+			const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
+
+			const callback = await handleAuth(
+				new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, { headers: { Cookie: `px_oidc=${setCookieValue(login, 'px_oidc')}` } }),
+				services,
+				AUTH_ENV,
+				ctx(),
+			)
+			expect(callback.status).toBe(302)
+			expect(callback.headers.get('location')).toBe(consoleOrigin === null ? `${ISSUER}/auth/login` : `${consoleOrigin}/`)
+		}
 	})
 
 	test("an IdP presenting an external principal's mailbox is refused and claims nothing, allowlisted or not (ADR-0051)", async () => {

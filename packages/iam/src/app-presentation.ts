@@ -58,18 +58,32 @@ export function landingUrl(presentation: AppPresentation): string | null {
 	return presentation.landing === null ? null : `${presentation.landing}/`
 }
 
-/**
- * Where a completed action lands when its own application names no landing: the installation's console, the first
- * admin audience with a registered origin, whose proxy then signs the browser in through the normal handoff. IAM's
- * own origin serves no page at `/`, so an action that landed there left a person who had just set a password on an
- * error. Without a registered console it is IAM's sign-in page.
- */
-export async function installationLanding(services: Services): Promise<string> {
+/** The installation's console: the registered origin of the first admin audience that has one, or null for none. */
+export async function installationConsole(services: Services): Promise<string | null> {
 	for (const app of services.config.adminAudiences) {
-		const landing = landingUrl(await presentationFor(services, app))
+		const { landing } = await presentationFor(services, app)
 		if (landing !== null) return landing
 	}
-	return new URL('/auth/login', services.config.issuer).toString()
+	return null
+}
+
+/**
+ * Where a browser lands when nothing names its destination — a sign-in, a sign-out or a completed action of no
+ * application: the installation's console, whose proxy then signs the browser in through the normal handoff. IAM's
+ * own origin serves no page at `/`, and on Zerops the proxy answers it with 403. Without a registered console it is
+ * IAM's sign-in page.
+ */
+export async function installationLanding(services: Services): Promise<string> {
+	const console = await installationConsole(services)
+	return console === null ? new URL('/auth/login', services.config.issuer).toString() : `${console}/`
+}
+
+/**
+ * The origin off IAM where a completed action of `presentation` lands, which its page's `form-action` must admit:
+ * the application's own, else the console. Null when it lands on IAM's own sign-in page.
+ */
+export async function actionLandingOrigin(services: Services, presentation: AppPresentation): Promise<string | null> {
+	return presentation.landing ?? await installationConsole(services)
 }
 
 /** The `?app=` query a link or a form carries so the next page speaks for the same application; empty for none. */

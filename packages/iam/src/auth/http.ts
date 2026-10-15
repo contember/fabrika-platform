@@ -2,8 +2,9 @@ import { type Config } from '../services'
 
 /**
  * Open-redirect guard for a `?redirect=` that stays on IAM: accept only an absolute URL on IAM's OWN
- * origin, and fall back to the issuer for anything else. Prevents
- * `/auth/login?redirect=https://evil.example` from bouncing a logged-in user out.
+ * origin, and answer null for anything else, which the caller sends to the installation's landing
+ * (`installationLanding`). Prevents `/auth/login?redirect=https://evil.example` from bouncing a
+ * logged-in user out.
  *
  * It used to also admit the configured session-cookie domain and, locally, any `*.localhost` — the
  * allowlist for the shared cookie's reach. ADR-0023 retired that cookie, so **the return-origin
@@ -14,15 +15,15 @@ import { type Config } from '../services'
  * The comparison is the whole origin, not the hostname: the issuer already fixes the scheme and port,
  * so there is nothing left for a special case to decide.
  */
-export function safeRedirect(raw: string | null, config: Config): string {
+export function safeRedirect(raw: string | null, config: Config): string | null {
 	if (!raw) {
-		return config.issuer
+		return null
 	}
 	try {
 		const target = new URL(raw)
-		return target.origin === new URL(config.issuer).origin ? target.toString() : config.issuer
+		return target.origin === new URL(config.issuer).origin ? target.toString() : null
 	} catch {
-		return config.issuer
+		return null
 	}
 }
 

@@ -7,7 +7,8 @@ import { PASSWORD_MAX_CODE_POINTS, PASSWORD_MIN_CODE_POINTS, type PasswordProble
 
 export function loginPage(input: {
 	readonly presentation: AppPresentation
-	readonly redirect: string
+	/** An address on IAM's own origin, or a handoff's destination; null lands on the installation's landing. */
+	readonly redirect: string | null
 	readonly oidcEnabled: boolean
 	readonly forgotEnabled: boolean
 	/** The app this login is a handoff for (ADR-0022); absent for a plain IAM login. */
@@ -15,14 +16,14 @@ export function loginPage(input: {
 	readonly handoffState?: string
 	readonly handoffChallenge?: string
 	/**
-	 * The handoff destination's ORIGIN, and the one page on this service whose form may answer with a
-	 * redirect off it. Chromium applies `form-action` to the REDIRECT a submission answers with, not
-	 * only to the action, so `'self'` alone silently blocks the 302 to `<app>/__fabrika/auth/callback`
-	 * — the login succeeds, a code is issued and spent, and the browser never leaves this page.
-	 * Measured in Chromium 149. The value comes from the app's REGISTERED return origin, never from
-	 * the request, so widening the directive cannot widen where a browser may be sent.
+	 * The ORIGIN off IAM the submission answers its 302 with: the handoff destination's, or the console's
+	 * for a login with no return address. Chromium applies `form-action` to the REDIRECT a submission
+	 * answers with, not only to the action, so `'self'` alone silently blocks the 302 to
+	 * `<app>/__fabrika/auth/callback` — the login succeeds, a code is issued and spent, and the browser
+	 * never leaves this page. Measured in Chromium 149. The value is a REGISTERED return origin, never
+	 * the request's, so widening the directive cannot widen where a browser may be sent.
 	 */
-	readonly handoffOrigin?: string
+	readonly redirectOrigin?: string
 	readonly invalidCredentials?: boolean
 }): Response {
 	const text = catalogFor(input.presentation.locale).pages
@@ -33,14 +34,14 @@ export function loginPage(input: {
 		: `&app=${encodeURIComponent(input.app)}&state=${encodeURIComponent(input.handoffState ?? '')}&code_challenge=${
 			encodeURIComponent(input.handoffChallenge ?? '')
 		}`
-	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect)}${appQueryPart}`
+	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect ?? '')}${appQueryPart}`
 	const title = text.signIn.title(input.presentation.displayName)
 	return htmlPage({
 		locale: input.presentation.locale,
 		title,
 		content: `<h1>${escapeHtml(title)}</h1>${message(input.invalidCredentials === true ? text.signIn.invalidCredentials : undefined)}
 		<form method="post" action="/auth/login">
-			<input type="hidden" name="redirect" value="${escapeHtml(input.redirect)}">
+			<input type="hidden" name="redirect" value="${escapeHtml(input.redirect ?? '')}">
 			${input.app === undefined ? '' : `<input type="hidden" name="app" value="${escapeHtml(input.app)}">`}
 			${input.handoffState === undefined ? '' : `<input type="hidden" name="state" value="${escapeHtml(input.handoffState)}">`}
 			${input.handoffChallenge === undefined ? '' : `<input type="hidden" name="code_challenge" value="${escapeHtml(input.handoffChallenge)}">`}
@@ -55,7 +56,7 @@ export function loginPage(input: {
 		}
 		${input.oidcEnabled ? `<hr><p><a class="button" href="${escapeHtml(oidcUrl)}">${escapeHtml(text.signIn.singleSignOn)}</a></p>` : ''}`,
 		status: input.invalidCredentials === true ? 401 : 200,
-		formActionOrigin: input.handoffOrigin,
+		formActionOrigin: input.redirectOrigin,
 	})
 }
 
@@ -81,10 +82,12 @@ export function forgotPasswordPage(input: { readonly presentation: AppPresentati
 
 /**
  * The page an action link opens. Its form posts back with the link's `?app=`, so a refusal speaks the same language;
- * the completed action lands on the application's registered origin, which `form-action` therefore admits.
+ * the completed action lands on `landingOrigin`, which `form-action` therefore admits.
  */
 export function setPasswordPage(input: {
 	readonly presentation: AppPresentation
+	/** Where the completed action lands off IAM (`actionLandingOrigin`); null for IAM's own sign-in page. */
+	readonly landingOrigin: string | null
 	readonly token?: string
 	readonly purpose: 'enrollment' | 'reset'
 	readonly problem?: PasswordProblem
@@ -106,7 +109,7 @@ export function setPasswordPage(input: {
 			<button type="submit">${escapeHtml(title)}</button>
 		</form>`,
 		status: input.problem === undefined ? 200 : 400,
-		formActionOrigin: presentation.landing ?? undefined,
+		formActionOrigin: input.landingOrigin ?? undefined,
 	})
 }
 
@@ -115,15 +118,22 @@ export function setPasswordPage(input: {
  * only happens on a POST that passes the origin check; this keeps the link usable and lives here
  * because `htmlPage` (and its CSP) is what every browser-facing IAM page is built from.
  */
-export function logoutPage(redirect: string): Response {
+export function logoutPage(input: {
+	/** An address on IAM's own origin; null signs out to the installation's landing. */
+	readonly redirect: string | null
+	/** The console's origin when the sign-out lands there, which `form-action` therefore admits. */
+	readonly landingOrigin: string | null
+}): Response {
 	const text = catalogFor(DEFAULT_LOCALE).pages
+	const query = input.redirect === null ? '' : `?redirect=${encodeURIComponent(input.redirect)}`
 	return htmlPage({
 		locale: DEFAULT_LOCALE,
 		title: text.logout.title,
 		content: `<h1>${escapeHtml(text.logout.title)}</h1><p>${escapeHtml(text.logout.text)}</p>
-		<form method="post" action="/auth/logout?redirect=${encodeURIComponent(redirect)}">
+		<form method="post" action="${escapeHtml(`/auth/logout${query}`)}">
 			<button type="submit">${escapeHtml(text.logout.submit)}</button>
 		</form>`,
+		formActionOrigin: input.landingOrigin ?? undefined,
 	})
 }
 
@@ -172,10 +182,12 @@ export function invitationPage(presentation: AppPresentation): Response {
 /**
  * The answer to accepting an invitation that creates its principal: choose the password of the new account. The token
  * rides in the form as on `setPasswordPage`, and the form posts back to the invitation with the application's `?app=`;
- * the accepted invitation lands on the application's registered origin, which `form-action` therefore admits.
+ * the accepted invitation lands on `landingOrigin`, which `form-action` therefore admits.
  */
 export function invitationPasswordPage(input: {
 	readonly presentation: AppPresentation
+	/** Where the new account lands off IAM (`actionLandingOrigin`); null for IAM's own sign-in page. */
+	readonly landingOrigin: string | null
 	readonly token: string
 	/** The invited mailbox, which the new account signs in with. */
 	readonly address: string
@@ -197,7 +209,7 @@ export function invitationPasswordPage(input: {
 			<button type="submit">${escapeHtml(text.invitation.createSubmit)}</button>
 		</form>`,
 		status: input.problem === undefined ? 200 : 400,
-		formActionOrigin: presentation.landing ?? undefined,
+		formActionOrigin: input.landingOrigin ?? undefined,
 	})
 }
 

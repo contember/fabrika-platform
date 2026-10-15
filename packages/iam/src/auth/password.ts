@@ -1,6 +1,6 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { type AppPresentation, INSTALLATION_PRESENTATION, installationLanding, landingUrl, presentationFor } from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, INSTALLATION_PRESENTATION, landingUrl, presentationFor } from '../app-presentation'
 import { type AuditEventInput } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 
@@ -12,7 +12,7 @@ import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { hashToken } from '../secret'
 import { type Config, type Services } from '../services'
 import type { AuthFailure } from './failure'
-import { handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
+import { handoffOf, handoffRedirectOr, loginDestinationFields, readHandoff } from './handoff'
 import { methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
 import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
@@ -111,7 +111,7 @@ export async function handlePasswordLogin(
 		redirect,
 		oidcEnabled: services.config.authentication.oidc.enabled,
 		forgotEnabled: services.email !== null,
-		...loginHandoffFields(handoff),
+		...await loginDestinationFields(services, handoff, redirect),
 	}
 	if (!login.success) {
 		return refuseLogin(
@@ -294,7 +294,7 @@ export async function handlePasswordAction(
 	// The link's `?app=` is a hint for the page's words and its `form-action`; the stored action decides where it lands.
 	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'))
 	if (!services.config.authentication.password.enabled) return authFailurePage(linked, { kind: 'password_disabled' }, 404)
-	if (request.method === 'GET') return setPasswordPage({ presentation: linked, purpose })
+	if (request.method === 'GET') return setPasswordPage({ presentation: linked, landingOrigin: await actionLandingOrigin(services, linked), purpose })
 	if (request.method !== 'POST') return methodNotAllowed()
 	if (!sameOrigin(request, services.config)) return authFailurePage(linked, { kind: 'cross_origin' }, 403)
 	const form = await readForm(request)
@@ -309,7 +309,15 @@ export async function handlePasswordAction(
 	const principal = await services.repositories.principals.getPrincipalById(action.principal_id)
 	if (principal === null || principal.disabled_at !== null) return invalidActionPage(presentation)
 	const policy = validatePassword(password, { email: principal.email, label: principal.label })
-	if (!policy.ok) return setPasswordPage({ presentation, token: submittedToken, purpose, problem: policy.problem })
+	if (!policy.ok) {
+		return setPasswordPage({
+			presentation,
+			landingOrigin: await actionLandingOrigin(services, presentation),
+			token: submittedToken,
+			purpose,
+			problem: policy.problem,
+		})
+	}
 	const completed = await services.repositories.passwords.completeAction({
 		tokenHash,
 		purpose,
@@ -318,14 +326,14 @@ export async function handlePasswordAction(
 	if (completed === null) return invalidActionPage(presentation)
 	const completedPrincipal = await services.repositories.principals.getPrincipalById(completed.principalId)
 	if (completedPrincipal === null || completedPrincipal.disabled_at !== null) return invalidActionPage(presentation)
-	// An action that keeps an application lands on its registered origin, any other on the installation's console;
-	// that application's proxy then signs the browser in through the normal handoff, which the session issued here
-	// makes silent.
+	// An action that keeps an application lands on its registered origin, any other on the installation's landing
+	// (`issueSession`); that application's proxy then signs the browser in through the normal handoff, which the
+	// session issued here makes silent.
 	return issueSession(request, services, ctx, {
 		principalId: completedPrincipal.id,
 		email: completedPrincipal.email,
 		authenticationMethod: 'password',
-		redirect: landingUrl(presentation) ?? await installationLanding(services),
+		redirect: landingUrl(presentation),
 		reason: purpose === 'enrollment' ? 'password_enrollment' : 'password_reset',
 		requestId,
 	})

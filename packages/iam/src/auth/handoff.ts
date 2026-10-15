@@ -1,5 +1,6 @@
 import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 
+import { installationConsole } from '../app-presentation'
 import { issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
 import { type Services } from '../services'
 import type { AuthFailure } from './failure'
@@ -70,27 +71,35 @@ export function handoffOf(reading: HandoffReading): Handoff | null {
 
 /**
  * What a login page or an OIDC flight should carry as its return address: the handoff's validated
- * destination when there is one, otherwise IAM's own origin (`safeRedirect`).
+ * destination when there is one, otherwise an address on IAM's own origin (`safeRedirect`), or null
+ * for none, which `issueSession` answers with the installation's landing.
  */
-export function handoffRedirectOr(handoff: Handoff | null, raw: string | null, services: Services): string {
+export function handoffRedirectOr(handoff: Handoff | null, raw: string | null, services: Services): string | null {
 	return handoff === null ? safeRedirect(raw, services.config) : handoff.returnUrl
 }
 
 /**
- * What the login page needs to know about a handoff: the app id it carries in a hidden field, and the
- * destination origin its `form-action` must admit. The origin is taken from the REGISTERED return URL
- * `readHandoff` resolved, so it is the same value the 302 will use and never a caller's spelling.
+ * What the login page needs to know about where its submission lands: a handoff's app id and proof,
+ * which it carries in hidden fields, and the origin off IAM its `form-action` must admit — the
+ * handoff's destination, or the console for a login with no return address. Both origins are
+ * REGISTERED ones: the handoff's is taken from the return URL `readHandoff` resolved, so it is the
+ * same value the 302 will use and never a caller's spelling.
  */
-export function loginHandoffFields(
+export async function loginDestinationFields(
+	services: Services,
 	handoff: Handoff | null,
-): { app?: string; handoffOrigin?: string; handoffState?: string; handoffChallenge?: string } {
-	if (handoff === null) return {}
+	redirect: string | null,
+): Promise<{ app?: string; redirectOrigin?: string; handoffState?: string; handoffChallenge?: string }> {
+	if (handoff === null) {
+		const console = redirect === null ? await installationConsole(services) : null
+		return console === null ? {} : { redirectOrigin: console }
+	}
 	const origin = normalizeOrigin(handoff.returnUrl)
 	return {
 		app: handoff.app,
 		handoffState: handoff.state,
 		handoffChallenge: handoff.challenge,
-		...(origin === null ? {} : { handoffOrigin: origin }),
+		...(origin === null ? {} : { redirectOrigin: origin }),
 	}
 }
 

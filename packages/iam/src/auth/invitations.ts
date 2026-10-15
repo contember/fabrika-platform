@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { type AppPresentation, installationLanding, landingUrl, presentationFor } from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, landingUrl, presentationFor } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
@@ -60,13 +60,16 @@ export async function handleInvitation(request: Request, services: Services, ctx
 			})
 		}
 		const password = stringValue(form?.get('password') ?? null)
-		return password === null
-			? invitationPasswordPage({
-				presentation: await presentationFor(services, offer.invitation.app),
-				token: token.data,
-				address: offer.invitation.email,
-			})
-			: createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId })
+		if (password !== null) {
+			return createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId })
+		}
+		const presentation = await presentationFor(services, offer.invitation.app)
+		return invitationPasswordPage({
+			presentation,
+			landingOrigin: await actionLandingOrigin(services, presentation),
+			token: token.data,
+			address: offer.invitation.email,
+		})
 	}
 	const session = await currentSession(request, services)
 	if (session === null) {
@@ -127,7 +130,13 @@ async function createAndAccept(
 	const presentation = await presentationFor(services, invitation.app)
 	const policy = validatePassword(input.password, { email: invitation.email, label: invitation.email })
 	if (!policy.ok) {
-		return invitationPasswordPage({ presentation, token: input.token, address: invitation.email, problem: policy.problem })
+		return invitationPasswordPage({
+			presentation,
+			landingOrigin: await actionLandingOrigin(services, presentation),
+			token: input.token,
+			address: invitation.email,
+			problem: policy.problem,
+		})
 	}
 	const outcome = await acceptCreatingPrincipal(services, invitation, await services.passwordHasher.hash(policy.password), input.requestId)
 	if (!outcome.ok) {
@@ -137,7 +146,7 @@ async function createAndAccept(
 		principalId: outcome.principal.id,
 		email: outcome.principal.email,
 		authenticationMethod: 'password',
-		redirect: landingUrl(presentation) ?? await installationLanding(services),
+		redirect: landingUrl(presentation),
 		reason: 'invitation_enrollment',
 		requestId: input.requestId,
 	})

@@ -1,6 +1,6 @@
 import { permits, SESSION_COOKIE } from '@fabrika/auth-core'
 import { ADMIN_ACTION, IAM_APP } from '../admin/router'
-import { INSTALLATION_PRESENTATION } from '../app-presentation'
+import { INSTALLATION_PRESENTATION, installationLanding } from '../app-presentation'
 import { sessionUsable } from '../auth'
 import { type AuthenticationMethod } from '../db'
 import { type RequestContext } from '../env'
@@ -52,7 +52,8 @@ export async function issueSession(
 		idpSub?: string | null
 		email?: string | null
 		authenticationMethod?: AuthenticationMethod
-		redirect: string
+		/** Where the login lands; null for no destination of its own, which is the installation's landing. */
+		redirect: string | null
 		reason: string
 		/** The correlation id the composition root allowed; see `src/request-id.ts`. */
 		requestId: string
@@ -88,7 +89,9 @@ export async function issueSession(
 
 	// The IAM cookie is set either way: it is what makes the NEXT handoff, to this or any other app,
 	// silent. What changes is where the browser goes — its own destination, or the app's callback.
-	const location = input.handoff == null ? input.redirect : await handoffLocation(services, input.handoff, sessionId)
+	const location = input.handoff == null
+		? input.redirect ?? await installationLanding(services)
+		: await handoffLocation(services, input.handoff, sessionId)
 	const headers = redirectHeaders(location)
 	headers.append('Set-Cookie', sessionCookie(sessionToken))
 	if (input.clearOidc === true) {
@@ -164,7 +167,7 @@ export async function handleLogout(request: Request, services: Services, request
 		}
 	}
 	const url = new URL(request.url)
-	const headers = redirectHeaders(safeRedirect(url.searchParams.get('redirect'), services.config))
+	const headers = redirectHeaders(safeRedirect(url.searchParams.get('redirect'), services.config) ?? await installationLanding(services))
 	headers.append('Set-Cookie', clearCookie(SESSION_COOKIE, { path: '/' }))
 	return new Response(null, { status: 302, headers })
 }

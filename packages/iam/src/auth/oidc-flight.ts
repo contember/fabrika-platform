@@ -19,7 +19,8 @@ export type AuthEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 interface Flight {
 	state: string
 	verifier: string
-	redirect: string
+	/** Absent for a login with no return address, which lands on the installation's landing. */
+	redirect?: string
 	/** The handoff app, when this SSO detour started from one (ADR-0022). */
 	app?: string
 	handoffState?: string
@@ -47,7 +48,7 @@ export async function encodeFlight(env: AuthEnv, flight: Flight): Promise<string
 const flightSchema = z.object({
 	state: z.string(),
 	verifier: z.string(),
-	redirect: z.string(),
+	redirect: z.string().optional(),
 	app: z.string().optional().catch(undefined),
 	handoffState: z.string().optional().catch(undefined),
 	handoffChallenge: z.string().optional().catch(undefined),

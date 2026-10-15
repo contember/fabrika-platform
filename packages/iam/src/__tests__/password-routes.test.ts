@@ -132,13 +132,14 @@ describe('password login modes and CSRF', () => {
 		const local = h.makeServices({ environment: 'local', issuer: ISSUER }).config
 		expect(safeRedirect('https://iam.example.com/console', production)).toBe('https://iam.example.com/console')
 		expect(safeRedirect(`${ISSUER}/console`, local)).toBe(`${ISSUER}/console`)
-		// Everything else falls back to the issuer, including a sibling host and a local one. ADR-0023
-		// left the return-origin registry as the only authority on sending a browser to another host,
-		// and `readHandoff` has already consulted it by the time this runs.
-		expect(safeRedirect('https://evil.example/x', production)).toBe('https://iam.example.com')
-		expect(safeRedirect('http://localhost:3000/callback', local)).toBe(ISSUER)
-		expect(safeRedirect('http://notes.fabrika.localhost:18081/', local)).toBe(ISSUER)
-		expect(safeRedirect('https://iam.example.com.evil.test/', production)).toBe('https://iam.example.com')
+		// Everything else is refused, including a sibling host and a local one, and the caller lands on the
+		// installation's landing instead. ADR-0023 left the return-origin registry as the only authority on
+		// sending a browser to another host, and `readHandoff` has already consulted it by the time this runs.
+		expect(safeRedirect('https://evil.example/x', production)).toBeNull()
+		expect(safeRedirect('http://localhost:3000/callback', local)).toBeNull()
+		expect(safeRedirect('http://notes.fabrika.localhost:18081/', local)).toBeNull()
+		expect(safeRedirect('https://iam.example.com.evil.test/', production)).toBeNull()
+		expect(safeRedirect(null, production)).toBeNull()
 	})
 })
 
@@ -387,12 +388,114 @@ describe('forgot password and one-time actions', () => {
 	})
 })
 
-describe('an action of no application', () => {
-	test("lands on the installation's console once it has registered an origin", async () => {
-		const { h, services } = passwordServices()
+// IAM serves no page at its bare origin, and on Zerops the proxy answers it with 403, so a flow that names no
+// destination of its own lands on the installation's console, or on IAM's sign-in page without one.
+describe('a flow that names no destination', () => {
+	const CONSOLE_ORIGIN = 'https://console.example.test'
+
+	async function registerConsole(h: Harness, services: Services): Promise<void> {
 		const console = [...services.config.adminAudiences][0]
 		if (console === undefined) throw new Error('no admin audience configured')
-		await h.repositories.handoff.setReturnOrigins(console, ['https://console.example.test'])
+		await h.repositories.handoff.setReturnOrigins(console, [CONSOLE_ORIGIN])
+	}
+
+	async function seedPasswordUser(h: Harness, hasher: FastPasswordHasher): Promise<void> {
+		const principalId = seedUser(h.sqlite, { sub: null, email: 'person@example.test' })
+		await h.repositories.passwords.enableEnrollment(principalId)
+		await h.repositories.passwords.upsertCredential(principalId, await hasher.hash('a valid long password'))
+	}
+
+	function formAction(response: Response): string | undefined {
+		return /form-action ([^;]*);/.exec(response.headers.get('content-security-policy') ?? '')?.[1]
+	}
+
+	function signIn(services: Services, fields: Record<string, string> = {}): Promise<Response> {
+		return handleAuth(
+			post('/auth/login', { email: 'person@example.test', password: 'a valid long password', ...fields }),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+	}
+
+	function signOut(services: Services, redirect?: string): Promise<Response> {
+		const query = redirect === undefined ? '' : `?redirect=${encodeURIComponent(redirect)}`
+		return handleAuth(post(`/auth/logout${query}`, {}), services, AUTH_ENV, new TestContext())
+	}
+
+	test("a sign-in lands on the installation's console, whose origin the login page admits", async () => {
+		const { h, hasher, services } = passwordServices()
+		await registerConsole(h, services)
+		await seedPasswordUser(h, hasher)
+
+		const page = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, new TestContext())
+		expect(formAction(page)).toBe(`'self' ${CONSOLE_ORIGIN}`)
+		expect(await page.text()).toContain('name="redirect" value=""')
+
+		const login = await signIn(services, { redirect: '' })
+		expect(login.status).toBe(302)
+		expect(login.headers.get('Location')).toBe(`${CONSOLE_ORIGIN}/`)
+		expect(cookieValue(login, SESSION_COOKIE)).not.toBeNull()
+	})
+
+	test("a sign-in lands on IAM's sign-in page without a registered console, never on IAM's bare origin", async () => {
+		const { h, hasher, services } = passwordServices()
+		await seedPasswordUser(h, hasher)
+
+		const page = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, new TestContext())
+		expect(formAction(page)).toBe(`'self'`)
+
+		const login = await signIn(services)
+		expect(login.headers.get('Location')).toBe(`${ISSUER}/auth/login`)
+	})
+
+	test("a return address on IAM's own origin still wins, and any other is replaced by the console", async () => {
+		const { h, hasher, services } = passwordServices()
+		await registerConsole(h, services)
+		await seedPasswordUser(h, hasher)
+
+		const page = await handleAuth(
+			new Request(`${ISSUER}/auth/login?redirect=${encodeURIComponent(`${ISSUER}/after`)}`),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(formAction(page)).toBe(`'self'`)
+		expect((await signIn(services, { redirect: `${ISSUER}/after` })).headers.get('Location')).toBe(`${ISSUER}/after`)
+		expect((await signIn(services, { redirect: 'https://evil.example/x' })).headers.get('Location')).toBe(`${CONSOLE_ORIGIN}/`)
+	})
+
+	test("a sign-out lands on the installation's console, whose origin its confirmation admits", async () => {
+		const { h, services } = passwordServices()
+		await registerConsole(h, services)
+
+		const page = await handleAuth(new Request(`${ISSUER}/auth/logout`), services, AUTH_ENV, new TestContext())
+		expect(formAction(page)).toBe(`'self' ${CONSOLE_ORIGIN}`)
+		expect(await page.text()).toContain('<form method="post" action="/auth/logout">')
+		expect((await signOut(services)).headers.get('Location')).toBe(`${CONSOLE_ORIGIN}/`)
+		expect((await signOut(services, 'https://evil.example/x')).headers.get('Location')).toBe(`${CONSOLE_ORIGIN}/`)
+
+		// The console asks to return to IAM's sign-in page, which stays where it asked.
+		const asked = await handleAuth(
+			new Request(`${ISSUER}/auth/logout?redirect=${encodeURIComponent(`${ISSUER}/auth/login`)}`),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(formAction(asked)).toBe(`'self'`)
+		expect((await signOut(services, `${ISSUER}/auth/login`)).headers.get('Location')).toBe(`${ISSUER}/auth/login`)
+	})
+
+	test("a sign-out lands on IAM's sign-in page without a registered console", async () => {
+		const { services } = passwordServices()
+		const page = await handleAuth(new Request(`${ISSUER}/auth/logout`), services, AUTH_ENV, new TestContext())
+		expect(formAction(page)).toBe(`'self'`)
+		expect((await signOut(services)).headers.get('Location')).toBe(`${ISSUER}/auth/login`)
+	})
+
+	test('a password action of no application lands on the console, whose origin its page admits', async () => {
+		const { h, services } = passwordServices()
+		await registerConsole(h, services)
 		const principalId = seedUser(h.sqlite, { sub: null, email: 'first-admin@example.test' })
 		await h.repositories.passwords.enableEnrollment(principalId)
 		const principal = await h.repositories.principals.getPrincipalById(principalId)
@@ -404,6 +507,9 @@ describe('an action of no application', () => {
 		const token = new URLSearchParams(new URL(action.url).hash.slice(1)).get('token')
 		if (token === null) throw new Error('missing action token')
 
+		const page = await handleAuth(new Request(`${ISSUER}/auth/password/enroll`), services, AUTH_ENV, new TestContext())
+		expect(formAction(page)).toBe(`'self' ${CONSOLE_ORIGIN}`)
+
 		const complete = await handleAuth(
 			post('/auth/password/enroll', { token, password: 'a sufficiently long password' }),
 			services,
@@ -412,7 +518,7 @@ describe('an action of no application', () => {
 		)
 
 		expect(complete.status).toBe(302)
-		expect(complete.headers.get('Location')).toBe('https://console.example.test/')
+		expect(complete.headers.get('Location')).toBe(`${CONSOLE_ORIGIN}/`)
 	})
 })
 

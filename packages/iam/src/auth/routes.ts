@@ -2,6 +2,7 @@
  * The public IAM-host auth surface. App session delivery uses a browser-bound handoff; `/auth/mint/*`
  * is intercepted upstream by `src/app.ts` for the proxy. Admin admission belongs to `admin/router.ts`.
  */
+import { installationConsole } from '../app-presentation'
 import type { RequestContext } from '../env'
 import { INVITATION_ACCEPT_PATH } from '../membership'
 import { logoutPage } from '../password-pages'
@@ -67,7 +68,10 @@ export async function handleAuth(
 		// stays usable — it renders the same-origin form that posts — because a cross-site
 		// `location = '…/auth/logout'` used to revoke the login and every app session under it.
 		if (request.method === 'POST') return handleLogout(request, services, requestId)
-		if (request.method === 'GET') return logoutPage(safeRedirect(url.searchParams.get('redirect'), services.config))
+		if (request.method === 'GET') {
+			const redirect = safeRedirect(url.searchParams.get('redirect'), services.config)
+			return logoutPage({ redirect, landingOrigin: redirect === null ? await installationConsole(services) : null })
+		}
 		return methodNotAllowed()
 	}
 	return new Response('Not found', { status: 404 })

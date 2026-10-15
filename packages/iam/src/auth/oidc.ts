@@ -35,7 +35,7 @@ export async function handleOidcStart(request: Request, services: Services, env:
 export async function startOidc(
 	services: Services,
 	env: AuthEnv,
-	redirect: string,
+	redirect: string | null,
 	handoff: Handoff | null = null,
 ): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) {
@@ -48,7 +48,7 @@ export async function startOidc(
 	const flight = await encodeFlight(env, {
 		state,
 		verifier,
-		redirect,
+		...(redirect === null ? {} : { redirect }),
 		...(handoff === null
 			? {}
 			: { app: handoff.app, handoffState: handoff.state, handoffChallenge: handoff.challenge }),
@@ -128,7 +128,7 @@ export async function handleCallback(
 		: await readHandoff(
 			services,
 			flight.app,
-			flight.redirect,
+			flight.redirect ?? null,
 			flight.handoffState ?? null,
 			flight.handoffChallenge ?? null,
 		)
@@ -140,7 +140,7 @@ export async function handleCallback(
 		principalId: resolved.principal.id,
 		idpSub: identity.sub,
 		email: identity.email,
-		redirect: safeRedirect(flight.redirect, services.config),
+		redirect: safeRedirect(flight.redirect ?? null, services.config),
 		reason: 'login',
 		requestId,
 		clearOidc: true,
