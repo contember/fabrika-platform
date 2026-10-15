@@ -125,6 +125,9 @@ that declares a mailer has no such flow, so it does not start without a sender (
   the deploy hands nothing and Zerops removes the stale variables with the rest of the framework's families. The names
   are framework variables ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), so no application
   sets them itself.
+- As framework variables, the `FABRIKA_EMAIL_*` values are secrets to the error-report scrubber of
+  [ADR-0059](0059-application-server-errors-carry-their-stack-and-message.md): it removes each value of eight or more
+  characters from an application's reports.
 - Control refuses such a deploy, before any effect, when the installation has no transport. It refuses at deploy, not
   at approval: the transport is installation state that can be added or removed after a contract was approved.
 - IAM and Control read the transport when they start. An application gets a changed transport at its next deploy;
