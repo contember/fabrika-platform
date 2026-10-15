@@ -1,9 +1,11 @@
 import { Outlet } from '@buzola/router'
+import { AppNamesProvider, useLoadedAppNames } from '../../access/lib/app-names'
 import { useMe } from '../../access/lib/useMe'
 import { RouteError } from '../../components/RouteError'
 
 export default function AccessLayout() {
 	const me = useMe()
+	const names = useLoadedAppNames()
 
 	if (me.status === 'forbidden') {
 		return (
@@ -29,9 +31,11 @@ export default function AccessLayout() {
 	}
 
 	return (
-		<Outlet
-			fallback={<div className="loading">Connecting to IAM…</div>}
-			errorFallback={(error) => <RouteError error={error} />}
-		/>
+		<AppNamesProvider names={names}>
+			<Outlet
+				fallback={<div className="loading">Connecting to IAM…</div>}
+				errorFallback={(error) => <RouteError error={error} />}
+			/>
+		</AppNamesProvider>
 	)
 }

@@ -3,6 +3,7 @@ import type { CreatePolicyRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ActionPicker } from '../../../../access/components/ActionPicker'
 import { api } from '../../../../access/lib/api'
+import { AppName } from '../../../../access/lib/app-names'
 import { Icon } from '../../../../components/Icon'
 import { ApiError } from '../../../../lib/api'
 
@@ -63,7 +64,7 @@ export default createPage()
 					</Link>
 					<h1>Create policy</h1>
 					<p className="hint">
-						A named permission set for <code>{data.app}</code>, built from its action catalog. Grantable like any role.
+						A named permission set for <AppName app={data.app} />, built from its action catalog. Grantable like any role.
 					</p>
 				</div>
 

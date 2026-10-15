@@ -1,4 +1,5 @@
 import type { AppDto } from '@fabrika/iam-contract'
+import { appOptionLabel } from '../lib/app-names'
 
 /**
  * Which app a grant / mapping applies to. Three explicit states (mirrors ScopePicker)
@@ -65,7 +66,7 @@ export function AppPicker({ apps, value, onChange, idPrefix = 'app' }: AppPicker
 					value={value.app}
 					onChange={(e) => onChange({ kind: 'app', app: e.target.value })}
 				>
-					{apps.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}
+					{apps.map((a) => <option key={a.id} value={a.id}>{appOptionLabel(a)}</option>)}
 				</select>
 			)}
 			{apps.length === 0 && <p className="hint">No apps registered yet — grants can only be cross-app.</p>}

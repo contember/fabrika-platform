@@ -3,6 +3,7 @@ import type { ApiKeyDto, GrantDto, RotateApiKeyResponse, ShareLinkListItem } fro
 import { useState } from 'react'
 import { SecretModal } from '../../../access/components/SecretModal'
 import { api } from '../../../access/lib/api'
+import { AppName } from '../../../access/lib/app-names'
 import { fmtExpiry, fmtScope, shareLinkState } from '../../../access/lib/format'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { Icon } from '../../../components/Icon'
@@ -117,8 +118,8 @@ function GrantSummary({ grants }: { grants: GrantDto[] }) {
 				const scope = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
 				return (
 					<div key={grant.id} className="grant-chip">
-						<code>{grant.roleKey ?? (grant.permissions ?? []).join(', ')}</code> on {grant.app ?? 'all apps'} · {scope} · expires{' '}
-						{fmtExpiry(grant.expiresAt).toLowerCase()}
+						<code>{grant.roleKey ?? (grant.permissions ?? []).join(', ')}</code> on {grant.app === null ? 'all apps' : <AppName app={grant.app} />} ·{' '}
+						{scope} · expires {fmtExpiry(grant.expiresAt).toLowerCase()}
 					</div>
 				)
 			})}

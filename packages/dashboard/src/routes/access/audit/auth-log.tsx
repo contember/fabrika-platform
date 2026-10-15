@@ -1,6 +1,7 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { api } from '../../../access/lib/api'
+import { AppName } from '../../../access/lib/app-names'
 import { trimmedQueryValue } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
 import { Status } from '../../../components/Status'
@@ -85,7 +86,9 @@ export default createPage()
 					{rows.map((row) => (
 						<tr key={row.id}>
 							<td className="nowrap">{fmtDate(row.createdAt)}</td>
-							<td>{row.app}</td>
+							<td>
+								<AppName app={row.app} />
+							</td>
 							<td>{row.kind}</td>
 							<td>
 								{row.credentialId

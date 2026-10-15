@@ -3,6 +3,7 @@ import type { AuditEventDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { JsonView } from '../../../access/components/JsonView'
 import { api } from '../../../access/lib/api'
+import { AppName } from '../../../access/lib/app-names'
 import { actorIdsToResolve, type AuditActor, auditActor, resolveActors } from '../../../access/lib/audit-actors'
 import { trimmedQueryValue } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
@@ -192,7 +193,9 @@ function AuditRow({ event, actor }: { event: AuditEventDto; actor: AuditActor })
 				<td>
 					<ActorCell actor={actor} />
 				</td>
-				<td>{event.app}</td>
+				<td>
+					<AppName app={event.app} />
+				</td>
 				<td>
 					<code>{event.action}</code>
 				</td>

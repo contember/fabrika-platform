@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Badge } from '../../../access/components/Badge'
 import { SecretModal } from '../../../access/components/SecretModal'
 import { api } from '../../../access/lib/api'
+import { AppName } from '../../../access/lib/app-names'
 import { fmtExpiry, fmtScope } from '../../../access/lib/format'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { Icon } from '../../../components/Icon'
@@ -332,7 +333,11 @@ function SessionRow({ session, onDone }: { session: SessionDto; onDone: () => vo
 			<td>
 				{session.app === null
 					? <span className="muted">IAM</span>
-					: <Chip title={session.parentSessionId === null ? undefined : `Derived from session ${session.parentSessionId}`}>{session.app}</Chip>}
+					: (
+						<Chip title={session.parentSessionId === null ? undefined : `Derived from session ${session.parentSessionId}`}>
+							<AppName app={session.app} />
+						</Chip>
+					)}
 			</td>
 			<td>{fmtExpiry(session.expiresAt)}</td>
 			<td>
@@ -503,7 +508,7 @@ function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => void }) {
 			<td>
 				<GrantAuthorizationCell grant={grant} />
 			</td>
-			<td>{grant.app ? <code>{grant.app}</code> : <span className="muted">All apps</span>}</td>
+			<td>{grant.app ? <AppName app={grant.app} /> : <span className="muted">All apps</span>}</td>
 			<td>{scopeLabel}</td>
 			<td>{fmtExpiry(grant.expiresAt)}</td>
 			<td>{grant.grantedBy ?? <span className="muted">—</span>}</td>

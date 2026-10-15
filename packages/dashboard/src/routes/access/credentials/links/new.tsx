@@ -3,6 +3,7 @@ import type { IssuedShareLinkResponse, IssueShareLinkRequest } from '@fabrika/ia
 import { useState } from 'react'
 import { SecretModal } from '../../../../access/components/SecretModal'
 import { api } from '../../../../access/lib/api'
+import { appOptionLabel } from '../../../../access/lib/app-names'
 import { type GrantRow, parseShareLinkForm } from '../../../../access/lib/share-link-form'
 import { Icon } from '../../../../components/Icon'
 import { ApiError } from '../../../../lib/api'
@@ -80,7 +81,7 @@ export default createPage()
 						App
 						<select value={app} onChange={(e) => setApp(e.target.value)}>
 							<option value="">Choose an app…</option>
-							{data.apps.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}
+							{data.apps.map((item) => <option key={item.id} value={item.id}>{appOptionLabel(item)}</option>)}
 						</select>
 						<small className="hint">
 							The link mints only for this app. Its grants are frozen at issue, so the app is what keeps them from being spent anywhere else.

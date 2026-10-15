@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ActionPicker } from '../../../access/components/ActionPicker'
 import { Badge } from '../../../access/components/Badge'
 import { api } from '../../../access/lib/api'
+import { appOptionLabel } from '../../../access/lib/app-names'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { Icon } from '../../../components/Icon'
 import { EmptyState, Table } from '../../../components/Table'
@@ -67,7 +68,7 @@ export default createPage()
 							onChange={(e) => navigate('access/permissions', { params: { app: e.target.value || undefined }, replace: true })}
 						>
 							<option value="">Built-in only</option>
-							{data.apps.map((app) => <option key={app.id} value={app.id}>{app.id}</option>)}
+							{data.apps.map((app) => <option key={app.id} value={app.id}>{appOptionLabel(app)}</option>)}
 						</select>
 					</label>
 					<span className="count">{roleCount} grantable</span>

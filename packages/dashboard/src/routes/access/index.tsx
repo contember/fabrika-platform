@@ -1,6 +1,7 @@
 import { createPage, Link } from '@buzola/router'
 import type { ApiKeyDto, AuditEventDto, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 import { api } from '../../access/lib/api'
+import { type AppNames, appText, useAppNames } from '../../access/lib/app-names'
 import { fmtExpiry, shareLinkState } from '../../access/lib/format'
 import { Icon } from '../../components/Icon'
 import { Chip, principalLamp, Status, StatusLamp } from '../../components/Status'
@@ -34,6 +35,7 @@ export default createPage()
 	.render(({ data }) => {
 		const { users, apiKeys, shareLinks, audit } = data
 		const now = Math.floor(Date.now() / 1000)
+		const names = useAppNames()
 
 		const activeUsers = users.filter((user) => user.status === 'active')
 		const invited = users.filter((user) => user.status === 'invited')
@@ -261,7 +263,7 @@ export default createPage()
 															<Chip>API key</Chip>
 														</span>
 														<span className="feed-meta">
-															<span className="truncate">{authorizationLabel(key)}</span>
+															<span className="truncate">{authorizationLabel(key, names)}</span>
 														</span>
 													</span>
 												</Link>
@@ -339,12 +341,12 @@ function inDays(expiresAt: number, now: number): string {
 }
 
 /** One line of what a key may do — the detail lives on the credentials page. */
-function authorizationLabel(key: ApiKeyDto): string {
+function authorizationLabel(key: ApiKeyDto, names: AppNames): string {
 	if (key.grants.length === 0) return 'no grants'
 	const first = key.grants[0]
 	if (first === undefined) return 'no grants'
 	const what = first.roleKey ?? (first.permissions ?? []).join(', ')
-	const where = first.app ?? 'all apps'
+	const where = first.app === null ? 'all apps' : appText(names, first.app)
 	return key.grants.length === 1 ? `${what} on ${where}` : `${what} on ${where} + ${key.grants.length - 1} more`
 }
 
