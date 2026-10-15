@@ -3,6 +3,7 @@ import type { GrantDto, PasswordActionDelivery, PermissionEntry, PrincipalDetail
 import { useState } from 'react'
 import { Badge } from '../../../access/components/Badge'
 import { SecretModal } from '../../../access/components/SecretModal'
+import { useAdministration } from '../../../access/lib/administration'
 import { api } from '../../../access/lib/api'
 import { AppName } from '../../../access/lib/app-names'
 import { fmtExpiry, fmtScope } from '../../../access/lib/format'
@@ -22,6 +23,7 @@ export default createPage()
 	.route('/access/users/:id')
 	.render(({ data, invalidate }) => {
 		const { principal } = data
+		const administration = useAdministration()
 		// An invited user's label IS their email, so printing both under the title says one thing twice.
 		const identity = [principal.email, principal.externalId].filter((value): value is string => value !== null && value !== principal.label)
 
@@ -115,7 +117,9 @@ export default createPage()
 					</Table>
 				</section>
 
-				{principal.affiliation === 'external' && <PromoteToInternal principal={principal} onDone={invalidate} />}
+				{principal.affiliation === 'external' && administration.kind === 'installation' && (
+					<PromoteToInternal principal={principal} onDone={invalidate} />
+				)}
 
 				<DisableToggle principal={principal} onDone={invalidate} />
 			</>

@@ -1,5 +1,13 @@
 import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
-import type { ApiKeyDto, AuditEventDto, IamAdminRpcContract, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
+import {
+	type ApiKeyDto,
+	type AuditEventDto,
+	type IamAdministrationScope,
+	iamAdministrationScope,
+	type IamAdminRpcContract,
+	type PrincipalListItem,
+	type ShareLinkListItem,
+} from '@fabrika/iam-contract'
 
 const RPC_BASE = '/iam/admin/rpc'
 
@@ -53,16 +61,17 @@ export async function iamSnapshot(fetcher: RpcFetch = fetch): Promise<IamSnapsho
 	}
 }
 
-/** IAM's `me` answers an installation administrator, and refuses everyone else with 403. */
+/** IAM's `me` answers an administrator, of the installation or of applications' people, and refuses everyone else with 403. */
 export type IamAdministration =
-	| { status: 'admin'; principal: SignedInPrincipal }
+	| { status: 'administrator'; principal: SignedInPrincipal; scope: IamAdministrationScope }
 	| { status: 'not-admin' }
 	| { status: 'unknown' }
 
 export async function iamAdministration(fetcher: RpcFetch = fetch): Promise<IamAdministration> {
 	try {
 		const me = await quietIamClient(fetcher).me()
-		return { status: 'admin', principal: { id: me.id, label: me.label } }
+		const scope = iamAdministrationScope(me.permissions)
+		return scope === null ? { status: 'not-admin' } : { status: 'administrator', principal: { id: me.id, label: me.label }, scope }
 	} catch (cause) {
 		return cause instanceof RpcError && cause.httpStatus === 403 ? { status: 'not-admin' } : { status: 'unknown' }
 	}

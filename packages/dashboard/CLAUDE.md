@@ -38,10 +38,12 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   cross-site POST, so never post it from the console. IAM's origin comes from `/.well-known/fabrika-builder`. The
   signed-in name is Control's `consoleAccess` principal, or IAM's `me` when Control does not answer.
 - **The console shows what its caller may use; it decides nothing** (`src/lib/console-access.ts`). `consoleSession()`
-  reads, once per load and without a login bounce, Control's `consoleAccess`, IAM's `me` (answers administrators only)
-  and `appPeople.apps`. `mayOpen` gives each rail page the rule its LOADER needs, so a page in the rail loads: the
+  reads, once per load and without a login bounce, Control's `consoleAccess`, IAM's `me` (answers administrators only:
+  `iamAdministrationScope` of its permissions says whether of the installation or of some applications' people,
+  ADR-0058) and `appPeople.apps`. `mayOpen` gives each rail page the rule its LOADER needs, so a page in the rail loads: the
   overview needs `app.manage`, `namespace.manage` and `deploy.read` globally, Applications `app.manage` globally,
-  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope. The root layout drops the rest,
+  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope, Access's Users any IAM administration, every other Access page the
+  installation's. The root layout drops the rest,
   answers a hidden page reached by URL with "not available", and shows the no-access page when nothing is left. A
   part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
   `mayDo` at the object's app and environment (`ConsoleAccessContext`). The action names come from the contracts —
@@ -71,8 +73,12 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
     the roles table it belongs to. `roles.list({ app })` already returns custom roles; the page drops them and
     renders the policy rows instead, which carry what it takes to edit them.
 - **People (`/people`) is outside the Access rail on purpose.** It serves an application's own administrator, who holds
-  the application's `members.manage` and is no IAM administrator, so the Access layout's `iam.admin` gate would refuse
+  the application's `members.manage` and is no IAM administrator, so the Access layout's gate would refuse
   them. It only asks IAM's `appPeople.*`; IAM decides which applications and roles it lists and audits each change.
+- **A user administrator (ADR-0058) works in Access's Users.** The Access layout waits for `me` and provides its
+  `IamAdministrationScope` (`src/access/lib/administration.tsx`); `grantTargets` gives a grant form the applications in
+  the caller's scope, never an `installation: true` app and never the cross-app option, and the user page hides
+  promotion. It decides nothing: IAM refuses a grant, or an action on a person, outside the caller's administration.
 
 ## Patterns
 

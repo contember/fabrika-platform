@@ -30,7 +30,8 @@ function consoleFetch(answers: Answers): RpcFetch {
 
 const unavailable = () => new Response('unavailable', { status: 503 })
 const forbidden = () => Response.json({ error: { type: 'forbidden', message: 'forbidden' } }, { status: 403 })
-const meAnswer = () => Response.json({ result: { id: 'user-1', type: 'user', label: 'Ada@Example.com', permissions: [] } })
+const meAnswer = (permissions: object[] = [{ action: 'iam.admin', scope: null, source: 'grant' }]) =>
+	Response.json({ result: { id: 'user-1', type: 'user', label: 'Ada@Example.com', permissions } })
 const accessAnswer = (access: object) => Response.json({ result: access })
 const peopleAnswer = (apps: number) =>
 	Response.json({ result: { items: Array.from({ length: apps }, (_, i) => ({ app: `app-${i}`, displayName: null, roles: [] })) } })
@@ -63,22 +64,30 @@ describe('console session', () => {
 
 		expect(session.principal).toEqual({ id: 'user-2', label: 'bob@example.com' })
 		expect(session.access).toEqual(access)
-		expect(session.iamAdmin).toBe(false)
+		expect(session.iam).toBe(false)
 		expect(session.administersPeople).toBe(false)
 	})
 
 	test('an IAM administrator who administers an application is both', async () => {
 		const session = await readConsoleSession(consoleFetch({ me: meAnswer(), people: peopleAnswer(1), discovery: Response.json(DISCOVERY) }))
 
-		expect(session.iamAdmin).toBe(true)
+		expect(session.iam).toEqual({ kind: 'installation' })
 		expect(session.administersPeople).toBe(true)
+	})
+
+	test('a user administrator is named from IAM with the applications it administers', async () => {
+		const scoped = [{ action: 'iam.users.manage', scope: { type: 'app', value: 'crm@prod' }, source: 'grant' }]
+		const session = await readConsoleSession(consoleFetch({ me: meAnswer(scoped), discovery: Response.json(DISCOVERY) }))
+
+		expect(session.principal).toEqual({ id: 'user-1', label: 'Ada@Example.com' })
+		expect(session.iam).toEqual({ kind: 'users', apps: ['crm@prod'] })
 	})
 
 	test('a service that does not answer leaves its part unknown, never refused', async () => {
 		const session = await readConsoleSession(consoleFetch({ me: unavailable(), discovery: Response.json(DISCOVERY) }))
 
 		expect(session.access).toBeNull()
-		expect(session.iamAdmin).toBeNull()
+		expect(session.iam).toBeNull()
 		expect(session.administersPeople).toBeNull()
 	})
 
@@ -103,7 +112,7 @@ describe('console session', () => {
 				principal: { id: 'user-1', label: 'Ada@Example.com' },
 				signOutUrl: signOutUrl('https://iam.example.com'),
 				access: null,
-				iamAdmin: null,
+				iam: null,
 				administersPeople: null,
 			},
 		}))
@@ -115,7 +124,7 @@ describe('console session', () => {
 	})
 
 	test('renders only what it knows', () => {
-		const session = { principal: null, signOutUrl: null, access: null, iamAdmin: null, administersPeople: null }
+		const session = { principal: null, signOutUrl: null, access: null, iam: null, administersPeople: null }
 		expect(renderToStaticMarkup(createElement(SignedIn, { session }))).toBe('')
 	})
 })

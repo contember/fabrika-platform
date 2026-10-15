@@ -51,7 +51,7 @@ async function consoleAccess(fetcher: RpcFetch): Promise<ConsoleAccessDto | null
 
 /** Control names every caller; IAM's `me` names an administrator when Control does not answer. */
 function signedInPrincipal(access: ConsoleAccessDto | null, administration: IamAdministration): SignedInPrincipal | null {
-	return access?.principal ?? (administration.status === 'admin' ? administration.principal : null)
+	return access?.principal ?? (administration.status === 'administrator' ? administration.principal : null)
 }
 
 export async function readConsoleSession(fetcher: RpcFetch = fetch): Promise<ConsoleSession> {
@@ -65,7 +65,7 @@ export async function readConsoleSession(fetcher: RpcFetch = fetch): Promise<Con
 		principal: signedInPrincipal(access, administration),
 		signOutUrl: discovery === null ? null : signOutUrl(discovery.iamIssuer),
 		access,
-		iamAdmin: administration.status === 'unknown' ? null : administration.status === 'admin',
+		iam: administration.status === 'unknown' ? null : administration.status === 'administrator' ? administration.scope : false,
 		administersPeople: people,
 	}
 }

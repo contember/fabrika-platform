@@ -25,6 +25,8 @@ interface AppPickerProps {
 	value: AppValue
 	onChange: (value: AppValue) => void
 	idPrefix?: string
+	/** Offer "All apps"; a user administrator never grants across applications (ADR-0058). */
+	crossApp?: boolean
 }
 
 /**
@@ -32,23 +34,25 @@ interface AppPickerProps {
  * for its app (or every app when "All apps"). Defaults to "unset" so the admin chooses
  * deliberately — "All apps" is a distinct, conscious option, not a silent default.
  */
-export function AppPicker({ apps, value, onChange, idPrefix = 'app' }: AppPickerProps) {
+export function AppPicker({ apps, value, onChange, idPrefix = 'app', crossApp = true }: AppPickerProps) {
 	const allId = `${idPrefix}-all`
 	const oneId = `${idPrefix}-one`
 
 	return (
 		<fieldset className="scope-picker">
 			<legend>App</legend>
-			<label htmlFor={allId}>
-				<input
-					id={allId}
-					type="radio"
-					name={idPrefix}
-					checked={value.kind === 'all'}
-					onChange={() => onChange({ kind: 'all' })}
-				/>
-				All apps (cross-app)
-			</label>
+			{crossApp && (
+				<label htmlFor={allId}>
+					<input
+						id={allId}
+						type="radio"
+						name={idPrefix}
+						checked={value.kind === 'all'}
+						onChange={() => onChange({ kind: 'all' })}
+					/>
+					All apps (cross-app)
+				</label>
+			)}
 			<label htmlFor={oneId}>
 				<input
 					id={oneId}
@@ -69,7 +73,9 @@ export function AppPicker({ apps, value, onChange, idPrefix = 'app' }: AppPicker
 					{apps.map((a) => <option key={a.id} value={a.id}>{appOptionLabel(a)}</option>)}
 				</select>
 			)}
-			{apps.length === 0 && <p className="hint">No apps registered yet — grants can only be cross-app.</p>}
+			{apps.length === 0 && (
+				<p className="hint">{crossApp ? 'No apps registered yet — grants can only be cross-app.' : 'You administer no application to grant at.'}</p>
+			)}
 		</fieldset>
 	)
 }

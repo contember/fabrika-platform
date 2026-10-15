@@ -2,6 +2,7 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import type { CreateGrantRequest, InviteRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../../access/components/GrantComposer'
+import { grantTargets, useAdministration } from '../../../access/lib/administration'
 import { api } from '../../../access/lib/api'
 import { parseDateTimeLocal } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
@@ -24,6 +25,7 @@ export default createPage()
 		const [external, setExternal] = useState(false)
 		const [withGrant, setWithGrant] = useState(false)
 		const composer = useGrantComposerState()
+		const targets = grantTargets(data.apps, useAdministration())
 		const [expiry, setExpiry] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
@@ -102,7 +104,7 @@ export default createPage()
 					</label>
 					{withGrant && (
 						<div className="nested">
-							<GrantComposer apps={data.apps} state={composer} idPrefix="invite" />
+							<GrantComposer apps={targets.apps} crossApp={targets.crossApp} state={composer} idPrefix="invite" />
 							<label>
 								Expires (optional)
 								<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />

@@ -1,7 +1,9 @@
 import type { ConsoleAccessDto } from '@fabrika/control-contract'
+import type { AppDto, IamAdministrationScope } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { grantTargets } from '../access/lib/administration'
 import { type ConsoleCaller, holdsAt, mayDo, mayOpen, type NavPage, scopedRunReads } from '../lib/console-access'
 import { signOutUrl } from '../lib/session'
 import { NoAccess, visibleNav } from '../routes/_layout'
@@ -21,10 +23,13 @@ const EVERYTHING = [
 	...OPERATIONS,
 ]
 
-function caller(access: Partial<ConsoleAccessDto>, iam: { iamAdmin?: boolean | null; administersPeople?: boolean | null } = {}): ConsoleCaller {
+function caller(
+	access: Partial<ConsoleAccessDto>,
+	iam: { iam?: IamAdministrationScope | false | null; administersPeople?: boolean | null } = {},
+): ConsoleCaller {
 	return {
 		access: { principal: { id: 'user-1', label: 'ada@example.com' }, global: [], scopes: [], ...access },
-		iamAdmin: iam.iamAdmin ?? false,
+		iam: iam.iam ?? false,
 		administersPeople: iam.administersPeople ?? false,
 	}
 }
@@ -44,7 +49,7 @@ describe('the console shows what its caller may use', () => {
 	})
 
 	test('an admin of the console and of IAM sees every section', () => {
-		expect(rail(caller({ global: EVERYTHING }, { iamAdmin: true }))).toEqual([
+		expect(rail(caller({ global: EVERYTHING }, { iam: { kind: 'installation' } }))).toEqual([
 			'Overview',
 			'Delivery: Applications, Namespaces, Deploy runs, Approvals, Source connection',
 			'Access: Overview, Users, Credentials, Permissions, Audit',
@@ -75,14 +80,42 @@ describe('the console shows what its caller may use', () => {
 	})
 
 	test('an IAM administrator with no console role sees Access, and an application administrator sees People', () => {
-		expect(rail(caller({}, { iamAdmin: true }))).toEqual(['Access: Overview, Users, Credentials, Permissions, Audit'])
+		expect(rail(caller({}, { iam: { kind: 'installation' } }))).toEqual(['Access: Overview, Users, Credentials, Permissions, Audit'])
 		expect(rail(caller({}, { administersPeople: true }))).toEqual(['Your applications: People'])
 	})
 
+	test('a user administrator sees the Users of Access and no other Access page (ADR-0058)', () => {
+		for (const scope of [{ kind: 'users', apps: null }, { kind: 'users', apps: ['crm@prod'] }] as const) {
+			expect(rail(caller({}, { iam: scope }))).toEqual(['Access: Users'])
+			expect(mayOpen(caller({}, { iam: scope }), 'access/credentials')).toBe(false)
+		}
+	})
+
 	test('a part nobody answered for is shown, so its own page reports the outage', () => {
-		const unknown: ConsoleCaller = { access: null, iamAdmin: null, administersPeople: null }
+		const unknown: ConsoleCaller = { access: null, iam: null, administersPeople: null }
 		const pages: NavPage[] = ['index', 'apps', 'runs', 'access/users', 'operations', 'people']
 		expect(pages.every((page) => mayOpen(unknown, page))).toBe(true)
+	})
+})
+
+describe('the grant form offers what the caller may grant (ADR-0058)', () => {
+	const apps: AppDto[] = [
+		{ id: 'vozka', displayName: 'Console', installation: true },
+		{ id: 'propustka', displayName: 'Access', installation: true },
+		{ id: 'crm@prod', displayName: 'CRM', installation: false },
+		{ id: 'notes@prod', displayName: null, installation: false },
+	]
+	const ids = (targets: { apps: AppDto[] }) => targets.apps.map((app) => app.id)
+
+	test('an installation administrator gets every app and the cross-app option', () => {
+		const targets = grantTargets(apps, { kind: 'installation' })
+		expect([ids(targets), targets.crossApp]).toEqual([['vozka', 'propustka', 'crm@prod', 'notes@prod'], true])
+	})
+
+	test("a user administrator gets the applications in its scope, never the installation's own, never cross-app", () => {
+		const everywhere = grantTargets(apps, { kind: 'users', apps: null })
+		expect([ids(everywhere), everywhere.crossApp]).toEqual([['crm@prod', 'notes@prod'], false])
+		expect(ids(grantTargets(apps, { kind: 'users', apps: ['crm@prod', 'vozka'] }))).toEqual(['crm@prod'])
 	})
 })
 

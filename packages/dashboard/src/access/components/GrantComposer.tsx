@@ -28,6 +28,8 @@ type Mode = 'role' | 'inline'
 
 interface GrantComposerProps {
 	apps: AppDto[]
+	/** Offer the cross-app option (an installation admin only). */
+	crossApp?: boolean
 	/** Called with a validated authorization, or throws an Error with a user message. */
 	state: GrantComposerState
 	idPrefix: string
@@ -83,14 +85,14 @@ export function useGrantComposerState(): GrantComposerState & { reset: () => voi
  * plus a scope. The role list, scope dimensions and action catalog all derive from the
  * chosen app (loaded reactively via `useAppVocab`). The parent owns submit / expiry.
  */
-export function GrantComposer({ apps, state, idPrefix }: GrantComposerProps) {
+export function GrantComposer({ apps, crossApp = true, state, idPrefix }: GrantComposerProps) {
 	const { appValue, setAppValue, mode, setMode, roleKey, setRoleKey, permissions, setPermissions, scope, setScope } = state
 	const app = appValue.kind === 'unset' ? undefined : appValue.kind === 'all' ? null : appValue.app
 	const vocab = useAppVocab(app)
 
 	return (
 		<>
-			<AppPicker apps={apps} value={appValue} onChange={setAppValue} idPrefix={`${idPrefix}-app`} />
+			<AppPicker apps={apps} value={appValue} onChange={setAppValue} idPrefix={`${idPrefix}-app`} crossApp={crossApp} />
 
 			{vocab.status === 'loading' && <p className="hint">Loading app roles & actions…</p>}
 			{vocab.status === 'error' && <p className="error-text" role="alert">{vocab.message}</p>}

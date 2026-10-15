@@ -1,5 +1,5 @@
-import { permits, scopedValues, SESSION_COOKIE } from '@fabrika/auth-core'
-import { IAM_ACTIONS, IAM_SCOPES } from '@fabrika/iam-contract'
+import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { iamAdministrationScope } from '@fabrika/iam-contract'
 import { IAM_APP } from '../admin/router'
 import { INSTALLATION_PRESENTATION, installationLanding } from '../app-presentation'
 import { sessionUsable } from '../auth'
@@ -161,9 +161,7 @@ export async function refuseLogin(
 async function administersIam(services: Services, principalId: string): Promise<boolean> {
 	const principal = await services.repositories.principals.getPrincipalById(principalId)
 	if (principal === null) return false
-	const permissions = await resolvePermissionsAt(services, principal, IAM_APP)
-	const peopleApps = scopedValues(permissions, IAM_ACTIONS.USERS_MANAGE, IAM_SCOPES.APP)
-	return permits(permissions, IAM_ACTIONS.ADMIN) || peopleApps === null || peopleApps.length > 0
+	return iamAdministrationScope(await resolvePermissionsAt(services, principal, IAM_APP)) !== null
 }
 
 /**

@@ -1,4 +1,5 @@
 import { type ConsoleAccessDto, CONTROL_ACTIONS } from '@fabrika/control-contract'
+import type { IamAdministrationScope } from '@fabrika/iam-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 
 /** Every page the navigation links to. */
@@ -27,8 +28,8 @@ export type NavPage =
  */
 export interface ConsoleCaller {
 	readonly access: ConsoleAccessDto | null
-	/** IAM's `me` answers installation administrators only. */
-	readonly iamAdmin: boolean | null
+	/** What IAM's `me` says the caller administers there; `false` for nothing (ADR-0058). */
+	readonly iam: IamAdministrationScope | false | null
 	/** IAM lists an application whose own people the caller administers. */
 	readonly administersPeople: boolean | null
 }
@@ -85,12 +86,13 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 			return control(caller, (access) => holdsAnywhere(access, ACCESS_APPROVE))
 		case 'settings/source':
 			return control(caller, (access) => holdsGlobally(access, SOURCE_CONNECTION_MANAGE))
-		case 'access':
 		case 'access/users':
+			return caller.iam !== false
+		case 'access':
 		case 'access/credentials':
 		case 'access/permissions':
 		case 'access/audit':
-			return caller.iamAdmin !== false
+			return caller.iam === null || (caller.iam !== false && caller.iam.kind === 'installation')
 		case 'operations':
 		case 'operations/errors':
 		case 'operations/sources':

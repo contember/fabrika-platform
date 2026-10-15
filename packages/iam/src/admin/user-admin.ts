@@ -1,8 +1,7 @@
 // User administration (ADR-0058): who may manage the people of applications without administering IAM, and where that
 // authority stops. Every rule here applies only to a caller without `iam.admin`.
 
-import { permits, scopedValues } from '@fabrika/auth-core'
-import { IAM_ACTIONS, IAM_APP_ID, IAM_SCOPES } from '@fabrika/iam-contract'
+import { IAM_APP_ID, type IamAdministrationScope, iamAdministrationScope } from '@fabrika/iam-contract'
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { Services } from '../services'
@@ -10,20 +9,16 @@ import { type AdminContext, fail } from './context'
 import type { ResolvedAdmin } from './router'
 
 /** What the caller administers: the installation, or the people of some applications (`null` = every application). */
-export type Administration =
-	| { readonly kind: 'installation' }
-	| { readonly kind: 'users'; readonly apps: readonly string[] | null }
+export type Administration = IamAdministrationScope
 
 /**
  * The caller's administration, or null when it holds none. A user administrator is a person signed in to the console,
  * as for `appPeople`: a `px_` key administers only with `iam.admin`.
  */
 export function administrationOf(admin: Pick<ResolvedAdmin, 'permissions' | 'type' | 'audience' | 'session'>): Administration | null {
-	if (permits(admin.permissions, IAM_ACTIONS.ADMIN)) return { kind: 'installation' }
-	if (admin.type !== 'user' || admin.audience === IAM_APP_ID || !admin.session) return null
-	const apps = scopedValues(admin.permissions, IAM_ACTIONS.USERS_MANAGE, IAM_SCOPES.APP)
-	if (apps === null) return { kind: 'users', apps: null }
-	return apps.length === 0 ? null : { kind: 'users', apps }
+	const administration = iamAdministrationScope(admin.permissions)
+	if (administration?.kind !== 'users') return administration
+	return admin.type === 'user' && admin.audience !== IAM_APP_ID && admin.session ? administration : null
 }
 
 /** True when `administration` may write a grant at `app`: never cross-app, never an installation app, only in scope. */
