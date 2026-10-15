@@ -122,7 +122,7 @@ describe('the generated execution descriptor of a contract application', () => {
 					PORT: '3000',
 					FABRIKA_CONTRACT_DIGEST: DIGEST,
 					FABRIKA_RELEASE: 'r1',
-					FABRIKA_APP_DATABASE_URL: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
+					FABRIKA_APP_DATABASE_URL: '${notesdb_connectionString}/${notesdb_dbName}?sslmode=prefer',
 				},
 			},
 		})
@@ -162,7 +162,7 @@ describe('the generated execution descriptor of a contract application', () => {
 			PORT: '3000',
 			FABRIKA_CONTRACT_DIGEST: DIGEST,
 			FABRIKA_RELEASE: 'r1',
-			FABRIKA_APP_DATABASE_URL: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
+			FABRIKA_APP_DATABASE_URL: '${notesdb_connectionString}/${notesdb_dbName}?sslmode=prefer',
 			FABRIKA_APP_STORAGE_ENDPOINT: '${notesfiles_apiUrl}',
 			FABRIKA_APP_STORAGE_BUCKET: '${notesfiles_bucketName}',
 			FABRIKA_APP_STORAGE_ACCESS_KEY_ID: '${notesfiles_accessKeyId}',
