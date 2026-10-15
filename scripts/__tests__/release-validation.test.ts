@@ -53,7 +53,7 @@ describe('release package boundaries', () => {
 			expect(Object.entries(manifest).find(([key]) => key === '__proto__')).toEqual(['__proto__', { custom: true }])
 			expect(Object.getPrototypeOf(manifest)).toBe(Object.prototype)
 		}
-		expect(JSON.stringify(staged)).toContain('"dependencies":{"__proto__":"^1.2.3","constructor":"^1"}')
+		expect(JSON.stringify(staged)).toContain('"dependencies":{"__proto__":"1.2.3","constructor":"^1"}')
 		expect(JSON.stringify(staged)).toContain('"optionalDependencies":{"__proto__":"^2"}')
 		expect(JSON.stringify(staged)).toContain('"peerDependencies":{"__proto__":"^3"}')
 		const packed = parsePackedManifest('{"name":"x","version":"1","devDependencies":{"__proto__":"^4"}}', 'packed')
@@ -74,9 +74,9 @@ describe('release package boundaries', () => {
 		const expected = {
 			...retained,
 			version: '1.2.3',
-			dependencies: { '@fabrika/app': '^1.2.3', external: '^2.0.0' },
-			optionalDependencies: { '@fabrika/auth': '^1.2.3' },
-			peerDependencies: { '@fabrika/engine': '^1.2.3' },
+			dependencies: { '@fabrika/app': '1.2.3', external: '^2.0.0' },
+			optionalDependencies: { '@fabrika/auth': '1.2.3' },
+			peerDependencies: { '@fabrika/engine': '1.2.3' },
 		}
 		expect(staged).toEqual(expected)
 		expect(info.manifest).toEqual(publicManifest)
@@ -328,8 +328,8 @@ describe('staging the whole public set', () => {
 			const app = join(root, '@fabrika-app', 'skill')
 			expect(await readFile(join(app, 'SKILL.md'), 'utf8')).toContain('\nversion: 9.8.7\n')
 			const setup = await readFile(join(app, 'references', 'app-setup.md'), 'utf8')
-			expect(setup).toContain('"@fabrika/app": "^9.8.7"')
-			expect(setup).not.toMatch(/"@fabrika\/[a-z-]+": "\^0\./)
+			expect(setup).toContain('"@fabrika/app": "9.8.7"')
+			expect(setup).not.toMatch(/"@fabrika\/[a-z-]+": "\^/)
 			expect(setup).toContain('"zod": "^3.25.76"')
 			const builder = publicPackages.find((item) => item.name === '@fabrika/builder')
 			if (builder !== undefined) {

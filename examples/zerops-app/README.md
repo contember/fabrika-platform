@@ -82,22 +82,24 @@ it from a composed container with the variables a deploy writes (`docs/reference
 
 ## Updating the standalone repository
 
-The monorepo directory is the source of truth and the mirror's tree must equal it byte for byte. The mirror's history
-is curated rather than replayed, so an update is one commit on top of what is there:
+The monorepo directory is the source of truth and the mirror's tree must equal it at the release tag byte for byte,
+except for the `@fabrika/*` pins and `bun.lock`. The mirror's history is curated rather than replayed, so an update is
+one commit on top of what is there. The `example-mirror` job of fabrika-platform's release workflow runs these steps
+after every release
+([`release-process.md`](https://github.com/contember/fabrika-platform/blob/main/docs/reference/release-process.md#pinning-the-standalone-example)).
+By hand, after the release is on npm:
 
 ```bash
 git clone git@github.com:contember/fabrika-example-zerops.git /tmp/fabrika-example-zerops
 cd /tmp/fabrika-example-zerops
-git fetch /path/to/fabrika-platform main
+git fetch /path/to/fabrika-platform <released tag>
 git read-tree -u --reset FETCH_HEAD:examples/zerops-app
-bun /path/to/fabrika-platform/scripts/release.ts example-pin . --tag=<released tag>   # pin the released packages
+bun /path/to/fabrika-platform/scripts/release.ts example-pin . --tag=<released tag>   # pin exactly the released packages
 bun install                                             # refresh bun.lock against them
-git commit -m "…" && git push origin main
+git add -A . && git commit -m "chore: sync with fabrika-platform <released tag>" && git push origin main
 ```
 
-`bun.lock` here pins the packages of the last release that the mirror installed. The example now needs `@fabrika/db`,
-`@fabrika/proxy-core`, `@fabrika/platform` and `@fabrika/check` (the SPA build's plugin) of a release that carries the
-staged kit, and `kysely` (the generated schema's types), so export it only
-after that release, with the pins and the lockfile refreshed in the mirror as above. A fresh export must pass
-`bun install --frozen-lockfile`, `bun run typecheck` and `bun run test` from its repository root. Do not edit the
-mirror directly, and do not use `git subtree split`: it replays the monorepo's history into a public repository.
+`example-pin` pins every `@fabrika/*` package to exactly the released version, so the example installs the release
+that an installation of the same tag runs. A fresh export must pass `bun install --frozen-lockfile`,
+`bun run typecheck`, `bunx fabrika-check .` and `bun run test` from its repository root. Do not edit the mirror
+directly, and do not use `git subtree split`: it replays the monorepo's history into a public repository.

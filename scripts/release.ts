@@ -346,7 +346,8 @@ export const stagedManifest = (item: PackageInfo, version: string, publicNames: 
 		const dependencies = dependencyMap(item, field)
 		if (dependencies.size === 0) continue
 		manifest[field] = Object.fromEntries(
-			[...dependencies].map(([name, range]) => [name, publicNames.has(name) && range.startsWith('workspace:') ? `^${version}` : range]),
+			// Exact, because the set is co-versioned: a range would let a sibling resolve a newer patch than the one installed.
+			[...dependencies].map(([name, range]) => [name, publicNames.has(name) && range.startsWith('workspace:') ? version : range]),
 		)
 	}
 	return manifest
@@ -365,7 +366,7 @@ const APP_SKILL_PACKAGE = '@fabrika/app'
 
 /**
  * The application skill of `@fabrika/app` as a release ships it: `SKILL.md` names the released version, and every
- * `@fabrika/*` range of a reference file's examples is `^<pinnedVersion>`, so an application copied from it installs
+ * `@fabrika/*` pin of a reference file's examples is exactly `<pinnedVersion>`, so an application copied from it installs
  * the release whose rules it read. A local pack pins the last published version, the newest npm has.
  */
 export const stagedAppSkill = (files: readonly { readonly path: string; readonly text: string }[], version: string, pinnedVersion = version) =>
@@ -885,7 +886,10 @@ const registrySmoke = async (options: Options, expectedOrder: readonly PackageIn
 /** A `"@fabrika/x": "<range>"` manifest line. Line-for-line by design, so the rewrite's diff shows only pins. */
 const FABRIKA_PIN_LINE = /^(\s*"(?:@fabrika\/[A-Za-z0-9._-]+)"\s*:\s*")([^"]*)("\s*,?)$/
 
-/** Rewrite every `@fabrika/*` range in one manifest to the released version, one line for one line. */
+/**
+ * Pin every `@fabrika/*` dependency of one manifest to exactly the released version, one line for one line. Exact, so an
+ * application installs the release its installation runs and not a later patch.
+ */
 export const rewriteExamplePins = (text: string, version: string): { readonly text: string; readonly changed: number } => {
 	let changed = 0
 	const rewritten = text.split('\n').map((line) => {
@@ -895,9 +899,9 @@ export const rewriteExamplePins = (text: string, version: string): { readonly te
 		const suffix = match?.[3]
 		if (prefix === undefined || range === undefined || suffix === undefined) return line
 		// A workspace range means the checkout is a monorepo member; rewriting it would unlink the package.
-		if (range.startsWith('workspace:') || range === `^${version}`) return line
+		if (range.startsWith('workspace:') || range === version) return line
 		changed++
-		return `${prefix}^${version}${suffix}`
+		return `${prefix}${version}${suffix}`
 	})
 	return { text: rewritten.join('\n'), changed }
 }
@@ -988,8 +992,8 @@ const examplePin = async (options: Options): Promise<void> => {
 	}
 	console.info(
 		changed === 0
-			? `${manifests.length} manifest(s) already pin ^${options.version}`
-			: `rewrote ${changed} @fabrika/* range(s) to ^${options.version}; nothing was committed or pushed`,
+			? `${manifests.length} manifest(s) already pin ${options.version}`
+			: `pinned ${changed} @fabrika/* dependencies to ${options.version}; nothing was committed or pushed`,
 	)
 }
 
@@ -1003,11 +1007,11 @@ export const bumpedManifest = (text: string, version: string): string => text.re
 
 /** A decision's `npm:` line, whose `@fabrika/*` entries name the range a generated application installs. */
 const DECISION_NPM_LINE = /^npm:/
-const DECISION_FABRIKA_PIN = /("@fabrika\/[A-Za-z0-9._-]+@)\^[^"]*"/g
+const DECISION_FABRIKA_PIN = /("@fabrika\/[A-Za-z0-9._-]+@)[^"]*"/g
 
-/** The builder's decision with every `@fabrika/*` range of its `npm:` line moved to `^<version>`. */
+/** The builder's decision with every `@fabrika/*` entry of its `npm:` line pinned to exactly `<version>`. */
 export const bumpedDecision = (text: string, version: string): string =>
-	text.split('\n').map((line) => DECISION_NPM_LINE.test(line) ? line.replace(DECISION_FABRIKA_PIN, `$1^${version}"`) : line).join('\n')
+	text.split('\n').map((line) => DECISION_NPM_LINE.test(line) ? line.replace(DECISION_FABRIKA_PIN, `$1${version}"`) : line).join('\n')
 
 /** Refuse a bump that would not move the source forward: an older tag would republish a version npm already has. */
 export const assertBumpForward = (sourceVersion: string, version: string): void => {

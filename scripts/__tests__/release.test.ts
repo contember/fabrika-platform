@@ -213,10 +213,10 @@ describe('the source version', () => {
 		expect(bumpedManifest(unversioned, '0.4.3')).toBe(unversioned)
 	})
 
-	test("a bump moves a builder decision's @fabrika ranges and leaves everything else", () => {
-		const decision = 'id: x\nnpm: ["@fabrika/app@^0.0.4", "@fabrika/db@^0.0.4", "zod@^3.25.76"]\nnotes: "@fabrika/app@^0.0.4"\n'
+	test("a bump pins a builder decision's @fabrika entries exactly and leaves everything else", () => {
+		const decision = 'id: x\nnpm: ["@fabrika/app@^0.0.4", "@fabrika/db@0.0.4", "zod@^3.25.76"]\nnotes: "@fabrika/app@^0.0.4"\n'
 		expect(bumpedDecision(decision, '0.4.3')).toBe(
-			'id: x\nnpm: ["@fabrika/app@^0.4.3", "@fabrika/db@^0.4.3", "zod@^3.25.76"]\nnotes: "@fabrika/app@^0.0.4"\n',
+			'id: x\nnpm: ["@fabrika/app@0.4.3", "@fabrika/db@0.4.3", "zod@^3.25.76"]\nnotes: "@fabrika/app@^0.0.4"\n',
 		)
 	})
 
@@ -259,7 +259,7 @@ describe('a local pack', () => {
 		]
 		expect(stagedAppSkill(files, '0.3.3-local.gabc1234', '0.3.3')).toEqual([
 			{ path: 'SKILL.md', text: '---\nname: fabrika-app\nversion: 0.3.3-local.gabc1234\ndescription: rules\n---\n' },
-			{ path: 'references/app-setup.md', text: '\t\t"@fabrika/app": "^0.3.3",\n' },
+			{ path: 'references/app-setup.md', text: '\t\t"@fabrika/app": "0.3.3",\n' },
 		])
 	})
 })
@@ -358,22 +358,28 @@ const EXAMPLE_MANIFEST = `{
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {
-		"@fabrika/cli": "^0.0.26",
+		"@fabrika/cli": "0.0.26",
 		"typescript": "^5.9.3"
 	}
 }
 `
 
 describe('pinning an example checkout to a released version', () => {
-	test('rewrites every fabrika range and leaves every other dependency alone', () => {
+	test('pins every fabrika dependency exactly and leaves every other dependency alone', () => {
 		const rewrite = rewriteExamplePins(EXAMPLE_MANIFEST, '0.0.26')
 
 		expect(rewrite.changed).toBe(2)
-		expect(rewrite.text).toContain('"@fabrika/app": "^0.0.26",')
-		expect(rewrite.text).toContain('"@fabrika/auth-core": "^0.0.26",')
+		expect(rewrite.text).toContain('"@fabrika/app": "0.0.26",')
+		expect(rewrite.text).toContain('"@fabrika/auth-core": "0.0.26",')
 		expect(rewrite.text).toContain('"@sentry/browser": "10.69.0",')
 		expect(rewrite.text).toContain('"jose": "^5.9.0"')
 		expect(rewrite.text.split('\n')).toHaveLength(EXAMPLE_MANIFEST.split('\n').length)
+	})
+
+	test('replaces a caret range of the same version, which would resolve a later patch', () => {
+		const manifest = '{\n\t"dependencies": {\n\t\t"@fabrika/app": "^0.0.26"\n\t}\n}\n'
+
+		expect(rewriteExamplePins(manifest, '0.0.26')).toEqual({ text: manifest.replace('^0.0.26', '0.0.26'), changed: 1 })
 	})
 
 	test('is a no-op the second time, so a re-run produces no diff', () => {
@@ -413,8 +419,8 @@ describe('pinning an example checkout to a released version', () => {
 				'\t"dependencies": {',
 				'-\t\t"@fabrika/app": "^0.0.4",',
 				'-\t\t"@fabrika/auth-core": "^0.0.4",',
-				'+\t\t"@fabrika/app": "^0.0.26",',
-				'+\t\t"@fabrika/auth-core": "^0.0.26",',
+				'+\t\t"@fabrika/app": "0.0.26",',
+				'+\t\t"@fabrika/auth-core": "0.0.26",',
 				'\t\t"@sentry/browser": "10.69.0",',
 				'\t\t"jose": "^5.9.0"',
 				'\t},',

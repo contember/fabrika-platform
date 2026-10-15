@@ -35,7 +35,7 @@ The source tree carries the version of its next release. An installation does no
 bun run release:bump --tag=v1.2.3
 ```
 
-`bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, rewrites the `@fabrika/*` ranges of `examples/*` to `^1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again, runs `bun install` for the lockfile, and re-pins the local stack's Notes source fixture (`fixtures:pin`), whose tree holds that template. It commits nothing.
+`bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, pins the `@fabrika/*` dependencies of `examples/*` to exactly `1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again, runs `bun install` for the lockfile, and re-pins the local stack's Notes source fixture (`fixtures:pin`), whose tree holds that template. It commits nothing.
 
 Between the bump commit and the publish of its tag, the source names a version npm does not have yet. On Zerops `fabrika platform install` and `deploy` refuse such a checkout ([`zerops-platform.md`](zerops-platform.md#the-checker-version)), so a source install from `main` works again once the tag is published.
 
@@ -120,19 +120,19 @@ The workflow refuses to start publication while any package name is absent from 
 
 ## Pinning the standalone example
 
-The standalone example repository described in [`examples/zerops-app/README.md`](../../examples/zerops-app/README.md) is a real consumer: it installs `@fabrika/*` from npm rather than from the workspace, so its `package.json` carries a version range that a release does not update by itself. A checkout pinned many releases back deploys many releases back.
+The standalone example repository described in [`examples/zerops-app/README.md`](../../examples/zerops-app/README.md) is a real consumer: it installs `@fabrika/*` from npm rather than from the workspace. An application installs the release its installation runs, so every `@fabrika/*` pin is an exact version, never a range. A range such as `^0.4.5` resolves a later patch, and the co-versioned set then mixes releases. The packed packages pin their `@fabrika/*` dependencies exactly for the same reason.
 
-Updating it is an operator step, run after the release is on npm, against a checkout of that repository:
+`example-pin` writes those pins in a checkout of another repository:
 
 ```bash
 bun scripts/release.ts example-pin /path/to/example-checkout --tag=v0.0.26
 ```
 
-It rewrites every `@fabrika/*` range in every `package.json` under the given path to `^<released version>`, prints a unified diff of exactly the lines it changed, and commits and pushes nothing. Review the diff, then commit in that repository.
+It pins every `@fabrika/*` dependency in every `package.json` under the given path to exactly `<released version>`, prints a unified diff of exactly the lines it changed, and commits and pushes nothing.
 
-The command **refuses a path inside this repository**, and leaves a `workspace:` range alone wherever it finds one. Both guards exist for the same reason: `examples/*` are workspace members whose ranges match the workspace's own version so that bun links the local packages. Stamping a released range on them is silent — the next install fetches those packages from npm and the example stops exercising the working tree.
+The command **refuses a path inside this repository**, and leaves a `workspace:` range alone wherever it finds one. Both guards exist for the same reason: `examples/*` are workspace members whose pins match the workspace's own version so that bun links the local packages. Stamping a released version on them is silent: the next install fetches those packages from npm and the example stops exercising the working tree.
 
-Nothing in CI checks the example's pins. Reading another repository would need a credential this repository deliberately does not hold, so the bump stays an operator step.
+The `example-mirror` job of `release.yml` refreshes the mirror after every release that is not a prerelease, once `publish` and its registry smoke have passed. It runs the procedure of the example's README: it exports `examples/zerops-app` at the tag, runs `example-pin` and `bun install`, checks a frozen install, the type check and `fabrika-check`, and pushes one commit to the mirror's `main`. It pushes with a write deploy key of the mirror repository, held in the `EXAMPLE_MIRROR_DEPLOY_KEY` secret of this repository. Without that secret the job prints a notice and changes nothing; then run the README procedure by hand.
 
 ## Deployment boundary
 

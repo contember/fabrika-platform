@@ -45,3 +45,75 @@ jobs:
       - run: bun run release:smoke
       - run: bun run release:publish
       - run: bun run release:registry-smoke
+
+  # The procedure of examples/zerops-app/README.md, run once the release installs from npm.
+  example-mirror:
+    needs: publish
+    # A prerelease publishes under `next`; the mirror's main follows `latest`.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      HAS_DEPLOY_KEY: ${{ secrets.EXAMPLE_MIRROR_DEPLOY_KEY != '' }}
+    steps:
+      - name: Skip without the mirror's deploy key
+        if: env.HAS_DEPLOY_KEY != 'true'
+        run: |
+          echo "::notice title=Example mirror not refreshed::The EXAMPLE_MIRROR_DEPLOY_KEY secret is not set. Add a write deploy key of contember/fabrika-example-zerops as that secret, or follow examples/zerops-app/README.md by hand."
+
+      - uses: actions/checkout@v6
+        if: env.HAS_DEPLOY_KEY == 'true'
+
+      - uses: oven-sh/setup-bun@v2
+        if: env.HAS_DEPLOY_KEY == 'true'
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install the release tool
+        if: env.HAS_DEPLOY_KEY == 'true'
+        run: bun install --frozen-lockfile
+
+      # Outside the workspace: example-pin refuses a checkout inside this repository.
+      - name: Clone the mirror
+        if: env.HAS_DEPLOY_KEY == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.EXAMPLE_MIRROR_DEPLOY_KEY }}
+        run: |
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/mirror-key")
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/known_hosts"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/mirror-key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts" >> "$GITHUB_ENV"
+          echo "MIRROR=$RUNNER_TEMP/fabrika-example-zerops" >> "$GITHUB_ENV"
+          GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/mirror-key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts" \
+            git clone --depth=1 git@github.com:contember/fabrika-example-zerops.git "$RUNNER_TEMP/fabrika-example-zerops"
+
+      - name: Export the example at the tag and pin the released packages
+        if: env.HAS_DEPLOY_KEY == 'true'
+        run: |
+          cd "$MIRROR"
+          git fetch --depth=1 "$GITHUB_WORKSPACE" HEAD
+          git read-tree -u --reset FETCH_HEAD:examples/zerops-app
+          bun "$GITHUB_WORKSPACE/scripts/release.ts" example-pin . --tag="$RELEASE_TAG"
+          bun install
+
+      - name: Check the export as a fresh clone would
+        if: env.HAS_DEPLOY_KEY == 'true'
+        run: |
+          cd "$MIRROR"
+          rm -rf node_modules
+          bun install --frozen-lockfile
+          bun run typecheck
+          bunx fabrika-check .
+
+      - name: Commit and push
+        if: env.HAS_DEPLOY_KEY == 'true'
+        run: |
+          cd "$MIRROR"
+          git add -A .
+          if git diff --cached --quiet; then
+            echo "the mirror already holds $RELEASE_TAG"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "chore: sync with fabrika-platform $RELEASE_TAG"
+          git push origin HEAD:main
