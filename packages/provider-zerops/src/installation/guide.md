@@ -118,8 +118,10 @@ fabrika platform install --provider=zerops --create-project --client-id=<clientI
   over the same project would destroy the vault key. Start over in a new empty project.
 - The account must be in the default region, or set `FABRIKA_ZEROPS_API_URL` for every command.
 
-**Check.** The log ends with `✓ iam <host>`, the console origin and the `ADMIT YOURSELF` box, and the
-secrets file exists with mode `0600`. Write down the three hosts: IAM, console and Operations.
+**Check.** The log ends with the `Hand off` step: where the credentials are, `The console answers at
+https://<console host>`, and an `ADMIT YOURSELF` box that holds the step 2 command with `--iam-host` filled
+in. The secrets file exists with mode `0600`. The three hosts are printed earlier, right after pass 1, as
+`✓ iam <host>`, `✓ console <host>` and `✓ operations <host>`. Write them down.
 
 ## Step 2. Admit the first administrator
 
@@ -128,14 +130,21 @@ secrets file exists with mode `0600`. Write down the three hosts: IAM, console a
   fabrika platform admin --provider=zerops --email=<address> --iam-host=<IAM host from step 1> )
 ```
 
-It prints one enrollment URL. Nothing is e-mailed: the installation has no mail service, so do not tell the
-human to wait for a message. The URL is a credential: give it to the human only, and do not log it. The
-human opens it, sets a password and signs in at the console origin. A re-run creates nothing new;
-`--reissue` replaces an enrollment that expired unopened.
+It prints one enrollment URL and the time it expires. Nothing is e-mailed: the installation has no mail
+service, so do not tell the human to wait for a message. The URL is a credential: give it to the human only,
+and do not log it. The human opens it, sets a password and signs in at the console origin.
+
+The URL is valid for ONE HOUR. Hand it over at once. A re-run creates nothing new: while the enrollment is
+unused it only reports that one is outstanding, and it never prints the URL again. To get a new URL, after
+expiry or after a lost one, run the same command with `--reissue`. It replaces the old enrollment, so the old
+URL stops working.
 
 ## Step 3. Create the sidecar repository
 
 The sidecar is a GitHub repository the operator owns. Its workflow runs `platform deploy` at the pinned tag.
+
+Steps 4 and 5 do not depend on this step: the installation from step 1 already runs. The sidecar is what
+upgrades it later (step 6). Run this step before or after step 5. Only `platform upgrade` needs it.
 
 `init` takes the integration token step 1 minted, never the personal one. The secrets file holds it as
 `FABRIKA_ZEROPS_ACCESS_TOKEN`, beside the provisioning key. Run `init` from a directory that is NOT inside
@@ -160,12 +169,15 @@ one too. Otherwise pass `--checkout=<dir>` outside one:
 ```bash
 ( umask 077 && set -a && . <secrets file> && set +a && FABRIKA_IAM_RPC_URL=https://<IAM host> \
   fabrika control key issue --label=<name> --permissions=app.manage,namespace.manage,deploy.trigger,deploy.read \
-  --expires-in=2592000 > control-key.out )
-grep -o 'px_[A-Za-z0-9_-]*' control-key.out | head -1 > control.key && rm control-key.out
+  --expires-in=2592000 > control.key )
+wc -c control.key && ls -l control.key
 ```
 
 The secrets file supplies `FABRIKA_IAM_RPC_KEY` and `FABRIKA_IAM_PROVISIONING_KEY`.
 
+- stdout carries the key and nothing else; the credential id goes to stderr. Keep the redirect inside the
+  `umask 077` subshell: `control.key` is then created with mode `0600` (`-rw-------`). Outside it, the file
+  is readable by other users.
 - `FABRIKA_IAM_RPC_URL` is IAM's PUBLIC `https://` origin. The private `http://iam:3000` answers only inside
   the Zerops project.
 - A key expires after at most 30 days. Mint a new one when it does.
@@ -177,13 +189,29 @@ export FABRIKA_CONTROL_URL=https://<console host>
 FABRIKA_CONTROL_KEY="$(cat control.key)" fabrika control apps list
 ```
 
-**Check.** `apps list` answers, with an empty list on a fresh installation.
+**Check.** On a fresh installation `apps list` prints `no applications registered yet` (on stderr) and
+exits 0. An authentication error means the key or the console origin is wrong.
 
 ## Step 5. Deploy the first application
 
-The public example is [`contember/fabrika-example-zerops`](https://github.com/contember/fabrika-example-zerops).
+The example is [`contember/fabrika-example-zerops`](https://github.com/contember/fabrika-example-zerops).
 Its `fabrika.config.ts` places the app with its own database (`mid` preset), and `fabrika.cheap.config.ts`
 places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config that matches the preset.
+
+**Repository access decides how you register** (step 5.2). Check it first:
+`curl -s -o /dev/null -w '%{http_code}\n' https://api.github.com/repos/<owner>/<name>`.
+
+- `200`: the repository is public. Register it with `--installation-id=none`. Control reads it without a token.
+- `404`: GitHub hides it from an anonymous caller, so it is private (or the name is wrong). `register` refuses
+  it with `--installation-id=none`. Ask the human to connect the GitHub App in the console first (Settings →
+  Source, a browser flow), then register without `--installation-id`.
+
+**Use the installation's release in the application.** The application's `@fabrika/*` packages, the CLI
+among them, must be the version of the tag you installed: for `v0.4.3`, `^0.4.3`. Another version can build
+a manifest this installation's control refuses or reads differently. From the fabrika clone of step 0, run
+`bun scripts/release.ts example-pin <application checkout> --tag=<tag>`. It rewrites every `@fabrika/*` range
+and commits nothing. Commit and push the change in the application repository, then run `bun install` there.
+Check with `bun pm ls | grep @fabrika/cli`.
 
 1. **Create a namespace** with the preset and core package the human chose (see Decisions). Without a
    custom domain bound to its proxy, pass `--public-access=zerops-subdomain`; the default is
@@ -196,10 +224,23 @@ places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config 
    ```
 
    `create` returns while the state is `pending`. Provisioning takes several minutes. Poll `get` every
-   30 seconds until it is `ready`, then pick a host it lists as `free`.
+   30 seconds until it is `ready`.
+
+   - If the state is `failed`, `get` prints the cause and the command that resumes it on stderr. Run
+     `fabrika control namespaces reconcile --namespace=<id>` and poll `get` again. Provisioning resumes from
+     where it stopped. Do not create a second namespace.
+   - `get` lists one host per line as `<host> <port> free` or `<host> <port> taken by <app>/<env>`. A
+     `zerops-subdomain` namespace has six hosts, one per public port of its proxy: 8080 and 8082–8086. No
+     port is special or reserved; 8081 is the proxy's health port and is never listed. Use ANY `free` host,
+     for example the first one. Each host serves exactly one application environment, so six is the limit
+     per namespace.
 
 2. **Build and register**, from the application's repository root. The repository must be pushed: control
    deploys the commit on GitHub, not your working tree.
+
+   `--app=<id>` is the application id the manifest carries: `jq -r .app.id fabrika.manifest.json` after the
+   build. The application's `fabrika.config.ts` sets it (`defineApp({ id })`); the example takes it from its
+   contract's vocabulary, and it is `notes`.
 
    ```bash
    bun install
@@ -209,8 +250,10 @@ places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config 
      --namespace=<namespace id> --domain=<free host> --installation-id=none
    ```
 
-   - `--installation-id=none` is for a PUBLIC repository. A private one needs the GitHub App connected in
-     the console (Settings → Source, a browser flow for the human); then omit the flag.
+   - `--installation-id=none` works only for a repository GitHub serves without a token. `register` reads it
+     once and refuses one that is not publicly readable, so the failure shows here and not at deploy. A
+     private repository needs the GitHub App connected in the console first (Settings → Source, a browser
+     flow for the human); then omit the flag.
    - `register` CREATES and refuses a second registration. A changed manifest goes through
      `control apps environments put` with the same placement flags.
 
@@ -221,6 +264,9 @@ places it on the namespace's shared PostgreSQL (`cheap` preset). Use the config 
    FABRIKA_CONTROL_KEY="$(cat control.key)" bunx fabrika control runs list --app=<id>
    FABRIKA_CONTROL_KEY="$(cat control.key)" bunx fabrika control runs log --run=<run id>
    ```
+
+   A failed run's log ends with `deploy failed: <reason>`. For example, `source resolve failed
+   (ref_not_found)` means control could not read the repository or the ref.
 
    The deploy fails when the repository at the deployed commit does not match the registered manifest.
    Commit and push, rebuild the manifest, `apps environments put` it, and deploy again.
