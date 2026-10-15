@@ -45,6 +45,7 @@ bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimensio
 bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honeypot and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
 bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/mutation-kick.test.ts    # a mutation's then: a run after the commit, nothing on a refusal, stopKicks (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/error-reports.test.ts    # what a report carries: scrubbing, frames, causes, caps; crash reports of both adapters
 bun test src/__tests__/intake.test.ts           # the intake recipe's job: each stop, bad records, batches, locks, keys (needs FABRIKA_TEST_POSTGRES_URL)

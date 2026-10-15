@@ -4,6 +4,7 @@
 
 import { compileContract, ContractError, defineApp, type KitImport } from '@fabrika/app/contract'
 import { type ContractApp, type ContractImplementation, defineDeps, serve } from '@fabrika/app/implement'
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQL } from 'bun'
@@ -11,7 +12,18 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { createCapabilityIssuer } from '../implement/capability'
 import { isSiteHandler, siteHandler } from '../implement/invocation'
-import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
+import {
+	bootApp,
+	environment,
+	frameworkEnvFor,
+	grant,
+	ISSUER,
+	linkToken,
+	resultOf,
+	send,
+	token,
+	workloadTokensFor,
+} from './fixtures/implement/harness'
 import { isRecord } from './helpers'
 import { contract as kitContract } from './kit-fixture/fabrika.contract'
 import { app } from './kit-fixture/src/app-kit'
@@ -23,6 +35,7 @@ import { vocabulary } from './kit-fixture/src/vocabulary'
 import { migration } from './orm-fixture/migration'
 
 const DEAL = '0190a0a0-0000-7000-8000-0000000000d1'
+const Done = z.strictObject({ ok: z.boolean() })
 
 /** The kit fixture's kit without its import, whose contracts need no endpoint that connects. */
 const plainApp = defineApp(vocabulary, tables)
@@ -112,6 +125,25 @@ describe("the kit's builders", () => {
 	})
 })
 
+/** A cron job that counts its runs, and a link mount whose mutation kicks it. */
+const nightlyRuns = { count: 0 }
+const nightly = plainApp.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app' }).handle(() => {
+	nightlyRuns.count++
+})
+const linkKicking = plainApp.contract(() => ({
+	kicked: plainApp.link('/k', {
+		spa: 'dist/share',
+		dimension: 'deal',
+		grants: ['crm.read'],
+		issuedBy: 'deals.share',
+		maxDays: 30,
+		procedures: (l) => ({
+			touch: l.mutation({ output: Done, access: { action: 'crm.read' }, then: 'nightly' }).handle(() => ({ ok: true })),
+		}),
+	}),
+	jobs: { nightly },
+}))
+
 describe('buildArtifact refuses a declaration the site may not carry', () => {
 	const refusals = (build: () => unknown): readonly string[] => {
 		try {
@@ -147,6 +179,112 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 		}))
 		expect(refusals(() => compileContract(contract, tables))).toEqual([
 			"procedure 'api.deals.share': issues 'shared', which is not a link mount of the contract",
+		])
+	})
+
+	/** `options` with `key` set, as a cast or a hand-written declaration would set what the kit's types refuse. */
+	const withField = <const T extends object>(options: T, key: string, value: unknown): T => {
+		Object.defineProperty(options, key, { value, enumerable: true })
+		return options
+	}
+	const kicks = plainApp.group({ callers: ['human'] }, (r) => ({
+		touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, then: 'nightly' })
+			.handle(({ ctx }) => ({ id: ctx.target.value })),
+	}))
+	const misspelled = plainApp.group({ callers: ['human'] }, (r) => ({
+		touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, then: 'nightyl' })
+			.handle(({ ctx }) => ({ id: ctx.target.value })),
+	}))
+	const kicking = (deals: typeof kicks, jobs: Readonly<Record<string, typeof nightly>> = { nightly }) =>
+		plainApp.contract((c) => ({ api: c.rpc('/api', { deals }), jobs }))
+
+	test('then on a mutation names a cron job: the artifact records it under the endpoint', () => {
+		expect(compileContract(kicking(kicks), tables).declared).toEqual({
+			'api.deals.touch': { sql: null, unscoped: {}, connect: [], issues: null, then: 'nightly' },
+		})
+	})
+
+	test('then on a query, on a webhook and on a cron job', () => {
+		const contract = plainApp.contract((c) => ({
+			api: c.rpc('/api', {
+				deals: plainApp.group({ callers: ['human'] }, (r) => ({
+					get: r.query(withField({ input: ById, output: ById, access: { action: 'crm.read', on: 'deal', from: 'id' } }, 'then', 'nightly'))
+						.handle(({ ctx }) => ({ id: ctx.target.value })),
+				})),
+			}),
+			github: plainApp.webhook(
+				'/hooks/github',
+				withField({ scheme: 'github-sha256', boundTo: 'org', actions: ['crm.write'], input: ById }, 'then', 'nightly'),
+			).handle(async () => {}),
+			jobs: {
+				nightly,
+				hourly: plainApp.cron('0 * * * *', withField({ actions: ['crm.read'], scope: 'app' }, 'then', 'nightly')).handle(async () => {}),
+			},
+		}))
+		expect(refusals(() => compileContract(contract, tables))).toEqual([
+			"procedure 'api.deals.get': declares then, and it runs read-only (allowed: then on a mutation)",
+			"mount 'github': declares then, which only a mutation of an RPC or link mount declares",
+			"job 'hourly': declares then, which only a mutation of an RPC or link mount declares",
+		])
+	})
+
+	test('then that names no job of the contract, with a suggestion, and a job that is not a cron job', () => {
+		expect(refusals(() => compileContract(kicking(misspelled), tables))).toEqual([
+			"procedure 'api.deals.touch': then 'nightyl' is not a job of the contract (jobs: nightly) — did you mean 'nightly'?",
+		])
+		const notCron = withField({ ...nightly }, 'kind', 'webhook')
+		expect(refusals(() => compileContract(kicking(kicks, { nightly: notCron }), tables))).toEqual([
+			"procedure 'api.deals.touch': then 'nightly' is not a cron job (allowed: a job c.cron declares)",
+			"job 'nightly': is not built with c.cron('<schedule>', { … })",
+		])
+	})
+
+	test('then on a mutation of a link mount names a cron job: the artifact records it under the procedure', () => {
+		expect(compileContract(linkKicking, tables).declared).toEqual({
+			'kicked.touch': { sql: null, unscoped: {}, connect: [], issues: null, then: 'nightly' },
+		})
+	})
+
+	test('then on an export procedure, and a then that is no name', () => {
+		const contract = plainApp.contract((c) => ({
+			api: c.rpc('/api', {
+				deals: plainApp.group({ callers: ['human'] }, (r) => ({
+					touch: r.mutation(withField({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' } }, 'then', 42))
+						.handle(({ ctx }) => ({ id: ctx.target.value })),
+				})),
+			}),
+			jobs: { nightly },
+			exports: {
+				pipeline: plainApp.export({
+					version: 1,
+					consumers: ['billing'],
+					audience: 'any consumer user',
+					procedures: (e) => ({
+						deal: e.query(withField({ input: ById, output: ById, access: { action: 'crm.read', on: 'deal', from: 'id' } }, 'then', 'nightly'))
+							.handle(({ ctx }) => ({ id: ctx.target.value })),
+					}),
+				}),
+			},
+		}))
+		expect(refusals(() => compileContract(contract, tables))).toEqual([
+			"procedure 'api.deals.touch': then is not a job's name (allowed: then: '<cron job>')",
+			"procedure 'pipeline.v1.deal': declares then, which only a mutation of an RPC or link mount declares",
+		])
+	})
+
+	test('mailer on an endpoint, and a mailer that is no transport', () => {
+		const contract = plainApp.contract((c) => ({
+			api: c.rpc('/api', {
+				deals: plainApp.group({ callers: ['human'] }, (r) => ({
+					touch: r.mutation(withField({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' } }, 'mailer', 'own'))
+						.handle(({ ctx }) => ({ id: ctx.target.value })),
+				})),
+			}),
+			jobs: { nightly: plainApp.cron('0 3 * * *', withField({ actions: ['crm.read'], scope: 'app' }, 'mailer', 'smtp')).handle(async () => {}) },
+		}))
+		expect(refusals(() => compileContract(contract, tables))).toEqual([
+			"procedure 'api.deals.touch': declares mailer, which only a cron job declares",
+			`job 'nightly': mailer "smtp" is not a transport (allowed: mailer: 'installation' or 'own')`,
 		])
 	})
 })
@@ -283,5 +421,32 @@ describe('serve', () => {
 	test('the dependencies are read while a handler runs, not at module load', () => {
 		const unbuilt = defineDeps(() => ({ greeting: 'hi' }))
 		expect(() => unbuilt.get()).toThrow('the dependencies are built at boot')
+	})
+})
+
+describe.skipIf(!hasPostgres)('a link mount whose mutation declares then', () => {
+	test("kicks its job once the holder's mutation committed", async () => {
+		const served = serve(linkKicking, { database: scoped(tables) })
+		const connection = Database.postgres({ url, schema, max: 2 })
+		connections.push(connection)
+		const kicked = bootApp(served, {
+			environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: 'crm@prod' }),
+			workloadTokens: workloadTokensFor(served, undefined, ISSUER, 'crm@prod'),
+			database: connection,
+		})
+		const deal = { type: 'deal', value: DEAL }
+		const holder = await linkToken([grant('crm.read', deal)], {
+			mount: 'kicked',
+			chain: [deal, { type: 'company', value: 'c1' }, { type: 'org', value: 'o1' }],
+		}, 'crm@prod')
+		const background: Promise<unknown>[] = []
+		const headers = { 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json', [PROXY_TOKEN_HEADER]: holder }
+		const before = nightlyRuns.count
+		const answer = await kicked.fetch(new Request('https://notes.test/k/api/touch', { method: 'POST', headers, body: '{}' }), {
+			waitUntil: (promise) => void background.push(promise),
+		})
+		expect(answer.status).toBe(200)
+		await Promise.all(background)
+		expect(nightlyRuns.count).toBe(before + 1)
 	})
 })

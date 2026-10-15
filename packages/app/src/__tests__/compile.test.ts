@@ -4,10 +4,13 @@ import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { compileContract, defineContract, parseContractArtifact } from '../contract'
+import { compileContract, defineApp, defineContract, parseContractArtifact } from '../contract'
 import { contract } from './fixtures/notes-app/fabrika.contract'
 import { contract as scopedContract } from './fixtures/scoped-notes/fabrika.contract'
 import { tables as scopedTables } from './fixtures/scoped-notes/src/db/tables'
+import { tables as kitTables } from './kit-fixture/src/db/tables'
+import { ById } from './kit-fixture/src/schemas'
+import { vocabulary as kitVocabulary } from './kit-fixture/src/vocabulary'
 
 /** The generated file endpoints `notesArtifact` does not list. */
 const UNLISTED_FILE_ROWS = new Set(['files.attachments.upload', 'files.attachments.list', 'files.attachments.remove'])
@@ -313,5 +316,37 @@ describe('parseContractArtifact', () => {
 			parseContractArtifact({ ...artifact, roles: { ...artifact.roles, owner: { ...owner, member: { ...owner.member, assignableBy: ['admin'] } } } })
 		)
 			.toThrow(message)
+	})
+})
+
+describe('parseContractArtifact of a kit contract that kicks and mails', () => {
+	const kit = defineApp(kitVocabulary, kitTables)
+	const contract = kit.contract((c) => ({
+		api: c.rpc('/api', {
+			deals: kit.group({ callers: ['human'] }, (r) => ({
+				touch: r.mutation({ input: ById, output: ById, access: { action: 'deals.write', on: 'deal', from: 'id' }, then: 'notify' })
+					.handle(({ ctx }) => ({ id: ctx.target.value })),
+			})),
+		}),
+		jobs: { notify: kit.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation' }).handle(async () => {}) },
+	}))
+	const artifact = compileContract(contract, kitTables)
+
+	test('reads then and mailer back unchanged, each under its site', () => {
+		expect(artifact.declared).toEqual({
+			'api.deals.touch': { sql: null, unscoped: {}, connect: [], issues: null, then: 'notify' },
+			'job:notify': { sql: null, unscoped: {}, connect: [], issues: null, mailer: 'installation' },
+		})
+		const json: unknown = JSON.parse(JSON.stringify(artifact))
+		expect(parseContractArtifact(json)).toEqual(artifact)
+	})
+
+	test('refuses a mailer that is no transport and a then that is no name', () => {
+		const declared = artifact.declared ?? {}
+		const job = declared['job:notify']
+		const endpoint = declared['api.deals.touch']
+		if (job === undefined || endpoint === undefined) throw new Error('the contract changed')
+		expect(() => parseContractArtifact({ ...artifact, declared: { ...declared, 'job:notify': { ...job, mailer: 'smtp' } } })).toThrow()
+		expect(() => parseContractArtifact({ ...artifact, declared: { ...declared, 'api.deals.touch': { ...endpoint, then: '' } } })).toThrow()
 	})
 })

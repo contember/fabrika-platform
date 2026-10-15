@@ -278,3 +278,31 @@ describe.skipIf(!hasPostgres)("a job's ctx.links", () => {
 		)
 	})
 })
+
+describe.skipIf(!hasPostgres)('a job that declares its mailer', () => {
+	let ran = false
+	const mailing = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'own' }).handle(() => {
+		ran = true
+	})
+	const mailingContract = app.contract(() => ({ jobs: { mailing } }))
+
+	test('boots with the mailer the approved artifact records under the job, and runs', async () => {
+		expect(compileContract(mailingContract, tables).declared?.['job:mailing']).toEqual({
+			sql: null,
+			unscoped: {},
+			connect: [],
+			issues: null,
+			mailer: 'own',
+		})
+		const served = serve(mailingContract, { database: scoped(tables) })
+		const connection = Database.postgres({ url, schema, max: 2 })
+		connections.push(connection)
+		const mailingApp = bootApp(served, {
+			environment: environment({ ...frameworkEnvFor(served), FABRIKA_IAM_APP_ID: 'crm@prod' }),
+			workloadTokens: workloadTokensFor(served, undefined, ISSUER, 'crm@prod'),
+			database: connection,
+		})
+		expect(await mailingApp.jobs.run('mailing', { reporter: noReports })).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(ran).toBe(true)
+	})
+})

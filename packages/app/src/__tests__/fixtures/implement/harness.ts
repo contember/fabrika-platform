@@ -276,6 +276,7 @@ export function bootApp(app: ContractImplementation, options: Partial<BootOption
 			return runtime.fetch(new Request(request, { headers }), exec)
 		},
 		jobs: runtime.jobs,
+		stopKicks: runtime.stopKicks,
 	}
 }
 

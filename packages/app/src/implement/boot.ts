@@ -134,6 +134,8 @@ export interface ContractApp {
 	fetch(request: Request, exec?: RequestExecutionContext): Promise<Response>
 	/** The contract's `c.cron` jobs; `fabrika job run <name>` runs one. */
 	readonly jobs: ContractJobs
+	/** Aborts every kicked run in flight; a later kick starts none; the schedule recovers their work. */
+	stopKicks(): void
 }
 
 /** Everything that stops a contract application from starting, with where it is and what to do. */
@@ -682,6 +684,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						facilities: siteFacilities(facilitiesOf(artifact, row), bound.declaration),
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
+						...(bound.declaration?.then == null ? {} : { then: bound.declaration.then }),
 					})
 				}
 			}
@@ -822,5 +825,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		kick: jobs.kick,
 		actions: Object.freeze(Object.keys(artifact.actions).sort()),
 	})
-	return Object.freeze({ fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec), jobs: jobs.jobs })
+	return Object.freeze({
+		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),
+		jobs: jobs.jobs,
+		stopKicks: jobs.stopKicks,
+	})
 }

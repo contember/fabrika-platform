@@ -3,7 +3,7 @@
 // handlers beside their endpoints, in any module, type-check without a cycle. Browser-safe: it builds plain data and
 // holds each handler beside its site (`handled.ts`), never calling one.
 
-import type { RpcCaller } from '@fabrika/auth-core'
+import type { JobMailer, RpcCaller } from '@fabrika/auth-core'
 import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Declared, JobKitContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
@@ -73,10 +73,19 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 	}
 	: never
 
-export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex> =
+export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never> =
 	& Owned<'kind' | 'schedule'>
 	& { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number }
 	& DeclaredFields<S, U, never, Is, Ix>
+	& MailerField<M>
+
+/** The mail transport a job reaches, inferred from its optional field and then required, like a declared field. */
+type MailerField<M> =
+	& {
+		/** `'installation'`: the installation's mail transport; `'own'`: the application's own. */
+		readonly mailer?: M
+	}
+	& ([M] extends [never] ? unknown : { readonly mailer: M })
 
 /** A cron job of the kit, handled. */
 export interface KitCronJob<Acts extends string, Sc extends string, D> extends CronJob<Acts, Sc> {
@@ -84,7 +93,12 @@ export interface KitCronJob<Acts extends string, Sc extends string, D> extends C
 }
 
 /** A cron job before `.handle`: the contract's `jobs` refuses it. */
-export interface CronBuilder<K extends KitTypes, Acts extends string, Sc extends string, D extends Declared<SqlMode, unknown, never, string>> {
+export interface CronBuilder<
+	K extends KitTypes,
+	Acts extends string,
+	Sc extends string,
+	D extends Declared<SqlMode, unknown, never, string, JobMailer>,
+> {
 	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
 }
 
@@ -234,7 +248,8 @@ export interface App<K extends KitTypes> {
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 		const Is extends string = never,
-	>(schedule: string, options: CronOptions<Acts, Sc, S, U, Is, K['index']>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is>>
+		const M extends JobMailer = never,
+	>(schedule: string, options: CronOptions<Acts, Sc, S, U, Is, K['index'], M>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>>
 	/** A GitHub webhook bound per value of `boundTo`; the contract mounts it by name. */
 	webhook<
 		const B extends K['dimension'],

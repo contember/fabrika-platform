@@ -2,7 +2,7 @@
 // is typed by the kit (vocabulary, `DbIndex`, imports) and the site's own declaration, never by the contract value,
 // so a group in any module types itself without importing `fabrika.contract.ts`.
 
-import type { RpcCaller } from '@fabrika/auth-core'
+import type { JobMailer, RpcCaller } from '@fabrika/auth-core'
 import type {
 	AnyDbIndex,
 	ApplicationTables,
@@ -86,15 +86,17 @@ export type SqlMode = 'read' | 'write'
  * The off-road reach a site declares: part of the contract, read by Control, a review signal for the approver. A
  * field the site does not declare is absent.
  */
-export interface Declared<S extends SqlMode, U, Cn extends readonly string[], Is extends string> {
+export interface Declared<S extends SqlMode, U, Cn extends readonly string[], Is extends string, M extends JobMailer = never> {
 	readonly sql?: S
 	readonly unscoped?: U
 	readonly connect?: Cn
 	readonly issues?: Is
+	readonly mailer?: M
 }
 
 /** One declared field, `never` when the site leaves it out. */
-type Of<D, F extends keyof Declared<SqlMode, unknown, readonly string[], string>> = D extends { readonly [P in F]?: infer V } ? Exclude<V, undefined>
+type Of<D, F extends keyof Declared<SqlMode, unknown, readonly string[], string, JobMailer>> = D extends { readonly [P in F]?: infer V }
+	? Exclude<V, undefined>
 	: never
 
 export type SqlValue = string | number | boolean | bigint | Date | null | readonly (string | number)[]
@@ -387,7 +389,7 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 	& UnscopedData<Ix, U, Kind>
 
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
-export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string>> =
+export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], 'mutation'>
@@ -401,7 +403,7 @@ type JobLinksContext<Dim extends string, A extends string, Is extends string> = 
 	: { readonly links: LinkIssuing<Dim, A, Is> }
 
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
-export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string>> =
+export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =
 	& JobContext<A, K['dimension']>
 	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }

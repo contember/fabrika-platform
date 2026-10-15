@@ -55,6 +55,22 @@ type OneLiteral<Is> = string extends Is ? Unavailable<"issues names one link mou
 	: true extends IsUnion<Is> ? Unavailable<"issues names one link mount, as a literal: issues: 'shared'">
 	: unknown
 
+/** `then` names one cron job, as a literal. */
+type OneJob<Th> = string extends Th ? Unavailable<"then names one cron job, as a literal: then: 'mailing'">
+	: true extends IsUnion<Th> ? Unavailable<"then names one cron job, as a literal: then: 'mailing'">
+	: unknown
+
+/** A mutation's `then`, inferred from its optional field and then required, like a declared field. */
+type KickField<Th> =
+	& {
+		/** The cron job this mutation kicks once its transaction committed; the schedule stays its recovery. */
+		readonly then?: Th
+	}
+	& ([Th] extends [never] ? unknown : { readonly then: Th & NoInfer<OneJob<Th>> })
+
+/** A query writes nothing, so it has nothing to kick a job for. */
+type NoKick = { readonly then?: Unavailable<'a query kicks no job: declare then on a mutation'> }
+
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
 /** An endpoint's declaration: its schemas, its access form and the reach it declares. */
@@ -147,7 +163,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>,
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & NoKick,
 	): EndpointBuilder<
 		'query',
 		I,
@@ -164,8 +180,9 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
+		const Th extends string = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>,
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & KickField<Th>,
 	): EndpointBuilder<
 		'mutation',
 		I,
@@ -226,7 +243,7 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 		const S extends 'read' = never,
 		const U extends UnscopedDeclaration<K['tables'], 'read'> = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']>,
+		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']> & NoKick,
 	): EndpointBuilder<'query', I, O, Acc, Declared<S, U, never, never>, LinkContext<K, 'query', LD, Acc['action'], Declared<S, U, never, never>>>
 	mutation<
 		const Acc extends LinkAccess<G>,
@@ -234,8 +251,9 @@ export interface LinkGroupKit<K extends KitTypes, LD extends string, G extends s
 		I extends InputSchema | null = null,
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
+		const Th extends string = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']>,
+		def: EndpointDef<I, O, Acc, S, U, never, never, K['index']> & KickField<Th>,
 	): EndpointBuilder<'mutation', I, O, Acc, Declared<S, U, never, never>, LinkContext<K, 'mutation', LD, Acc['action'], Declared<S, U, never, never>>>
 }
 

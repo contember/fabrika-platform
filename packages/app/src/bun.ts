@@ -125,6 +125,23 @@ async function loadDataLayer(): Promise<DataLayerOpeners> {
 	return { postgres: Database.postgres, applicationSchema }
 }
 
+/** How long a stopping process waits for the work its requests left running; a kicked run aborts at once. */
+const SHUTDOWN_DRAIN_MS = 10_000
+
+/** Waits for `drain`, at most `ms`; a drain the bound cuts short is logged. */
+async function drainWithin(drain: Promise<void>, ms: number): Promise<void> {
+	const expired = Promise.withResolvers<void>()
+	const timer = setTimeout(() => {
+		console.error(`fabrika: the shutdown drain ended after ${ms / 1000} s with background work still running`)
+		expired.resolve()
+	}, ms)
+	try {
+		await Promise.race([drain, expired.promise])
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
 /** The provisioning credential the platform writes; only the launcher reads it, and the application's process never holds it. */
 const PROVISIONING_DATABASE_URL = 'FABRIKA_APP_DATABASE_URL'
 /** The runtime role's credential, which the launcher derives and hands the application's process in its place. */
@@ -373,7 +390,7 @@ async function startContractServer(
 		requireProxySecret: true,
 		...(operationsFetch === undefined ? {} : { operationsFetch }),
 	})
-	// The work a request leaves running (a failure's report, a job a form kicked) is drained before the database closes.
+	// The work a request leaves running (a failure's report, a kicked run) is drained, within a bound, before the database closes.
 	const handler = createBunHandler({ fetch: (request, _env: undefined, exec) => served.fetch(request, exec) }, undefined, {
 		onBackgroundError: () => console.error('fabrika: a background task of a request failed'),
 	})
@@ -386,8 +403,9 @@ async function startContractServer(
 	}
 	const stop = async (): Promise<void> => {
 		clearInterval(checks)
+		served.stopKicks()
 		await server.stop(false)
-		await handler.drain()
+		await drainWithin(handler.drain(), SHUTDOWN_DRAIN_MS)
 		await database?.close()
 	}
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))

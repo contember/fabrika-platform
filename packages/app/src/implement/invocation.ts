@@ -3,7 +3,7 @@
 // commits it after the handler returned and its output passed validation, and rolls it back otherwise. Every handle
 // is bound to the invocation: called from another request, another `boot`, or after it ended, it refuses.
 
-import type { ContractArtifact } from '@fabrika/auth-core'
+import { type ContractArtifact, JOB_MAILERS, type JobMailer } from '@fabrika/auth-core'
 import {
 	type DataAccess,
 	type DataHandles,
@@ -16,6 +16,7 @@ import {
 } from '@fabrika/db/framework'
 import type { DataKind, UnscopedMode } from '@fabrika/db/tables'
 import type { SqlMode } from '../contract/context'
+import { DECLARED_FIELDS } from '../contract/declaration'
 import type { FileSite } from '../files/collections'
 import { CapabilityRefusedError, isActiveRequest, type RequestFrame } from './capability'
 import { ServerFault } from './faults'
@@ -26,6 +27,8 @@ export interface SiteDeclaration {
 	readonly unscoped: Readonly<Record<string, UnscopedMode>>
 	readonly connect: readonly string[]
 	readonly issues: string | null
+	readonly then: string | null
+	readonly mailer: JobMailer | null
 }
 
 export type SiteFunction = (args: { readonly input?: unknown; readonly ctx: object }) => unknown
@@ -53,8 +56,14 @@ export function isSiteHandler(node: unknown): node is SiteHandler {
 	return typeof node === 'object' && node !== null && sites.has(node)
 }
 
-const DECLARED_FIELDS: readonly string[] = ['sql', 'unscoped', 'connect', 'issues']
-const NO_DECLARATION: SiteDeclaration = Object.freeze({ sql: null, unscoped: Object.freeze({}), connect: Object.freeze([]), issues: null })
+const NO_DECLARATION: SiteDeclaration = Object.freeze({
+	sql: null,
+	unscoped: Object.freeze({}),
+	connect: Object.freeze([]),
+	issues: null,
+	then: null,
+	mailer: null,
+})
 
 function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -81,7 +90,7 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		return NO_DECLARATION
 	}
 	for (const key of Object.keys(declared)) {
-		if (!DECLARED_FIELDS.includes(key)) {
+		if (!DECLARED_FIELDS.some((field) => field === key)) {
 			problems.push(`${where}: '${key}' is no declaration (declarations: ${DECLARED_FIELDS.join(', ')})`)
 		}
 	}
@@ -122,11 +131,22 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 	if (issues !== undefined && typeof issues !== 'string') {
 		problems.push(`${where}: issues is not the name of a link mount`)
 	}
+	const then = ownField(declared, 'then')
+	if (then !== undefined && typeof then !== 'string') {
+		problems.push(`${where}: then is not the name of a job`)
+	}
+	const mailerField = ownField(declared, 'mailer')
+	const mailer = JOB_MAILERS.find((transport) => transport === mailerField) ?? null
+	if (mailerField !== undefined && mailer === null) {
+		problems.push(`${where}: mailer is not 'installation' or 'own'`)
+	}
 	return Object.freeze({
 		sql: sql === 'read' || sql === 'write' ? sql : null,
 		unscoped: Object.freeze(unscoped),
 		connect: Object.freeze(connectors),
 		issues: typeof issues === 'string' ? issues : null,
+		then: typeof then === 'string' ? then : null,
+		mailer,
 	})
 }
 
@@ -167,13 +187,25 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			unscoped: Object.freeze({ ...reach.unscoped }),
 			connect: Object.freeze([...reach.connect]),
 			issues: reach.issues,
+			then: reach.then ?? null,
+			mailer: reach.mailer ?? null,
 		})
 }
 
-/** A declaration as one comparable line: its fields in a fixed order, its tables and connectors sorted. */
+/**
+ * A declaration as one comparable line: its fields in a fixed order, its tables and connectors sorted; `then` and
+ * `mailer` only when declared.
+ */
 function describeDeclaration(declaration: SiteDeclaration): string {
 	const unscoped = Object.entries(declaration.unscoped).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-	return JSON.stringify({ sql: declaration.sql, unscoped, connect: [...declaration.connect].sort(), issues: declaration.issues })
+	return JSON.stringify({
+		sql: declaration.sql,
+		unscoped,
+		connect: [...declaration.connect].sort(),
+		issues: declaration.issues,
+		...(declaration.then === null ? {} : { then: declaration.then }),
+		...(declaration.mailer === null ? {} : { mailer: declaration.mailer }),
+	})
 }
 
 /**

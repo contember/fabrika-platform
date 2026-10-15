@@ -434,7 +434,16 @@ export interface DeclaredReach {
 	readonly unscoped: Readonly<Record<string, 'read' | 'write'>>
 	readonly connect: readonly string[]
 	readonly issues: string | null
+	/** The cron job this mutation kicks after its commit; absent unless declared, so the digest stays. */
+	readonly then?: string
+	/** The mail transport this job reaches: the installation's or its own; absent unless declared. */
+	readonly mailer?: JobMailer
 }
+
+/** The mail transports a job may declare: the installation's default, or the application's own. */
+export const JOB_MAILERS = ['installation', 'own'] as const
+
+export type JobMailer = (typeof JOB_MAILERS)[number]
 
 export interface CspExtensions {
 	readonly connectSrc: readonly CspSource[]

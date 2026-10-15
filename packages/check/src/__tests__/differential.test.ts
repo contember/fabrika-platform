@@ -22,6 +22,8 @@ import { contract as kitFilesContract } from '../../../app/src/__tests__/fixture
 import { tables as kitFilesTables } from '../../../app/src/__tests__/fixtures/kit-files/src/db/tables'
 import { contract as multiTenantContract } from '../../../app/src/__tests__/fixtures/multi-tenant/fabrika.contract'
 import { tables as multiTenantTables } from '../../../app/src/__tests__/fixtures/multi-tenant/src/db/tables'
+import { contract as mutationKickContract } from '../../../app/src/__tests__/fixtures/mutation-kick/fabrika.contract'
+import { tables as mutationKickTables } from '../../../app/src/__tests__/fixtures/mutation-kick/src/db/tables'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
 import { contract as filesContract } from '../../../app/src/__tests__/fixtures/scoped-files/fabrika.contract'
 import { tables as filesTables } from '../../../app/src/__tests__/fixtures/scoped-files/src/db/tables'
@@ -177,6 +179,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app form-kick (forms whose then kicks a job, read from source)',
 		root: join(APP_TESTS, 'fixtures', 'form-kick'),
 		evaluated: () => compileContract(formKickContract, formKickTables),
+	},
+	{
+		name: '@fabrika/app mutation-kick (a mutation whose then kicks a job, read from source)',
+		root: join(APP_TESTS, 'fixtures', 'mutation-kick'),
+		evaluated: () => compileContract(mutationKickContract, mutationKickTables),
 	},
 	{
 		name: '@fabrika/app connect/shop, whose import reads its digest from the vendored snapshot',

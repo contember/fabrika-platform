@@ -1,0 +1,417 @@
+// Mutations that kick their job through `boot`'s real pipeline, on a REAL Postgres: a mutation's `then` starts a run of
+// the job in the background once the mutation's transaction committed, under the job's own key; a refused request kicks
+// nothing; a process that stops aborts its kicked runs and frees their lease for the schedule. Skips cleanly when
+// FABRIKA_TEST_POSTGRES_URL is unset.
+
+import { boot, type ContractApp, type WorkloadTokenSource } from '@fabrika/app/implement'
+import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { applicationSchema, Database } from '@fabrika/db'
+import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { SQL } from 'bun'
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { compileContract } from '../contract'
+import type { RequestExecutionContext } from '../fetch'
+import { testKit } from '../testing'
+import {
+	endpointHeaderFor,
+	environment,
+	frameworkEnvFor,
+	grant,
+	keySource,
+	ORIGIN,
+	token,
+	workloadKey,
+	workloadTokensFor,
+} from './fixtures/implement/harness'
+import { contract } from './fixtures/mutation-kick/fabrika.contract'
+import { migration } from './fixtures/mutation-kick/migration'
+import { outboxApp } from './fixtures/mutation-kick/src/app'
+import { tables } from './fixtures/mutation-kick/src/db/tables'
+import type { OutboxWorld } from './fixtures/mutation-kick/src/world'
+
+const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
+const url = process.env[URL_VAR] ?? ''
+const hasPostgres = url !== ''
+
+if (!hasPostgres) {
+	console.warn(`mutation-kick.test.ts skipped: set ${URL_VAR} to run it (the job's lease and the outbox live in @fabrika/db)`)
+}
+
+const schema = applicationSchema(`mkick-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
+/** The advisory lock an outbox insert's COMMIT waits for: a test that holds it holds that COMMIT. */
+const COMMIT_LOCK = 7_310_221
+/** A message whose insert the database refuses at COMMIT. */
+const REFUSED_AT_COMMIT = 'refused at commit'
+const opened: Database[] = []
+
+async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
+	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+	try {
+		return await work(sql)
+	} finally {
+		await sql.close()
+	}
+}
+
+beforeAll(async () => {
+	if (!hasPostgres) return
+	const framework = FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')
+	// A deferred trigger runs at COMMIT: the advisory lock it takes holds that COMMIT, and its exception fails it.
+	const commitHold = `
+create function hold_commit() returns trigger language plpgsql as $$ begin
+	if new.body = '${REFUSED_AT_COMMIT}' then raise exception 'refused at commit'; end if;
+	perform pg_advisory_xact_lock(${COMMIT_LOCK});
+	return null;
+end $$;
+create constraint trigger outbox_commit after insert on outbox deferrable initially deferred for each row execute function hold_commit();
+`
+	await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${framework} ${migration} ${commitHold}`))
+})
+
+beforeEach(async () => {
+	if (!hasPostgres) return
+	await admin((sql) => sql.unsafe(`truncate ${schema}.outbox; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks`))
+})
+
+afterAll(async () => {
+	if (!hasPostgres) return
+	for (const connection of opened) await connection.close()
+	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
+})
+
+/** A point a test holds a run at, and the signal that the run got there. */
+interface Gate {
+	readonly reached: Promise<void>
+	open(): void
+	wait(signal: AbortSignal): Promise<void>
+}
+
+function gate(): Gate {
+	const reached = Promise.withResolvers<void>()
+	const opened = Promise.withResolvers<void>()
+	return {
+		reached: reached.promise,
+		open: () => opened.resolve(),
+		wait: async (signal) => {
+			reached.resolve()
+			const aborted = new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+			await Promise.race([opened.promise, aborted])
+		},
+	}
+}
+
+/** Every run of the job, what it delivered, and the one run a test holds before it reads. */
+class World implements OutboxWorld {
+	readonly runs: { readonly principal: string; readonly runId: string }[] = []
+	readonly deliveredBodies: string[] = []
+	/** The runs whose signal aborted while they were held. */
+	aborted = 0
+	holdStart: Gate | null = null
+	/** Fail the next run after its hold, as a handler error does. */
+	failNext = false
+
+	async started(run: { readonly principal: string; readonly runId: string; readonly signal: AbortSignal }): Promise<void> {
+		this.runs.push({ principal: run.principal, runId: run.runId })
+		const hold = this.holdStart
+		this.holdStart = null
+		await hold?.wait(run.signal)
+		if (run.signal.aborted) {
+			this.aborted++
+			throw new Error('the run was stopped')
+		}
+		if (this.failNext) {
+			this.failNext = false
+			throw new Error('the run failed')
+		}
+	}
+
+	delivered(bodies: readonly string[]): void {
+		this.deliveredBodies.push(...bodies)
+	}
+}
+
+interface Answer {
+	readonly status: number
+	readonly body: unknown
+}
+
+interface Running {
+	readonly app: ContractApp
+	readonly world: World
+	/** The keys the application exchanged for a token: only workload keys, never a request's credential. */
+	readonly exchanged: string[]
+	/** Holds the next exchange of a workload key until the test opens it. */
+	holdExchange: Gate | null
+	call(path: '/api/outbox.enqueue' | '/api/outbox.refuse' | '/api/outbox.peek', body: unknown): Promise<Answer>
+	/** Resolves once every kick the requests started has ended. */
+	settled(): Promise<void>
+}
+
+/** An instance of the application over the shared schema, booted as the proxy fronts it. */
+function start(): Running {
+	const world = new World()
+	const { implementation, variables } = outboxApp(world)
+	const connection = Database.postgres({ url, schema, max: 4 })
+	opened.push(connection)
+	const exchanged: string[] = []
+	const tokens = workloadTokensFor(implementation)
+	const recording: WorkloadTokenSource = {
+		exchange: async (input) => {
+			exchanged.push(input.key)
+			const hold = running.holdExchange
+			running.holdExchange = null
+			await hold?.wait(new AbortController().signal)
+			return tokens.exchange(input)
+		},
+	}
+	const app = boot(implementation, {
+		environment: environment({ ...frameworkEnvFor(implementation), ...variables }),
+		iam: keySource,
+		workloadTokens: recording,
+		database: connection,
+	})
+	const background = new Set<Promise<unknown>>()
+	const exec: RequestExecutionContext = {
+		waitUntil: (promise) => {
+			background.add(promise)
+		},
+	}
+	const staff = token('user', [grant('outbox.read'), grant('outbox.write')])
+	const running: Running = {
+		app,
+		world,
+		exchanged,
+		holdExchange: null,
+		async call(path, body) {
+			const headers = new Headers({ 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json', [PROXY_TOKEN_HEADER]: await staff })
+			const endpoint = endpointHeaderFor(implementation, 'POST', path)
+			if (endpoint !== null) headers.set(ENDPOINT_HEADER, endpoint)
+			const response = await app.fetch(new Request(`${ORIGIN}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }), exec)
+			return { status: response.status, body: JSON.parse(await response.text()) }
+		},
+		async settled() {
+			while (background.size > 0) {
+				const pending = [...background]
+				background.clear()
+				await Promise.all(pending)
+			}
+		},
+	}
+	return running
+}
+
+function quietly<T>(work: () => Promise<T>): Promise<T> {
+	const log = spyOn(console, 'error').mockImplementation(() => {})
+	return work().finally(() => log.mockRestore())
+}
+
+/** `work` within `ms`, or the test fails. */
+function inTime<T>(ms: number, work: Promise<T>): Promise<T> {
+	return Promise.race([
+		work,
+		Bun.sleep(ms).then((): never => {
+			throw new Error(`still waiting after ${ms} ms`)
+		}),
+	])
+}
+
+async function until(condition: () => boolean | Promise<boolean>, ms: number): Promise<void> {
+	const deadline = performance.now() + ms
+	while (!(await condition())) {
+		if (performance.now() > deadline) throw new Error(`still waiting after ${ms} ms`)
+		await Bun.sleep(5)
+	}
+}
+
+async function leaseOf(): Promise<{ readonly holder: string | null; readonly pending: boolean } | undefined> {
+	const [row] = await admin((sql) =>
+		sql.unsafe(
+			`select holder, coalesce(k.pending, false) as pending from ${schema}.fabrika_job_leases l left join ${schema}.fabrika_job_kicks k using (job) where job = 'deliver'`,
+		)
+	)
+	return row
+}
+
+async function outbox(): Promise<string[]> {
+	const rows: { readonly body: string }[] = await admin((sql) => sql.unsafe(`select body from ${schema}.outbox order by body`))
+	return rows.map((row) => row.body)
+}
+
+/** Whether a connection waits for `COMMIT_LOCK`: an outbox insert's COMMIT the test holds. */
+async function commitWaiting(): Promise<boolean> {
+	const [row] = await admin((sql) =>
+		sql.unsafe(`select count(*)::int as n from pg_locks where locktype = 'advisory' and objid = ${COMMIT_LOCK} and not granted`)
+	)
+	return Number(row?.n) > 0
+}
+
+describe('a mutation with then in the artifact', () => {
+	test('names its job under the endpoint; a site without then carries none', () => {
+		const declared = compileContract(contract, tables).declared ?? {}
+		expect(declared['api.outbox.enqueue']?.then).toBe('deliver')
+		expect(declared['api.outbox.refuse']?.then).toBe('deliver')
+		expect(declared['api.outbox.peek']).toEqual({ sql: 'read', unscoped: {}, connect: [], issues: null })
+	})
+})
+
+describe.skipIf(!hasPostgres)('a mutation with then kicks its job', () => {
+	test('a queued message is delivered within a second, by a run under the job’s own key, without waiting for cron', async () => {
+		const running = start()
+		const sent = performance.now()
+		expect((await running.call('/api/outbox.enqueue', { body: 'ada' })).status).toBe(200)
+		await until(() => running.world.deliveredBodies.includes('ada'), 1_000)
+		expect(performance.now() - sent).toBeLessThan(1_000)
+		await running.settled()
+		expect(running.world.runs.map((run) => run.principal)).toEqual(['job:deliver'])
+		expect(new Set(running.exchanged)).toEqual(new Set([workloadKey('job', 'deliver')]))
+		expect(await outbox()).toEqual([])
+	})
+
+	test('the run starts only after the mutation’s transaction committed', async () => {
+		const running = start()
+		const holder = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			await holder.unsafe(`select pg_advisory_lock(${COMMIT_LOCK})`)
+			const answer = running.call('/api/outbox.enqueue', { body: 'bo' })
+			await until(commitWaiting, 2_000)
+			await Bun.sleep(200)
+			// The handler returned and its COMMIT waits: nothing has started a run.
+			expect(running.world.runs).toEqual([])
+			await holder.unsafe(`select pg_advisory_unlock(${COMMIT_LOCK})`)
+			expect((await answer).status).toBe(200)
+		} finally {
+			await holder.close()
+		}
+		await running.settled()
+		expect(running.world.runs).toHaveLength(1)
+		expect(running.world.deliveredBodies).toEqual(['bo'])
+	})
+
+	test('a refused request kicks nothing: a handler that throws, an input that is refused', async () => {
+		const running = start()
+		expect((await running.call('/api/outbox.refuse', { body: 'cy' })).status).toBe(409)
+		expect((await running.call('/api/outbox.enqueue', { body: '' })).status).toBe(400)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect(await outbox()).toEqual([])
+		expect(await leaseOf()).toBeUndefined()
+	})
+
+	test('a COMMIT the database refuses answers 500 and kicks nothing', async () => {
+		const running = start()
+		expect((await quietly(() => running.call('/api/outbox.enqueue', { body: REFUSED_AT_COMMIT }))).status).toBe(500)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect(await outbox()).toEqual([])
+		expect(await leaseOf()).toBeUndefined()
+	})
+
+	test('a query answers without a kick', async () => {
+		const running = start()
+		expect(await running.call('/api/outbox.peek', {})).toEqual({ status: 200, body: { result: { waiting: 0 } } })
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+	})
+
+	test('stopKicks ends a held kicked run at once, reports nothing and frees the lease for the schedule', async () => {
+		const running = start()
+		const held = gate()
+		running.world.holdStart = held
+		expect((await running.call('/api/outbox.enqueue', { body: 'di' })).status).toBe(200)
+		await held.reached
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			running.app.stopKicks()
+			await inTime(1_000, running.settled())
+			expect(log.mock.calls.map(([line]) => line)).toEqual([
+				"fabrika: job 'deliver' stopped: the process is shutting down; its schedule runs it again",
+			])
+		} finally {
+			log.mockRestore()
+		}
+		expect(running.world.aborted).toBe(1)
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+		// A kick after the stop starts no run; it leaves the flag for a process that is not stopping.
+		expect((await running.call('/api/outbox.enqueue', { body: 'ed' })).status).toBe(200)
+		await running.settled()
+		expect(running.world.runs).toHaveLength(1)
+		expect(await leaseOf()).toEqual({ holder: null, pending: true })
+		expect(await outbox()).toEqual(['di', 'ed'])
+		expect(await quietly(() => running.app.jobs.run('deliver'))).toEqual({ status: 'succeeded', attempts: 1 })
+		expect([...running.world.deliveredBodies].sort()).toEqual(['di', 'ed'])
+		expect(await outbox()).toEqual([])
+	})
+
+	test('stopKicks during the wait before a retry ends the run as stopped, with no further attempt', async () => {
+		const running = start()
+		running.world.failNext = true
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		const lines = () => log.mock.calls.map(([line]) => line)
+		try {
+			expect((await running.call('/api/outbox.enqueue', { body: 'fi' })).status).toBe(200)
+			await until(() => lines().length > 0, 2_000)
+			running.app.stopKicks()
+			// The backoff before attempt 2 is at least 500 ms: the stop ends it.
+			await inTime(450, running.settled())
+			expect(lines()).toEqual([
+				"fabrika: job 'deliver' attempt 1 of 2 failed: handler_failed",
+				"fabrika: job 'deliver' stopped: the process is shutting down; its schedule runs it again",
+			])
+		} finally {
+			log.mockRestore()
+		}
+		expect(running.world.runs).toHaveLength(1)
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+		expect(await outbox()).toEqual(['fi'])
+	})
+
+	test('stopKicks while the attempt asks IAM for its token starts no handler', async () => {
+		const running = start()
+		const exchange = gate()
+		running.holdExchange = exchange
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await running.call('/api/outbox.enqueue', { body: 'go' })).status).toBe(200)
+			await exchange.reached
+			running.app.stopKicks()
+			exchange.open()
+			await inTime(1_000, running.settled())
+			expect(log.mock.calls.map(([line]) => line)).toEqual([
+				"fabrika: job 'deliver' stopped: the process is shutting down; its schedule runs it again",
+			])
+		} finally {
+			log.mockRestore()
+		}
+		expect(running.world.runs).toEqual([])
+		expect(await leaseOf()).toEqual({ holder: null, pending: false })
+		expect(await outbox()).toEqual(['go'])
+	})
+
+	test("the test kit's drain waits for the run a mutation kicked", async () => {
+		const world = new World()
+		const { implementation, variables } = outboxApp(world)
+		const connection = Database.postgres({ url, schema, max: 4 })
+		opened.push(connection)
+		const kit = testKit(implementation, { database: connection, env: variables })
+		const held = gate()
+		world.holdStart = held
+		const staff = kit.browser(kit.testCaller([{ action: 'outbox.write' }]))
+		const answer = await staff('/api/outbox.enqueue', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ body: 'fy' }),
+		})
+		expect(answer.status).toBe(200)
+		await held.reached
+		let drained = false
+		const draining = kit.drain().then(() => {
+			drained = true
+		})
+		await Bun.sleep(50)
+		expect(drained).toBe(false)
+		held.open()
+		await draining
+		expect(world.runs).toHaveLength(1)
+		expect(world.deliveredBodies).toEqual(['fy'])
+	})
+})

@@ -29,8 +29,10 @@ import {
 	type ImportArtifact,
 	isLocale,
 	isMessageKind,
+	JOB_MAILERS,
 	JOB_SITE_PREFIX,
 	type JobArtifact,
+	type JobMailer,
 	type Locale,
 	LOCALES,
 	type MailTemplate,
@@ -113,7 +115,8 @@ const AUDIENCE = 'any consumer user'
 const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'usedBy', 'timeoutMs']
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
-const DECLARED_ALLOWED = "sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>'"
+const DECLARED_ALLOWED =
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own'"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -530,7 +533,7 @@ class ArtifactBuilder {
 					path: mount.path,
 					appendTo: mount.appendTo,
 					...this.#formAdmission(name, where, mount),
-					...(mount.then === undefined ? {} : { then: this.#formJob(where, mount.then) }),
+					...(mount.then === undefined ? {} : { then: this.#kickedJob(where, mount.then) }),
 				}
 			case 'webhook': {
 				this.#prefix(where, mount.path)
@@ -555,8 +558,8 @@ class ArtifactBuilder {
 		}
 	}
 
-	/** The job a form kicks: a cron job of this contract. */
-	#formJob(where: string, then: string): string {
+	/** The job a form or a mutation kicks: a cron job of this contract. */
+	#kickedJob(where: string, then: string): string {
 		const jobs = this.#contract.jobs
 		const job: { readonly kind: string } | undefined = Object.hasOwn(jobs, then) ? jobs[then] : undefined
 		if (job === undefined) {
@@ -1467,6 +1470,8 @@ class ArtifactBuilder {
 				this.#problem(where, `'${key}' is not a declared field (allowed: ${DECLARED_ALLOWED})`)
 			}
 		}
+		const then = this.#then(where, value['then'], place)
+		const mailer = this.#mailer(where, value['mailer'], place)
 		const reach: DeclaredReach = {
 			sql: this.#sqlMode(where, value['sql'], place.readOnly),
 			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
@@ -1476,6 +1481,8 @@ class ArtifactBuilder {
 				: place.kind === 'job'
 				? this.#jobIssues(where, value['issues'], place.actions)
 				: null,
+			...(then === undefined ? {} : { then }),
+			...(mailer === undefined ? {} : { mailer }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -1483,7 +1490,10 @@ class ArtifactBuilder {
 		if (place.kind !== 'rpc' && place.kind !== 'job' && value['issues'] !== undefined) {
 			this.#problem(where, 'declares issues, which only an endpoint of an RPC mount or a cron job declares')
 		}
-		if (reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null) {
+		if (
+			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
+			|| reach.mailer !== undefined
+		) {
 			this.#declared[site] = reach
 		}
 	}
@@ -1609,6 +1619,42 @@ class ArtifactBuilder {
 			)
 		}
 		return name
+	}
+
+	/** The cron job a mutation kicks once its transaction committed; `undefined` when it declares none or after a problem. */
+	#then(where: string, value: unknown, place: DeclaringSite): string | undefined {
+		if (value === undefined) {
+			return undefined
+		}
+		if (place.kind !== 'rpc' && place.kind !== 'link') {
+			this.#problem(where, 'declares then, which only a mutation of an RPC or link mount declares')
+			return undefined
+		}
+		if (place.readOnly) {
+			this.#problem(where, 'declares then, and it runs read-only (allowed: then on a mutation)')
+			return undefined
+		}
+		if (typeof value !== 'string') {
+			this.#problem(where, "then is not a job's name (allowed: then: '<cron job>')")
+			return undefined
+		}
+		return this.#kickedJob(where, value)
+	}
+
+	/** The mail transport a cron job reaches; `undefined` when it declares none or after a problem. */
+	#mailer(where: string, value: unknown, place: DeclaringSite): JobMailer | undefined {
+		if (value === undefined) {
+			return undefined
+		}
+		if (place.kind !== 'job') {
+			this.#problem(where, 'declares mailer, which only a cron job declares')
+			return undefined
+		}
+		const mailer = JOB_MAILERS.find((transport) => transport === value)
+		if (mailer === undefined) {
+			this.#problem(where, `mailer ${JSON.stringify(value)} is not a transport (allowed: mailer: 'installation' or 'own')`)
+		}
+		return mailer
 	}
 
 	/** `connect` calls another application on behalf of a person, so only an RPC endpoint declares it. */

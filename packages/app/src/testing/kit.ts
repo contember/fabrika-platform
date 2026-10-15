@@ -147,11 +147,13 @@ export interface TestKit<C extends AnyContract> {
 	acceptInvitation(invitationId: string, person?: LabelledTestCaller): LabelledTestCaller
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
-	 * its key, its writes fenced. It first waits for the runs a form's `then` kicked, so it never races them.
+	 * its key, its writes fenced. It first waits for the runs a form's or a mutation's `then` kicked, so it never races them.
 	 * `FILE_SCAN_JOB` runs the scan of `scan: true` collections with the kit's `scanner`, `FILE_SWEEP_JOB` the sweep of
 	 * removed and orphaned files. Needs the application's data layer on Postgres.
 	 */
 	runJob(name: JobName<C> | typeof FILE_SCAN_JOB | typeof FILE_SWEEP_JOB, options?: JobRunOptions): Promise<JobRunResult>
+	/** Waits for the work requests left running: the runs a form's or a mutation's `then` kicked, a failure's report. */
+	drain(): Promise<void>
 }
 
 /** The names of the contract's cron jobs. */
@@ -495,7 +497,7 @@ export function bootTestKit<C extends AnyContract>(
 
 	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: membership ?? null })
 
-	// What requests leave running: a job a form's `then` kicked, or a failure's report.
+	// What requests leave running: a job a form's or a mutation's `then` kicked, or a failure's report.
 	const background = new Set<Promise<void>>()
 	const exec: RequestExecutionContext = {
 		waitUntil(promise) {
@@ -550,10 +552,14 @@ export function bootTestKit<C extends AnyContract>(
 		}
 	}
 
-	const runJob = async (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => {
+	const drain = async (): Promise<void> => {
 		while (background.size > 0) {
 			await Promise.all(background)
 		}
+	}
+
+	const runJob = async (name: string, runOptions?: JobRunOptions): Promise<JobRunResult> => {
+		await drain()
 		return application.jobs.run(name, runOptions)
 	}
 
@@ -578,7 +584,7 @@ export function bootTestKit<C extends AnyContract>(
 		return invitee
 	}
 	return {
-		kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob, acceptInvitation }),
+		kit: Object.freeze({ origin, appId, artifact, testCaller, scope, fetch: kitFetch, browser, iam, runJob, drain, acceptInvitation }),
 		standIn,
 		callerOf: (value) => [...memberships.keys()].find((caller) => caller === value),
 	}

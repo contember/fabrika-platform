@@ -60,6 +60,8 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'43-member-label-without-a-labels-directory.ts': "'member.label' is possibly 'null'.",
 	'44-remove-files-in-a-query.ts': 'a query reads only; remove files in a mutation',
 	'45-remove-files-outside-a-job-transaction.ts': 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
+	'46-then-on-a-query.ts': 'a query kicks no job: declare then on a mutation',
+	'47-then-not-a-literal.ts': "then names one cron job, as a literal: then: 'mailing'",
 }
 
 /**

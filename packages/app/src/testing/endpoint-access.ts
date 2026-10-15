@@ -805,5 +805,20 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 		},
 	}
-	return Object.freeze(accessKit)
+	// Each case waits for the runs its requests kicked, so the suite's teardown never closes the database under one.
+	const drained = <A extends readonly unknown[], R>(method: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+		try {
+			return await method(...args)
+		} finally {
+			await kit.drain()
+		}
+	}
+	return Object.freeze({
+		denied: drained(accessKit.denied),
+		leaked: drained(accessKit.leaked),
+		own: drained(accessKit.own),
+		file: drained(accessKit.file),
+		scoped: drained(accessKit.scoped),
+		global: drained(accessKit.global),
+	})
 }

@@ -120,6 +120,8 @@ export type ServedEndpoint =
 		readonly connect?: readonly ImportWire[]
 		/** A staged-kit site, which gets `ctx.db`; a handler `implement` bound has none. */
 		readonly site?: ServedSite
+		/** The cron job this mutation kicks once its transaction committed; absent without `then`. */
+		readonly then?: string
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -302,7 +304,7 @@ export class ContractRuntime {
 					}
 					return await withBootstrap(await this.#asset(served, request), served.prefix)
 				case 'procedure':
-					return await this.#procedure(served, request)
+					return await this.#procedure(served, request, exec)
 				case 'file':
 					return await this.#file(served, request, plan.params)
 				case 'form':
@@ -438,9 +440,14 @@ export class ContractRuntime {
 	/**
 	 * A staged-kit site runs in one transaction: its statements commit after the handler returned, the output passed
 	 * validation and an attachment was encoded, and roll back on a throw, a refused output, a file over its limit or a
-	 * cancelled request. So an audited export keeps its log row only when its file goes out.
+	 * cancelled request. So an audited export keeps its log row only when its file goes out. Only after that commit does
+	 * `then` kick its job, which the answer neither waits for nor depends on.
 	 */
-	async #procedure(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Response> {
+	async #procedure(
+		served: Extract<ServedEndpoint, { kind: 'procedure' }>,
+		request: Request,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
 		const input = await readInput(served, request)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
@@ -476,6 +483,11 @@ export class ContractRuntime {
 			}
 			const answer = this.#answerOf(served, result)
 			await invocation?.commit(signal)
+			if (served.then !== undefined) {
+				// Without an execution context the kick runs detached; it never rejects.
+				const kicked = this.#parts.kick(served.then)
+				exec?.waitUntil(kicked)
+			}
 			return answer
 		} finally {
 			await invocation?.rollback()

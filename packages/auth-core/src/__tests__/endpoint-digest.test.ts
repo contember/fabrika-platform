@@ -176,6 +176,18 @@ describe('contractDigest', () => {
 			contractDigest({ ...notesArtifact, mail: { reset: { cs: { ...reset, subject: 'Heslo' } } } }),
 		)
 	})
+
+	test("covers a site's then and mailer only when it declares them", () => {
+		const reach = { sql: 'write', unscoped: {}, connect: [], issues: null } as const
+		const declaring = { ...notesArtifact, declared: { 'api.notes.create': reach, 'job:welcome': reach } }
+		const digest = contractDigest(declaring)
+		expect(
+			contractDigest({ ...declaring, declared: { 'api.notes.create': { ...reach, then: undefined }, 'job:welcome': { ...reach, mailer: undefined } } }),
+		)
+			.toBe(digest)
+		expect(contractDigest({ ...declaring, declared: { ...declaring.declared, 'api.notes.create': { ...reach, then: 'welcome' } } })).not.toBe(digest)
+		expect(contractDigest({ ...declaring, declared: { ...declaring.declared, 'job:welcome': { ...reach, mailer: 'own' } } })).not.toBe(digest)
+	})
 })
 
 describe('the endpoint header', () => {
