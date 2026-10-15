@@ -6,6 +6,14 @@ x-bun: &bun
   volumes:
     - ../..:/workspace
 
+# The installation's mail transport in this composition, which Control holds: a deploy hands it only to an application
+# whose job declares `mailer: 'installation'`, and the `directory` provider writes each message to `.state/mail/`. Only
+# Control's composition and an application under a loopback issuer accept that provider.
+x-local-mail: &local-mail
+  FABRIKA_EMAIL_PROVIDER: directory
+  FABRIKA_EMAIL_FROM: Fabrika local <mail@local.test>
+  FABRIKA_EMAIL_DIRECTORY: /workspace/packages/local-stack/.state/mail
+
 services:
   platform-db:
     image: postgres:17-alpine
@@ -120,6 +128,7 @@ services:
       - path: .state/control.env
       - path: .state/control-table.env
     environment:
+      <<: *local-mail
       PORT: "3000"
       FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
       ENVIRONMENT: local

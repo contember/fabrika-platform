@@ -8,6 +8,8 @@
 import { HttpIamMembership } from '@fabrika/auth'
 import type { Database, PostgresOptions } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
+import type { EmailProviderRegistry } from '@fabrika/email'
+import { directoryEmailProvider } from '@fabrika/email/directory'
 import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { applicationRuntimeUrl, S3BlobStore } from '@fabrika/platform-node'
@@ -26,6 +28,9 @@ export { diskAssets } from './disk-assets.js'
 export { clamscanArguments, type ClamscanOptions, clamscanScanner } from './files/clamscan.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
+
+/** The local stack's capture: boot honours it only under a loopback issuer, and the stack names it with `FABRIKA_EMAIL_PROVIDER`. */
+const LOCAL_EMAIL_PROVIDERS = { directory: directoryEmailProvider } satisfies EmailProviderRegistry
 
 export interface ManagedBunHandlerOptions {
 	/** Required sink for rejected background tasks. Do not log raw errors or secret-bearing values. */
@@ -388,6 +393,7 @@ async function startContractServer(
 		membership,
 		workloadTokens,
 		requireProxySecret: true,
+		localEmailProviders: LOCAL_EMAIL_PROVIDERS,
 		...(operationsFetch === undefined ? {} : { operationsFetch }),
 	})
 	// The work a request leaves running (a failure's report, a kicked run) is drained, within a bound, before the database closes.
@@ -457,6 +463,7 @@ export async function runContractJob(
 			membership,
 			workloadTokens,
 			requireProxySecret: true,
+			localEmailProviders: LOCAL_EMAIL_PROVIDERS,
 			// ClamAV on PATH, as the provider's build installs it for a `scan: true` collection; missing, the scan fails closed.
 			scanner: clamscanScanner(),
 		})

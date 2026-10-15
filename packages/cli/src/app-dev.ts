@@ -15,14 +15,17 @@ import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
-import { DEV_ENV_FILE, DevEnvProblem, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
+import { DEV_ENV_FILE, DevEnvProblem, type DevOutbox, devOutbox, mailHeadOf, readDevEnv, shownBody } from './app-dev-outside'
 import { DEFAULT_SEED, importSeed, isLocalPath, NOTHING_SEEDED, parseSeeded, type Seeded, seedPath, SeedProblem } from './app-dev-seed'
 import {
 	type Badge,
 	type CurrentView,
 	type DevView,
+	mailPage,
 	type MailView,
+	newestMail,
 	noticePage,
+	type OutboxView,
 	pickerPage,
 	type RoleView,
 	stringsOf,
@@ -42,10 +45,11 @@ and a throwaway schema of the database in ${TEST_POSTGRES_URL}, migrated from db
 The seed module (--seed, or ${DEFAULT_SEED} when it exists) default-exports a DevSeed of @fabrika/app/testing: it
 receives the kit, writes through the endpoints, and answers the personas, link pages and scope values to offer.
 Pick who the browser is at /__fabrika/dev; every SPA page shows a toolbar that switches the caller and lists the
-mail IAM sent and the requests the application sent to ${DEV_OUTBOX_ORIGIN}, the dev outbox. A form's challenge
-passes. The application's own variables come from ${DEV_ENV_FILE} (NAME=value lines) over the environment. What the
-seed or a job's handler throws is printed with its stack. It listens on 127.0.0.1 (or ::1, localhost) only, port
-3000 unless --port says otherwise (0 picks a free one), and prints the address it serves.
+mail IAM and the application's jobs sent, and the requests the application sent to ${DEV_OUTBOX_ORIGIN}, the dev
+outbox. A form's challenge passes. The application's own variables come from ${DEV_ENV_FILE} (NAME=value lines)
+over the environment. What the seed or a job's handler throws is printed with its stack. It listens on 127.0.0.1
+(or ::1, localhost) only, port 3000 unless --port says otherwise (0 picks a free one), and prints the address it
+serves.
 `
 
 const LOOPBACK: ReadonlySet<string> = new Set(['127.0.0.1', '::1', 'localhost'])
@@ -55,6 +59,7 @@ const CHOOSE_PATH = '/__fabrika/dev/as'
 const ACCEPT_PATH = '/__fabrika/dev/accept'
 const STATE_PATH = '/__fabrika/dev/state'
 const OUTBOX_PATH = '/__fabrika/dev/outbox/'
+const MAIL_PATH = '/__fabrika/dev/mail/'
 const TOOLBAR_PATH = '/__fabrika/dev/toolbar.js'
 const CHOICE_COOKIE = 'fabrika-dev-as'
 const MAX_SCOPE_VALUE = 200
@@ -249,7 +254,7 @@ async function serveDevKit(
 	app: ContractImplementation<AnyContract>,
 	options: AppDevOptions,
 	postgres: TestDatabase | null,
-	outbox: DevOutside,
+	outbox: DevOutbox,
 	restoreFetch: () => void,
 ): Promise<AppDevServer> {
 	const contract = app.contract
@@ -263,7 +268,8 @@ async function serveDevKit(
 		revealHandlerErrors: printHandlerError,
 	})
 	const kit = dev.kit
-	const seeded = await runSeed(dev, outbox, options.seed)
+	const outside: DevOutside = { outbox: () => outbox.outbox(), mails: () => dev.mails() }
+	const seeded = await runSeed(dev, outside, options.seed)
 	const text = stringsOf(vocabulary.locale ?? 'en')
 	const title = vocabulary.displayName ?? vocabulary.app
 	const mounts = Object.values(kit.artifact.mounts)
@@ -361,23 +367,31 @@ async function serveDevKit(
 		})),
 		anonymousHref: chooseHref({ anonymous: '1' }, next),
 		links: seeded.links.map((link) => ({ title: link.title, description: link.description, href: link.url })),
-		mail: [
+		mail: newestMail([
 			...dev.invitations().map((invitation): MailView => ({
 				to: invitation.email,
 				subject: text.invitation(invitation.role, scopeLabel(invitation.scope.type, invitation.scope.value)),
+				at: invitation.sentAt * 1000,
+				key: null,
 				status: invitation.status,
+				answer: null,
 				action: invitation.status === 'open'
 					? { label: text.accept, href: `${ACCEPT_PATH}?${new URLSearchParams({ invitation: invitation.id, next }).toString()}` }
 					: invitation.status === 'accepted' && invitees.has(invitation.id)
 					? { label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }
 					: null,
 			})),
-			...outbox.outbox().map((message): MailView => ({
-				...mailHeadOf(message),
-				status: 'sent',
-				action: { label: text.openMessage, href: `${OUTBOX_PATH}${message.id}` },
+			...dev.mails().map((sent): MailView => ({
+				to: sent.to,
+				subject: sent.subject,
+				at: Date.parse(sent.at),
+				key: sent.key,
+				status: sent.outcome === 'accepted' ? 'sent' : sent.outcome,
+				answer: sent.answer === 'accepted' ? null : sent.answer,
+				action: { label: text.openMessage, href: `${MAIL_PATH}${sent.id}` },
 			})),
-		],
+		]),
+		outbox: [...outbox.outbox()].reverse().map((message): OutboxView => ({ ...mailHeadOf(message), href: `${OUTBOX_PATH}${message.id}` })),
 		pickerHref: `${PICKER_PATH}?${new URLSearchParams({ next }).toString()}`,
 	})
 
@@ -489,9 +503,17 @@ async function serveDevKit(
 		})
 	}
 
+	/** A message a job handed to the mail stand-in: its fields, its text, and its HTML in a sandboxed frame. */
+	const mailMessage = (request: Request, path: string): Response => {
+		const sent = dev.mails().find((candidate) => `${MAIL_PATH}${candidate.id}` === path)
+		if (sent === undefined) return plain(404, 'no such mail in app dev')
+		return new Response(mailPage(viewOf(choiceOf(request), firstSpa), sent), { headers: PAGE_HEADERS })
+	}
+
 	const devRoute = (request: Request, url: URL): Response | null => {
 		if (request.method !== 'GET') return null
 		if (url.pathname.startsWith(OUTBOX_PATH)) return outboxMessage(url.pathname)
+		if (url.pathname.startsWith(MAIL_PATH)) return mailMessage(request, url.pathname)
 		switch (url.pathname) {
 			case PICKER_PATH:
 				return new Response(pickerPage(viewOf(choiceOf(request), nextOf(url.searchParams.get('next')))), { headers: PAGE_HEADERS })

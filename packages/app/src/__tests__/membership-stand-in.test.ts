@@ -600,15 +600,20 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 
 	afterEach(() => setSystemTime())
 
-	test('a repeat answers the same open invitation; a resend keeps its id and restarts its 7 days', async () => {
+	test('a repeat answers the same open invitation and sends nothing; a resend keeps its id, restarts its 7 days and is sent again', async () => {
 		const membership = standIn()
 		setSystemTime(new Date('2026-10-14T10:00:00Z'))
 		const first = await invite(membership)
+		const opened = Date.parse('2026-10-14T10:00:00Z') / 1000
+		expect(membership.invitations().map((sent) => sent.sentAt)).toEqual([opened])
+		setSystemTime(new Date('2026-10-14T12:00:00Z'))
 		expect(await invite(membership, 'Ann@Example.test')).toEqual(first)
+		expect(membership.invitations().map((sent) => sent.sentAt)).toEqual([opened])
 		setSystemTime(new Date('2026-10-15T10:00:00Z'))
 		const resent = await invite(membership, 'ann@example.test', true)
 		expect(resent).toEqual({ ...first, expiresAt: first.expiresAt + 24 * 60 * 60 })
 		expect(await invite(membership)).toEqual(resent)
+		expect(membership.invitations().map((sent) => sent.sentAt)).toEqual([opened + 24 * 60 * 60])
 	})
 
 	test('a cancelled or expired invitation is no longer open: the next one has a new id; a repeated cancel answers the same', async () => {

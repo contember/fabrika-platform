@@ -144,6 +144,8 @@ export interface SentInvitation {
 	readonly role: string
 	readonly scope: Scope
 	readonly expiresAt: number
+	/** When it was last sent, in seconds: when it was opened, or its latest resend. */
+	readonly sentAt: number
 	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired'
 }
 
@@ -165,6 +167,7 @@ interface KitInvitation {
 	readonly role: string
 	readonly email: string
 	readonly expiresAt: number
+	readonly sentAt: number
 	readonly closed: 'cancelled' | 'accepted' | null
 	/** The principal that opened it, whose authority IAM checks again at acceptance; `null` for a seeded one. */
 	readonly inviter: string | null
@@ -479,9 +482,15 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		)
 
 	const openNew = (scope: Scope, role: string, email: string, inviter: string | null): KitInvitation => {
-		const invitation = { id: `invitation-${randomId()}`, scope, role, email, expiresAt: now() + INVITATION_TTL_SECONDS, closed: null, inviter }
+		const sentAt = now()
+		const invitation = { id: `invitation-${randomId()}`, scope, role, email, expiresAt: sentAt + INVITATION_TTL_SECONDS, sentAt, closed: null, inviter }
 		invitations.set(invitation.id, invitation)
 		return invitation
+	}
+
+	const resent = (invitation: KitInvitation): KitInvitation => {
+		const sentAt = now()
+		return { ...invitation, expiresAt: sentAt + INVITATION_TTL_SECONDS, sentAt }
 	}
 
 	/** Spends the request's grant before its binding is compared, as IAM does, so each attempt is single use. */
@@ -595,7 +604,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const invitation = open === undefined
 			? openNew(input.scope, input.role, email, caller.id)
 			: input.invitation?.resend === true
-			? { ...open, expiresAt: now() + INVITATION_TTL_SECONDS }
+			? resent(open)
 			: open
 		invitations.set(invitation.id, invitation)
 		asked.push({
@@ -751,12 +760,13 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return link === undefined || link.revoked ? undefined : { id: link.id, mount: link.mount, chain: link.chain }
 	}
 	const invitationsSent = (): readonly SentInvitation[] =>
-		[...invitations.values()].map(({ id, email, role, scope, expiresAt, closed }) => ({
+		[...invitations.values()].map(({ id, email, role, scope, expiresAt, sentAt, closed }) => ({
 			id,
 			email,
 			role,
 			scope,
 			expiresAt,
+			sentAt,
 			status: closed ?? (expiresAt > now() ? 'open' : 'expired'),
 		}))
 	const accept = (invitationId: string, recipient?: TestCaller): AcceptedInvitation => {

@@ -148,12 +148,15 @@ arguments and reports.
   - The outside (`src/app-dev-outside.ts`): `dev/dev.env` (`NAME=value`, no `FABRIKA_*`) sets the application's
     variables over the environment's; the dev outbox replaces the process's `fetch` for `DEV_OUTBOX_ORIGIN`
     (`https://outbox.invalid`) only, keeps each request's method, path, content type and body (never a header), and
-    answers 200; the seed reads it as its second argument and the mail view lists it. A form's challenge passes
+    answers 200. The seed's second argument reads it (`outbox()`) and every message a job handed to the kit's mail
+    stand-in (`mails()`). The mail view lists the stand-in IAM's invitations and the jobs' mail together, newest
+    first; the dev outbox has its own section after it. A form's challenge passes
     (`devKit`'s `passingChallenge`), and Turnstile's test-widget token passes at every submission
     (`TURNSTILE_TEST_TOKEN`); any other token is single use.
   - The routes under `/__fabrika/dev`: the picker, `as` (a persona, a role in a scope value, an accepted invitee, or
     anonymous; it sets the cookie the application never sees), `accept` (an invitation the stand-in IAM sent),
-    `state` (the toolbar's JSON), `toolbar.js` and `outbox/<id>` (a captured message, as text). Every `text/html` 200 of an SPA or link mount gets the toolbar's
+    `state` (the toolbar's JSON), `toolbar.js`, `outbox/<id>` (a captured request, as text) and `mail/<id>` (a job's
+    message: its fields, its text, and its HTML in a `sandbox=""` `srcdoc` frame under the page's own CSP). Every `text/html` 200 of an SPA or link mount gets the toolbar's
     same-origin script tag; the kit's CSP already admits it, so `app dev` changes no header the kit answers.
   - The UI (`src/app-dev-ui.ts`) is self-contained HTML, CSS and a shadow-DOM script, colored by `--fd-*` custom
     properties, light and dark. The picker answers its own strict CSP and runs no script.

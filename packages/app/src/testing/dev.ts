@@ -80,11 +80,14 @@ export interface DevMail {
 export interface DevOutside {
 	/** Every request sent to `DEV_OUTBOX_ORIGIN` so far, oldest first. */
 	outbox(): readonly DevOutboxMessage[]
+	/** Every message a job handed to the mail stand-in so far, oldest first. */
+	mails(): readonly DevMail[]
 }
 
 /**
  * The default export of `dev/seed.ts`: it receives the application's test kit, the API its tests use, writes through the
- * endpoints, and answers who and what the picker offers. `outside` reads what the application sent to the dev outbox.
+ * endpoints, and answers who and what the picker offers. `outside` reads what the application sent to the dev outbox
+ * and every message a job handed to the mail stand-in, oldest first.
  */
 export type DevSeed<C extends AnyContract> = (dev: TestKit<C>, outside: DevOutside) => Promise<DevSeedResult<C>> | DevSeedResult<C>
 

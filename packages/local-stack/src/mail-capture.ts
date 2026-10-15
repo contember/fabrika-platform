@@ -1,6 +1,7 @@
-// IAM's mail in the local composition. `iam-server.ts` hands IAM a sender that writes each message to `.state/mail/`
-// instead of delivering it; a browser suite reads a person's message back here and opens its link. The messages hold
-// one-time links, so nothing here prints one.
+// The mail of the local composition, IAM's and the applications'. `iam-server.ts` hands IAM a sender that writes each
+// message to `.state/mail/` instead of delivering it, and an application's `directory` provider writes there too; a
+// browser suite reads a person's message back here and opens its link. The messages hold one-time links, so nothing
+// here prints one.
 
 import { type CapturedEmail, readCapturedEmails } from '@fabrika/email/directory'
 import { resolve } from 'node:path'
@@ -16,14 +17,23 @@ export interface MailQuery {
 	readonly to: string
 	/** Only a message captured at or after this time (ms since the epoch, the host's clock that the container shares). */
 	readonly since: number
+	/** Only the message sent under this transport key: an app's is `transportMailKey({ issuer, appId: '<app>@<env>' }, key)`, IAM's `iam-…`. */
+	readonly idempotencyKey?: string
 	readonly timeoutMs?: number
 }
 
-/** Wait for the newest message to `to` since `since`. */
+/** The newest of `emails` (oldest first, as `readCapturedEmails` answers) that `query` matches. */
+export function newestMatching(emails: readonly CapturedEmail[], query: MailQuery): CapturedEmail | undefined {
+	return emails.filter((email) =>
+		email.to === query.to && email.capturedAt >= query.since && (query.idempotencyKey === undefined || email.idempotencyKey === query.idempotencyKey)
+	).at(-1)
+}
+
+/** Wait for the newest message to `to` since `since`, from IAM or an application unless `idempotencyKey` names one. */
 export async function waitForMail(query: MailQuery): Promise<CapturedEmail> {
 	const deadline = Date.now() + (query.timeoutMs ?? 15_000)
 	for (;;) {
-		const found = (await readCapturedEmails(MAIL_DIRECTORY)).filter((email) => email.to === query.to && email.capturedAt >= query.since).at(-1)
+		const found = newestMatching(await readCapturedEmails(MAIL_DIRECTORY), query)
 		if (found !== undefined) return found
 		if (Date.now() > deadline) throw new Error('no e-mail reached the mailbox in time')
 		await Bun.sleep(200)

@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DirectoryEmailSender, readCapturedEmails } from '../directory.js'
+import { emailSenderFromEnv } from '../config.js'
+import { directoryEmailProvider, DirectoryEmailSender, readCapturedEmails } from '../directory.js'
 import { EmailDeliveryError } from '../email.js'
+import { builtinEmailProviders } from '../providers.js'
 
 const message = {
 	to: 'ada@example.test',
@@ -91,5 +93,46 @@ describe('DirectoryEmailSender', () => {
 		expect(error.code).toBe('provider_unavailable')
 		expect(error.retryable).toBe(true)
 		expect(error.message).not.toContain(message.text)
+	})
+})
+
+describe('directoryEmailProvider', () => {
+	const registry = { directory: directoryEmailProvider }
+	const env = (variables: Readonly<Record<string, string>>) => ({
+		FABRIKA_EMAIL_PROVIDER: 'directory',
+		FABRIKA_EMAIL_FROM: 'mail@local.test',
+		...variables,
+	})
+
+	function refusal(work: () => unknown): string {
+		try {
+			work()
+		} catch (error) {
+			if (error instanceof EmailDeliveryError && error.code === 'invalid_configuration') return error.message
+			throw error
+		}
+		throw new Error('Expected an invalid_configuration refusal')
+	}
+
+	test('names a missing FABRIKA_EMAIL_DIRECTORY, and refuses a relative one with the fixed text', () => {
+		expect(refusal(() => emailSenderFromEnv(env({}), registry))).toBe('Email configuration is invalid: FABRIKA_EMAIL_DIRECTORY is missing')
+		expect(refusal(() => emailSenderFromEnv(env({ FABRIKA_EMAIL_DIRECTORY: 'relative/mail' }), registry))).toBe(
+			'Email configuration is invalid: The mail capture directory must be an absolute path',
+		)
+	})
+
+	test('builds a sender whose capture the reader answers with its idempotency key', async () => {
+		const sender = emailSenderFromEnv(env({ FABRIKA_EMAIL_DIRECTORY: directory }), registry)
+		if (sender === null) throw new Error('Expected a sender')
+		await sender.send(message, signal)
+		const captured = await readCapturedEmails(directory)
+		expect(captured.map((email) => email.idempotencyKey)).toEqual([message.idempotencyKey])
+	})
+
+	test('is no built-in provider: only a composition registers it', () => {
+		expect(Object.keys(builtinEmailProviders)).not.toContain('directory')
+		expect(refusal(() => emailSenderFromEnv(env({ FABRIKA_EMAIL_DIRECTORY: directory }), builtinEmailProviders))).toBe(
+			'FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing',
+		)
 	})
 })

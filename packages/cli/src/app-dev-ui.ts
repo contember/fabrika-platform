@@ -1,8 +1,9 @@
-// What `fabrika app dev` shows a person: the caller picker page, and the toolbar script it injects into every SPA page.
-// Both are self-contained (no font, no CDN) and take their colors from `--fd-*` custom properties, light and dark.
+// What `fabrika app dev` shows a person: the caller picker page, one mail a job sent, and the toolbar script it injects
+// into every SPA page. All are self-contained (no font, no CDN) and take their colors from `--fd-*` custom properties, light and dark.
 // Every value here comes from the seed, the vocabulary or the request, so the page escapes it and the script only ever
 // sets `textContent` and `href`.
 
+import type { DevMail, SentInvitation } from '@fabrika/app/testing'
 import type { Locale } from '@fabrika/auth-core'
 
 /** A label beside a caller: a role it holds (with the scope value it holds it in), or that it is external. */
@@ -48,12 +49,37 @@ export interface LinkView {
 	readonly href: string
 }
 
+/** An invitation's state, or how a job's message ended: `sent` when the transport accepted it. */
+export type MailStatus = SentInvitation['status'] | 'sent' | 'not_sent' | 'unknown'
+
 export interface MailView {
 	readonly to: string
 	readonly subject: string
-	/** An invitation's state, or `sent` for a message of the dev outbox. */
-	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired' | 'sent'
+	/** When it was sent, in ms: an invitation's latest send, or a job's handoff. */
+	readonly at: number
+	/** The key the job passed; `null` for an invitation. */
+	readonly key: string | null
+	readonly status: MailStatus
+	/** The transport's refusal code (`provider_rejected`) when it did not accept; otherwise `null`. */
+	readonly answer: string | null
 	readonly action: { readonly label: string; readonly href: string } | null
+}
+
+/** A request the application sent to the dev outbox. */
+export interface OutboxView {
+	readonly to: string
+	readonly subject: string
+	readonly href: string
+}
+
+export const MAX_MAIL_ROWS = 200
+
+/** Newest first, at most `MAX_MAIL_ROWS`. On equal times, the row given later comes first. */
+export function newestMail(rows: readonly MailView[]): MailView[] {
+	return rows.map((row, index) => ({ row, index }))
+		.sort((left, right) => right.row.at - left.row.at || right.index - left.index)
+		.slice(0, MAX_MAIL_ROWS)
+		.map(({ row }) => row)
 }
 
 export interface DevView {
@@ -66,6 +92,7 @@ export interface DevView {
 	readonly anonymousHref: string
 	readonly links: readonly LinkView[]
 	readonly mail: readonly MailView[]
+	readonly outbox: readonly OutboxView[]
 	readonly pickerHref: string
 }
 
@@ -96,8 +123,21 @@ interface Strings {
 	readonly accept: string
 	readonly continueAs: string
 	readonly openMessage: string
-	readonly status: Readonly<Record<MailView['status'], string>>
+	readonly status: Readonly<Record<MailStatus, string>>
 	readonly to: string
+	readonly subject: string
+	readonly key: string
+	readonly transportKey: string
+	readonly sentAt: string
+	readonly answer: string
+	readonly fromName: string
+	readonly replyTo: string
+	readonly text: string
+	readonly html: string
+	readonly noHtml: string
+	readonly outbox: string
+	readonly outboxText: string
+	readonly noOutbox: string
 	readonly picker: string
 	readonly close: string
 	readonly back: string
@@ -125,14 +165,35 @@ const STRINGS: Readonly<Record<Locale, Strings>> = {
 		linksText: 'Each opens as the holder of a link the application issued.',
 		openLink: 'Open as link holder',
 		mail: 'Mail',
-		mailText: 'The invitations the stand-in IAM would have e-mailed, and what the application sent to the dev outbox.',
+		mailText: "The invitations the stand-in IAM would have e-mailed, and the mail the application's jobs sent.",
 		noMail: 'Nothing has been sent yet.',
 		invitation: (role, scope) => `Invitation: ${role} in ${scope}`,
 		accept: 'Accept invitation',
 		continueAs: 'Continue as this person',
 		openMessage: 'Open the message',
-		status: { open: 'waiting', accepted: 'accepted', cancelled: 'cancelled', expired: 'expired', sent: 'sent' },
+		status: {
+			open: 'waiting',
+			accepted: 'accepted',
+			cancelled: 'cancelled',
+			expired: 'expired',
+			sent: 'sent',
+			not_sent: 'not sent',
+			unknown: 'may have been sent',
+		},
 		to: 'To',
+		subject: 'Subject',
+		key: 'Key',
+		transportKey: 'Transport key',
+		sentAt: 'Sent',
+		answer: 'Transport answer',
+		fromName: 'From name',
+		replyTo: 'Reply to',
+		text: 'Text',
+		html: 'HTML',
+		noHtml: 'The message has no HTML part.',
+		outbox: 'Dev outbox',
+		outboxText: 'The requests the application sent to the dev outbox, newest first.',
+		noOutbox: 'Nothing has reached the dev outbox yet.',
 		picker: 'Choose another caller',
 		close: 'Close',
 		back: 'Back to the picker',
@@ -158,14 +219,35 @@ const STRINGS: Readonly<Record<Locale, Strings>> = {
 		linksText: 'Každá se otevře jako držitel odkazu, který aplikace vydala.',
 		openLink: 'Otevřít jako držitel odkazu',
 		mail: 'Pošta',
-		mailText: 'Pozvánky, které by zástupný IAM odeslal e-mailem, a co aplikace poslala do vývojové schránky.',
+		mailText: 'Pozvánky, které by zástupný IAM odeslal e-mailem, a pošta, kterou odeslaly úlohy aplikace.',
 		noMail: 'Zatím nebylo nic odesláno.',
 		invitation: (role, scope) => `Pozvánka: ${role} v ${scope}`,
 		accept: 'Přijmout pozvánku',
 		continueAs: 'Pokračovat jako tato osoba',
 		openMessage: 'Otevřít zprávu',
-		status: { open: 'čeká', accepted: 'přijata', cancelled: 'zrušena', expired: 'vypršela', sent: 'odesláno' },
+		status: {
+			open: 'čeká',
+			accepted: 'přijata',
+			cancelled: 'zrušena',
+			expired: 'vypršela',
+			sent: 'odesláno',
+			not_sent: 'neodesláno',
+			unknown: 'možná odesláno',
+		},
 		to: 'Komu',
+		subject: 'Předmět',
+		key: 'Klíč',
+		transportKey: 'Klíč transportu',
+		sentAt: 'Odesláno',
+		answer: 'Odpověď transportu',
+		fromName: 'Jméno odesílatele',
+		replyTo: 'Odpovědět na',
+		text: 'Text',
+		html: 'HTML',
+		noHtml: 'Zpráva nemá část HTML.',
+		outbox: 'Vývojová schránka',
+		outboxText: 'Požadavky, které aplikace poslala do vývojové schránky, od nejnovějšího.',
+		noOutbox: 'Do vývojové schránky zatím nic nedorazilo.',
 		picker: 'Vybrat jiného volajícího',
 		close: 'Zavřít',
 		back: 'Zpět na výběr',
@@ -173,6 +255,8 @@ const STRINGS: Readonly<Record<Locale, Strings>> = {
 }
 
 export const stringsOf = (locale: Locale): Strings => STRINGS[locale]
+
+const timeOf = (locale: Locale, at: number): string => new Intl.DateTimeFormat(locale, { dateStyle: 'short', timeStyle: 'medium' }).format(at)
 
 /** The palette: neutral greys and one accent, redefined for a dark color scheme. */
 const TOKENS = `
@@ -263,12 +347,19 @@ input::placeholder { color: var(--fd-muted); }
 .button.quiet { background: transparent; color: var(--fd-text); border-color: var(--fd-border-strong); }
 .button.quiet:hover { background: var(--fd-surface-2); }
 .empty { padding: 16px; border: 1px dashed var(--fd-border-strong); border-radius: 12px; color: var(--fd-muted); font-size: 14px; }
+.mono { font-family: var(--fd-mono); font-size: 12px; overflow-wrap: anywhere; }
+.fields { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 24px 0 0; padding: 16px; border: 1px solid var(--fd-border); border-radius: 12px; background: var(--fd-surface); font-size: 14px; }
+.fields dt { color: var(--fd-muted); }
+.fields dd { margin: 0; overflow-wrap: anywhere; }
+pre.text { margin: 14px 0 0; padding: 16px; border: 1px solid var(--fd-border); border-radius: 12px; background: var(--fd-surface); font: 13px/1.5 var(--fd-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+iframe.mail-html { display: block; width: 100%; min-height: 420px; margin-top: 14px; border: 1px solid var(--fd-border-strong); border-radius: 12px; background: #ffffff; }
 a:focus-visible, button:focus-visible, input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--fd-ring); border-color: var(--fd-accent); }
 @media (max-width: 560px) {
 	main { padding-top: 28px; }
 	h1 { font-size: 24px; }
 	.row .control { flex: 1 1 100%; }
 	.row .control input { flex: 1; width: auto; min-width: 0; }
+	.fields { grid-template-columns: 1fr; }
 }
 `
 
@@ -342,22 +433,34 @@ function roleRow(role: RoleView, text: Strings): string {
 	}"><datalist id="${list}">${options}</datalist><button class="button quiet" type="submit">${escapeHtml(text.use)}</button></span></form>`
 }
 
-function mailRows(mail: readonly MailView[], text: Strings): string {
+const actionButton = (action: { readonly label: string; readonly href: string } | null): string =>
+	action === null ? '' : `<span class="control"><a class="button quiet" href="${escapeHtml(action.href)}">${escapeHtml(action.label)}</a></span>`
+
+function mailRows(mail: readonly MailView[], text: Strings, locale: Locale): string {
 	if (mail.length === 0) return `<div class="empty">${escapeHtml(text.noMail)}</div>`
 	return `<div class="rows">${
-		mail.map((item) =>
+		mail.map((item) => {
+			const when = [...(item.key === null ? [] : [item.key]), timeOf(locale, item.at)].join(' · ')
+			return `<div class="row"><span class="meta stack"><span class="subject">${escapeHtml(item.subject)}</span><span class="to">${
+				escapeHtml(text.to)
+			}: ${escapeHtml(item.to)}</span><span class="to">${escapeHtml(when)}</span></span><span class="badge">${
+				escapeHtml(text.status[item.status])
+			}</span>${item.answer === null ? '' : `<span class="mono">${escapeHtml(item.answer)}</span>`}${actionButton(item.action)}</div>`
+		}).join('')
+	}</div>`
+}
+
+function outboxRows(outbox: readonly OutboxView[], text: Strings): string {
+	return `<div class="rows">${
+		outbox.map((item) =>
 			`<div class="row"><span class="meta stack"><span class="subject">${escapeHtml(item.subject)}</span><span class="to">${escapeHtml(text.to)}: ${
 				escapeHtml(item.to)
-			}</span></span><span class="badge">${escapeHtml(text.status[item.status])}</span>${
-				item.action === null
-					? ''
-					: `<span class="control"><a class="button quiet" href="${escapeHtml(item.action.href)}">${escapeHtml(item.action.label)}</a></span>`
-			}</div>`
+			}</span></span>${actionButton({ label: text.openMessage, href: item.href })}</div>`
 		).join('')
 	}</div>`
 }
 
-/** The picker: the personas, another role, anonymous, the link pages, and the mail IAM sent. */
+/** The picker: the personas, another role, anonymous, the link pages, the mail IAM and the jobs sent, and the dev outbox. */
 export function pickerPage(view: DevView): string {
 	const text = stringsOf(view.locale)
 	const personas = view.personas.length === 0
@@ -374,6 +477,11 @@ export function pickerPage(view: DevView): string {
 				}<span class="cta">${escapeHtml(text.openLink)} →</span></a>`
 			).join('')
 		}</div></section>`
+	const outbox = view.outbox.length === 0
+		? ''
+		: `<section aria-labelledby="outbox"><h2 id="outbox">${escapeHtml(text.outbox)}</h2><p class="hint">${escapeHtml(text.outboxText)}</p>${
+			outboxRows(view.outbox, text)
+		}</section>`
 	const body = `<p class="lede">${escapeHtml(text.lede)}</p>
 <section aria-labelledby="personas"><h2 id="personas">${escapeHtml(text.personas)}</h2>${personas}</section>
 <section aria-labelledby="roles"><h2 id="roles">${escapeHtml(text.another)}</h2><div class="rows">${
@@ -384,8 +492,9 @@ export function pickerPage(view: DevView): string {
 	}</p><a class="button quiet" href="${escapeHtml(view.anonymousHref)}">${escapeHtml(text.anonymousButton)}</a></section>
 ${links}
 <section aria-labelledby="mail"><h2 id="mail">${escapeHtml(text.mail)}</h2><p class="hint">${escapeHtml(text.mailText)}</p>${
-		mailRows(view.mail, text)
-	}</section>`
+		mailRows(view.mail, text, view.locale)
+	}</section>
+${outbox}`
 	return page(view, `${view.title}: ${text.choose.toLowerCase()}`, body)
 }
 
@@ -401,6 +510,36 @@ export function noticePage(view: Pick<DevView, 'locale' | 'title' | 'current' | 
 	)
 }
 
+/**
+ * One message a job handed to the mail stand-in: its fields, its text, and its HTML in a frame that runs no script, has no
+ * origin and submits nothing. The frame's document inherits the page's policy (`default-src 'none'`), so it loads nothing.
+ */
+export function mailPage(view: Pick<DevView, 'locale' | 'title' | 'current' | 'pickerHref'>, mail: DevMail): string {
+	const text = stringsOf(view.locale)
+	const status = mail.outcome === 'accepted' ? text.status.sent : text.status[mail.outcome]
+	const fields: readonly (readonly [string, string | null])[] = [
+		[text.to, mail.to],
+		[text.subject, mail.subject],
+		[text.fromName, mail.fromName],
+		[text.replyTo, mail.replyTo],
+		[text.key, mail.key],
+		[text.transportKey, mail.transportKey],
+		[text.answer, mail.answer === 'accepted' ? status : `${status} · ${mail.answer}`],
+		[text.sentAt, timeOf(view.locale, Date.parse(mail.at))],
+	]
+	const html = mail.html === null
+		? `<div class="empty">${escapeHtml(text.noHtml)}</div>`
+		: `<iframe class="mail-html" sandbox="" referrerpolicy="no-referrer" title="${escapeHtml(text.html)}" srcdoc="${escapeHtml(mail.html)}"></iframe>`
+	return page(
+		view,
+		mail.subject,
+		`<p class="actions"><a class="button quiet" href="${escapeHtml(view.pickerHref)}">${escapeHtml(text.back)}</a></p>
+<dl class="fields">${fields.map(([name, value]) => (value === null ? '' : `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd>`)).join('')}</dl>
+<section aria-labelledby="text"><h2 id="text">${escapeHtml(text.text)}</h2><pre class="text">${escapeHtml(mail.text)}</pre></section>
+<section aria-labelledby="html"><h2 id="html">${escapeHtml(text.html)}</h2>${html}</section>`,
+	)
+}
+
 /** What the toolbar renders: its labels and the view, with every caller already put into words. */
 export function toolbarState(view: DevView): unknown {
 	const text = stringsOf(view.locale)
@@ -412,6 +551,7 @@ export function toolbarState(view: DevView): unknown {
 			links: text.links,
 			mail: text.mail,
 			noMail: text.noMail,
+			outbox: text.outbox,
 			picker: text.picker,
 			close: text.close,
 			preview: text.preview,
@@ -421,6 +561,11 @@ export function toolbarState(view: DevView): unknown {
 		personas: view.personas.map((persona) => ({ name: persona.name, detail: detail(persona.badges), href: persona.href, current: persona.current })),
 		links: view.links.map((link) => ({ title: link.title, detail: link.description ?? '', href: link.href })),
 		mail: view.mail.map((item) => ({ subject: item.subject, detail: `${text.to}: ${item.to} · ${text.status[item.status]}`, action: item.action })),
+		outbox: view.outbox.map((item) => ({
+			subject: item.subject,
+			detail: `${text.to}: ${item.to}`,
+			action: { label: text.openMessage, href: item.href },
+		})),
 		picker: view.pickerHref,
 	}
 }
@@ -534,12 +679,19 @@ export function toolbarScript(statePath: string): string {
 
 		const mail = section(state.labels.mail)
 		if (state.mail.length === 0) mail.append(node('div', 'empty', state.labels.noMail))
-		for (const item of state.mail) {
+		const message = (item) => {
 			const element = entry(item.action === null ? null : item.action.href, item.subject, item.detail, false)
 			if (item.action !== null) element.append(node('span', 'act', item.action.label + ' →'))
-			mail.append(element)
+			return element
 		}
+		for (const item of state.mail) mail.append(message(item))
 		panel.append(mail)
+
+		if (state.outbox.length > 0) {
+			const outbox = section(state.labels.outbox)
+			for (const item of state.outbox) outbox.append(message(item))
+			panel.append(outbox)
+		}
 
 		const open = (opened) => {
 			panel.hidden = !opened

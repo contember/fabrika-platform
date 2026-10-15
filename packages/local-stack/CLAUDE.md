@@ -60,12 +60,17 @@ bun run test:browser  # the opice suites in tests/browser/
   `.state/notes-workloads.env`, keeping a key while IAM still exchanges it; only then does Notes start. `local:smoke`
   checks the keys its deploy wrote on the emulator and hands those to the container: each issuance revokes the
   workload's other keys, so the container would otherwise hold a revoked one.
-- **IAM's mail is captured in `.state/mail/`, through a composition input (`src/iam-server.ts`).** The IAM container runs
-  the production server with a `DirectoryEmailSender` passed to `createRuntime`; IAM refuses one outside
-  `ENVIRONMENT=local` or beside `FABRIKA_EMAIL_PROVIDER`, which stays `none`. Never select it with an environment variable.
-  `prepareLocalStack` creates the directory as the host's user, so a reset can remove what the root container wrote.
-  A suite reads a person's newest message with `waitForMail` (`src/mail-capture.ts`); the files hold one-time links,
-  so nothing prints one.
+- **All mail is captured in `.state/mail/`.** IAM's goes through a composition input (`src/iam-server.ts`): the IAM
+  container runs the production server with a `DirectoryEmailSender` passed to `createRuntime`; IAM refuses one outside
+  `ENVIRONMENT=local` or beside `FABRIKA_EMAIL_PROVIDER`, which stays `none`. Never select IAM's with an environment
+  variable. Control and the applications instead name the `directory` provider (`FABRIKA_EMAIL_PROVIDER=directory`, the
+  `x-local-mail` set Control holds in `compose.yaml` and a deploy hands only an application whose job declares
+  `mailer: 'installation'`), because an application runs the generated production entrypoint, which takes
+  nothing but its environment. Control accepts that provider only because `src/control-server.ts` registers it, and an
+  application only under a loopback issuer (`@fabrika/app/bun`'s local providers); anywhere else boot refuses it as an
+  unknown provider. `prepareLocalStack` creates the directory as the host's user, so a reset can remove what the root
+  container wrote. A suite reads a person's newest message with `waitForMail` (`src/mail-capture.ts`), an application's
+  by its transport key; the files hold one-time links, so nothing prints one.
 - **The composed Notes container holds IAM's membership transport before it starts.** Notes manages workspace members,
   so a deploy writes `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY`, and `boot` refuses to start without them. `up`
   makes Control's own `membershipKeys.issue` call into `.state/notes-membership.env` (`src/membership-key.ts`), and

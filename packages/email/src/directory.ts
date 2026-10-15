@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { link, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
+import { type EmailProvider, parseProviderVariables } from './config.js'
 import { emailContentOf, sameEmailContent } from './content.js'
 import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender, type EmailSenderCapabilities } from './email.js'
 import { validateEmailMessage } from './validation.js'
@@ -69,6 +70,17 @@ export class DirectoryEmailSender implements EmailSender {
 		}
 		return { status: 'accepted', provider: 'directory', messageId }
 	}
+}
+
+const directoryVariablesSchema = z.object({ FABRIKA_EMAIL_DIRECTORY: z.string() })
+
+/**
+ * `FABRIKA_EMAIL_PROVIDER=directory`: a local composition's capture. Never in `builtinEmailProviders`; a composition
+ * registers it. The capture records content only, so `FABRIKA_EMAIL_FROM` is not used.
+ */
+export const directoryEmailProvider: EmailProvider = {
+	variables: [{ name: 'FABRIKA_EMAIL_DIRECTORY', secret: false, required: true }],
+	create: ({ env }) => new DirectoryEmailSender({ directory: parseProviderVariables(directoryVariablesSchema, env).FABRIKA_EMAIL_DIRECTORY }),
 }
 
 /** Every message a `DirectoryEmailSender` captured in `directory`, oldest first. */

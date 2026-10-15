@@ -5,7 +5,7 @@
 // tests' database, and skip cleanly without it. The URL is a credential: no assertion prints it, and the command's
 // output is checked for it, for a link key and for a mailbox.
 
-import { testKit } from '@fabrika/app/testing'
+import { type DevMail, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { SQL, type Subprocess } from 'bun'
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { parseAppDevArgs } from '../app-dev'
 import { devOutbox, readDevEnv } from '../app-dev-outside'
+import { mailPage, type MailView, MAX_MAIL_ROWS, newestMail } from '../app-dev-ui'
 
 setDefaultTimeout(60_000)
 
@@ -90,6 +91,7 @@ const ToolbarState = z.object({
 	personas: z.array(z.object({ name: z.string(), detail: z.string(), href: z.string(), current: z.boolean() })),
 	links: z.array(z.object({ title: z.string(), detail: z.string(), href: z.string() })),
 	mail: z.array(z.object({ subject: z.string(), detail: z.string(), action: z.object({ label: z.string(), href: z.string() }).nullable() })),
+	outbox: z.array(z.object({ subject: z.string(), detail: z.string(), action: z.object({ label: z.string(), href: z.string() }) })),
 	picker: z.string(),
 })
 
@@ -188,6 +190,48 @@ describe("app dev's stand-ins for the outside, without serving", () => {
 			restore()
 		}
 		expect(globalThis.fetch).toBe(original)
+	})
+})
+
+describe("app dev's mail view, without serving", () => {
+	const row = (subject: string, at: number): MailView => ({ to: 'a@example.test', subject, at, key: null, status: 'sent', answer: null, action: null })
+	const view: Parameters<typeof mailPage>[0] = { locale: 'en', title: 'Shop', current: null, pickerHref: '/__fabrika/dev' }
+	const mail: DevMail = {
+		id: 1,
+		at: '2026-10-15T10:00:00.000Z',
+		to: 'payer@example.test',
+		subject: 'Receipt',
+		text: 'Paid <in> full.',
+		html: '<p title="x">Paid</p></iframe><script>alert(1)</script>',
+		replyTo: null,
+		fromName: null,
+		key: 'receipt-1',
+		transportKey: 'fabrika:0123:receipt-1',
+		answer: 'accepted',
+		outcome: 'accepted',
+		delivered: true,
+	}
+
+	test('keeps the newest rows, at most MAX_MAIL_ROWS, and of rows sent at the same time the one given later first', () => {
+		const rows = Array.from({ length: MAX_MAIL_ROWS + 1 }, (_, index) => row(`m${index}`, index))
+		const kept = newestMail(rows)
+		expect(kept).toHaveLength(MAX_MAIL_ROWS)
+		expect(kept[0]?.subject).toBe(`m${MAX_MAIL_ROWS}`)
+		expect(kept.at(-1)?.subject).toBe('m1')
+		expect(newestMail([row('first', 5), row('older', 1), row('second', 5)]).map((kept) => kept.subject)).toEqual(['second', 'first', 'older'])
+	})
+
+	test("escapes the message's HTML into the sandboxed frame, so none of it reaches the page, and says when there is none", () => {
+		const page = mailPage(view, mail)
+		expect(page).toContain('sandbox=""')
+		expect(page).not.toContain('allow-')
+		expect(page).toContain('srcdoc="&lt;p title=&quot;x&quot;&gt;Paid&lt;/p&gt;&lt;/iframe&gt;&lt;script&gt;alert(1)&lt;/script&gt;"')
+		expect(page.split('</iframe>')).toHaveLength(2)
+		expect(page).not.toContain('<script')
+		expect(page).toContain('Paid &lt;in&gt; full.')
+		const plainText = mailPage(view, { ...mail, html: null })
+		expect(plainText).not.toContain('<iframe')
+		expect(plainText).toContain('The message has no HTML part.')
 	})
 })
 
@@ -477,17 +521,19 @@ describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a form
 		// The seed ran the job that throws: its message and stack are printed, on the developer's machine.
 		expect(output).toContain("fabrika app dev: job 'broken' attempt 1 threw")
 		expect(output).toContain('the broken job threw on purpose')
-		for (const secret of [url, 'dev-turnstile-secret', 'dev-mail-key']) expect(output).not.toContain(secret)
+		for (const secret of [url, 'dev-turnstile-secret', 'dev-mail-key', 'payer@receipt.example', 'receipt-1', 'receipt-2']) {
+			expect(output).not.toContain(secret)
+		}
 	})
 
-	test("the seed's sign-up passed the challenge, and the mail the job sent is in the mail view with its body", async () => {
-		const { mail } = await stateOf(origin, null)
-		expect(mail).toHaveLength(1)
-		const [sent] = mail
+	test("the seed's sign-up passed the challenge, and the request the job sent is in the dev outbox with its body", async () => {
+		const { outbox } = await stateOf(origin, null)
+		expect(outbox).toHaveLength(1)
+		const [sent] = outbox
 		expect(sent?.subject).toBe('Welcome aboard')
-		expect(sent?.detail).toBe('To: ada@signup.example · sent')
-		expect(sent?.action?.label).toBe('Open the message')
-		const opened = await fetch(new URL(sent?.action?.href ?? '', origin))
+		expect(sent?.detail).toBe('To: ada@signup.example')
+		expect(sent?.action.label).toBe('Open the message')
+		const opened = await fetch(new URL(sent?.action.href ?? '', origin))
 		expect(opened.status).toBe(200)
 		expect(opened.headers.get('X-Content-Type-Options')).toBe('nosniff')
 		const body = await opened.text()
@@ -495,6 +541,37 @@ describe.skipIf(url === '')("fabrika app dev's stand-ins for the outside: a form
 		expect(body).toContain('Hello ada@signup.example, your sign-up is in.')
 		expect(body).not.toContain('dev-mail-key')
 		expect((await fetch(`${origin}__fabrika/dev/outbox/99`)).status).toBe(404)
+	})
+
+	test('the mail the receipt job handed to the stand-in is listed newest first: the refused one, then the accepted one', async () => {
+		const { mail } = await stateOf(origin, null)
+		expect(mail.map((sent) => [sent.subject, sent.detail, sent.action?.href])).toEqual([
+			['Receipt 2', 'To: payer@receipt.example · not sent', '/__fabrika/dev/mail/2'],
+			['Receipt 1', 'To: payer@receipt.example · sent', '/__fabrika/dev/mail/1'],
+		])
+		const picker = await (await fetch(`${origin}__fabrika/dev`)).text()
+		expect(picker.indexOf('>Receipt 2<')).toBeLessThan(picker.indexOf('>Receipt 1<'))
+		expect(picker.indexOf('>Receipt 1<')).toBeLessThan(picker.indexOf('>Dev outbox<'))
+		expect(picker).toContain('<span class="mono">provider_rejected</span>')
+	})
+
+	test('a message opens on its own page: its fields, and its HTML only in a sandboxed frame under the page policy', async () => {
+		const opened = await fetch(`${origin}__fabrika/dev/mail/2`)
+		expect(opened.status).toBe(200)
+		expect(opened.headers.get('Content-Security-Policy')).toStartWith("default-src 'none';")
+		expect(opened.headers.get('X-Content-Type-Options')).toBe('nosniff')
+		const page = await opened.text()
+		expect(page).toContain('<iframe class="mail-html" sandbox="" ')
+		expect(page).not.toContain('allow-')
+		expect(page).toContain('srcdoc="&lt;p&gt;Paid&lt;/p&gt;&lt;script&gt;')
+		expect(page).not.toContain('<script')
+		expect(page).toContain('<dd>receipt-2</dd>')
+		expect(page).toMatch(/<dd>fabrika:[0-9a-f]{32}:receipt-2<\/dd>/)
+		expect(page).toContain('<dd>not sent · provider_rejected</dd>')
+		expect((await fetch(`${origin}__fabrika/dev/mail/99`)).status).toBe(404)
+		const posted = await fetch(`${origin}__fabrika/dev/mail/2`, { method: 'POST' })
+		expect(posted.status).not.toBe(200)
+		expect(await posted.text()).not.toContain('receipt-2')
 	})
 
 	test("the always-passing test widget's token submits the form again; any other token only once", async () => {

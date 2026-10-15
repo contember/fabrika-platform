@@ -1,7 +1,7 @@
 // What `fabrika app dev` stands in for outside the application: the dev outbox, which captures every request the
-// process sends to `DEV_OUTBOX_ORIGIN` (a mail provider's stand-in, say), and `dev/dev.env`, the application's variables.
+// process sends to `DEV_OUTBOX_ORIGIN` (another provider's stand-in), and `dev/dev.env`, the application's variables.
 
-import { DEV_OUTBOX_ORIGIN, type DevOutboxMessage, type DevOutside } from '@fabrika/app/testing'
+import { DEV_OUTBOX_ORIGIN, type DevOutboxMessage } from '@fabrika/app/testing'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
@@ -46,7 +46,9 @@ export function readDevEnv(root: string): Readonly<Record<string, string>> {
 	return variables
 }
 
-export interface DevOutbox extends DevOutside {
+export interface DevOutbox {
+	/** Every request sent to `DEV_OUTBOX_ORIGIN` so far, oldest first. */
+	outbox(): readonly DevOutboxMessage[]
 	/** Captures the process's requests to `DEV_OUTBOX_ORIGIN` until the returned function restores `fetch`. */
 	install(): () => void
 }
