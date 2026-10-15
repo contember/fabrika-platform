@@ -61,3 +61,73 @@ function isImplicitVoidInput(schema: unknown): boolean {
 	const standard = Reflect.get(schema, '~standard')
 	return standard !== null && typeof standard === 'object' && Reflect.get(standard, 'vendor') === 'fabrika'
 }
+
+/** The procedures a user administrator calls too (ADR-0058), gated by `context` instead of `.require`. */
+export const USER_ADMINISTRATION = [
+	'apps.getSchema',
+	'apps.list',
+	'grants.create',
+	'grants.delete',
+	'me',
+	'passwords.disable',
+	'passwords.issueEnrollment',
+	'passwords.issueReset',
+	'policies.list',
+	'principals.get',
+	'principals.invite',
+	'principals.list',
+	'principals.update',
+	'roles.list',
+	'sessions.list',
+	'sessions.revoke',
+	'sessions.revokeAll',
+]
+
+/**
+ * A minimally-shaped input for each method — enough to pass validation IF the gate were missing, so a
+ * 400 can never be mistaken for a refusal. Anything absent here gets `{}`, which is correct for every
+ * procedure whose input is fully optional.
+ */
+const INPUTS: Record<string, unknown> = {
+	// `null` = "no input", which is what a procedure with no `.input()` schema accepts.
+	me: null,
+	'apps.list': null,
+	'apiKeys.list': null,
+	'shareLinks.list': null,
+	'principals.get': { principalId: 'nobody' },
+	'principals.invite': { email: 'nobody@example.com' },
+	'principals.update': { principalId: 'nobody', disabled: true },
+	'principals.promote': { principalId: 'nobody' },
+	'sessions.list': { principalId: 'nobody' },
+	'sessions.revoke': { id: 'nobody' },
+	'sessions.revokeAll': { principalId: 'nobody' },
+	'passwords.issueEnrollment': { principalId: 'nobody' },
+	'passwords.issueReset': { principalId: 'nobody' },
+	'passwords.disable': { principalId: 'nobody' },
+	'grants.create': { principalId: 'nobody', roleKey: 'admin' },
+	'grants.delete': { id: 'nobody' },
+	'apps.getSchema': { app: 'nowhere' },
+	'apps.setReturnOrigins': { app: 'nowhere', origins: ['https://nowhere.example.com'] },
+	'roles.list': { app: null },
+	'policies.list': { app: 'nowhere' },
+	'policies.create': { app: 'nowhere', policy: { key: 'k', name: 'n', permissions: ['*'] } },
+	'policies.update': { app: 'nowhere', key: 'k', policy: { name: 'n', permissions: ['*'] } },
+	'policies.delete': { app: 'nowhere', key: 'k' },
+	'apiKeys.provision': { label: 'l', type: 'service', permissions: ['*'] },
+	'apiKeys.rotate': { principalId: 'nobody' },
+	'apiKeys.revoke': { principalId: 'nobody' },
+	'workloads.issueKey': { app: 'nowhere@prod', kind: 'job', name: 'nightly', expiresAt: 4_102_444_800, keep: null },
+	'workloads.revokeKeys': { app: 'nowhere@prod', kind: 'app', name: 'shop' },
+	'membershipKeys.issue': { app: 'nowhere@prod', expiresAt: 4_102_444_800, keep: null },
+	'shareLinks.issue': { app: 'nowhere', grants: [{ action: 'a' }], expiresAt: 1 },
+	'shareLinks.revoke': { id: 'nobody' },
+	'appPeople.apps': null,
+	'appPeople.list': { app: 'nowhere@prod' },
+	'appPeople.grant': { app: 'nowhere@prod', role: 'staff', email: 'nobody@example.com' },
+	'appPeople.revoke': { app: 'nowhere@prod', role: 'staff', principalId: 'nobody' },
+}
+
+/** The input `INPUTS` names for `method`, or `{}`. */
+export function procedureInput(method: string): unknown {
+	return Object.hasOwn(INPUTS, method) ? INPUTS[method] : {}
+}

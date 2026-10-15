@@ -16,6 +16,7 @@ import { resolvePermissionsAt } from '../resolve'
 import { type AdminContext, adminEvent, fail } from './context'
 import { toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
+import { requireActableTarget } from './user-admin'
 
 function toPrincipalListItem(row: PrincipalRow): PrincipalListItem {
 	return {
@@ -142,6 +143,7 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 	if (!row) {
 		return fail(404, 'principal not found')
 	}
+	await requireActableTarget(c, row)
 	// Recorded only when it changes something: disabling a disabled principal is not a change.
 	if (disabled) {
 		await c.services.repositories.principals.disablePrincipal(

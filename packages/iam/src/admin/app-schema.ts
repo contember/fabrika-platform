@@ -23,7 +23,7 @@ import { error, json, readJson } from './http'
 export async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
 	const items = await Promise.all((await knownApps(c)).map(async (id): Promise<AppDto> => {
 		const { displayName } = parsePresentation(await c.services.repositories.appSchema.getPresentation(id))
-		return { id, displayName }
+		return { id, displayName, installation: c.services.config.platformAudiences.has(id) }
 	}))
 	return { items }
 }

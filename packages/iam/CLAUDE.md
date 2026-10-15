@@ -278,7 +278,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`APP_MEMBER_GRANT`: a membership role only in a value of its dimension, an external's only of an external role).
   `listAppMembers` needs `list` held globally and pages by principal id (`MAX_APP_MEMBERS_PAGE`); labels by
   `directory` or to `manage`, emails and last sign-ins only to `manage`. The `appPeople.*` procedures of `/admin/rpc`
-  are the ONE exception to "every procedure requires `iam.admin`" (`admin-rpc-gates.test.ts` names them): a USER behind
+  are one of the two exceptions to "every procedure requires `iam.admin`" (`admin-rpc-gates.test.ts` names both): a USER behind
   a session's console token (`AccessTokenClaims.session`, set only by `mintToken`; never a `px_` key, presented or
   exchanged by the proxy, whose own grants narrow it) holding `manage` globally at the app, resolved
   live there, grants and revokes the app's declared global roles (no `member`, no built-in, no custom policy) whose
@@ -288,6 +288,22 @@ fails if that stops being true — it is the guard, not documentation of one.
   transaction, with `delegated: true` and no address, and only under the `DelegatedAuthority` its check read (the
   user's `grant_revision` and the app's schema revision, read first; principal rows first, then the revision row
   `FOR SHARE` on Postgres); a stale one writes nothing and answers 409.
+- **A USER ADMINISTRATOR MANAGES THE PEOPLE OF APPLICATIONS AND STOPS AT THE INSTALLATION** (ADR-0058,
+  `src/admin/user-admin.ts`). IAM's vocabulary is `IAM_APP_SCHEMA` (`@fabrika/iam-contract`), reconciled under
+  `propustka` beside the console: `iam.admin`, `iam.users.manage` (global, or in `app` values `<app>@<env>`) and the
+  `user-admin` role. `administrationOf` turns the caller into an `Administration` on `AdminContext`: `installation`
+  for `iam.admin`, `users` for `iam.users.manage` held from a SIGNED-IN SESSION only (never a `px_` key, as for
+  `appPeople`). The procedures in `USER_ADMINISTRATION` (`__tests__/helpers/admin-router.ts`) carry no `.require`;
+  `context` refuses a caller without an administration. For a `users` caller: a grant write (`grants.create`,
+  `grants.delete`) only at a registered app that is not a platform audience and is in its scope, never cross-app
+  (`requireManagedApp`), and with no "holds what it grants" rule, because nothing granted there reaches the
+  installation; an action on a principal (`principals.update`, `sessions.*`, `passwords.*`) only when every active
+  grant of that principal is one it could have written, and never on a service or a bootstrap mailbox
+  (`requireActableTarget`). Without an email sender it receives a manual password URL only for the enrollment of a
+  principal that never signed in, checked again after issuing (`mayReceiveEnrollmentUrl`); a reset URL stays
+  `iam.admin`'s. Reads (`principals.list/get`, `sessions.list`, apps, roles, policies) are installation-wide
+  (backlog 175). `apps.list` marks each platform audience `installation: true`. `user-admin.test.ts` is the witness, on
+  both engines.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE
@@ -397,15 +413,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   `revokeSessionByHash` writes the `logout` row from the session it ends, each in the session's batch; a refused
   password, OIDC, handoff or local login goes through `refuseLogin` with a fixed `LoginRefusal` reason, never what
   the caller submitted. A row that cannot be written answers 503 and opens or ends no session. A login of a principal
-  holding `iam.admin` at IAM is `privileged = 1`. A handoff redemption writes its `allow` row in the child session's
+  holding `iam.admin`, or `iam.users.manage` in any scope, at IAM is `privileged = 1`. A handoff redemption writes its `allow` row in the child session's
   batch. Token-only mint rows (`mintToken`, `mintFromKey`, the workload token) and a refused redemption open no
   session and stay in `waitUntil`.
-- **EVERY `/admin/*` REQUEST OF AN INSTALLATION ADMIN WRITES ONE `iam.admin.access` ROW BEFORE IT RUNS** (`admin/access.ts`),
+- **EVERY `/admin/*` REQUEST OF AN ADMINISTRATOR WRITES ONE `iam.admin.access` ROW BEFORE IT RUNS** (`admin/access.ts`),
   reads included: method, route template, and for `/admin/rpc` the procedure (a well-formed name, else null), under
   the app the admin's credential was verified for (the console gateway, or `propustka` for a `px_` key). A request whose
   access cannot be recorded answers 503 and does not run. A refused REST route is recorded too: a 405 under its
-  template, a path that names no operation under the fixed `/admin/*`, never the raw path. An RPC caller without
-  `iam.admin` reaches no procedure but `appPeople.*`, and is not recorded; each change it makes there is. A mutation therefore writes two rows: the access and the
+  template, a path that names no operation under the fixed `/admin/*`, never the raw path. An administrator is an
+  installation admin or a user administrator (`administrationOf`). An RPC caller with neither reaches no procedure but
+  `appPeople.*`, and is not recorded; each change it makes there is. A mutation therefore writes two rows: the access and the
   change.
 - **RETENTION IS AN IAM SETTING, IN DAYS** (`src/retention.ts`, `Config.retention`): `AUTH_LOG_RETENTION_DAYS` (deploy
   var `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`, default 30) and `AUDIT_RETENTION_DAYS` (`FABRIKA_IAM_AUDIT_RETENTION_DAYS`,

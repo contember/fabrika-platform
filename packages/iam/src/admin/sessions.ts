@@ -11,6 +11,7 @@ import { type SessionRow } from '../db'
 import { type AdminContext, adminEvent, fail } from './context'
 
 import { cursorOf, normalizeLimit } from './pagination'
+import { requireActableTarget } from './user-admin'
 
 /**
  * Sessions an operator can see and end.
@@ -76,6 +77,11 @@ export async function revokeSessionUseCase(c: AdminContext, input: SessionIdInpu
 	if (!session) {
 		return fail(404, 'session not found')
 	}
+	const holder = await c.services.repositories.principals.getPrincipalById(session.principal_id)
+	if (!holder) {
+		return fail(404, 'session not found')
+	}
+	await requireActableTarget(c, holder)
 	const revoked = await c.services.repositories.sessions.revokeSessionById(
 		input.id,
 		adminEvent(c, {
@@ -100,6 +106,7 @@ export async function revokeSessionsForPrincipalUseCase(c: AdminContext, input: 
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
+	await requireActableTarget(c, principal)
 	// The recorded count is the unrevoked sessions this request saw; the row itself is written only when some went.
 	const unrevoked = await c.services.repositories.sessions.countUnrevokedSessions(input.principalId)
 	const revoked = await c.services.repositories.sessions.revokeSessionsForPrincipal(

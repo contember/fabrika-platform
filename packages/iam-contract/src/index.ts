@@ -147,6 +147,8 @@ export interface AppDto {
 	id: string
 	/** The name the app's schema declares for people; null when it declares none. */
 	displayName: string | null
+	/** One of the installation's own apps (a platform audience): a user administrator grants nothing there (ADR-0058). */
+	installation: boolean
 }
 
 // ── Roles & policies (per-app, DB-backed) ─────────────────────────────────────
@@ -672,4 +674,5 @@ export interface IamAdminRpcContract {
 }
 
 export type { AppActionDef, AppMemberItem, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }
+export * from './access'
 export * from './oauth'

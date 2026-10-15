@@ -13,8 +13,10 @@
  *      method is added to the contract and forgotten here, which is the point: the list of methods is
  *      derived from the contract's own shape, not typed out.
  *
- * The one exception is named here: `appPeople.*`, which an application's own administrator calls, authorizes the
- * application's `members.manage` held globally there in its use case, and answers a stranger nothing.
+ * Two exceptions are named here. `appPeople.*`, which an application's own administrator calls, authorizes the
+ * application's `members.manage` held globally there in its use case, and answers a stranger nothing. The user
+ * administration procedures (ADR-0058) carry no `.require`: `context` admits only a caller with an administration,
+ * `iam.admin` or `iam.users.manage`, and `user-admin.test.ts` proves a user administrator reaches nothing else.
  */
 
 import { unusedDatabase } from '@fabrika/platform/testing'
@@ -23,7 +25,7 @@ import { adminRpcRouter } from '../admin/rpc'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
-import { routerLeaves } from './helpers/admin-router'
+import { procedureInput, routerLeaves, USER_ADMINISTRATION } from './helpers/admin-router'
 import { createHarness, type Harness, seedGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
@@ -52,54 +54,12 @@ const ROUTER_METHODS = routerLeaves(adminRpcRouter)
 /** The procedures an application's administrator calls without `iam.admin` (`admin/app-people.ts`). */
 const DELEGATED = ['appPeople.apps', 'appPeople.grant', 'appPeople.list', 'appPeople.revoke']
 
-/**
- * A minimally-shaped input for each method — enough to pass validation IF the gate were missing, so a
- * 400 can never be mistaken for a refusal. Anything absent here gets `{}`, which is correct for every
- * procedure whose input is fully optional.
- */
-const INPUTS: Record<string, unknown> = {
-	// `null` = "no input", which is what a procedure with no `.input()` schema accepts.
-	me: null,
-	'apps.list': null,
-	'apiKeys.list': null,
-	'shareLinks.list': null,
-	'principals.get': { principalId: 'nobody' },
-	'principals.invite': { email: 'nobody@example.com' },
-	'principals.update': { principalId: 'nobody', disabled: true },
-	'principals.promote': { principalId: 'nobody' },
-	'sessions.list': { principalId: 'nobody' },
-	'sessions.revoke': { id: 'nobody' },
-	'sessions.revokeAll': { principalId: 'nobody' },
-	'passwords.issueEnrollment': { principalId: 'nobody' },
-	'passwords.issueReset': { principalId: 'nobody' },
-	'passwords.disable': { principalId: 'nobody' },
-	'grants.create': { principalId: 'nobody', roleKey: 'admin' },
-	'grants.delete': { id: 'nobody' },
-	'apps.getSchema': { app: 'nowhere' },
-	'apps.setReturnOrigins': { app: 'nowhere', origins: ['https://nowhere.example.com'] },
-	'roles.list': { app: null },
-	'policies.list': { app: 'nowhere' },
-	'policies.create': { app: 'nowhere', policy: { key: 'k', name: 'n', permissions: ['*'] } },
-	'policies.update': { app: 'nowhere', key: 'k', policy: { name: 'n', permissions: ['*'] } },
-	'policies.delete': { app: 'nowhere', key: 'k' },
-	'apiKeys.provision': { label: 'l', type: 'service', permissions: ['*'] },
-	'apiKeys.rotate': { principalId: 'nobody' },
-	'apiKeys.revoke': { principalId: 'nobody' },
-	'workloads.issueKey': { app: 'nowhere@prod', kind: 'job', name: 'nightly', expiresAt: 4_102_444_800, keep: null },
-	'workloads.revokeKeys': { app: 'nowhere@prod', kind: 'app', name: 'shop' },
-	'membershipKeys.issue': { app: 'nowhere@prod', expiresAt: 4_102_444_800, keep: null },
-	'shareLinks.issue': { app: 'nowhere', grants: [{ action: 'a' }], expiresAt: 1 },
-	'shareLinks.revoke': { id: 'nobody' },
-	'appPeople.apps': null,
-	'appPeople.list': { app: 'nowhere@prod' },
-	'appPeople.grant': { app: 'nowhere@prod', role: 'staff', email: 'nobody@example.com' },
-	'appPeople.revoke': { app: 'nowhere@prod', role: 'staff', principalId: 'nobody' },
-}
-
 describe('every admin RPC procedure is gated', () => {
 	test('the shipped router declares at least one authz requirement on every leaf', () => {
 		expect(ROUTER_METHODS.length).toBeGreaterThan(20)
-		expect(ROUTER_METHODS.filter((leaf) => leaf.requirements === 0).map((leaf) => leaf.method).sort()).toEqual(DELEGATED)
+		expect(ROUTER_METHODS.filter((leaf) => leaf.requirements === 0).map((leaf) => leaf.method).sort()).toEqual(
+			[...DELEGATED, ...USER_ADMINISTRATION].sort(),
+		)
 	})
 
 	test('an authenticated NON-admin is refused by every method the contract declares', async () => {
@@ -116,7 +76,7 @@ describe('every admin RPC procedure is gated', () => {
 				new Request(`${ORIGIN}/admin/rpc`, {
 					method: 'POST',
 					headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
-					body: JSON.stringify({ method, input: Object.hasOwn(INPUTS, method) ? INPUTS[method] : {} }),
+					body: JSON.stringify({ method, input: procedureInput(method) }),
 				}),
 				env(h),
 				exec,

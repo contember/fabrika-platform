@@ -24,6 +24,7 @@
  */
 
 import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, permits, type PrincipalType } from '@fabrika/auth-core'
+import { IAM_ACTIONS, IAM_APP_ID } from '@fabrika/iam-contract'
 import { resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -36,15 +37,13 @@ import { recordAdminAccess } from './access'
 import { type AdminContext, AdminUseCaseError, getAppSchema, provisionApiKey, putAppSchema, revokeApiKey } from './handlers'
 import { error } from './http'
 
-// The pinned sentinel action: only the `admin` role's `*` and bootstrap admins
-// hold it. Scope-less → satisfied by a GLOBAL permission only (never a
-// project-scoped grant).
-export const ADMIN_ACTION = 'iam.admin'
+// The installation administrator's action. Scope-less → satisfied by a GLOBAL permission only.
+export const ADMIN_ACTION = IAM_ACTIONS.ADMIN
 
 // propustka's own app id — the audience the admin caller is resolved against (the SSO session is
 // minted for it in auth/routes.ts). The built-in `admin` role is cross-app, so a global admin grant
 // still resolves here regardless.
-export const IAM_APP = 'propustka'
+export const IAM_APP = IAM_APP_ID
 
 /**
  * The admin credential read off the request: an `Authorization: Bearer` holding a `px_` admin or
@@ -187,6 +186,7 @@ export async function handleAdmin(
 			request,
 			url,
 			admin: resolution.admin,
+			administration: { kind: 'installation' },
 			app: IAM_APP,
 			requestId: creds.requestId,
 			ctx,

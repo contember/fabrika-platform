@@ -159,7 +159,8 @@ export interface MembershipFixture {
 	adminRpc(method: string, input: unknown): Promise<Response>
 	/** A workload key, issued as Control issues it (`workloads.issueKey`). */
 	workload(kind: WorkloadKind, name: string): Promise<Workload>
-	putSchema(schema: AppSchema): Promise<Response>
+	/** Reconcile `schema` as a deploy does, for `APP` unless another app id is named. */
+	putSchema(schema: AppSchema, app?: string): Promise<Response>
 }
 
 export async function membershipFixture(
@@ -174,9 +175,9 @@ export async function membershipFixture(
 	await repositories.grants.createGrant({ principalId: admin.id, roleKey: 'admin' })
 	const adminBearer = await adminTokenFor(repositories, admin.id, { issuer: ORIGIN })
 
-	const putSchema = (schema: AppSchema): Promise<Response> =>
+	const putSchema = (schema: AppSchema, app: string = APP): Promise<Response> =>
 		handleAdmin(
-			new Request(`${ORIGIN}/admin/apps/${encodeURIComponent(APP)}/schema`, {
+			new Request(`${ORIGIN}/admin/apps/${encodeURIComponent(app)}/schema`, {
 				method: 'PUT',
 				headers: { authorization: `Bearer ${adminBearer}`, 'content-type': 'application/json' },
 				body: JSON.stringify(schema),

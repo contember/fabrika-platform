@@ -1,5 +1,6 @@
-import { permits, SESSION_COOKIE } from '@fabrika/auth-core'
-import { ADMIN_ACTION, IAM_APP } from '../admin/router'
+import { permits, scopedValues, SESSION_COOKIE } from '@fabrika/auth-core'
+import { IAM_ACTIONS, IAM_SCOPES } from '@fabrika/iam-contract'
+import { IAM_APP } from '../admin/router'
 import { INSTALLATION_PRESENTATION, installationLanding } from '../app-presentation'
 import { sessionUsable } from '../auth'
 import { type AuthenticationMethod, type PrincipalRow, principalStatus, type SessionRow } from '../db'
@@ -55,8 +56,8 @@ export async function currentLogin(request: Request, services: Services): Promis
 
 /**
  * Open a login: the session and its `auth_log` row are written in one batch, before the answer. A login that cannot
- * be logged opens no session and answers 503. A principal holding the installation-admin action is logged
- * `privileged`.
+ * be logged opens no session and answers 503. A principal that administers at IAM, the installation or the people of
+ * an application (ADR-0058), is logged `privileged`.
  */
 export async function issueSession(
 	request: Request,
@@ -95,7 +96,7 @@ export async function issueSession(
 			principalId: input.principalId,
 			decision: 'allow',
 			reason: input.reason,
-			privileged: await isInstallationAdmin(services, input.principalId),
+			privileged: await administersIam(services, input.principalId),
 		})
 	} catch (err) {
 		logError(`login could not be recorded for request '${input.requestId}'`, err)
@@ -156,10 +157,13 @@ export async function refuseLogin(
 	return answer()
 }
 
-/** Whether the principal holds the installation-admin action at IAM — what marks its login privileged. */
-async function isInstallationAdmin(services: Services, principalId: string): Promise<boolean> {
+/** Whether the principal administers at IAM, the installation or the people of an application — what marks its login privileged. */
+async function administersIam(services: Services, principalId: string): Promise<boolean> {
 	const principal = await services.repositories.principals.getPrincipalById(principalId)
-	return principal !== null && permits(await resolvePermissionsAt(services, principal, IAM_APP), ADMIN_ACTION)
+	if (principal === null) return false
+	const permissions = await resolvePermissionsAt(services, principal, IAM_APP)
+	const peopleApps = scopedValues(permissions, IAM_ACTIONS.USERS_MANAGE, IAM_SCOPES.APP)
+	return permits(permissions, IAM_ACTIONS.ADMIN) || peopleApps === null || peopleApps.length > 0
 }
 
 /**

@@ -2,18 +2,20 @@ import { type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
 import { type AuditEventInput, auditLabelOf } from '../db'
 import { type RequestContext } from '../env'
 import { type Services } from '../services'
+import { type Administration } from './user-admin'
 
 /**
- * Context every admin handler receives: the resolved admin caller (already gated
- * on `iam.admin` by the router), the request, parsed URL, and the verified app id
- * for audit labeling.
+ * Context every admin handler receives: the resolved admin caller (already gated on its administration), the
+ * request, parsed URL, and the verified app id for audit labeling.
  */
 export interface AdminContext {
 	services: Services
 	request: Request
 	url: URL
-	/** The resolved admin caller (already gated on `iam.admin`). `label` is null for a label-less key. */
+	/** The resolved admin caller (already gated on its administration). `label` is null for a label-less key. */
 	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[] }
+	/** The installation, or the people of some applications (ADR-0058); every user-admin rule reads it. */
+	administration: Administration
 	/** propustka's own app id — the audience the admin was resolved against; used for audit labeling. */
 	app: string
 	/** Correlation id supplied by the proxy/edge or generated at IAM. */

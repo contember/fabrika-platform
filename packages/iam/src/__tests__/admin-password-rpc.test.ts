@@ -88,6 +88,7 @@ function directContext(h: Harness, services: Services, adminId: string): AdminCo
 		request: new Request(`${ORIGIN}/admin/rpc`, { method: 'POST' }),
 		url: new URL(`${ORIGIN}/admin/rpc`),
 		admin: { id: adminId, type: 'user', label: 'Admin', permissions: [{ action: 'iam.admin', scope: null, source: 'grant' }] },
+		administration: { kind: 'installation' },
 		app: 'fabrika-iam',
 		requestId: 'request-password-admin',
 		ctx: exec,

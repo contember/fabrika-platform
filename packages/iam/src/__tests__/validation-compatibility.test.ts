@@ -17,6 +17,7 @@ function context(h: Harness, body?: unknown): AdminContext {
 		request: new Request(url, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
 		url,
 		admin: { id: 'provisioning-admin', type: 'service', label: null, permissions: [{ action: '*', scope: null, source: 'grant' }] },
+		administration: { kind: 'installation' },
 		app: 'propustka',
 		requestId: 'validation-compatibility',
 		ctx: { waitUntil() {} },

@@ -9,6 +9,7 @@ import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
+import { administrationOf } from './user-admin'
 
 const t = initRpc<IamAppContext>()
 const nonEmpty = z.string().min(1)
@@ -37,8 +38,10 @@ const shareGrantSchema = z.object({
 	scope: z.object({ type: nonEmpty, value: nonEmpty }).nullable().optional(),
 })
 
+// A procedure without `.require(ADMIN_ACTION)` is open to a user administrator too (ADR-0058): `context` admits only a
+// caller with an administration, and the use case applies the user-admin rules (`user-admin.ts`).
 export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = t.router({
-	me: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.me(context(ctx))),
+	me: t.procedure.query(({ ctx }) => adminUseCases.me(context(ctx))),
 	principals: t.router({
 		list: t.procedure
 			.input(
@@ -49,16 +52,13 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 					...pageInput,
 				}).default({}),
 			)
-			.require(ADMIN_ACTION)
 			.query(({ ctx, input }) => adminUseCases.listPrincipals(context(ctx), input)),
-		get: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getPrincipal(context(ctx), input)),
+		get: t.procedure.input(principalIdInput).query(({ ctx, input }) => adminUseCases.getPrincipal(context(ctx), input)),
 		invite: t.procedure
 			.input(z.object({ email: nonEmpty, affiliation: z.enum(['internal', 'external']).optional() }))
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.invitePrincipal(context(ctx), input)),
 		update: t.procedure
 			.input(z.object({ principalId: nonEmpty, disabled: z.boolean() }))
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.updatePrincipal(context(ctx), input)),
 		promote: t.procedure
 			.input(principalIdInput)
@@ -70,40 +70,32 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	sessions: t.router({
 		list: t.procedure
 			.input(z.object({ principalId: nonEmpty, ...pageInput }))
-			.require(ADMIN_ACTION)
 			.query(({ ctx, input }) => adminUseCases.listSessions(context(ctx), input)),
 		revoke: t.procedure
 			.input(z.object({ id: nonEmpty }))
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.revokeSession(context(ctx), input)),
 		revokeAll: t.procedure
 			.input(principalIdInput)
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.revokeSessionsForPrincipal(context(ctx), input)),
 	}),
 	passwords: t.router({
 		issueEnrollment: t.procedure
 			.input(principalIdInput)
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.issuePasswordEnrollment(context(ctx), input)),
 		issueReset: t.procedure
 			.input(principalIdInput)
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.issuePasswordReset(context(ctx), input)),
 		disable: t.procedure
 			.input(principalIdInput)
-			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.disablePassword(context(ctx), input)),
 	}),
 	grants: t.router({
-		create: t.procedure.input(grantSchema).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.createGrant(context(ctx), input)),
-		delete: t.procedure.input(z.object({ id: nonEmpty })).require(ADMIN_ACTION).mutation(({ ctx, input }) =>
-			adminUseCases.deleteGrant(context(ctx), input)
-		),
+		create: t.procedure.input(grantSchema).mutation(({ ctx, input }) => adminUseCases.createGrant(context(ctx), input)),
+		delete: t.procedure.input(z.object({ id: nonEmpty })).mutation(({ ctx, input }) => adminUseCases.deleteGrant(context(ctx), input)),
 	}),
 	apps: t.router({
-		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.listApps(context(ctx))),
-		getSchema: t.procedure.input(appInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getAppSchema(context(ctx), input)),
+		list: t.procedure.query(({ ctx }) => adminUseCases.listApps(context(ctx))),
+		getSchema: t.procedure.input(appInput).query(({ ctx, input }) => adminUseCases.getAppSchema(context(ctx), input)),
 		setReturnOrigins: t.procedure
 			.input(z.object({ app: nonEmpty, origins: z.array(nonEmpty) }))
 			.require(ADMIN_ACTION)
@@ -112,11 +104,10 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	roles: t.router({
 		list: t.procedure
 			.input(z.object({ app: optionalNullableString }))
-			.require(ADMIN_ACTION)
 			.query(({ ctx, input }) => adminUseCases.listRoles(context(ctx), input)),
 	}),
 	policies: t.router({
-		list: t.procedure.input(appInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.listPolicies(context(ctx), input)),
+		list: t.procedure.input(appInput).query(({ ctx, input }) => adminUseCases.listPolicies(context(ctx), input)),
 		create: t.procedure
 			.input(z.object({ app: nonEmpty, policy: z.object({ key: nonEmpty, ...policy }) }))
 			.require(ADMIN_ACTION)
@@ -230,9 +221,9 @@ export const adminRpcAuth = async (request: Request, ctx: IamAppContext, next: (
 
 		ctx.admin = resolution.admin
 		ctx.auth = authContext(resolution.admin)
-		// Every request of an installation admin is recorded before it runs, reads included. A caller without the
-		// action reaches no procedure (each requires it), so it used no privileged access.
-		if (permits(resolution.admin.permissions, ADMIN_ACTION)) {
+		// Every request of an administrator is recorded before it runs, reads included. A caller without an administration
+		// reaches no procedure but `appPeople.*`, so it used no privileged access.
+		if (administrationOf(resolution.admin) !== null) {
 			const access = { method: request.method, route: '/admin/rpc', procedure: await rpcProcedureOf(request) }
 			try {
 				await recordAdminAccess(ctx.services, resolution.admin, ctx.requestId, access)
@@ -320,13 +311,17 @@ function authContext(admin: NonNullable<IamAppContext['admin']>): AuthContext {
 	}
 }
 
+/** The context of a caller with an administration; anyone else is refused before the use case runs. */
 function context(ctx: IamAppContext): AdminContext {
 	if (ctx.admin === null) throw new UnauthorizedError()
+	const administration = administrationOf(ctx.admin)
+	if (administration === null) throw new ForbiddenError('admin permission required')
 	return {
 		services: ctx.services,
 		request: ctx.request,
 		url: new URL(ctx.request.url),
 		admin: ctx.admin,
+		administration,
 		app: IAM_APP,
 		requestId: ctx.requestId,
 		ctx: ctx.exec,

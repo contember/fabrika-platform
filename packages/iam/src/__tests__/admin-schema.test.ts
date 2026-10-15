@@ -188,21 +188,25 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 		expect('locale' in dropped || 'displayName' in dropped).toBe(false)
 	})
 
-	test('the app list carries each app display name, and null for an app that declares none', async () => {
+	test("the app list carries each app display name, null for an app that declares none, and whether it is the installation's own", async () => {
 		const h = createHarness()
 		const token = await asAdmin(h)
 		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, { ...SCHEMA, displayName: 'Opice' }))).status).toBe(200)
 		expect((await run(h, req('/admin/apps/bare/schema', 'PUT', token, SCHEMA))).status).toBe(200)
+		expect((await run(h, req('/admin/apps/vozka/schema', 'PUT', token, SCHEMA))).status).toBe(200)
 		const apps = await result(
 			h,
 			token,
 			'apps.list',
 			null,
-			(value) => z.object({ items: z.array(z.object({ id: z.string(), displayName: z.string().nullable() }).strict()) }).parse(value).items,
+			(value) =>
+				z.object({ items: z.array(z.object({ id: z.string(), displayName: z.string().nullable(), installation: z.boolean() }).strict()) }).parse(value)
+					.items,
 		)
-		expect(apps.filter((app) => app.id === 'opice' || app.id === 'bare')).toEqual([
-			{ id: 'bare', displayName: null },
-			{ id: 'opice', displayName: 'Opice' },
+		expect(apps.filter((app) => ['opice', 'bare', 'vozka'].includes(app.id))).toEqual([
+			{ id: 'bare', displayName: null, installation: false },
+			{ id: 'opice', displayName: 'Opice', installation: false },
+			{ id: 'vozka', displayName: null, installation: true },
 		])
 	})
 

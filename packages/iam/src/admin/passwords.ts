@@ -4,6 +4,7 @@ import { INSTALLATION_PRESENTATION } from '../app-presentation'
 import { type PrincipalRow } from '../db'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { type AdminContext, adminEvent, fail } from './context'
+import { mayReceiveEnrollmentUrl, requireActableTarget } from './user-admin'
 
 async function passwordUser(c: AdminContext, id: string, requireActive: boolean = true): Promise<PrincipalRow> {
 	if (!c.services.config.authentication.password.enabled) {
@@ -14,6 +15,7 @@ async function passwordUser(c: AdminContext, id: string, requireActive: boolean 
 	if (principal.type !== 'user') return fail(400, 'password authentication is available only for users')
 	if (principal.email === null) return fail(409, 'user has no email address')
 	if (requireActive && principal.disabled_at !== null) return fail(409, 'principal is disabled')
+	await requireActableTarget(c, principal)
 	return principal
 }
 
@@ -23,6 +25,13 @@ async function passwordDelivery(
 	purpose: 'enrollment' | 'reset',
 ): Promise<PasswordActionDelivery> {
 	const delivery = c.services.email === null ? 'manual' : 'email'
+	// A manual URL signs its holder in as the person: a user administrator gets one only to onboard (ADR-0058).
+	if (delivery === 'manual' && c.administration.kind === 'users') {
+		if (purpose === 'reset') return fail(403, 'without an email sender, only an installation administrator receives a password reset link')
+		if (!(await mayReceiveEnrollmentUrl(c, principal.id))) {
+			return fail(403, 'without an email sender, a user administrator receives an enrollment link only for a person who never signed in')
+		}
+	}
 	// The token, the enrollment opt-in and the record commit together; the email is an effect after that.
 	// An administrator's action belongs to the installation: its page and mail speak IAM's default language.
 	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id, presentation: INSTALLATION_PRESENTATION }, {
@@ -30,6 +39,7 @@ async function passwordDelivery(
 		enableEnrollment: purpose === 'enrollment',
 	})
 	if (c.services.email === null) {
+		if (!(await mayReceiveEnrollmentUrl(c, principal.id))) return fail(409, 'the person changed while the link was issued; the link is withheld')
 		return { delivery: 'manual', url: action.url, expiresAt: action.expiresAt }
 	}
 	if (action.message === null || principal.email === null) {
