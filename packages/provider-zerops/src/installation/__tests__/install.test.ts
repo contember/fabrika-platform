@@ -14,6 +14,7 @@ import { describe, expect, test } from 'bun:test'
 import { deployPlatform, PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
 import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
+import { provisioningDocument } from '../install-provisioning'
 import { recordingInitLog } from '../log'
 import { generateInstallationSecrets } from '../secrets'
 import { generatedArtifacts } from '../topology/artifacts'
@@ -387,6 +388,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets,
 			zeropsAccessToken: 'minted',
+			tier: 'light',
 		})
 		const generated = new Set<string>([...Object.values(secrets), 'minted'])
 		for (const hostname of PLATFORM_DEPLOY_ORDER) {
@@ -406,6 +408,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
+			tier: 'light',
 			apiBaseUrl: 'https://api.app-brn1.zerops.io/api/rest/public',
 		})
 		expect(withRegion.get('control')?.get('FABRIKA_ZEROPS_API_BASE_URL')).toBe('https://api.app-brn1.zerops.io/api/rest/public')
@@ -420,6 +423,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
+			tier: 'light',
 		})
 		expect([...matrix.keys()].sort()).toEqual(['control', 'iam', 'operations', 'proxy'])
 		expect(matrix.get('control')?.has('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(false)
@@ -429,6 +433,38 @@ describe('what reaches which service', () => {
 		)
 		expect(matrix.get('control')?.has('GITHUB_WEBHOOK_SECRET')).toBe(false)
 		expect(matrix.get('control')?.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
+	})
+
+	test.each(
+		[
+			['light', 'db', 'storage'],
+			['standard', 'operationsdb', 'operationsstorage'],
+		] as const,
+	)('the %s tier points Operations at %s and %s, and IAM and control at db and storage', (tier, database, storage) => {
+		const matrix = installationServiceEnv({
+			environment: 'stage',
+			scheme: 'https',
+			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
+			clientId: CLIENT_ID,
+			proxySource: fakeNamespaceProxySource(),
+			secrets: generateInstallationSecrets(),
+			zeropsAccessToken: 'minted',
+			tier,
+		})
+		const platformDatabase = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
+		expect(matrix.get('iam')?.get('FABRIKA_IAM_DATABASE_URL')).toBe(platformDatabase)
+		expect(matrix.get('control')?.get('FABRIKA_CONTROL_DATABASE_URL')).toBe(platformDatabase)
+		expect(matrix.get('control')?.get('FABRIKA_CONTROL_RUN_LOGS_BUCKET')).toBe('${storage_bucketName}')
+		expect(matrix.get('operations')?.get('FABRIKA_OPERATIONS_DATABASE_URL')).toBe(
+			`\${${database}_connectionTlsString}/\${${database}_dbName}?sslmode=require`,
+		)
+		expect(matrix.get('operations')?.get('FABRIKA_OPERATIONS_BLOB_BUCKET')).toBe(`\${${storage}_bucketName}`)
+		expect(matrix.get('operations')?.get('FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY')).toBe(`\${${storage}_secretAccessKey}`)
+	})
+
+	test('every service the standard tier references is one its import document declares', () => {
+		const declared = provisioningDocument('stage', 'standard').document.services.map((service) => service.hostname)
+		expect(declared).toEqual(expect.arrayContaining(['db', 'storage', 'operationsdb', 'operationsstorage', ...PLATFORM_DEPLOY_ORDER]))
 	})
 })
 
@@ -577,12 +613,19 @@ describe('what it refuses', () => {
 		expect(fixture.asked).toEqual([])
 	})
 
-	test('a tier that has no services-only import document', () => {
+	test('a tier that does not exist, naming the two that do', () => {
 		expect(() =>
-			parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage', '--tier=standard'], {
+			parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage', '--tier=premium'], {
 				FABRIKA_ZEROPS_ACCESS_TOKEN: 'token',
 			})
-		).toThrow('cannot be installed into a project you created')
+		).toThrow('pass --tier=light or --tier=standard')
+	})
+
+	test('the standard tier in a LIGHT project, before anything is imported', async () => {
+		const fixture = harness({ projectMode: 'LIGHT' })
+
+		await expect(fixture.run({ tier: 'standard' })).rejects.toThrow('is LIGHT and the standard tier needs SERIOUS')
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('import:'))).toEqual([])
 	})
 })
 

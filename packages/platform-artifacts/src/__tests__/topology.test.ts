@@ -57,10 +57,12 @@ describe('every generated import document validates against the supported instal
 		})
 	}
 
-	test('all eight documents exist — provisioning and steady state, plus the light tier services-only pair', () => {
+	test('all ten documents exist — provisioning and steady state, plus each platform tier services-only pair', () => {
 		expect(importArtifacts().map((artifact) => artifact.path)).toEqual([
 			'packages/platform-artifacts/generated/platform.provision.zerops-import.yaml',
 			'packages/platform-artifacts/generated/platform.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform.services.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform.services.zerops-import.yaml',
 			'packages/platform-artifacts/generated/platform-light.provision.zerops-import.yaml',
 			'packages/platform-artifacts/generated/platform-light.zerops-import.yaml',
 			'packages/platform-artifacts/generated/platform-light.services.provision.zerops-import.yaml',
@@ -353,7 +355,7 @@ describe('provisioning vs steady state', () => {
 	})
 })
 
-describe('the light tier also compiles services-only, for a project the operator created by hand', () => {
+describe('a platform tier also compiles services-only, for the project `platform install` creates or is handed', () => {
 	// `POST /client/{clientId}/project/import` is the only endpoint a `project:` block is valid at, and it
 	// CREATES a project — Zerops permits duplicate project names, so applying one at an installation that
 	// already exists yields a second project rather than an error. A bootstrap imports into the operator's
@@ -412,6 +414,8 @@ describe('the light tier also compiles services-only, for a project the operator
 	test('both are committed, and the committed text has no `project:` line either', () => {
 		const committed = importArtifacts().filter((artifact) => artifact.path.includes('.services'))
 		expect(committed.map((artifact) => artifact.path)).toEqual([
+			'packages/platform-artifacts/generated/platform.services.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform.services.zerops-import.yaml',
 			'packages/platform-artifacts/generated/platform-light.services.provision.zerops-import.yaml',
 			'packages/platform-artifacts/generated/platform-light.services.zerops-import.yaml',
 		])
@@ -421,8 +425,8 @@ describe('the light tier also compiles services-only, for a project the operator
 		}
 	})
 
-	test('only the light tier declares one — the standard tier spans two projects fabrika creates itself', () => {
-		expect(compiled.filter((entry) => entry.servicesProvision !== undefined).map((entry) => entry.topology.id)).toEqual(['platform-light'])
+	test('both platform tiers declare one, and the apps project does not — `platform install` brings up either tier', () => {
+		expect(compiled.filter((entry) => entry.servicesProvision !== undefined).map((entry) => entry.topology.id)).toEqual(['platform', 'platform-light'])
 	})
 })
 

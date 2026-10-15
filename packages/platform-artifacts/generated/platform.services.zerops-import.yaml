@@ -1,0 +1,73 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+#
+# Source: packages/provider-zerops/src/installation/topology/topology.ts
+# Regenerate: bun run --filter @fabrika/platform-artifacts gen
+#
+# Apply with: POST /project/{projectId}/service-stack/import  { yaml }
+#
+# `envIsolation: service` on EVERY service is written by the compiler, not by the declaration, and
+# re-checked before serialization; a service-level value overrides the project's (ADR-0004). This
+# document sets NO project-level isolation and cannot — the field is settable at project CREATION
+# only, so the project this is imported into must already carry `envIsolation: service`.
+#
+services:
+  - hostname: db
+    type: "postgresql:ha@18"
+    envIsolation: service
+    override: true
+    priority: 100
+    profile: oltp-production
+  - hostname: storage
+    type: object-storage
+    envIsolation: service
+    override: true
+    objectStorageSize: 25
+    objectStoragePolicy: private
+    priority: 100
+    enableCdn: false
+  - hostname: operationsdb
+    type: "postgresql:ha@18"
+    envIsolation: service
+    override: true
+    priority: 100
+    profile: oltp-staging
+  - hostname: operationsstorage
+    type: object-storage
+    envIsolation: service
+    override: true
+    objectStorageSize: 25
+    objectStoragePolicy: private
+    priority: 100
+    enableCdn: false
+  - hostname: iam
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 50
+    minContainers: 2
+    maxContainers: 4
+  - hostname: operations
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 40
+    minContainers: 1
+    maxContainers: 3
+  - hostname: control
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 20
+    minContainers: 1
+    maxContainers: 2
+  - hostname: proxy
+    type: alpine@3.21
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 30
+    minContainers: 2
+    maxContainers: 6

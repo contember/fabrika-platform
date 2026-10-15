@@ -2,24 +2,24 @@ import { waitForProcess, type ZeropsImportResult, type ZeropsService, type Zerop
 import { PLATFORM_DEPLOY_ORDER, type PlatformDeployService, readServiceEnv, type ResolvedService } from './deploy'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import { GENERATED_SECRET_KEYS } from './install-environment'
-import { type CompiledDocument, type CompiledTopology, compileTopology, platformTopology } from './topology/topology'
+import { type CompiledDocument, type CompiledTopology, compileTopology, type PlatformTier, platformTopology } from './topology/topology'
 
-/** The one topology this command installs, so the project document and the services document cannot drift. */
-export const lightTopology = (environment: string): CompiledTopology =>
-	compileTopology(platformTopology({ env: environment, tier: 'light', publicAccess: 'zerops-subdomain' }), environment)
+/** The topology this command installs for a tier, so the project document and the services document cannot drift. */
+export const installationTopology = (environment: string, tier: PlatformTier): CompiledTopology =>
+	compileTopology(platformTopology({ env: environment, tier, publicAccess: 'zerops-subdomain' }), environment)
 
 /**
  * The services-only provisioning document (WU2), compiled from the declaration the committed artifact
  * is rendered from.
  *
  * Not read off disk: `gen:check` already proves
- * `packages/platform-artifacts/generated/platform-light.services.provision.zerops-import.yaml` is this exact text, and a
- * value needs no filesystem in a published package.
+ * `packages/platform-artifacts/generated/platform{,-light}.services.provision.zerops-import.yaml` is this exact text,
+ * and a value needs no filesystem in a published package.
  */
-export const provisioningDocument = (environment: string): CompiledDocument => {
-	const document = lightTopology(environment).servicesProvision
+export const provisioningDocument = (environment: string, tier: PlatformTier): CompiledDocument => {
+	const document = installationTopology(environment, tier).servicesProvision
 	if (document === undefined) {
-		throw new Error('the light platform topology declares no services-only provisioning document')
+		throw new Error(`the ${tier} platform topology declares no services-only provisioning document`)
 	}
 	return document
 }
@@ -64,7 +64,7 @@ export const assertNoServiceIsBeingCreated = (existing: ReadonlyMap<string, Exis
 	if (creating.length > 0) {
 		throw new Error(
 			`Zerops is still creating ${creating.join(', ')} — a service reads NEW with no environment at all, so nothing can be `
-				+ 'read from it or written to it yet. The light topology settles in about a minute; run the install again then',
+				+ 'read from it or written to it yet. The topology settles in a few minutes; run the install again then',
 		)
 	}
 }

@@ -66,9 +66,9 @@ deploy that push triggers.
 
 ── platform install ──────────────────────────────────────────────────────────────────────────────
 
-The from-scratch bring-up. With \`--create-project\` it creates the project too, with core package
-LIGHT and \`envIsolation: service\` — the two settings Zerops accepts at project CREATION only and never
-afterwards. \`--project-id=<id>\` installs into an empty project you created yourself instead, with both
+The from-scratch bring-up. With \`--create-project\` it creates the project too, with the tier's core
+package (LIGHT or SERIOUS) and \`envIsolation: service\` — the two settings Zerops accepts at project
+CREATION only and never afterwards. \`--project-id=<id>\` installs into an empty project you created yourself instead, with both
 already right; nothing here can read \`envIsolation\` back or correct it.
 
 Interactive and laptop-side. It CONFIRMS before every step that leaves your machine: reading the
@@ -79,7 +79,7 @@ is not consent.
 
   1. create the project and wait for it to be ACTIVE (\`--create-project\`; its id is printed before
      the wait), or read the one you named — and refuse a core package the tier does not match
-  2. import ${PLATFORM_DEPLOY_ORDER.length + 2} services without code, and wait for the import's processes
+  2. import the tier's services without code, and wait for the import's processes
   3. generate six secrets and mint the control plane's Zerops INTEGRATION token
      (client role NO_ACCESS, ADMIN on this project only — never your personal token)
   4. pass 1: give the proxy an EMPTY manifest and build it, so it publishes one public hostname per
@@ -98,8 +98,10 @@ placed but before every bootstrap variable was placed, preserve the existing key
 operator-owned recovery, or start a fresh installation in a separate empty project.
 Re-running install after any generated secret was placed is refused.
 
-Only the LIGHT tier can be installed this way — it is the one topology that emits a services-only
-import document. Authentication is PASSWORD ONLY; no administrator exists yet when this finishes.
+Two tiers, one project each. \`light\` (core LIGHT): one single-node PostgreSQL and one bucket shared by
+IAM, control and Operations, one container per service. \`standard\` (core SERIOUS): an HA PostgreSQL for
+IAM and control, a second HA PostgreSQL and bucket for Operations, two containers of IAM and the proxy.
+Authentication is PASSWORD ONLY; no administrator exists yet when this finishes.
 
 Options (a flag beats the environment variable beside it):
 
@@ -112,7 +114,7 @@ Options (a flag beats the environment variable beside it):
   --env=<name>                      FABRIKA_PLATFORM_ENVIRONMENT    written to every service as ENVIRONMENT
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --source-dir=<checkout>           required                       clean full checkout running this CLI
-  --tier=light                      FABRIKA_PLATFORM_TIER           default light, and the only value
+  --tier=<light|standard>           FABRIKA_PLATFORM_TIER           default light
   ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
                                                                     required when stdin is not a terminal
 

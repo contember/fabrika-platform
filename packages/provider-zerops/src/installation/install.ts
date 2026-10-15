@@ -115,7 +115,7 @@ const installPreparedPlatform = async (
 	log.ok(`project ${project.name} (${project.id})`)
 
 	log.step('Provision the topology')
-	const document = provisioningDocument(environment)
+	const document = provisioningDocument(environment, input.tier)
 	const declared = document.document.services.map((service) => service.hostname)
 	const existing = existingServices(declared, await collaborators.api.listProjectServices({ projectId: project.id, signal }))
 	assertNoServiceIsBeingCreated(existing)
@@ -160,6 +160,7 @@ const installPreparedPlatform = async (
 	log.step('Write every remaining variable')
 	const desired = installationServiceEnv({
 		environment,
+		tier: input.tier,
 		scheme: input.scheme,
 		hosts,
 		clientId: input.clientId,

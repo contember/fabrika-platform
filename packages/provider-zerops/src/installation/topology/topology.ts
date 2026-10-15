@@ -117,12 +117,11 @@ export interface ProjectTopology {
 	/** The source declaration compiled into the generated topology artifacts. */
 	target: ZeropsSourceTarget
 	/**
-	 * The SAME services with no `project` block, for a project the operator created by hand.
+	 * The SAME services with no `project` block, for the project `platform install` created or was handed.
 	 *
 	 * A document carrying `project:` is only valid at `POST /client/{clientId}/project/import`, which
 	 * CREATES a project — and Zerops permits duplicate project names, so applying one at an existing
-	 * installation risks a second project rather than failing. Present only on the tiers a bootstrap
-	 * imports into an existing project.
+	 * installation risks a second project rather than failing. Present on both platform tiers.
 	 */
 	servicesTarget?: ZeropsSourceTarget
 	/** The one service allowed to be publicly routed (ADR-0022). Always the proxy. */
@@ -182,6 +181,107 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 	if (tier === 'light') {
 		return lightPlatformTopology(options, publicAccess)
 	}
+	// ONE services function behind both targets, as on the light tier.
+	const services = (): ZeropsServiceSpec[] => [
+		// ── data, created first (priority is descending) ──────────────────────────────────
+		{
+			hostname: 'db',
+			// HA is encoded in the TYPE. The deprecated `mode` field is not merely avoided here — it
+			// is absent from `ZeropsServiceSpec`, so it cannot be written. One database serves both
+			// IAM and the control plane; they are separate schemas in it, not separate services,
+			// because a second HA Postgres triples the cost of the isolation the private network
+			// already gives us.
+			type: 'postgresql:ha@18',
+			// The identity and control-plane database: every login, every token mint, every run's
+			// state. `oltp-production` is also what an HA service gets by DEFAULT — stated here so
+			// the bill is a decision rather than a discovery, and because this is the one place the
+			// standard tier should pay for it: dedicated CPU is what keeps auth latency off the
+			// noisy-neighbour curve.
+			profile: 'oltp-production',
+			priority: 100,
+		},
+		{
+			hostname: 'storage',
+			// S3-compatible object storage: run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and deploy artifacts.
+			// `@fabrika/platform-node`'s `S3BlobStore` speaks to this unchanged — it is the same
+			// implementation that speaks to R2.
+			type: 'object-storage',
+			objectStorageSize: 25,
+			// Never `public-read`: a run log can quote a build's environment.
+			objectStoragePolicy: 'private',
+			// A CDN in front of private run logs would be a cache in front of a thing nobody reads twice.
+			enableCdn: false,
+			priority: 100,
+		},
+		{
+			hostname: 'operationsdb',
+			// Operations has an independent database service. This prevents its high-volume error
+			// history and migrations from sharing IAM/control's failure and capacity domain.
+			type: 'postgresql:ha@18',
+			// NOT `db`'s profile, and that is the point of stating both. `oltp-staging` keeps the
+			// same three-container redundancy and the same 8-core/48 GB ceiling, but starts at one
+			// SHARED core and 1 GB instead of two DEDICATED cores and 4 GB — measured off a live
+			// HA service, see `docs/reference/zerops-platform.md`. Error history is bursty and
+			// tolerant of jitter: slow ingest is a queue, not an outage. Holding two dedicated
+			// cores idle for it is the half of the default nobody chose.
+			profile: 'oltp-staging',
+			priority: 100,
+		},
+		{
+			hostname: 'operationsstorage',
+			type: 'object-storage',
+			objectStorageSize: 25,
+			objectStoragePolicy: 'private',
+			enableCdn: false,
+			priority: 100,
+		},
+		// ── services ──────────────────────────────────────────────────────────────────────
+		runtime({
+			hostname: 'iam',
+			type: 'alpine/bun@1.3',
+			priority: 50,
+			// Identity is on the critical path of every login and every cold-path token mint, and the
+			// service is stateless (its state is in `db`), so two containers cost little and remove a
+			// single point of failure the product cannot afford.
+			minContainers: 2,
+			maxContainers: 4,
+		}),
+		runtime({
+			hostname: 'operations',
+			type: 'alpine/bun@1.3',
+			priority: 40,
+			minContainers: 1,
+			maxContainers: 3,
+		}),
+		runtime({
+			hostname: 'control',
+			type: 'alpine/bun@1.3',
+			// IAM → Operations → proxy → control is the code deployment order too:
+			// control must never start against a missing private dependency.
+			priority: 20,
+			// Deliberately allowed to be a single container. The control plane is CRASH-SAFE across a
+			// deploy by design — it may trigger its own redeploy and die, then reconcile in-flight runs
+			// by polling `/app-version` on restart (ADR-0003) — so an outage window here is a delay,
+			// not a lost run. Scaling it out would also multiply the queue consumers for no gain.
+			minContainers: 1,
+			maxContainers: 2,
+		}),
+		runtime({
+			hostname: PROXY_HOSTNAME,
+			// Alpine custom runtime: a Caddy binary plus a compiled Bun auth service, no interpreter
+			// (ADR-0022). `run.os` is deprecated — the OS is the service type.
+			type: 'alpine@3.21',
+			priority: 30,
+			// THE ONLY PUBLICLY ROUTED SERVICE. Everything above is reachable only over the project's
+			// private network; the proxy is what the internet talks to, including for IAM's own OIDC
+			// login and the control-plane dashboard.
+			public: publicAccess === 'zerops-subdomain',
+			// It is on every request to every service in this project, and it is stateless by
+			// construction (ADR-0022 insists on that precisely so this line is allowed to exist).
+			minContainers: 2,
+			maxContainers: 6,
+		}),
+	]
 	return {
 		id: 'platform',
 		publicService: PROXY_HOSTNAME,
@@ -193,107 +293,9 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 				corePackage: 'SERIOUS',
 				tags: ['fabrika', 'platform', options.env],
 			},
-			services: () => [
-				// ── data, created first (priority is descending) ──────────────────────────────────
-				{
-					hostname: 'db',
-					// HA is encoded in the TYPE. The deprecated `mode` field is not merely avoided here — it
-					// is absent from `ZeropsServiceSpec`, so it cannot be written. One database serves both
-					// IAM and the control plane; they are separate schemas in it, not separate services,
-					// because a second HA Postgres triples the cost of the isolation the private network
-					// already gives us.
-					type: 'postgresql:ha@18',
-					// The identity and control-plane database: every login, every token mint, every run's
-					// state. `oltp-production` is also what an HA service gets by DEFAULT — stated here so
-					// the bill is a decision rather than a discovery, and because this is the one place the
-					// standard tier should pay for it: dedicated CPU is what keeps auth latency off the
-					// noisy-neighbour curve.
-					profile: 'oltp-production',
-					priority: 100,
-				},
-				{
-					hostname: 'storage',
-					// S3-compatible object storage: run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and deploy artifacts.
-					// `@fabrika/platform-node`'s `S3BlobStore` speaks to this unchanged — it is the same
-					// implementation that speaks to R2.
-					type: 'object-storage',
-					objectStorageSize: 25,
-					// Never `public-read`: a run log can quote a build's environment.
-					objectStoragePolicy: 'private',
-					// A CDN in front of private run logs would be a cache in front of a thing nobody reads twice.
-					enableCdn: false,
-					priority: 100,
-				},
-				{
-					hostname: 'operationsdb',
-					// Operations has an independent database service. This prevents its high-volume error
-					// history and migrations from sharing IAM/control's failure and capacity domain.
-					type: 'postgresql:ha@18',
-					// NOT `db`'s profile, and that is the point of stating both. `oltp-staging` keeps the
-					// same three-container redundancy and the same 8-core/48 GB ceiling, but starts at one
-					// SHARED core and 1 GB instead of two DEDICATED cores and 4 GB — measured off a live
-					// HA service, see `docs/reference/zerops-platform.md`. Error history is bursty and
-					// tolerant of jitter: slow ingest is a queue, not an outage. Holding two dedicated
-					// cores idle for it is the half of the default nobody chose.
-					profile: 'oltp-staging',
-					priority: 100,
-				},
-				{
-					hostname: 'operationsstorage',
-					type: 'object-storage',
-					objectStorageSize: 25,
-					objectStoragePolicy: 'private',
-					enableCdn: false,
-					priority: 100,
-				},
-				// ── services ──────────────────────────────────────────────────────────────────────
-				runtime({
-					hostname: 'iam',
-					type: 'alpine/bun@1.3',
-					priority: 50,
-					// Identity is on the critical path of every login and every cold-path token mint, and the
-					// service is stateless (its state is in `db`), so two containers cost little and remove a
-					// single point of failure the product cannot afford.
-					minContainers: 2,
-					maxContainers: 4,
-				}),
-				runtime({
-					hostname: 'operations',
-					type: 'alpine/bun@1.3',
-					priority: 40,
-					minContainers: 1,
-					maxContainers: 3,
-				}),
-				runtime({
-					hostname: 'control',
-					type: 'alpine/bun@1.3',
-					// IAM → Operations → proxy → control is the code deployment order too:
-					// control must never start against a missing private dependency.
-					priority: 20,
-					// Deliberately allowed to be a single container. The control plane is CRASH-SAFE across a
-					// deploy by design — it may trigger its own redeploy and die, then reconcile in-flight runs
-					// by polling `/app-version` on restart (ADR-0003) — so an outage window here is a delay,
-					// not a lost run. Scaling it out would also multiply the queue consumers for no gain.
-					minContainers: 1,
-					maxContainers: 2,
-				}),
-				runtime({
-					hostname: PROXY_HOSTNAME,
-					// Alpine custom runtime: a Caddy binary plus a compiled Bun auth service, no interpreter
-					// (ADR-0022). `run.os` is deprecated — the OS is the service type.
-					type: 'alpine@3.21',
-					priority: 30,
-					// THE ONLY PUBLICLY ROUTED SERVICE. Everything above is reachable only over the project's
-					// private network; the proxy is what the internet talks to, including for IAM's own OIDC
-					// login and the control-plane dashboard.
-					public: publicAccess === 'zerops-subdomain',
-					// It is on every request to every service in this project, and it is stateless by
-					// construction (ADR-0022 insists on that precisely so this line is allowed to exist).
-					minContainers: 2,
-					maxContainers: 6,
-				}),
-			],
+			services,
 		},
+		servicesTarget: { platform: 'zerops', services },
 	}
 }
 
@@ -371,7 +373,6 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 			},
 			services,
 		},
-		// The light tier is the one an operator installs into a project they created themselves.
 		servicesTarget: { platform: 'zerops', services },
 	}
 }

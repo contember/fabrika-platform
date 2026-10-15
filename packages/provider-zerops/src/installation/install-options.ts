@@ -11,9 +11,9 @@
 import { describeArgument, readEnv, readFlag, requiredSetting, setting, UNATTENDED_FLAG } from '@fabrika/installation-init'
 import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
+import type { PlatformTier } from './topology/topology'
 
-/** The only tier a bootstrap can install. See `assertInstallableTier`. */
-export type InstallablePlatformTier = 'light'
+const PLATFORM_TIERS: readonly PlatformTier[] = ['light', 'standard']
 
 /**
  * Where the installation's project comes from.
@@ -43,7 +43,7 @@ export interface PlatformInstallInput {
 	/** The scheme a browser speaks to this installation. */
 	readonly scheme: 'http' | 'https'
 	readonly sourceDir: string
-	readonly tier: InstallablePlatformTier
+	readonly tier: PlatformTier
 	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
 	readonly unattended: boolean
 }
@@ -74,22 +74,16 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 	}
 }
 
-/**
- * The tier this command can bring up.
- *
- * Only `light`, and that is a property of the topology rather than a limitation of the flow: the light
- * tier is the only one that emits a services-only provisioning document, because it is the only one an
- * operator installs into a project they created themselves. The standard tier is TWO projects that
- * fabrika creates, which is a different command with a different failure mode.
- */
-const assertInstallableTier = (raw: string | undefined): InstallablePlatformTier => {
-	if (raw === undefined || raw === 'light') {
+/** The platform tier to bring up. `light` stays the default, so an existing invocation installs what it did. */
+const readTier = (raw: string | undefined): PlatformTier => {
+	if (raw === undefined) {
 		return 'light'
 	}
-	throw new Error(
-		`--tier=${raw} cannot be installed into a project you created: only the light tier emits a services-only `
-			+ 'provisioning document. The standard tier is two projects fabrika creates itself',
-	)
+	const tier = PLATFORM_TIERS.find((candidate) => candidate === raw)
+	if (tier === undefined) {
+		throw new Error(`--tier=${raw} is not a platform tier — pass --tier=light or --tier=standard`)
+	}
+	return tier
 }
 
 const readScheme = (argv: readonly string[], env: Record<string, string | undefined>): 'http' | 'https' => {
@@ -149,7 +143,7 @@ export const parsePlatformInstallArgs = (
 		environment: readEnvironment(argv, env),
 		scheme: readScheme(argv, env),
 		sourceDir,
-		tier: assertInstallableTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
+		tier: readTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
 	}

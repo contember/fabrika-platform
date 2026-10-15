@@ -1,11 +1,12 @@
 import { ENV_ISOLATION, renderYaml, type ZeropsProjectMode, type ZeropsProjectStatus } from '../index'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import type { PlatformInstallInput } from './install-options'
-import { lightTopology } from './install-provisioning'
+import { installationTopology } from './install-provisioning'
 import { assertPersonalAccessToken } from './install-token'
+import type { PlatformTier } from './topology/topology'
 
-/** The project compute tier each installable platform tier requires. `corePackage` is upgrade-only. */
-const REQUIRED_PROJECT_MODE: ZeropsProjectMode = 'LIGHT'
+/** The project compute tier each platform tier requires. `corePackage` is upgrade-only. */
+const REQUIRED_PROJECT_MODE: Readonly<Record<PlatformTier, ZeropsProjectMode>> = { light: 'LIGHT', standard: 'SERIOUS' }
 
 /** The one project state this command may install into. */
 const PROJECT_ACTIVE: ZeropsProjectStatus = 'ACTIVE'
@@ -33,15 +34,16 @@ const PROJECT_READ_FAILURES = 3
  * The document `--create-project` applies, carrying a `project:` block and NO services.
  *
  * Taken from the same declaration the provisioning import is compiled from, so `envIsolation: service`
- * and `corePackage: LIGHT` — the two settings a project accepts at CREATION only and never afterwards —
+ * and `corePackage` — the two settings a project accepts at CREATION only and never afterwards —
  * have exactly one source. Only the name is this run's. `renderImportYaml` is not the renderer here
  * because it refuses a document with no services, and this one deliberately has none: the services arrive
  * through the services-only import, into the project this creates.
  */
-const createProjectYaml = (environment: string, projectName: string): string => {
-	const declared = lightTopology(environment).provision.document.project
-	if (declared === undefined || declared.corePackage !== REQUIRED_PROJECT_MODE || declared.envIsolation !== ENV_ISOLATION) {
-		throw new Error(`the light platform topology declares no \`${REQUIRED_PROJECT_MODE}\` project with \`envIsolation: ${ENV_ISOLATION}\` to create`)
+const createProjectYaml = (environment: string, tier: PlatformTier, projectName: string): string => {
+	const declared = installationTopology(environment, tier).provision.document.project
+	const mode = REQUIRED_PROJECT_MODE[tier]
+	if (declared === undefined || declared.corePackage !== mode || declared.envIsolation !== ENV_ISOLATION) {
+		throw new Error(`the ${tier} platform topology declares no \`${mode}\` project with \`envIsolation: ${ENV_ISOLATION}\` to create`)
 	}
 	return renderYaml({ project: { ...declared, name: projectName }, services: [] })
 }
@@ -123,7 +125,7 @@ const createProject = async (
 	assertRunning(signal)
 	const result = await api.importProject({
 		clientId: input.clientId,
-		yaml: createProjectYaml(environment, projectName),
+		yaml: createProjectYaml(environment, input.tier, projectName),
 		signal,
 	})
 	if (result.projectId === '') {
@@ -144,18 +146,19 @@ const resolveProject = async (
 	{ api, log, signal }: InstallCollaborators,
 ): Promise<{ id: string; name: string }> => {
 	const project = await api.getProject({ projectId, signal })
+	const mode = REQUIRED_PROJECT_MODE[input.tier]
 	if (project.id === '') {
 		throw new Error(`Zerops project ${projectId} could not be read with this token`)
 	}
 	if (project.mode === undefined) {
 		// Not a mismatch, so not a refusal: the client narrows an unknown value to absent, and blocking an
 		// install on a field the API did not state would be refusing on an absence of evidence.
-		log.warn(`Zerops did not state project ${project.name}'s mode; the ${input.tier} tier expects ${REQUIRED_PROJECT_MODE}`)
-	} else if (project.mode !== REQUIRED_PROJECT_MODE) {
+		log.warn(`Zerops did not state project ${project.name}'s mode; the ${input.tier} tier expects ${mode}`)
+	} else if (project.mode !== mode) {
 		throw new Error(
-			`Zerops project ${project.name} is ${project.mode} and the ${input.tier} tier needs ${REQUIRED_PROJECT_MODE}. \`corePackage\` is `
+			`Zerops project ${project.name} is ${project.mode} and the ${input.tier} tier needs ${mode}. \`corePackage\` is `
 				+ 'upgrade-only and its upgrade is partly destructive, so this is not something an install may change — create the project '
-				+ `with core package ${REQUIRED_PROJECT_MODE}, or install a tier that matches`,
+				+ `with core package ${mode}, or install a tier that matches`,
 		)
 	}
 	return { id: project.id, name: project.name }
@@ -191,7 +194,9 @@ export const resolveInstallationProject = async (
 	log.info('`envIsolation` and `corePackage` are settable at project CREATION only, which is why the project is created from here.')
 	if (
 		!(await prompts.confirm(
-			`Check the token, then CREATE Zerops project \`${source.projectName}\` (core package ${REQUIRED_PROJECT_MODE}, envIsolation ${ENV_ISOLATION}) on client `
+			`Check the token, then CREATE Zerops project \`${source.projectName}\` (core package ${
+				REQUIRED_PROJECT_MODE[input.tier]
+			}, envIsolation ${ENV_ISOLATION}) on client `
 				+ `${input.clientId}, then read it back?`,
 			true,
 		))

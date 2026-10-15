@@ -5,21 +5,35 @@ import { type PlatformHosts, platformOrigin } from './hosts'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import { FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource } from './installation-source'
 import type { InstallationSecrets } from './secrets'
+import type { PlatformTier } from './topology/topology'
 
 /** The private address the proxy dials IAM at inside the project, and pass 1's placeholder issuer. */
 export const PRIVATE_IAM_UPSTREAM = 'iam:3000'
 const PRIVATE_IAM_URL = `http://${PRIVATE_IAM_UPSTREAM}`
 
 /** The canonical fabrika PostgreSQL DSN on Zerops — see `src/topology/setups.ts` for why both suffixes exist. */
-const POSTGRES_URL = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
+const postgresUrl = (service: string): string => `\${${service}_connectionTlsString}/\${${service}_dbName}?sslmode=require`
 
-/** The light tier's one object-storage service, as the platform's own `${service_variable}` references. */
-const STORAGE = {
-	bucket: '${storage_bucketName}',
-	accessKeyId: '${storage_accessKeyId}',
-	secretAccessKey: '${storage_secretAccessKey}',
-	endpoint: '${storage_apiUrl}',
-} as const
+/** An object-storage service's coordinates, as the platform's own `${service_variable}` references. */
+interface StorageReferences {
+	readonly bucket: string
+	readonly accessKeyId: string
+	readonly secretAccessKey: string
+	readonly endpoint: string
+}
+
+const storageOf = (service: string): StorageReferences => ({
+	bucket: `\${${service}_bucketName}`,
+	accessKeyId: `\${${service}_accessKeyId}`,
+	secretAccessKey: `\${${service}_secretAccessKey}`,
+	endpoint: `\${${service}_apiUrl}`,
+})
+
+/** IAM and control share `db` and `storage` on both tiers; `standard` gives Operations its own pair. */
+const OPERATIONS_DATA: Readonly<Record<PlatformTier, { readonly database: string; readonly storage: string }>> = {
+	light: { database: 'db', storage: 'storage' },
+	standard: { database: 'operationsdb', storage: 'operationsstorage' },
+}
 
 /**
  * The four variables pass 1 writes on the proxy, and nothing else.
@@ -40,6 +54,7 @@ export const passOneProxyEnv = (secrets: InstallationSecrets): ReadonlyMap<strin
 /** What `installationServiceEnv` needs. Everything in it is settled before the first write. */
 export interface InstallationEnvInput {
 	readonly environment: string
+	readonly tier: PlatformTier
 	readonly scheme: 'http' | 'https'
 	readonly hosts: PlatformHosts
 	readonly clientId: string
@@ -72,17 +87,21 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 	const { secrets } = input
 	const iamOrigin = platformOrigin(input.scheme, input.hosts.iam)
 	const operationsOrigin = platformOrigin(input.scheme, input.hosts.operations)
+	const platformDatabase = postgresUrl('db')
+	const runLogs = storageOf('storage')
+	const operationsData = OPERATIONS_DATA[input.tier]
+	const operationsBlobs = storageOf(operationsData.storage)
 	const control = new Map([
-		['FABRIKA_CONTROL_DATABASE_URL', POSTGRES_URL],
+		['FABRIKA_CONTROL_DATABASE_URL', platformDatabase],
 		['ENVIRONMENT', input.environment],
 		// A bare HOST, not an origin: `controlPublicOrigin` accepts either.
 		['FABRIKA_CONTROL_DOMAIN', input.hosts.control],
 		['FABRIKA_IAM_ISSUER', iamOrigin],
 		['OPERATIONS_ARTIFACT_ORIGIN', operationsOrigin],
-		['FABRIKA_CONTROL_RUN_LOGS_BUCKET', STORAGE.bucket],
-		['FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID', STORAGE.accessKeyId],
-		['FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY', STORAGE.secretAccessKey],
-		['FABRIKA_CONTROL_RUN_LOGS_ENDPOINT', STORAGE.endpoint],
+		['FABRIKA_CONTROL_RUN_LOGS_BUCKET', runLogs.bucket],
+		['FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID', runLogs.accessKeyId],
+		['FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY', runLogs.secretAccessKey],
+		['FABRIKA_CONTROL_RUN_LOGS_ENDPOINT', runLogs.endpoint],
 		['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 		['OPERATIONS_SYNC_KEY', secrets.operationsSyncKey],
 		['FABRIKA_CONTROL_VAULT_KEY', secrets.vaultKey],
@@ -104,7 +123,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		[
 			'iam',
 			new Map([
-				['FABRIKA_IAM_DATABASE_URL', POSTGRES_URL],
+				['FABRIKA_IAM_DATABASE_URL', platformDatabase],
 				['ENVIRONMENT', input.environment],
 				['ISSUER', iamOrigin],
 				// Password only, by decision: OIDC needs an identity provider the operator has not been
@@ -121,11 +140,11 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		[
 			'operations',
 			new Map([
-				['FABRIKA_OPERATIONS_DATABASE_URL', POSTGRES_URL],
-				['FABRIKA_OPERATIONS_BLOB_BUCKET', STORAGE.bucket],
-				['FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID', STORAGE.accessKeyId],
-				['FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY', STORAGE.secretAccessKey],
-				['FABRIKA_OPERATIONS_BLOB_ENDPOINT', STORAGE.endpoint],
+				['FABRIKA_OPERATIONS_DATABASE_URL', postgresUrl(operationsData.database)],
+				['FABRIKA_OPERATIONS_BLOB_BUCKET', operationsBlobs.bucket],
+				['FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID', operationsBlobs.accessKeyId],
+				['FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY', operationsBlobs.secretAccessKey],
+				['FABRIKA_OPERATIONS_BLOB_ENDPOINT', operationsBlobs.endpoint],
 				['FABRIKA_OPERATIONS_PUBLIC_HOST', input.hosts.operations],
 				['ENVIRONMENT', input.environment],
 				['FABRIKA_IAM_ISSUER', iamOrigin],
