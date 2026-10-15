@@ -276,6 +276,10 @@ other environment, before the provider prepares anything, and the write maps a r
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
   A run that fails before the provider accepted it writes `deploy failed: <reason>` to its run log before the row
   turns `failed`: the message only, through `redactNamespaceErrorText` and the run's known secrets, never the error object.
+  A run whose holder died before a provider accepted it (a Control restart) is failed by the next owner
+  (`settleUnfinishedRun`: startup reconcile, cron, or the environment's next deploy), which first appends
+  `RUN_INTERRUPTED_REASON` through `runLogs`; the stale-run sweep appends its own reason. Neither requeues the run
+  (ADR-0044): every composition hands `runLogs`, or the reason reaches the console only.
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
   both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
   restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the

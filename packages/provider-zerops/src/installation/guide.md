@@ -275,7 +275,9 @@ Check with `bun pm ls | grep @fabrika/cli`.
    ```
 
    A failed run's log ends with `deploy failed: <reason>`. For example, `source resolve failed
-   (ref_not_found)` means control could not read the repository or the ref.
+   (ref_not_found)` means control could not read the repository or the ref. A run that ends with
+   `deploy interrupted: …; run the deploy again` lost Control mid-run, typically to step 3's workflow
+   redeploying it: deploy again once Control is back.
 
    The deploy fails when the repository at the deployed commit does not match the registered manifest.
    Commit and push, rebuild the manifest, `apps environments put` it, and deploy again.

@@ -103,6 +103,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 	const reconciliation = await reconcileProviderRuns({
 		repositories: repositories(runtime.env),
 		provider: runtime.provider,
+		runLogs: runtime.env.RUN_LOGS,
 		lock: locks(runtime.env),
 		operations: operationsReleaseDeps(runtime.env),
 	})

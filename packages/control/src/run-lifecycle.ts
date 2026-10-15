@@ -62,6 +62,8 @@ export interface RunDeps {
 	/** Where a namespace rebuild a deploy could not settle is handed to a `reconcile` job. */
 	queue?: Pick<JobQueue<ControlJobMessage>, 'send'>
 	logs: Pick<BlobStore, 'put'>
+	/** The run-log store a settlement appends to after the run's own writer is gone; absent, its lines go to the console only. */
+	runLogs?: Pick<BlobStore, 'get' | 'put'>
 	/**
 	 * Where a run's snapshot is read at its pinned commit (ADR-0050). A run with a pinned commit and no commit source
 	 * fails rather than publish access it could not read.
@@ -794,11 +796,13 @@ async function startRun(deps: RunDeps, invocation: RunInvocation, run: RunRow): 
 	return runs.markRunStarted(run.id, logsKey(run.id), invocation.lease.fence())
 }
 
-export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations'> & {
+export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations' | 'runLogs'> & {
 	projectTerminal?: typeof projectTerminalRun
-	/** The run-log store a provider's reconcile appends to; absent, its lines go to the console only. */
-	runLogs?: Pick<BlobStore, 'get' | 'put'>
 }
+
+/** The reason a run settled by a new owner ends with: its holder stopped before any provider accepted the work. */
+export const RUN_INTERRUPTED_REASON =
+	"deploy interrupted: Control restarted (or lost the run's lease) while the run was in progress, before the provider accepted it; run the deploy again"
 
 /** `untracked`: the provider cannot observe accepted work, so only a cancellation can settle it. */
 export type RunSettlement = 'succeeded' | 'failed' | 'running' | 'waiting' | 'untracked'
@@ -845,6 +849,7 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		if (invocation.cancelled) return await settleCancellation()
 		if (run.external_run_id === null) {
 			if (run.status === 'pending') return 'waiting'
+			await logSettlement(deps, run, RUN_INTERRUPTED_REASON)
 			await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, 'failed', null, fence))
 			await projectSettled(deps, run.id, 'failed')
 			return 'failed'
@@ -864,11 +869,7 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 			...(run.provider_state_json === null ? {} : { providerState: parseProviderJson(run.provider_state_json, 'provider state') }),
 			startedAtMs: (run.started_at ?? run.created_at) * 1000,
 			...(returnOrigins === undefined ? {} : { returnOrigins }),
-			log: async (line) => {
-				console.info(`deploy run ${run.id}: ${line}`)
-				if (deps.runLogs === undefined || run.log_key === null) return
-				await appendRunLog(deps.runLogs, run.log_key, line).catch(() => console.error(`deploy run ${run.id}: failed to persist log output`))
-			},
+			log: (line) => logSettlement(deps, run, line),
 		})
 		await invocation.boundary()
 		if (outcome.state === 'running') return 'running'
@@ -881,6 +882,13 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		if (!invocation.lost && invocation.cancelled && !cancelling) return await settleCancellation()
 		throw error
 	}
+}
+
+/** One line of a settlement, to the console and, when the run has a log, appended to it. A failed write is not the run's outcome. */
+export async function logSettlement(deps: Pick<RunDeps, 'runLogs'>, run: Pick<RunRow, 'id' | 'log_key'>, line: string): Promise<void> {
+	console.info(`deploy run ${run.id}: ${line}`)
+	if (deps.runLogs === undefined || run.log_key === null) return
+	await appendRunLog(deps.runLogs, run.log_key, line).catch(() => console.error(`deploy run ${run.id}: failed to persist log output`))
 }
 
 export async function projectTerminalRun(

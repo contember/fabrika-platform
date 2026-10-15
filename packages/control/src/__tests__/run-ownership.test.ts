@@ -3,7 +3,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { expect, test } from 'bun:test'
 import { acquireLease, LEASE_RENEW_MS, LEASE_TTL_MS } from '../lease'
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
-import { cancelDeploy, executeDeploy, type RunDeps } from '../run-lifecycle'
+import { cancelDeploy, executeDeploy, RUN_INTERRUPTED_REASON, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
@@ -23,6 +23,7 @@ async function fixture() {
 	const locks = new RecordingLocks(new SqlDeployLocks(d1, { now: clock.now }), clock)
 	const advance = (ms: number) => clock.advance(ms, locks.idle)
 	const provider: ControlProvider = { id: TEST_PROVIDER_ID, normalizeRegistration: (input) => input, deploy: async () => ({ state: 'succeeded' }) }
+	const runLogs = new Map<string, string>()
 	const deps: RunDeps = {
 		repositories: db,
 		lock: locks,
@@ -30,9 +31,24 @@ async function fixture() {
 		provider,
 		secrets: new VaultSecretResolver({}),
 		logs: { put: async () => {} },
+		runLogs: {
+			put: async (key, value) => {
+				if (typeof value !== 'string') throw new Error('test log store accepts strings only')
+				runLogs.set(key, value)
+			},
+			get: async (key) => {
+				const value = runLogs.get(key)
+				return value === undefined ? null : { body: new Blob([value]).stream(), text: () => Promise.resolve(value) }
+			},
+		},
 		commits: contractCommits('app'),
 	}
-	return { ...harness, clock, locks, advance, deps, row }
+	const lastLogLine = (key: string): unknown => {
+		const lines = (runLogs.get(key) ?? '').trim().split('\n')
+		const last = lines[lines.length - 1]
+		return last === undefined || last === '' ? undefined : JSON.parse(last).text
+	}
+	return { ...harness, clock, locks, advance, deps, row, lastLogLine }
 }
 
 test('cancellation during reservation records initial identity and cleans it without submitting work', async () => {
@@ -141,7 +157,7 @@ test('missing cancellation capability never settles accepted work', async () => 
 })
 
 test('a no-id crash is settled only after takeover, while pending queue work is retained', async () => {
-	const { db, deps, clock, advance, row, locks } = await fixture()
+	const { db, deps, clock, advance, row, locks, lastLogLine } = await fixture()
 	const crashed = await acquireLease(locks, 'app:prod', clock)
 	if (crashed === null) throw new Error('lease missing')
 	expect(await db.runs.markRunStarted(row.id, 'logs', crashed.fence())).toBe(true)
@@ -153,6 +169,7 @@ test('a no-id crash is settled only after takeover, while pending queue work is 
 	locks.renewal = 'live'
 	expect(await reconcileProviderRuns(deps)).toMatchObject({ failed: 1, waiting: 1 })
 	expect((await db.runs.getRun('queued'))?.status).toBe('pending')
+	expect(lastLogLine('logs')).toBe(RUN_INTERRUPTED_REASON)
 	await crashed.release()
 })
 
@@ -256,7 +273,7 @@ test('a lease lost during a provider step leaves the run running and asks the pr
 })
 
 test('the next deploy settles a run a dead holder left running, within one TTL and without the cron', async () => {
-	const { db, deps, clock, advance, row, locks } = await fixture()
+	const { db, deps, clock, advance, row, locks, lastLogLine } = await fixture()
 	const crashed = await acquireLease(locks, 'app:prod', clock)
 	if (crashed === null) throw new Error('lease missing')
 	expect(await db.runs.markRunStarted(row.id, 'logs', crashed.fence())).toBe(true)
@@ -268,6 +285,7 @@ test('the next deploy settles a run a dead holder left running, within one TTL a
 	locks.renewal = 'live'
 	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'succeeded' })
 	expect((await db.runs.getRun(row.id))?.status).toBe('failed')
+	expect(lastLogLine('logs')).toBe(RUN_INTERRUPTED_REASON)
 	await crashed.release()
 })
 

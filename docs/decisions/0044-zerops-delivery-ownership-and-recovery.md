@@ -101,7 +101,10 @@ external work.
   keys. A newer issuer, DSN, service key or name reaching older code is benign.
 - No ownership markers, no admission of a prior binding, and no per-version service secrets. Nothing
   accumulates on the service, so nothing needs reclamation.
-- A Control restart fails or finishes an in-flight deploy; it never continues it. The user redeploys.
+- A Control restart fails or finishes an in-flight deploy; it never continues it, and it never requeues one:
+  the run's snapshot publication, its Operations projection and the provider checkpoint would each need a
+  replay rule (see the rejected resume below). A run failed this way ends its log with
+  `deploy interrupted: …; run the deploy again`, so the user knows to redeploy.
 - A dead holder blocks its key for at most about 90 seconds.
 - Deletion does not guarantee upload-URL revocation, stopped transfers or physical blob cleanup.
 - A long step must check the lease and cancellation at its own boundaries; a step that never yields

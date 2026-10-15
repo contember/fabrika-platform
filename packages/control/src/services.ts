@@ -89,6 +89,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		lock: locks(env),
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
+		runLogs: env.RUN_LOGS,
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).

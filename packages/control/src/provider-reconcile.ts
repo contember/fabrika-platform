@@ -1,4 +1,4 @@
-import { type RunDeps, RunInvocation, type RunSettleDeps, settleUnfinishedRun } from './run-lifecycle'
+import { logSettlement, type RunDeps, RunInvocation, type RunSettleDeps, settleUnfinishedRun } from './run-lifecycle'
 
 export interface ProviderReconcileSummary {
 	checked: number
@@ -39,7 +39,7 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 }
 
 export async function sweepStaleRuns(
-	deps: Pick<RunDeps, 'repositories' | 'lock' | 'leaseClock'>,
+	deps: Pick<RunDeps, 'repositories' | 'lock' | 'leaseClock' | 'runLogs'>,
 	maxAgeSeconds: number,
 	now: () => number = () => Math.floor(Date.now() / 1000),
 ): Promise<number> {
@@ -53,6 +53,11 @@ export async function sweepStaleRuns(
 				run === null || (run.status !== 'pending' && run.status !== 'running') || run.external_run_id !== null || run.cancel_requested_at !== null
 				|| (run.started_at ?? run.created_at) >= now() - maxAgeSeconds
 			) continue
+			await logSettlement(
+				deps,
+				run,
+				`deploy failed: no provider accepted the run within ${Math.round(maxAgeSeconds / 60)} minutes of its start; run the deploy again`,
+			)
 			await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, 'failed', null, fence))
 			swept++
 		} finally {

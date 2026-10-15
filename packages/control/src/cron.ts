@@ -74,7 +74,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `in-progress=${reconcile.inProgress} waiting=${reconcile.waiting}`,
 		)
 	}
-	const swept = await sweepStaleRuns({ repositories: persistence, lock: locks(env) }, STALE_RUN_MAX_AGE_S, options.now)
+	const swept = await sweepStaleRuns({ repositories: persistence, lock: locks(env), runLogs: env.RUN_LOGS }, STALE_RUN_MAX_AGE_S, options.now)
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}

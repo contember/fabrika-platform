@@ -434,7 +434,9 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			if (!checkpoint.triggered) {
 				// A throw keeps the run running; the next maintenance pass retries the deletion.
 				await deleteVersion(api, checkpoint.appVersionId, signal)
-				await log(`deleted app-version ${checkpoint.appVersionId}; its build was never requested`)
+				await log(
+					`deploy interrupted: Control stopped before it requested the build; deleted app-version ${checkpoint.appVersionId}; run the deploy again`,
+				)
 				return { state: 'failed' }
 			}
 			let version: ZeropsAppVersion | null

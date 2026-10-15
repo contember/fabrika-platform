@@ -39,6 +39,36 @@ describe('sweepStaleRuns', () => {
 		expect(queryRows(sqlite, 'SELECT finished_at FROM runs WHERE id = ?', 'old-running')[0]?.finished_at).toBe(NOW)
 	})
 
+	test('a swept running run ends its log with the reason', async () => {
+		const { db, sqlite } = createHarness(() => NOW)
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		const old = NOW - 40 * 60
+		sqlite.exec(
+			`INSERT INTO runs (id, app_id, env, ref, trigger, status, created_at, started_at, log_key)
+				VALUES ('stuck','app','prod','refs/heads/main','manual','running',${old},${old},'runs/stuck/logs.ndjson')`,
+		)
+		const stored = new Map([['runs/stuck/logs.ndjson', `${JSON.stringify({ ts: 1, stream: 'meta', text: 'resolving source' })}\n`]])
+		const runLogs = {
+			put: async (key: string, value: string | ArrayBuffer | ReadableStream) => {
+				if (typeof value !== 'string') throw new Error('test log store accepts strings only')
+				stored.set(key, value)
+			},
+			get: async (key: string) => {
+				const value = stored.get(key)
+				return value === undefined ? null : { body: new Blob([value]).stream(), text: () => Promise.resolve(value) }
+			},
+		}
+
+		expect(await sweepStaleRuns({ repositories: db, lock: makeFakeLock(db), runLogs }, 30 * 60, () => NOW)).toBe(1)
+
+		const lines = (stored.get('runs/stuck/logs.ndjson') ?? '').trim().split('\n').map((line) => JSON.parse(line).text)
+		expect(lines).toEqual([
+			'resolving source',
+			'deploy failed: no provider accepted the run within 30 minutes of its start; run the deploy again',
+		])
+	})
+
 	test('a fresh run loop is never reaped (the age guard protects in-flight deploys)', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
