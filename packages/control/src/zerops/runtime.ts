@@ -17,6 +17,8 @@
 import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { type EmailProviderRegistry, pickEmailEnvironment } from '@fabrika/email'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	type BackgroundTasks,
 	createBackgroundTasks,
@@ -35,6 +37,7 @@ import { gitHubAppClientFactory } from '../github/connections/credentials'
 import { createSourceConnections, type SourceConnectionPort } from '../github/connections/port'
 import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/workspace'
 import { controlPublicOrigin } from '../iam'
+import { readInstallationMailTransport } from '../mail-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
 import { HttpIamAdminGateway } from './iam-admin'
@@ -95,6 +98,8 @@ export const DEPLOY_MAX_ATTEMPTS = 4
 export interface RuntimeOverrides {
 	/** The local stack's fixture transports; never read from the environment. */
 	readonly sourceSeams?: GitHubSourceSeams
+	/** The providers `FABRIKA_EMAIL_PROVIDER` may name. Defaults to the built-in ones. */
+	readonly emailProviders?: EmailProviderRegistry
 }
 
 export function createRuntime(source: Record<string, string | undefined> = process.env, overrides: RuntimeOverrides = {}): Runtime {
@@ -113,6 +118,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		port: parsePort(source['PORT']),
 		assetsDir: source['FABRIKA_CONTROL_ASSETS_DIR'] ?? './public',
 	}
+
+	const mailTransport = readInstallationMailTransport(pickEmailEnvironment(source), overrides.emailProviders ?? builtinEmailProviders)
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const queue = new PostgresJobQueue<ControlJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
@@ -152,6 +159,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(bootstrapAdmins === undefined ? {} : { FABRIKA_CONTROL_BOOTSTRAP_ADMINS: bootstrapAdmins }),
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
+		...(mailTransport === null ? {} : { MAIL_TRANSPORT: mailTransport }),
 	}
 	const github = zeropsGitHubSources(baseEnv, sourceSeams)
 	const env: Env = { ...baseEnv, COMMITS: github.commits }

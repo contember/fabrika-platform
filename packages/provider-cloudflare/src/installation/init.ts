@@ -23,6 +23,7 @@ import {
 	type EnvironmentConfig,
 	ghRepoExists,
 	info,
+	type InstallationEmail,
 	ok,
 	type ProtectionOutcome,
 	step,
@@ -55,8 +56,8 @@ export interface Collected {
 	oidcClientId: string
 	/** Email domains admitted as a human at IAM login (self-provisioning allowlist). */
 	humanEmailDomains: string[]
-	emailProvider: 'none' | 'resend'
-	emailFrom: string
+	/** IAM's mail transport. */
+	email: InstallationEmail
 	bootstrapAdmins: string[]
 }
 
@@ -108,7 +109,6 @@ export async function runInit(input: InitInput, collaborators: InitCollaborators
 	const operationsSyncKey = await ensureOperationsSyncKey()
 	const signingKeys = await ensureSigningKeys()
 	const oidcClientSecret = input.oidc === undefined ? undefined : await ensureOidcClientSecret(input.oidc.clientSecret)
-	const emailApiKey = input.email.provider === 'resend' ? await ensureResendApiKey(input.email.apiKey) : undefined
 	const runnerKey = await ensureRunnerKey()
 
 	const { prompts, effects } = collaborators
@@ -142,7 +142,6 @@ export async function runInit(input: InitInput, collaborators: InitCollaborators
 			runnerKey,
 			signingKeys,
 			...(oidcClientSecret === undefined ? {} : { oidcClientSecret }),
-			...(emailApiKey === undefined ? {} : { emailApiKey }),
 		}),
 	}
 	info(
@@ -199,7 +198,6 @@ export interface GeneratedInstallation {
 	readonly runnerKey: string
 	readonly signingKeys: string
 	readonly oidcClientSecret?: string
-	readonly emailApiKey?: string
 }
 
 /**
@@ -210,6 +208,7 @@ export function environmentPayload(
 	collected: Collected,
 	generated: GeneratedInstallation,
 ): { secrets: Record<string, string>; vars: Record<string, string> } {
+	const email = collected.email.kind === 'none' ? { secrets: {}, vars: { FABRIKA_EMAIL_PROVIDER: 'none' } } : splitEmail(collected.email)
 	return {
 		secrets: {
 			CLOUDFLARE_ACCOUNT_ID: collected.accountId,
@@ -222,7 +221,7 @@ export function environmentPayload(
 			// IAM Stage 1 native-auth secrets (pushed as IAM Worker secrets by the pipeline).
 			FABRIKA_IAM_SIGNING_KEYS: generated.signingKeys,
 			...(generated.oidcClientSecret === undefined ? {} : { FABRIKA_IAM_OIDC_CLIENT_SECRET: generated.oidcClientSecret }),
-			...(generated.emailApiKey === undefined ? {} : { FABRIKA_EMAIL_RESEND_API_KEY: generated.emailApiKey }),
+			...email.secrets,
 		},
 		vars: {
 			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
@@ -233,7 +232,7 @@ export function environmentPayload(
 			FABRIKA_IAM_HOSTNAME: collected.iamHostname,
 			FABRIKA_IAM_OIDC_ENABLED: String(collected.oidcEnabled),
 			FABRIKA_IAM_PASSWORD_ENABLED: String(collected.passwordEnabled),
-			FABRIKA_EMAIL_PROVIDER: collected.emailProvider,
+			...email.vars,
 			...(collected.oidcEnabled
 				? {
 					FABRIKA_IAM_OIDC_ISSUER: collected.oidcIssuer,
@@ -241,11 +240,21 @@ export function environmentPayload(
 					FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: JSON.stringify(collected.humanEmailDomains),
 				}
 				: {}),
-			...(collected.emailProvider === 'resend' ? { FABRIKA_EMAIL_FROM: collected.emailFrom } : {}),
 			// The same first-admin emails admit the operator to IAM itself (its own bootstrap hatch).
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 		},
 	}
+}
+
+/** The provider's secret variables go to the Environment's secrets, the rest to its variables. */
+function splitEmail(email: Extract<InstallationEmail, { kind: 'provider' }>): { secrets: Record<string, string>; vars: Record<string, string> } {
+	const secrets: Record<string, string> = {}
+	const vars: Record<string, string> = {}
+	for (const [name, value] of email.variables) {
+		if (email.secretNames.has(name)) secrets[name] = value
+		else vars[name] = value
+	}
+	return { secrets, vars }
 }
 
 /**
@@ -312,8 +321,7 @@ async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffe
 		}
 		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_ID', oidc.clientId)
 	}
-	await persistEnv('FABRIKA_EMAIL_PROVIDER', input.email.provider)
-	if (input.email.provider === 'resend') await persistEnv('FABRIKA_EMAIL_FROM', input.email.from)
+	await ensureEmailSettings(input.email)
 
 	return {
 		account: input.account,
@@ -329,8 +337,7 @@ async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffe
 		oidcIssuer: oidc?.issuer ?? '',
 		oidcClientId: oidc?.clientId ?? '',
 		humanEmailDomains: oidc === undefined ? [] : [...oidc.humanEmailDomains],
-		emailProvider: input.email.provider,
-		emailFrom: input.email.provider === 'resend' ? input.email.from : '',
+		email: input.email,
 		bootstrapAdmins: [...input.bootstrapAdmins],
 	}
 }
@@ -467,12 +474,14 @@ async function ensureOidcClientSecret(value: string): Promise<string> {
 	return value
 }
 
-/** Persist the Resend API key without ever writing it to user-facing output. */
-async function ensureResendApiKey(value: string): Promise<string> {
-	step('Resend API key (FABRIKA_EMAIL_RESEND_API_KEY)')
-	await persistEnv('FABRIKA_EMAIL_RESEND_API_KEY', value)
-	ok('Resend API key saved to the installer env file.')
-	return value
+/** Persist every mail setting, credentials included, so a re-run reuses them; logs names, never a value. */
+async function ensureEmailSettings(email: InstallationEmail): Promise<void> {
+	if (email.kind === 'none') {
+		await persistEnv('FABRIKA_EMAIL_PROVIDER', 'none')
+		return
+	}
+	for (const [name, value] of email.variables) await persistEnv(name, value)
+	ok(`Mail transport saved to the installer env file: ${[...email.variables.keys()].join(', ')}.`)
 }
 
 /** Trigger the platform workflow (each deploy builds the runner image into this account's registry). */

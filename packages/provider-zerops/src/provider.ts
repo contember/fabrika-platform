@@ -596,7 +596,7 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		log(`  [dry-run] would write service variables on ${serviceId}: ${written.join(', ') || '(none)'}`)
 		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${removed.join(', ') || '(none)'}`)
 		if (Object.keys(familyVariables).length > 0) {
-			log(`  [dry-run] would remove every other job, webhook and connector variable on ${serviceId}`)
+			log(`  [dry-run] would remove every other job, webhook, connector and mail variable on ${serviceId}`)
 		}
 		return
 	}

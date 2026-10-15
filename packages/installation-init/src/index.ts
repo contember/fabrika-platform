@@ -11,6 +11,7 @@ export {
 } from './admin'
 export { CHECKOUT_FLAG, sidecarCheckoutDir } from './checkout'
 export { type Confirmations, confirmations, UNATTENDED_FLAG } from './confirmations'
+export { EMAIL_FLAGS, type InstallationEmail, readInstallationEmail } from './email'
 export {
 	configureEnvironment,
 	type EnvironmentConfig,

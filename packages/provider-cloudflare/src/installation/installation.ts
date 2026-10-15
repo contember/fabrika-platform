@@ -1,3 +1,4 @@
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
@@ -7,11 +8,16 @@ import type { PlatformIamTarget } from '../provider'
 import { defaultReconcileSchema } from '../schema'
 import { initCommand } from './init'
 
+const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
+const EMAIL_PROVIDER_VARIABLES = Object.values(builtinEmailProviders)
+	.flatMap((provider) => provider.variables.map((variable) => variable.name))
+	.join(', ')
+
 const USAGE = `Cloudflare installation
 
 Commands:
   fabrika platform init --provider=cloudflare <account> --console-host=<host> --operations-host=<host> --iam-host=<host>
-      --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend> [options] [--yes]
+      --auth-methods=<oidc|password|oidc,password> --email-provider=<none|provider> [options] [--yes]
   fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>]
   fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>]
   fabrika platform plan --provider=cloudflare --component-config=<path> [--env=<env>]
@@ -29,12 +35,14 @@ init prompts for nothing. Every value is a flag or the environment variable besi
   --oidc-issuer=<url>           FABRIKA_IAM_OIDC_ISSUER           default https://accounts.google.com
   --oidc-client-id=<id>         FABRIKA_IAM_OIDC_CLIENT_ID        absent: a placeholder, human SSO login stays inert
   --human-email-domains=<d,...> FABRIKA_IAM_HUMAN_EMAIL_DOMAINS   who may self-provision at login
-  --email-provider=<none|resend> FABRIKA_EMAIL_PROVIDER
-  --email-from=<sender>         FABRIKA_EMAIL_FROM                required for resend
+  --email-provider=<name>       FABRIKA_EMAIL_PROVIDER            none, or one of: ${EMAIL_PROVIDERS}
+  --email-from=<sender>         FABRIKA_EMAIL_FROM                required with a provider
+  --email-from-name=<name>      FABRIKA_EMAIL_FROM_NAME           the sender's display name, optional
 Credentials come from the environment only: CLOUDFLARE_API_TOKEN, FABRIKA_IAM_OIDC_CLIENT_SECRET (a real
-OIDC client), FABRIKA_EMAIL_RESEND_API_KEY (resend). The account's installer env file resumes all of them.
-The env file resumes the account id, the auth methods, the OIDC issuer and client id, the email provider
-and sender, and every credential; the hosts, repository, checkout and admins are not saved. An empty flag
+OIDC client). So does every variable of the mail provider, under its own name:
+${EMAIL_PROVIDER_VARIABLES}. The account's installer env file resumes all of them.
+The env file resumes the account id, the auth methods, the OIDC issuer and client id, every mail
+setting, and every credential; the hosts, repository, checkout and admins are not saved. An empty flag
 (such as --oidc-client-id=) counts as absent and falls back to that saved value; to return to the
 placeholder client, remove FABRIKA_IAM_OIDC_CLIENT_ID and FABRIKA_IAM_OIDC_CLIENT_SECRET from the env file.
 init confirms before it goes on with a token it could not verify ("Proceed anyway?"), creates or pushes the repository,

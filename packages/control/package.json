@@ -92,6 +92,7 @@
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/check": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
+		"@fabrika/email": "workspace:*",
 		"@fabrika/github-app": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",

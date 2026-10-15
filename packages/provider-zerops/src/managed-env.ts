@@ -4,6 +4,7 @@ import {
 	frameworkVariableReference,
 	isConnectKeyVariable,
 	isConnectUrlVariable,
+	isEmailTransportVariable,
 	isFrameworkVariableName,
 	isWorkloadKeyVariable,
 } from '@fabrika/auth-core'
@@ -67,7 +68,7 @@ export const SENSITIVE_MANAGED_KEYS: ReadonlySet<ManagedKey> = new Set<ManagedKe
 	'FABRIKA_IAM_RPC_KEY',
 ])
 
-/** A workload or connect key is a credential; a connect URL is an origin. */
+/** A workload or connect key and every mail transport variable are written sensitive; a connect URL is an origin. */
 export const isSensitiveFamilyVariable = (name: string): boolean => !isConnectUrlVariable(name)
 
 export type ManagedValues = Record<ManagedKey, string | null>
@@ -93,16 +94,20 @@ export function parseManagedValues(value: unknown): ManagedValues {
 }
 
 /**
- * What Control hands a deploy: the ten managed keys, the key of each job and webhook of the approved contract, and the
- * key and owner origin of each connector import.
+ * What Control hands a deploy: the ten managed keys, the key of each job and webhook of the approved contract, the
+ * key and owner origin of each connector import, and the installation's mail transport when a job sends through it.
  */
 export interface ManagedEnvironment {
 	readonly values: ManagedValues
-	/** `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key, and `FABRIKA_CONNECT_<IMPORT>_KEY` / `_URL`. */
+	/**
+	 * `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key, `FABRIKA_CONNECT_<IMPORT>_KEY` / `_URL`, and each
+	 * `FABRIKA_EMAIL_*` of the installation's mail transport.
+	 */
 	readonly familyVariables: Readonly<Record<string, string>>
 }
 
 const keySchema = z.string().startsWith('px_').min(4)
+const mailValueSchema = z.string().min(1)
 const originSchema = z.string().refine((value) => {
 	try {
 		return new URL(value).origin === value && value.startsWith('https://')
@@ -119,6 +124,12 @@ export function parseManagedEnvironment(value: Readonly<Record<string, string | 
 			managed[name] = entry
 			continue
 		}
+		if (isEmailTransportVariable(name)) {
+			const parsed = mailValueSchema.safeParse(entry)
+			if (!parsed.success) throw new Error(`zerops: ${name} must not be empty`)
+			familyVariables[name] = parsed.data
+			continue
+		}
 		const origin = isConnectUrlVariable(name)
 		if (!origin && !isWorkloadKeyVariable(name) && !isConnectKeyVariable(name)) {
 			throw new Error(`zerops: ${name} is not a variable a deploy writes`)
@@ -132,7 +143,10 @@ export function parseManagedEnvironment(value: Readonly<Record<string, string | 
 	return { values: parseManagedValues(managed), familyVariables }
 }
 
-/** A service variable only the platform writes per workload or import: a stale one is removed with it. */
+/**
+ * A service variable only the platform writes per workload, import or the installation's mail transport: a stale one is
+ * removed when the deploy no longer hands it.
+ */
 export function isFrameworkFamilyVariable(name: string): boolean {
 	return FRAMEWORK_VARIABLE_PREFIXES.some((prefix) => name.startsWith(prefix))
 }

@@ -27,7 +27,7 @@ import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-man
 import { derivePlatformHosts, type PlatformHosts, platformOrigin, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { checkedEnvironmentName } from './init-options'
 import { assertRunning, type InstallCollaborators, type InstallPrompts } from './install-collaborators'
-import { installationServiceEnv, PASS_ONE_PROXY_MANIFEST, passOneProxyEnv, writeServiceEnv } from './install-environment'
+import { GENERATED_SECRET_KEYS, installationServiceEnv, PASS_ONE_PROXY_MANIFEST, passOneProxyEnv, writeServiceEnv } from './install-environment'
 import type { PlatformInstallInput } from './install-options'
 import { resolveInstallationProject } from './install-project'
 import {
@@ -67,7 +67,7 @@ const passOne = async (
 	if (!(await prompts.confirm(`Write 3 variables on \`proxy\` and build commit ${source.commitSha}? (about 4 minutes)`, true))) {
 		throw new Error('declined: no variable was written, and re-running the install is safe')
 	}
-	await writeServiceEnv(proxy, passOneProxyEnv(secrets), collaborators)
+	await writeServiceEnv(proxy, passOneProxyEnv(secrets), collaborators, new Set(GENERATED_SECRET_KEYS.get(proxy.hostname)))
 	await deployPlatformService(proxy, { source, dryRun: false, proxyManifest: PASS_ONE_PROXY_MANIFEST }, collaborators)
 
 	const proxyEnv = await readServiceEnv(proxy.id, collaborators)
@@ -177,6 +177,7 @@ const installPreparedPlatform = async (
 		proxySource,
 		secrets,
 		zeropsAccessToken: token.token,
+		email: input.email,
 		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
 	})
 	const total = [...desired.values()].reduce((sum, keys) => sum + keys.size, 0)
@@ -187,8 +188,11 @@ const installPreparedPlatform = async (
 				+ `Keep ${input.secretsFile} and arrange operator-owned recovery, or start a fresh installation in a separate empty project`,
 		)
 	}
+	// The mail credentials are the operator's own, so they neither mark an installation nor go to the secrets file.
+	const emailSecrets = input.email.kind === 'none' ? [] : [...input.email.secretNames]
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
-		await writeServiceEnv(serviceOf(services, hostname), desired.get(hostname) ?? new Map<string, string>(), collaborators)
+		const sensitive = new Set([...(GENERATED_SECRET_KEYS.get(hostname) ?? []), ...emailSecrets])
+		await writeServiceEnv(serviceOf(services, hostname), desired.get(hostname) ?? new Map<string, string>(), collaborators, sensitive)
 	}
 
 	log.step('Pass 2 — deploy the installation')

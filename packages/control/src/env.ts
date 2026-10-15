@@ -22,6 +22,7 @@ import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
 import type { CommitSource } from './github/source/commit-files'
+import type { InstallationMailTransport } from './mail-transport'
 import type { ControlJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -63,6 +64,11 @@ export interface Env {
 	 * (ADR-0050). Each composition root builds it; a deploy with a pinned commit fails without it.
 	 */
 	COMMITS?: CommitSource
+	/**
+	 * The installation's mail transport, parsed from Control's own `FABRIKA_EMAIL_*` at boot; absent when the installation
+	 * configured none. Only the Zerops root sets it: Cloudflare runs no jobs.
+	 */
+	MAIL_TRANSPORT?: InstallationMailTransport
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string

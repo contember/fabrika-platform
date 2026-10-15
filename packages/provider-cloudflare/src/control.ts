@@ -1,5 +1,12 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { type AppEnvironment, appEnvironmentId, type AppSchema, isWorkloadKeyVariable, parseAppEnvironmentId } from '@fabrika/auth-core'
+import {
+	type AppEnvironment,
+	appEnvironmentId,
+	type AppSchema,
+	isEmailTransportVariable,
+	isWorkloadKeyVariable,
+	parseAppEnvironmentId,
+} from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -278,6 +285,11 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const workloadKey = Object.keys(input.managedEnvironment).find(isWorkloadKeyVariable)
 	if (workloadKey !== undefined) {
 		throw new Error(`cloudflare: the contract declares a job or a webhook (${workloadKey}); they run on Zerops only`)
+	}
+	// A dry run hands no workload key, and a mail credential must not land in a plain Worker var either way.
+	const mailVariable = Object.keys(input.managedEnvironment).find(isEmailTransportVariable)
+	if (mailVariable !== undefined) {
+		throw new Error(`cloudflare: the contract declares a job that sends mail through the installation (${mailVariable}); jobs run on Zerops only`)
 	}
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const listInstallationApps = options.installationApps

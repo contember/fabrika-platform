@@ -7,6 +7,7 @@ import {
 	frameworkVariableReference,
 	isConnectKeyVariable,
 	isConnectUrlVariable,
+	isEmailTransportVariable,
 	isFrameworkVariableName,
 	isWorkloadKeyVariable,
 	workloadKeyVariable,
@@ -72,6 +73,17 @@ describe('framework-only variable names', () => {
 			false,
 			false,
 		])
+	})
+
+	test("reserve the installation's mail transport", () => {
+		expect(isFrameworkVariableName('FABRIKA_EMAIL_RESEND_API_KEY')).toBe(true)
+		expect(frameworkVariableReference('${RUNTIME_FABRIKA_EMAIL_FROM}')).not.toBeNull()
+		for (const name of ['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_SMARTEMAILING_API_KEY']) {
+			expect(isEmailTransportVariable(name)).toBe(true)
+		}
+		for (const name of ['FABRIKA_EMAIL_', 'FABRIKA_EMAIL_from', 'FABRIKA_EMAILS', 'FABRIKA_JOB_NIGHTLY_KEY']) {
+			expect(isEmailTransportVariable(name)).toBe(false)
+		}
 	})
 
 	test('list each name once', () => {

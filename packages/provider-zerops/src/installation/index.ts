@@ -1,4 +1,5 @@
 import { reconcileSchema } from '@fabrika/auth'
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	describeArgument,
 	info as consoleInfo,
@@ -44,6 +45,9 @@ export {
 	resolvePlatformProxyManifest,
 } from './proxy-manifest'
 
+const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
+const EMAIL_PROVIDER_VARIABLES = Object.values(builtinEmailProviders).flatMap((provider) => provider.variables.map((variable) => variable.name))
+
 const USAGE = `Zerops installation
 
 New here, or an agent? Run \`fabrika platform guide --provider=zerops\` first: the whole bring-up in order,
@@ -86,7 +90,8 @@ is not consent.
      all of them to \`--secrets-file\` (mode 0600) before the first one is placed
   4. pass 1: give the proxy an EMPTY manifest and build it, so it publishes one public hostname per
      HTTP port; the three platform hosts are then READ off those, never composed
-  5. write every remaining variable on all four runtime services
+  5. write every remaining variable on all four runtime services; the mail transport, when one is
+     given, goes to \`iam\` and \`control\` only, its credentials sensitive and not in the secrets file
   6. pass 2: hand the whole ordered sequence to \`platform deploy\`
   7. print the next commands; they read their credentials from the secrets file. Zerops holds the
      same values as SENSITIVE variables and does not hand them back, so that file is the only copy
@@ -118,11 +123,19 @@ Options (a flag beats the environment variable beside it):
   --source-dir=<checkout>           required                       clean full checkout running this CLI
   --tier=<light|standard>           FABRIKA_PLATFORM_TIER           default light
   --secrets-file=<path>             FABRIKA_PLATFORM_SECRETS_FILE   required: a NEW file outside the checkout
+  --email-provider=<name>           FABRIKA_EMAIL_PROVIDER          default none; or one of: ${EMAIL_PROVIDERS}
+  --email-from=<address>            FABRIKA_EMAIL_FROM              the sender, required with a provider
+  --email-from-name=<name>          FABRIKA_EMAIL_FROM_NAME         the sender's display name, optional
   ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
                                                                     required when stdin is not a terminal
 
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
+	FABRIKA_EMAIL_<PROVIDER>_*        the selected provider's variables, environment only and no flag:
+	                                  ${EMAIL_PROVIDER_VARIABLES.join(', ')}
+
+With a mail provider, IAM sends its own mail and Control hands the same transport to every application
+whose job declares \`mailer: 'installation'\`. To set or rotate it later, see \`platform guide\`.
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 
@@ -266,8 +279,9 @@ Access plane refuses. A re-run creates nobody twice, grants nothing twice and is
 enrollment — a password that is already set, or an enrollment already outstanding, is REPORTED. Pass
 \`${REISSUE_FLAG}\` to replace an outstanding one, which is the way out when the first expired unopened.
 
-Nothing is e-mailed: a Zerops installation has no mail service. Hand the URL to the administrator
-yourself. It is a credential: it is printed once, on a line of its own, and stored nowhere.
+Unless \`install\` was given a mail provider, nothing is e-mailed: IAM then has no mail service. Hand the
+URL to the administrator yourself. It is a credential: it is printed once, on a line of its own, and
+stored nowhere. With a mail provider, IAM e-mails the enrollment and the URL is not printed.
 
 \`install\` reports the host this needs as \`✓ iam <host>\` and ends with this command ready to run.
 

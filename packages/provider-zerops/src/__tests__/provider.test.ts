@@ -641,6 +641,51 @@ describe('Zerops provider', () => {
 		expect(recorded.timeline).toEqual([])
 	})
 
+	test("writes the installation's mail transport sensitive, and removes a mail variable no longer handed", async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv: [
+					{ id: 'env-resend', key: 'FABRIKA_EMAIL_RESEND_API_KEY', content: 'private-old-resend', type: 'USER', sensitive: true },
+				],
+			})
+		)
+		await execute({
+			...deployRun(recorded),
+			managedEnvironment: {
+				...MANAGED_DEFAULTS,
+				FABRIKA_RELEASE: RELEASE,
+				FABRIKA_EMAIL_PROVIDER: 'smartemailing',
+				FABRIKA_EMAIL_FROM: 'mail@example.com',
+				FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'private-se-user',
+				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'private-se-key',
+			},
+		}, provider)
+		// Every mail variable is written sensitive, the provider and the sender too: the family has no readable member.
+		for (
+			const write of [
+				{ key: 'FABRIKA_EMAIL_PROVIDER', value: 'smartemailing', sensitive: true },
+				{ key: 'FABRIKA_EMAIL_FROM', value: 'mail@example.com', sensitive: true },
+				{ key: 'FABRIKA_EMAIL_SMARTEMAILING_USERNAME', value: 'private-se-user', sensitive: true },
+				{ key: 'FABRIKA_EMAIL_SMARTEMAILING_API_KEY', value: 'private-se-key', sensitive: true },
+			]
+		) {
+			expect(recorded.envWrites).toContainEqual(write)
+		}
+		expect(recorded.envDeletes).toEqual(['env-resend'])
+		const log = recorded.logs.join('\n')
+		expect(log).toContain('FABRIKA_EMAIL_RESEND_API_KEY: removed')
+		expect(log).not.toContain('private-')
+		expect(log).not.toContain('mail@example.com')
+		expect(recorded.builds[0]?.zeropsYaml ?? '').not.toContain('FABRIKA_EMAIL_')
+	})
+
+	test('refuses an empty mail variable without naming its value, before any platform call', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
+		const run = { ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_EMAIL_FROM: '' } }
+		await expect(provider(run)).rejects.toThrow('zerops: FABRIKA_EMAIL_FROM must not be empty')
+		expect(recorded.timeline).toEqual([])
+	})
+
 	test("writes each connector import's key and owner origin, and removes the variables of an import that is gone", async () => {
 		const provider = createZeropsDeployer(() =>
 			makeCollaborators(recorded, {

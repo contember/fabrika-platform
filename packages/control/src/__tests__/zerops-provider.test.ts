@@ -2,7 +2,7 @@ import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
 import type { Env } from '../env'
-import { buildControlRpcDeps } from '../services'
+import { buildControlRpcDeps, buildRunDeps } from '../services'
 import { zeropsControlProvider, zeropsGitHubSources, zeropsNamespaceProcessConfig } from '../zerops/provider'
 import { createRuntime } from '../zerops/runtime'
 import { createHarness } from './helpers/harness'
@@ -51,6 +51,34 @@ describe('the Zerops namespace process configuration', () => {
 		expect(runtime.sourceConnection).toMatchObject({ provider: 'zerops' })
 		expect(runtime.provider.source).toEqual({ binding: 'connection' })
 		await runtime.shutdown()
+	})
+
+	test("hands the installation's mail transport from its own environment to every deploy", async () => {
+		const runtime = createRuntime({
+			...namespaceEnvironment(),
+			FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
+			FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
+			FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',
+			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: 'secret-key',
+			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
+			FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
+			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+			ENVIRONMENT: 'stage',
+			FABRIKA_EMAIL_PROVIDER: 'resend',
+			FABRIKA_EMAIL_FROM: 'mail@example.test',
+			FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+		})
+		try {
+			const deps = await buildRunDeps(runtime.env, runtime.provider)
+			expect(deps.mailTransport?.variables).toEqual({
+				FABRIKA_EMAIL_PROVIDER: 'resend',
+				FABRIKA_EMAIL_FROM: 'mail@example.test',
+				FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+			})
+			expect([...(deps.mailTransport?.secretNames ?? [])]).toEqual(['FABRIKA_EMAIL_RESEND_API_KEY'])
+		} finally {
+			await runtime.shutdown()
+		}
 	})
 
 	test('the process provider republishes namespaces, so the registry hook is wired from its capability', async () => {

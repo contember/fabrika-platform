@@ -43,6 +43,7 @@ import {
 } from './db'
 import type { CommitSource } from './github/source/commit-files'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
+import { installationMailEnvironment, type InstallationMailTransport } from './mail-transport'
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { ProxySecrets } from './proxy-secret'
@@ -88,6 +89,11 @@ export interface RunDeps {
 	 * absent without a vault, an IAM issuer or a provisioning key, and then a contract that needs one does not deploy there.
 	 */
 	membershipTransport?: MembershipTransportPort
+	/**
+	 * The installation's mail transport; absent when the installation configured none, and then a contract whose job
+	 * declares `mailer: 'installation'` does not deploy.
+	 */
+	mailTransport?: InstallationMailTransport
 }
 
 export interface DeployJobMessage {
@@ -600,6 +606,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		}
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
+		const mailEnvironment = installationMailEnvironment(deps.mailTransport, approvedContract)
+		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
 		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
 		const membershipKey = dryRun
@@ -613,6 +621,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
 			...Object.values(workloadKeys),
 			membershipKey ?? '',
+			...[...(deps.mailTransport?.secretNames ?? [])].map((name) => mailEnvironment[name] ?? ''),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',
 		])

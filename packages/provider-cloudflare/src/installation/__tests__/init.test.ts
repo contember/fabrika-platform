@@ -59,7 +59,7 @@ describe('Cloudflare init arguments', () => {
 			checkout: join(CWD, 'fabrika-platform-acme'),
 			hosts: { control: 'fabrika.example.com', operations: 'errors.example.com', iam: 'iam.example.com' },
 			passwordEnabled: true,
-			email: { provider: 'none' },
+			email: { kind: 'none' },
 			bootstrapAdmins: [],
 			unattended: true,
 		})
@@ -148,17 +148,42 @@ describe('Cloudflare init arguments', () => {
 	})
 
 	test('Resend needs a sender and its key; none refuses a sender', () => {
-		const resend = [...REQUIRED, '--email-provider=resend']
-		expect(() => parse(resend.filter((arg) => arg !== '--email-provider=none'))).toThrow('--email-from=<value> or FABRIKA_EMAIL_FROM is required')
-		const withSender = [...resend.filter((arg) => arg !== '--email-provider=none'), '--email-from=Fabrika <auth@example.com>']
-		expect(() => parse(withSender)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is required')
-		expect(parse(withSender, { ...CREDENTIALS, FABRIKA_EMAIL_RESEND_API_KEY: 're_key' }).email).toEqual({
-			provider: 'resend',
-			from: 'Fabrika <auth@example.com>',
-			apiKey: 're_key',
-		})
-		expect(() => parse([...REQUIRED, '--email-provider=smtp'].filter((arg) => arg !== '--email-provider=none'))).toThrow('must be none or resend')
-		expect(() => parse([...REQUIRED, '--email-from=x@example.com'])).toThrow('the email provider is none')
+		const resend = required('--email-provider=resend')
+		expect(() => parse(resend)).toThrow('FABRIKA_EMAIL_FROM is missing')
+		const withSender = [...resend, '--email-from=Fabrika <auth@example.com>']
+		expect(() => parse(withSender)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY is missing')
+		const email = parse(withSender, { ...CREDENTIALS, FABRIKA_EMAIL_RESEND_API_KEY: 're_key' }).email
+		expect(email.kind === 'provider' ? [Object.fromEntries(email.variables), [...email.secretNames]] : email).toEqual([
+			{ FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>', FABRIKA_EMAIL_RESEND_API_KEY: 're_key' },
+			['FABRIKA_EMAIL_RESEND_API_KEY'],
+		])
+		expect(() => parse(required('--email-provider=smtp'))).toThrow('FABRIKA_EMAIL_PROVIDER must be none or one of: resend, smartemailing')
+		expect(() => parse([...REQUIRED, '--email-from=x@example.com'])).toThrow('--email-from was given, but the email provider is none')
+		expect(() => parse([...REQUIRED, '--email-from-name=Acme'])).toThrow('--email-from-name was given, but the email provider is none')
+	})
+
+	test('SmartEmailing reads its variables from the environment, and a refusal never shows a credential', () => {
+		const smartEmailing = [...required('--email-provider=smartemailing'), '--email-from=auth@example.com', '--email-from-name=Acme']
+		const missing = refusal(() => parse(smartEmailing, { ...CREDENTIALS, FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se_private_key' }))
+		expect(missing).toContain('FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing')
+		expect(missing).not.toContain('se_private_key')
+		const email = parse(smartEmailing, {
+			...CREDENTIALS,
+			FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'user@example.com',
+			FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se_private_key',
+		}).email
+		expect(rerunCommand(
+			parse(smartEmailing, {
+				...CREDENTIALS,
+				FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'user@example.com',
+				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se_private_key',
+			}),
+			'cf-account',
+		)).toContain('--email-provider=smartemailing --email-from=auth@example.com --email-from-name=Acme')
+		expect(email.kind === 'provider' ? [...email.secretNames].sort() : []).toEqual([
+			'FABRIKA_EMAIL_SMARTEMAILING_API_KEY',
+			'FABRIKA_EMAIL_SMARTEMAILING_USERNAME',
+		])
 	})
 
 	test('the checkout is --checkout or the default name, refused inside another repository', () => {
@@ -403,6 +428,45 @@ describe('Cloudflare init flow', () => {
 		for (const [name, value] of Object.entries(secrets)) {
 			if (name !== 'CLOUDFLARE_ACCOUNT_ID') expect(output).not.toContain(value)
 		}
+	})
+
+	test('SmartEmailing splits its credentials into secrets and the rest into variables, and persists every entry', async () => {
+		const input = parse(
+			[...required('--email-provider=smartemailing'), '--email-from=auth@example.com', '--email-from-name=Acme'],
+			{
+				...CREDENTIALS,
+				FABRIKA_EMAIL_SMARTEMAILING_USERNAME: 'se_private_user',
+				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se_private_key',
+				FABRIKA_EMAIL_SMARTEMAILING_TAG: 'fabrika',
+			},
+		)
+		const { recorded, collaborators } = recorder({})
+		const { output, persisted } = await withEnvFile(() => runInit(input, collaborators))
+
+		const environment = recorded.environments[0]
+		expect(environment?.secrets['FABRIKA_EMAIL_SMARTEMAILING_USERNAME']).toBe('se_private_user')
+		expect(environment?.secrets['FABRIKA_EMAIL_SMARTEMAILING_API_KEY']).toBe('se_private_key')
+		const mailVariables = Object.entries(environment?.vars ?? {}).filter(([name]) => name.startsWith('FABRIKA_EMAIL_'))
+		expect(Object.fromEntries(mailVariables)).toEqual({
+			FABRIKA_EMAIL_PROVIDER: 'smartemailing',
+			FABRIKA_EMAIL_FROM: 'auth@example.com',
+			FABRIKA_EMAIL_FROM_NAME: 'Acme',
+			FABRIKA_EMAIL_SMARTEMAILING_TAG: 'fabrika',
+		})
+		expect(Object.keys(environment?.secrets ?? {})).not.toContain('FABRIKA_EMAIL_RESEND_API_KEY')
+		for (
+			const name of [
+				'FABRIKA_EMAIL_PROVIDER',
+				'FABRIKA_EMAIL_FROM',
+				'FABRIKA_EMAIL_FROM_NAME',
+				'FABRIKA_EMAIL_SMARTEMAILING_USERNAME',
+				'FABRIKA_EMAIL_SMARTEMAILING_API_KEY',
+				'FABRIKA_EMAIL_SMARTEMAILING_TAG',
+			]
+		) {
+			expect(persisted[name]).toBeDefined()
+		}
+		expect(output).not.toContain('se_private_')
 	})
 
 	test('declining the trigger leaves the run to the operator', async () => {

@@ -42,7 +42,7 @@ Run init with the Cloudflare API token in `CLOUDFLARE_API_TOKEN`:
 ```sh
 fabrika platform init --provider=cloudflare {{ACCOUNT}} \
   --console-host=<host> --operations-host=<host> --iam-host=<host> \
-  --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend>
+  --auth-methods=<oidc|password|oidc,password> --email-provider=<none|resend|smartemailing>
 ```
 
 `fabrika platform init --provider=cloudflare --help` lists the optional flags. It creates this repo,
@@ -59,8 +59,25 @@ To close the escape hatch once IAM grants you admin, set the `{{ACCOUNT}}` Envir
 IAM authentication methods are independent Environment switches: `FABRIKA_IAM_OIDC_ENABLED` and
 `FABRIKA_IAM_PASSWORD_ENABLED`. At least one must be `true`. Password enrollment is managed through
 IAM provisioning and its admin surface. Email delivery is optional; `FABRIKA_EMAIL_PROVIDER=none`
-keeps password enrollment and reset admin-driven, while `resend` also requires the sender variable
-and the Resend API key secret.
+keeps password enrollment and reset admin-driven. A provider (`resend` or `smartemailing`) also needs
+the sender variable `FABRIKA_EMAIL_FROM` (optionally `FABRIKA_EMAIL_FROM_NAME`) and its own variables:
+`FABRIKA_EMAIL_RESEND_API_KEY` as a secret for Resend; `FABRIKA_EMAIL_SMARTEMAILING_USERNAME` and
+`FABRIKA_EMAIL_SMARTEMAILING_API_KEY` as secrets and optionally `FABRIKA_EMAIL_SMARTEMAILING_TAG` as a
+variable for SmartEmailing. To change or rotate them, re-run `fabrika platform init` with the new values;
+it rewrites this Environment and triggers the workflow, which redeploys IAM.
+
+Switching provider leaves the old provider's values stored: init writes the new ones and deletes none. IAM
+reads only the selected provider's variables, but delete the old credentials so nothing holds them, for
+example after leaving SmartEmailing:
+
+```sh
+gh secret delete FABRIKA_EMAIL_SMARTEMAILING_USERNAME --env {{ACCOUNT}}
+gh secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --env {{ACCOUNT}}
+gh variable delete FABRIKA_EMAIL_SMARTEMAILING_TAG --env {{ACCOUNT}}
+```
+
+Remove the same names from the installer env file (init prints its path when it starts), or a later run of
+init resumes them.
 
 ## Routine redeploy or version bump
 

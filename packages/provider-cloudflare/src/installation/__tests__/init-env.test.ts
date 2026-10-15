@@ -28,8 +28,7 @@ const COLLECTED: Collected = {
 	oidcIssuer: '',
 	oidcClientId: '',
 	humanEmailDomains: [],
-	emailProvider: 'none',
-	emailFrom: '',
+	email: { kind: 'none' },
 	bootstrapAdmins: ['ops@example.com'],
 }
 

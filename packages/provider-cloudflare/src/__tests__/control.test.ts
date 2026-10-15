@@ -579,6 +579,32 @@ describe('Cloudflare control provider', () => {
 		expect(jobs).toEqual([])
 	})
 
+	test('refuses the installation mail transport before any runner call, a dry run included: a Worker var is plain', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		const managedEnvironment = { ...input.managedEnvironment, FABRIKA_EMAIL_RESEND_API_KEY: 're_private-key' }
+		for (const dryRun of [false, true]) {
+			const refusal = provider.deploy({ ...input, dryRun, managedEnvironment })
+			await expect(refusal).rejects.toThrow(
+				'cloudflare: the contract declares a job that sends mail through the installation (FABRIKA_EMAIL_RESEND_API_KEY); jobs run on Zerops only',
+			)
+			await expect(refusal).rejects.not.toThrow('re_private-key')
+		}
+		expect(jobs).toEqual([])
+	})
+
 	test("sends every Cloudflare deployment of Control's registry with the job", async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({

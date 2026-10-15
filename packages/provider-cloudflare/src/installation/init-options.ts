@@ -6,11 +6,15 @@
 // prompts — a missing required value is an error naming both the flag and the variable — so a
 // pipeline or an agent drives init end to end. Its confirmations stay, answered by `--yes`.
 
+import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	CHECKOUT_FLAG,
 	type CommandEnv,
+	EMAIL_FLAGS,
+	type InstallationEmail,
 	readEnv,
 	readFlag,
+	readInstallationEmail,
 	requiredSetting,
 	setting,
 	shellWord,
@@ -39,10 +43,6 @@ export interface OidcInput {
 	readonly humanEmailDomains: readonly string[]
 }
 
-export type EmailInput =
-	| { readonly provider: 'none' }
-	| { readonly provider: 'resend'; readonly from: string; /** Environment only. */ readonly apiKey: string }
-
 /** Every input `runInit` takes from the operator. */
 export interface InitInput {
 	/** Names the GitHub Environment, the installer env file, the default repository and checkout. */
@@ -58,7 +58,8 @@ export interface InitInput {
 	/** Absent when OIDC login is not enabled. */
 	readonly oidc?: OidcInput
 	readonly passwordEnabled: boolean
-	readonly email: EmailInput
+	/** IAM's mail transport; the provider's variables come from the environment only. */
+	readonly email: InstallationEmail
 	/** First-admin emails for the escape hatch, admitted to both control and IAM. */
 	readonly bootstrapAdmins: readonly string[]
 	/** `--yes`: answer every confirmation yes. */
@@ -76,8 +77,7 @@ const FLAGS = [
 	'--oidc-issuer',
 	'--oidc-client-id',
 	'--human-email-domains',
-	'--email-provider',
-	'--email-from',
+	...EMAIL_FLAGS,
 	CHECKOUT_FLAG,
 ] as const
 
@@ -239,22 +239,6 @@ const readOidc = (argv: readonly string[], env: CommandEnv): OidcInput => {
 	return { issuer, clientId, clientSecret, humanEmailDomains }
 }
 
-const readEmail = (argv: readonly string[], env: CommandEnv): EmailInput => {
-	const provider = requiredSetting(setting(argv, env, '--email-provider', 'FABRIKA_EMAIL_PROVIDER'), '--email-provider', 'FABRIKA_EMAIL_PROVIDER')
-	if (provider === 'none') {
-		refuseFlags(argv, ['--email-from'], 'the email provider is none')
-		return { provider }
-	}
-	if (provider !== 'resend') {
-		throw new Error(`--email-provider / FABRIKA_EMAIL_PROVIDER must be none or resend, not \`${provider}\``)
-	}
-	return {
-		provider,
-		from: requiredSetting(setting(argv, env, '--email-from', 'FABRIKA_EMAIL_FROM'), '--email-from', 'FABRIKA_EMAIL_FROM'),
-		apiKey: credential(env, 'FABRIKA_EMAIL_RESEND_API_KEY', 'the Resend API key the email transport sends with'),
-	}
-}
-
 const readRepo = (argv: readonly string[], account: string): string => {
 	const repo = readFlag(argv, '--repo')
 	if (repo === undefined) {
@@ -289,7 +273,7 @@ export const parseInitArgs = (argv: readonly string[], env: CommandEnv, cwd: str
 			iam: requiredHost(argv, env, '--iam-host', 'FABRIKA_IAM_HOSTNAME'),
 		},
 		passwordEnabled: methods.passwordEnabled,
-		email: readEmail(argv, env),
+		email: readInstallationEmail(argv, env, { registry: builtinEmailProviders, required: true }),
 		bootstrapAdmins: parseList(
 			setting(argv, env, '--admins', 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS'),
 			'--admins',
@@ -299,6 +283,21 @@ export const parseInitArgs = (argv: readonly string[], env: CommandEnv, cwd: str
 		...(methods.oidcEnabled ? { oidc: readOidc(argv, env) } : {}),
 		...(accountId === undefined ? {} : { accountId }),
 	}
+}
+
+const EMAIL_FLAG_VARIABLES = [
+	{ flag: '--email-provider', variable: 'FABRIKA_EMAIL_PROVIDER' },
+	{ flag: '--email-from', variable: 'FABRIKA_EMAIL_FROM' },
+	{ flag: '--email-from-name', variable: 'FABRIKA_EMAIL_FROM_NAME' },
+] as const
+
+/** The mail flags that repeat `email`; the provider's own variables stay in the environment. */
+const emailFlags = (email: InstallationEmail): string[] => {
+	if (email.kind === 'none') return ['--email-provider=none']
+	return EMAIL_FLAG_VARIABLES.flatMap(({ flag, variable }) => {
+		const value = email.variables.get(variable)
+		return value === undefined ? [] : [`${flag}=${value}`]
+	})
 }
 
 /** The command that repeats this run, with every value but the credentials, which stay in the environment. */
@@ -318,8 +317,7 @@ export const rerunCommand = (input: InitInput, accountId: string): string =>
 				...(input.oidc.clientId === PLACEHOLDER_OIDC_CLIENT_ID ? [] : [`--oidc-client-id=${input.oidc.clientId}`]),
 				...(input.oidc.humanEmailDomains.length === 0 ? [] : [`--human-email-domains=${input.oidc.humanEmailDomains.join(',')}`]),
 			]),
-			`--email-provider=${input.email.provider}`,
-			...(input.email.provider === 'resend' ? [`--email-from=${input.email.from}`] : []),
+			...emailFlags(input.email),
 			...(input.bootstrapAdmins.length === 0 ? [] : [`--admins=${input.bootstrapAdmins.join(',')}`]),
 			`${CHECKOUT_FLAG}=${input.checkout}`,
 		].map(shellWord),

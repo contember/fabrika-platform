@@ -6,6 +6,7 @@
 		"packages/app",
 		"packages/auth-core",
 		"packages/check",
+		"packages/email",
 		"packages/jwks",
 		"packages/db",
 		"packages/auth",

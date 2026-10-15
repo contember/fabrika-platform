@@ -19,6 +19,7 @@ import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentPro
 import { parseClassification } from '../approval/publish'
 import { type AccessSnapshot, approvedSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import type { InstallationMailTransport } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
@@ -28,6 +29,7 @@ import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-cr
 import { memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness, harnessDatabase } from './helpers/harness'
+import { kitFiles } from './helpers/kit-contract'
 import { makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { refusedClaimScenario } from './helpers/refused-claims'
@@ -584,24 +586,25 @@ describe('protection survives the registry', () => {
 	})
 })
 
+/** Workload keys a vault holds, issued by a stand-in IAM that records each issue. */
+async function credentialed(w: World) {
+	const vault = await Vault.create(harnessDatabase(w.db), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
+	const issued: string[] = []
+	const issuer: WorkloadKeyIssuer = {
+		issue: (input) => {
+			issued.push(`${input.app}/${input.kind}:${input.name}`)
+			return Promise.resolve({ key: `px_${'k'.repeat(40)}${issued.length}`, credentialId: `credential-${issued.length}`, expiresAt: input.expiresAt })
+		},
+		revoke: () => Promise.reject(new Error('no import is removed here')),
+	}
+	return { issued, workloadCredentials: new VaultWorkloadCredentials(w.db.workloadCredentials, () => Promise.resolve(vault), issuer) }
+}
+
 describe('workload keys from the approved contract', () => {
 	const WITH_JOB = edited(
 		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n",
 		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n\tjobs: { nightly: c.cron('0 3 * * *', { actions: ['notes.delete'], scope: 'app' }) },\n",
 	)
-
-	async function credentialed(w: World) {
-		const vault = await Vault.create(harnessDatabase(w.db), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
-		const issued: string[] = []
-		const issuer: WorkloadKeyIssuer = {
-			issue: (input) => {
-				issued.push(`${input.app}/${input.kind}:${input.name}`)
-				return Promise.resolve({ key: `px_${'k'.repeat(40)}${issued.length}`, credentialId: `credential-${issued.length}`, expiresAt: input.expiresAt })
-			},
-			revoke: () => Promise.reject(new Error('no import is removed here')),
-		}
-		return { issued, workloadCredentials: new VaultWorkloadCredentials(w.db.workloadCredentials, () => Promise.resolve(vault), issuer) }
-	}
 
 	test('a deploy hands each job of the approved contract its key, and no run log keeps it', async () => {
 		const w = world()
@@ -653,6 +656,114 @@ describe('workload keys from the approved contract', () => {
 		expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
 		expect(issued).toEqual([])
 		expect(w.deploys.map((input) => Object.hasOwn(input.managedEnvironment, 'FABRIKA_JOB_NIGHTLY_KEY'))).toEqual([false, false])
+	})
+})
+
+describe('the installation mail transport for a job that declares it', () => {
+	const MAILING = `import { app } from './app-kit'
+
+export const digest = app.cron('0 3 * * *', { actions: ['notes.read'], scope: 'app', mailer: 'installation' }).handle(async () => {})
+`
+	const CONTRACT = `import { app } from './src/app-kit'
+import { digest } from './src/jobs'
+import { notes } from './src/notes/endpoints'
+
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { notes }),
+	health: c.health('/healthz'),
+	jobs: { digest },
+}))
+`
+	const RESEND_KEY = 're_private-installation-mail-key'
+	const mailTransport: InstallationMailTransport = {
+		variables: { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'mail@example.test', FABRIKA_EMAIL_RESEND_API_KEY: RESEND_KEY },
+		secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
+	}
+
+	function mailingWorld(): World {
+		const w = world()
+		const { 'fabrika.contract.ts': _contract, ...files } = kitFiles()
+		w.files = { ...files, 'src/jobs.ts': MAILING }
+		w.contract = CONTRACT
+		return w
+	}
+
+	const mailVariables = (input: ProviderDeployInput | undefined): string[] =>
+		Object.keys(input?.managedEnvironment ?? {}).filter((name) => name.startsWith('FABRIKA_EMAIL_')).sort()
+
+	test('a deploy hands the whole transport, and no run log keeps its credential', async () => {
+		const w = mailingWorld()
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const loggingProvider = provider(w)
+		const result = await executeDeploy({
+			...deps(w),
+			workloadCredentials,
+			mailTransport,
+			provider: {
+				...loggingProvider,
+				deploy: (input) => {
+					input.events.log(`mail=${input.managedEnvironment['FABRIKA_EMAIL_RESEND_API_KEY'] ?? 'none'}`)
+					return loggingProvider.deploy(input)
+				},
+			},
+		}, { runId: await createdRun(w, 'stage') })
+		expect(result.status).toBe('succeeded')
+		const managed = w.deploys[0]?.managedEnvironment
+		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+		expect(managed?.['FABRIKA_EMAIL_RESEND_API_KEY']).toBe(RESEND_KEY)
+		const stored = [...w.logs.values()].join('\n')
+		expect(stored).toContain('mail=[redacted]')
+		expect(stored).not.toContain(RESEND_KEY)
+	})
+
+	test('a contract whose job sends through the installation does not deploy where the installation has no transport', async () => {
+		const w = mailingWorld()
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const result = await executeDeploy({ ...deps(w), workloadCredentials }, { runId: await createdRun(w, 'stage') })
+			expect(result.status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect([...w.logs.values()].join('\n')).toContain(
+			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and this installation cannot hand it a mail transport",
+		)
+		expect(w.deploys).toEqual([])
+	})
+
+	test('a dry run of the approved contract hands the same transport, and is refused the same way where the installation has none', async () => {
+		const w = mailingWorld()
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		// A dry run publishes nothing, so a real deploy approves the contract it then reads.
+		expect((await executeDeploy({ ...deps(w), workloadCredentials, mailTransport }, { runId: await createdRun(w, 'stage') })).status).toBe(
+			'succeeded',
+		)
+		const dryRun = await executeDeploy({ ...deps(w), mailTransport }, { runId: await createdRun(w, 'stage'), dryRun: true })
+		expect(dryRun.status).toBe('succeeded')
+		expect(mailVariables(w.deploys[1])).toEqual(['FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_RESEND_API_KEY'])
+
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage'), dryRun: true })).status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect([...w.logs.values()].join('\n')).toContain(
+			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and this installation cannot hand it a mail transport",
+		)
+		expect(w.deploys).toHaveLength(2)
+		expect([...w.logs.values()].join('\n')).not.toContain(RESEND_KEY)
+	})
+
+	test('a contract without such a job gets no mail variable while the installation has a transport', async () => {
+		const w = world()
+		await seed(w)
+		expect((await executeDeploy({ ...deps(w), mailTransport }, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(mailVariables(w.deploys[0])).toEqual([])
 	})
 })
 

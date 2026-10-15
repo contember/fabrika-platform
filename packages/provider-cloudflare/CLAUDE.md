@@ -184,8 +184,8 @@ Invariants:
   questions are the confirmations (`Confirmations`), which `--yes` answers. The env file is opened BEFORE
   the arguments are parsed, so a resumed run reads its earlier answers as environment variables. It saves
   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, the two `FABRIKA_IAM_*_ENABLED` switches,
-  `FABRIKA_IAM_OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`, `FABRIKA_EMAIL_PROVIDER`/`_FROM`/`_RESEND_API_KEY`
-  and the generated keys. The hosts, the repository, the checkout and the admins are NOT saved; a re-run
+  `FABRIKA_IAM_OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`, every `FABRIKA_EMAIL_*` the mail transport collected
+  (`readInstallationEmail`: the provider, the sender and the provider's own variables) and the generated keys. The hosts, the repository, the checkout and the admins are NOT saved; a re-run
   names them again (the rerun command init prints on a declined step carries them).
 - **Idempotent + resumable.** Every captured value persists to that file; a re-run reuses generated
   values (vault key, provisioning, runner and signing keys) instead of rolling them.

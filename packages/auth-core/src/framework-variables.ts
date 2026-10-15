@@ -42,9 +42,10 @@ export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]
 
 /**
  * The name families only the platform writes: one variable per job or webhook, named after it (`workloadKeyVariable`),
- * and a connector import's address, key and Worker binding (`connectVariables`). Every name under one is framework-only.
+ * a connector import's address, key and Worker binding (`connectVariables`), and the installation's mail transport
+ * (`isEmailTransportVariable`). Every name under one is framework-only.
  */
-export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_CONNECT_'] as const
+export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_CONNECT_', 'FABRIKA_EMAIL_'] as const
 
 const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAMES)
 
@@ -97,6 +98,13 @@ export function isConnectKeyVariable(name: string): boolean {
 /** Whether `name` carries a connector import's owner origin, as `connectVariables` names it. */
 export function isConnectUrlVariable(name: string): boolean {
 	return CONNECT_URL_VARIABLE.test(name)
+}
+
+const EMAIL_VARIABLE = /^FABRIKA_EMAIL_[A-Z0-9][A-Z0-9_]*$/
+
+/** Whether `name` belongs to the installation's mail transport, which only Control hands an application. */
+export function isEmailTransportVariable(name: string): boolean {
+	return EMAIL_VARIABLE.test(name)
 }
 
 /** A Zerops reference: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}` or `${RUNTIME_<host>_NAME}`. */

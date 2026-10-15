@@ -167,13 +167,15 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * `ENVIRONMENT`, `ISSUER` (this service's public origin; it is the `iss` of every minted token AND the
  * OIDC redirect base, so it must match the domain routed to the proxy in front of it),
  * `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
- * `FABRIKA_IAM_OIDC_ENABLED`, `FABRIKA_IAM_PASSWORD_ENABLED`, `FABRIKA_EMAIL_PROVIDER`, and
- * `FABRIKA_EMAIL_FROM` when email delivery is enabled. OIDC-enabled installations also set
- * `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`, `OIDC_REQUIRE_VERIFIED_EMAIL`.
+ * `FABRIKA_IAM_OIDC_ENABLED`, `FABRIKA_IAM_PASSWORD_ENABLED`, and the mail transport when email delivery is
+ * enabled: `platform install --email-provider` writes `FABRIKA_EMAIL_PROVIDER`, `FABRIKA_EMAIL_FROM`,
+ * `FABRIKA_EMAIL_FROM_NAME` and the provider's variables on `iam` and `control`, the provider's secret ones
+ * sensitive. OIDC-enabled installations also set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`,
+ * `OIDC_REQUIRE_VERIFIED_EMAIL`.
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_SIGNING_KEYS` (ES256 private JWKs — an empty value is refused at
  * boot rather than silently issuing ephemeral tokens), `OIDC_CLIENT_SECRET` when OIDC is enabled,
- * `FABRIKA_EMAIL_RESEND_API_KEY` when Resend is enabled, `FABRIKA_IAM_RPC_KEY` (authenticates
+ * `FABRIKA_IAM_RPC_KEY` (authenticates
  * the management `/rpc/*` surface; unset 404s it, which is the fail-closed default), `FABRIKA_IAM_PROXY_KEY`
  * (authenticates `/auth/mint/*`, which the proxy calls on the cold path — a SEPARATE secret by least privilege,
  * since the proxy is the only publicly routed component and must not also be able to write audit rows),

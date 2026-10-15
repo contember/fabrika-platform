@@ -47,6 +47,7 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	sourceDir: '.',
 	secretsFile: SECRETS_FILE,
 	tier: 'light',
+	email: { kind: 'none' },
 	unattended: false,
 	...overrides,
 })
@@ -415,6 +416,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets,
 			zeropsAccessToken: 'minted',
+			email: { kind: 'none' },
 			tier: 'light',
 		})
 		const generated = new Set<string>([...Object.values(secrets), 'minted'])
@@ -435,6 +437,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
+			email: { kind: 'none' },
 			tier: 'light',
 			apiBaseUrl: 'https://api.app-brn1.zerops.io/api/rest/public',
 		})
@@ -450,6 +453,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
+			email: { kind: 'none' },
 			tier: 'light',
 		})
 		expect([...matrix.keys()].sort()).toEqual(['control', 'iam', 'operations', 'proxy'])
@@ -476,6 +480,7 @@ describe('what reaches which service', () => {
 			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
+			email: { kind: 'none' },
 			tier,
 		})
 		const platformDatabase = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
@@ -547,6 +552,40 @@ describe('the hand-off', () => {
 			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual([...keys].sort())
 		}
 		expect(fixture.zerops.env('proxy').has(FABRIKA_PROXY_MANIFEST_JSON)).toBe(false)
+	})
+
+	test("writes the operator's mail transport on iam and control only, its credentials sensitive and never in the secrets file", async () => {
+		const fixture = harness()
+		const apiKey = 're_mail-api-key-that-must-never-be-printed'
+
+		await fixture.run({
+			email: {
+				kind: 'provider',
+				variables: new Map([
+					['FABRIKA_EMAIL_PROVIDER', 'resend'],
+					['FABRIKA_EMAIL_FROM', 'mail@example.com'],
+					['FABRIKA_EMAIL_RESEND_API_KEY', apiKey],
+				]),
+				secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
+			},
+		})
+
+		for (const hostname of ['iam', 'control'] as const) {
+			const env = fixture.zerops.env(hostname)
+			expect([env.get('FABRIKA_EMAIL_PROVIDER'), env.get('FABRIKA_EMAIL_FROM'), env.get('FABRIKA_EMAIL_RESEND_API_KEY')]).toEqual([
+				'resend',
+				'mail@example.com',
+				apiKey,
+			])
+			expect([...fixture.zerops.sensitive(hostname)].sort()).toEqual(
+				[...(GENERATED_SECRET_KEYS.get(hostname) ?? []), 'FABRIKA_EMAIL_RESEND_API_KEY'].sort(),
+			)
+		}
+		for (const hostname of ['operations', 'proxy'] as const) {
+			expect([...fixture.zerops.env(hostname).keys()].filter((key) => key.startsWith('FABRIKA_EMAIL_'))).toEqual([])
+		}
+		expect(fixture.stored.join('\n')).not.toContain('FABRIKA_EMAIL_')
+		expect(fixture.log.lines.join('\n')).not.toContain(apiKey)
 	})
 
 	test('points the hand-off at the secrets file, ready to run', async () => {
@@ -875,6 +914,7 @@ describe('the argument surface', () => {
 			sourceDir: '.',
 			secretsFile: SECRETS_FILE,
 			tier: 'light',
+			email: { kind: 'none' },
 			unattended: false,
 		})
 		expect(() => parsePlatformInstallArgs(['--token=nope'], {})).toThrow('unexpected argument')
@@ -882,6 +922,32 @@ describe('the argument surface', () => {
 		expect(() => parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage'], {})).toThrow(
 			'FABRIKA_ZEROPS_ACCESS_TOKEN is required',
 		)
+	})
+
+	test('reads the mail transport: none by default, the provider from a flag, its credentials from the environment only', () => {
+		const base = ['--project-id=p1', '--client-id=c1', '--env=stage']
+		const env = { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' }
+		expect(parsePlatformInstallArgs(base, env).email).toEqual({ kind: 'none' })
+		const email = parsePlatformInstallArgs([...base, '--email-provider=resend', '--email-from=mail@example.com', '--email-from-name=Acme'], {
+			...env,
+			FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+		}).email
+		expect(email.kind === 'provider' ? [Object.fromEntries(email.variables), [...email.secretNames]] : email).toEqual([
+			{
+				FABRIKA_EMAIL_PROVIDER: 'resend',
+				FABRIKA_EMAIL_FROM: 'mail@example.com',
+				FABRIKA_EMAIL_FROM_NAME: 'Acme',
+				FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+			},
+			['FABRIKA_EMAIL_RESEND_API_KEY'],
+		])
+		expect(() => parsePlatformInstallArgs([...base, '--email-from=mail@example.com'], env)).toThrow(
+			'--email-from was given, but the email provider is none',
+		)
+		expect(() => parsePlatformInstallArgs([...base, '--email-provider=resend', '--email-from=mail@example.com'], env)).toThrow(
+			'FABRIKA_EMAIL_RESEND_API_KEY is missing',
+		)
+		expect(() => parsePlatformInstallArgs([...base, '--email-resend-api-key=re_key'], env)).toThrow('unexpected argument')
 	})
 
 	test('`--yes` is the one flag that carries no value, and it is off unless it is written', () => {

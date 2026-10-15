@@ -126,6 +126,12 @@ fabrika platform install --provider=zerops --create-project --client-id=<clientI
 - A project that already holds generated secrets is refused. Do not try to force it: a second bring-up
   over the same project would destroy the vault key. Start over in a new empty project.
 - The account must be in the default region, or set `FABRIKA_ZEROPS_API_URL` for every command.
+- Mail is optional. Without `--email-provider` the installation sends no mail. With one, add
+  `--email-provider=<resend|smartemailing> --email-from=<address>`, optionally `--email-from-name=<name>`, and
+  export the provider's variables (`FABRIKA_EMAIL_RESEND_API_KEY`, or `FABRIKA_EMAIL_SMARTEMAILING_USERNAME`,
+  `FABRIKA_EMAIL_SMARTEMAILING_API_KEY` and optionally `FABRIKA_EMAIL_SMARTEMAILING_TAG`) from their own `0600`
+  files. They have no flag. The install writes the set on `iam` and `control`, the credentials sensitive. They
+  are the human's own, so they are not copied into the secrets file.
 
 **Check.** The log ends with the `Hand off` step: where the credentials are, `The console answers at
 https://<console host>`, and an `ADMIT YOURSELF` box that holds the step 2 command with `--iam-host` filled
@@ -139,9 +145,10 @@ in. The secrets file exists with mode `0600`. The three hosts are printed earlie
   fabrika platform admin --provider=zerops --email=<address> --iam-host=<IAM host from step 1> )
 ```
 
-It prints one enrollment URL and the time it expires. Nothing is e-mailed: the installation has no mail
-service, so do not tell the human to wait for a message. The URL is a credential: give it to the human only,
-and do not log it. The human opens it, sets a password and signs in at the console origin.
+Without a mail provider it prints one enrollment URL and the time it expires. Nothing is e-mailed then, so
+do not tell the human to wait for a message. The URL is a credential: give it to the human only, and do not
+log it. The human opens it, sets a password and signs in at the console origin. With a mail provider, IAM
+e-mails the enrollment instead, and the command reports the address and the expiry.
 
 The URL is valid for ONE HOUR. Hand it over at once. A re-run creates nothing new: while the enrollment is
 unused it only reports that one is outstanding, and it never prints the URL again. To get a new URL, after
@@ -343,6 +350,22 @@ It re-pins the namespace and queues the reconcile that rebuilds its proxy; poll 
 `ready`. A namespace pinned to a release before the proxy manifest moved into the build archive carries it in a
 service variable, which Zerops caps at about 32 KB: when a deploy fails with `serviceEnvValueTooLarge`, this is
 the fix, and it also accepts a namespace in `failed`.
+
+## Set or rotate the mail transport
+
+The installation's mail transport lives on the `iam` and `control` services. Zerops is its record (ADR-0004),
+and Control hands a copy to every application whose job declares `mailer: 'installation'`. To add one to an
+existing installation, change the provider, or rotate a key:
+
+1. Set the same `FABRIKA_EMAIL_*` variables on BOTH `iam` and `control`, in the Zerops GUI or with `zcli`:
+   `FABRIKA_EMAIL_PROVIDER`, `FABRIKA_EMAIL_FROM`, optionally `FABRIKA_EMAIL_FROM_NAME`, and the provider's
+   variables. Mark the credentials sensitive. Delete the variables of a provider you leave.
+2. Restart `iam` and `control`. Each reads the transport at boot, and refuses to start on an invalid one.
+3. Redeploy every environment whose contract uses `installation` mail. An application gets the new transport
+   only at its next deploy. Until then it sends with the old one, and a revoked key fails its mail with
+   `provider_unauthorized`.
+
+A contract whose job declares `mailer: 'installation'` does not deploy while `control` has no transport.
 
 ## When something fails
 

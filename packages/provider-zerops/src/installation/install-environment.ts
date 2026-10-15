@@ -1,3 +1,4 @@
+import type { InstallationEmail } from '@fabrika/installation-init'
 import { encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import type { ZeropsNamespaceProxySource } from '../index'
 import type { PlatformDeployService, ResolvedService } from './deploy'
@@ -64,6 +65,8 @@ export interface InstallationEnvInput {
 	readonly secrets: InstallationSecrets
 	/** The Zerops integration token minted for the control plane. Never logged, never printed. */
 	readonly zeropsAccessToken: string
+	/** IAM sends its own mail with it, and Control hands it to applications whose job declares `mailer: 'installation'`. */
+	readonly email: InstallationEmail
 }
 
 /**
@@ -120,6 +123,8 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		// the CLI reads `FABRIKA_ZEROPS_API_URL`; they are different processes reading different sources.
 		control.set('FABRIKA_ZEROPS_API_BASE_URL', input.apiBaseUrl)
 	}
+	const email = input.email.kind === 'none' ? [] : [...input.email.variables]
+	for (const [key, value] of email) control.set(key, value)
 	return new Map<PlatformDeployService, ReadonlyMap<string, string>>([
 		[
 			'iam',
@@ -136,6 +141,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 				['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 				['FABRIKA_IAM_PROXY_KEY', secrets.proxyKey],
 				['FABRIKA_IAM_PROVISIONING_KEY', secrets.provisioningKey],
+				...email,
 			]),
 		],
 		[
@@ -196,19 +202,19 @@ export const GENERATED_SECRET_KEYS: ReadonlyMap<PlatformDeployService, readonly 
  * Write a set of variables, reporting the KEYS — never a value, not even in a debug line.
  *
  * Write-first and unconditional: a generated secret cannot be read back to compare, and `PUT
- * /user-data/{id}` replaces in place, so a repeat costs a call and nothing else. Exactly the generated
- * secrets are written sensitive; everything else stays readable, because `platform deploy` compares
- * and merges it later.
+ * /user-data/{id}` replaces in place, so a repeat costs a call and nothing else. Exactly the `sensitive`
+ * keys are written sensitive (the generated secrets and the operator's mail credentials); everything else
+ * stays readable, because `platform deploy` compares and merges it later.
  */
 export const writeServiceEnv = async (
 	service: ResolvedService,
 	desired: ReadonlyMap<string, string>,
 	{ api, log, signal }: InstallCollaborators,
+	sensitive: ReadonlySet<string>,
 ): Promise<void> => {
-	const secrets = GENERATED_SECRET_KEYS.get(service.hostname) ?? []
 	for (const [key, value] of desired) {
 		assertRunning(signal)
-		await api.putServiceEnv({ serviceId: service.id, key, value, sensitive: secrets.includes(key), signal })
+		await api.putServiceEnv({ serviceId: service.id, key, value, sensitive: sensitive.has(key), signal })
 	}
 	log.ok(`${service.hostname}: wrote ${[...desired.keys()].join(', ')}`)
 }

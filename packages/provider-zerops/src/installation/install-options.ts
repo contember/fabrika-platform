@@ -8,7 +8,18 @@
 // operator's disk — but nothing here prompts: a missing required value is an error naming both the flag
 // and the variable that would supply it, so a mistyped install fails before it contacts anything.
 
-import { describeArgument, readEnv, readFlag, requiredSetting, setting, UNATTENDED_FLAG } from '@fabrika/installation-init'
+import { builtinEmailProviders } from '@fabrika/email/providers'
+import {
+	describeArgument,
+	EMAIL_FLAGS,
+	type InstallationEmail,
+	readEnv,
+	readFlag,
+	readInstallationEmail,
+	requiredSetting,
+	setting,
+	UNATTENDED_FLAG,
+} from '@fabrika/installation-init'
 import { checkedSecretsFilePath, SECRETS_FILE_FLAG, SECRETS_FILE_VARIABLE } from './install-secrets'
 import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
@@ -47,6 +58,8 @@ export interface PlatformInstallInput {
 	/** Where every credential this run creates is written, mode 0600, before the first is placed. */
 	readonly secretsFile: string
 	readonly tier: PlatformTier
+	/** The installation's mail transport, written on `iam` and `control`; `none` when the operator named no provider. */
+	readonly email: InstallationEmail
 	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
 	readonly unattended: boolean
 }
@@ -54,7 +67,17 @@ export interface PlatformInstallInput {
 /** The canonical public release repository used for namespace proxy source identities. */
 export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
-const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--source-dir', '--tier', SECRETS_FILE_FLAG] as const
+const FLAGS = [
+	'--project-id',
+	'--project-name',
+	'--client-id',
+	'--env',
+	'--scheme',
+	'--source-dir',
+	'--tier',
+	SECRETS_FILE_FLAG,
+	...EMAIL_FLAGS,
+] as const
 
 /** `--create-project`: bring the project up too, instead of naming one the operator made. */
 export const CREATE_PROJECT_FLAG = '--create-project'
@@ -151,6 +174,8 @@ export const parsePlatformInstallArgs = (
 			sourceDir,
 		),
 		tier: readTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
+		// Optional, so an existing unattended install keeps working and installs without mail.
+		email: readInstallationEmail(argv, env, { registry: builtinEmailProviders, required: false }),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
 	}

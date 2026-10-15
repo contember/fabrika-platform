@@ -17,6 +17,7 @@ import {
 	type FormMountArtifact,
 	isAttachmentShape,
 	JOB_SITE_PREFIX,
+	type JobMailer,
 	LOCALES,
 	MESSAGE_KINDS,
 	type MountArtifact,
@@ -226,9 +227,10 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
 // ── Steps off the paved road ────────────────────────────────────────────────────────────────────
 
 /**
- * The reach each site declares (`sql`, `unscoped`, `connect`, link issuing). A site is keyed by its endpoint id or job,
- * so a handler that moves keeps its site; each effect is compared on its own. A new site, table, connector or mount and
- * `read` → `write` widen with closer review; a removal and `write` → `read` narrow.
+ * The reach each site declares (`sql`, `unscoped`, `connect`, link issuing, a job's mail transport). A site is keyed by
+ * its endpoint id or job, so a handler that moves keeps its site; each effect is compared on its own. A new site, table,
+ * connector or mount and `read` → `write` widen with closer review; a removal and `write` → `read` narrow. A mutation's
+ * kick (`then`) is shown and widens nothing.
  */
 function compareDeclared(
 	changes: Changes,
@@ -245,6 +247,7 @@ function compareDeclared(
 	const sites = before ?? {}
 	for (const site of union(Object.keys(sites), Object.keys(after))) {
 		changes.add(...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH))
+		changes.add(...endpointKickChange(site, sites[site]?.then, after[site]?.then))
 	}
 }
 
@@ -264,7 +267,27 @@ function reachChanges(site: string, from: DeclaredReach, to: DeclaredReach): Acc
 		if (to.issues !== null) changes.push(closerWidening(`${name} issues share links of mount \`${to.issues}\``))
 		if (from.issues !== null) changes.push(removal(`${name} no longer issues share links of mount \`${from.issues}\``))
 	}
+	changes.push(...mailerChange(name, from.mailer, to.mailer))
 	return changes
+}
+
+/** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */
+function mailerChange(name: string, from: JobMailer | undefined, to: JobMailer | undefined): AccessChange[] {
+	if (from === to) return []
+	if (to === undefined) return [removal(`${name} no longer sends e-mail`)]
+	if (to === 'installation') return [closerWidening(`${name} sends e-mail through the installation's mail transport`)]
+	if (from === undefined) return [widening(`${name} sends e-mail through its own transport`)]
+	return [removal(`${name} sends e-mail through its own transport, no longer the installation's`)]
+}
+
+/** A kick starts a job the contract already schedules, so it widens nothing, like a form's `then`. */
+function endpointKickChange(site: string, before: string | undefined, after: string | undefined): AccessChange[] {
+	if (before === after) return []
+	const name = siteName(site)
+	const line = after === undefined
+		? `${name} no longer starts job \`${before}\` after a call`
+		: `${name} starts job \`${after}\` after each committed call, beside its schedule`
+	return [{ widens: false, line }]
 }
 
 /** `null` is undeclared; `write` reaches more than `read`. */
