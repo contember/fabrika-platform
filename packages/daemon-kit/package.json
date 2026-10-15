@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/daemon-kit",
-	"version": "0.4.5",
+	"version": "0.4.6",
 	"type": "module",
 	"description": "Bun daemon lifecycle, HTTP routing, WebSocket channels and CLI waiters.",
 	"license": "MIT",
