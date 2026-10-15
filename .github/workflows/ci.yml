@@ -41,11 +41,16 @@ jobs:
         run: bun run --filter @fabrika/platform-artifacts gen:check
 
   test:
-    name: Test with PostgreSQL and S3
+    name: Test with PostgreSQL ${{ matrix.postgres }} and S3
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported major: Zerops runs 18, and `pg-catalog-names.ts` is the union of these.
+        postgres: ['17', '18']
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:${{ matrix.postgres }}-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
