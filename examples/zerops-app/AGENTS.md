@@ -1530,9 +1530,24 @@ message. The codes you meet most:
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `query_refused`      | the data layer refused a statement or an operation: `undeclared_reach`, `sql_read_only`, `unknown_column`, `read_only`, `sql_outside_transaction` …; the reason's text names the rule |
 | `capability_refused` | a capability of another kind, dimension or action than the call takes (`wrong_capability`, `wrong_action`, `out_of_reach`), or one kept past its request (`ended`, `foreign_work`)    |
-| `handler_failed`     | your handler threw something else; the log has no more, so test the handler                                                                                                           |
+| `handler_failed`     | your handler threw something else; the log has no more: the Operations issue has the stack, or test the handler                                                                       |
 
-With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. A job attempt names its failure with the
+With an Operations DSN the same 500 is a `RequestFailed` issue in Operations. Its event also carries what your handler
+threw: the error's type, its message, its stack and its `cause` chain. Read the stack there, not in the log. A crash
+outside a request (an uncaught exception, an unhandled rejection, a failed start) is an issue too, titled by the error.
+
+The framework removes the values of your secrets and anything shaped like a credential (a token, a key, a password in a
+URL) from the message before it leaves. It cannot recognize personal data or a secret it was not told about:
+
+- never put an e-mail address, a name, a record's text or any other personal data into an error message; name the
+  record by its id;
+- never put a secret, a token or a request header into an error message;
+- name an application variable that holds a secret so its name says so (`STRIPE_SECRET_KEY`, `MAIL_API_TOKEN`): only
+  such a name tells the framework to remove its value;
+- keep the original error as `cause` when you rethrow (`throw new Error('could not load the invoice', { cause })`), so
+  the chain shows both.
+
+A job attempt names its failure with the
 same codes and reasons: `fabrika job run` prints `job <name> failed after 1 attempt: query_refused: undeclared_reach`,
 its log line adds the text, and `kit.runJob` answers `{ status: 'failed', code, reason }`. A `DatabaseError` carries
 only the SQLSTATE: `23505` is a unique violation, `23503` a foreign key, `23502` a null in a `NOT NULL` column.
