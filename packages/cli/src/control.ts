@@ -9,7 +9,7 @@
 // Output contract, matching `zops`: stdout carries DATA ONLY, progress and errors go to stderr, and
 // `--json` prints the procedure's result verbatim so a caller never parses a table.
 
-import { createRpcClient, RpcError } from '@fabrika/app'
+import { createRpcClient, type InferRpcClient, RpcError } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import type {
 	AppDto,
@@ -80,6 +80,10 @@ REQUIRED for it — on \`register\` and on \`apps environments put\` alike — a
 refused before anything is created. \`namespaces get\` lists the hosts a \`zerops-subdomain\` namespace
 serves and which of them are still free; a custom-domain namespace serves the domain you bound to its
 proxy. A manifest with no proxy target needs no domain.
+
+\`--public-origin\` is where IAM may return a signed-in person: without one, sign-in to the environment is
+refused. When \`register\` is given none and the namespace lists \`--domain\` among its hosts, it sets
+\`https://<domain>\` and says so on stderr. A custom domain needs the flag.
 
 \`--installation-id\` has three states: omitted resolves the installation from the organization's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
@@ -215,7 +219,9 @@ const secret = (variable: string, env: Readonly<Record<string, string | undefine
 }
 
 /** The console's client with a bearer instead of a cookie, and no SSO bounce: there is no browser to send. */
-const controlClient = (flags: Flags, env: Readonly<Record<string, string | undefined>>) => {
+type ControlClient = InferRpcClient<ControlRpcContract>
+
+const controlClient = (flags: Flags, env: Readonly<Record<string, string | undefined>>): ControlClient => {
 	const base = origin(flags, 'url', 'FABRIKA_CONTROL_URL', env, 'Control')
 	const key = secret('FABRIKA_CONTROL_KEY', env)
 	return createRpcClient<ControlRpcContract>({
@@ -398,14 +404,38 @@ const registrationRequest = (inputs: RegistrationInputs, provider: string, manif
 	}
 }
 
+/**
+ * The registration with the public origin sign-in returns to, when `--public-origin` is not given and the namespace
+ * lists `--domain` among the hosts it serves. IAM refuses to return to an environment without one. A namespace lists
+ * only the hosts its provider publishes, and Zerops publishes each one over HTTPS.
+ */
+const withNamespacePublicOrigin = async (body: RegisterAppRequest, client: ControlClient): Promise<RegisterAppRequest> => {
+	const { domain, namespaceId } = body
+	if (body.publicOrigin !== undefined || domain === undefined || domain === null || namespaceId === undefined || namespaceId === null) {
+		return body
+	}
+	const namespace = await client.namespaces.get({ namespaceId })
+	if (!(namespace.hosts ?? []).some((entry) => entry.host === domain)) {
+		console.warn(
+			`no public origin: namespace ${namespaceId} does not list ${domain}, so sign-in cannot return to ${body.id}/${body.env} `
+				+ 'until `apps environments put` sets --public-origin',
+		)
+		return body
+	}
+	const publicOrigin = `https://${domain}`
+	console.warn(`public origin ${publicOrigin}: namespace ${namespaceId} serves ${domain}`)
+	return { ...body, publicOrigin }
+}
+
 const runRegister = async (flags: Flags, provider: string | undefined, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	if (provider === undefined || provider === '') {
 		throw new Error('--provider=<name> is required: it labels the envelope this registration carries.')
 	}
 	const manifestPath = required(flags, 'manifest')
 	const manifest = await readJsonFile(manifestPath)
-	const body = registrationRequest(registrationInputs(flags), provider, manifest, manifestPath)
-	const result = await controlClient(flags, env).register(body)
+	const client = controlClient(flags, env)
+	const body = await withNamespacePublicOrigin(registrationRequest(registrationInputs(flags), provider, manifest, manifestPath), client)
+	const result = await client.register(body)
 	emit(flags, result, () => registrationLine(result))
 }
 
@@ -457,7 +487,7 @@ export const registerCompiledManifest = async (
 	}
 	let result: RegisterAppResponse
 	try {
-		result = await client.register(body)
+		result = await client.register(await withNamespacePublicOrigin(body, client))
 	} catch (error) {
 		throw new Error(`Register phase failed after a successful compile; no manifest file was written. ${failureMessage(error, controlKey)}`)
 	}

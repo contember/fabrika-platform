@@ -94,8 +94,9 @@ describe('app register', () => {
 			const inMemory = captureRawBodies(REGISTERED)
 			await runCli(['app', 'register', ...flags])
 
-			expect(fromDisk).toHaveLength(1)
-			expect(fromDisk[0]).toContain('setup: notes')
+			// The namespace lookup for the public origin, then the registration.
+			expect(fromDisk).toHaveLength(2)
+			expect(fromDisk[1]).toContain('setup: notes')
 			expect(inMemory).toEqual(fromDisk)
 			expect((await readdir(root)).sort()).toEqual(['fabrika.config.ts', 'zerops.yaml'])
 		})

@@ -196,6 +196,74 @@ describe('control register', () => {
 	})
 })
 
+describe('control register public origin', () => {
+	const NAMESPACE = {
+		id: 'ns1',
+		env: 'prod',
+		state: 'ready',
+		hosts: [{ host: 'proxy-8080.prg1.zerops.app', port: 8080 }, { host: 'proxy-8082.prg1.zerops.app', port: 8082 }],
+	}
+	const REGISTERED = { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } }
+
+	/** Answer each procedure with its own result and record every request body. */
+	const routeFetch = (namespace: unknown): unknown[] => {
+		const bodies: unknown[] = []
+		globalThis.fetch = asFetch(async (_input, init) => {
+			const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+			bodies.push(body)
+			const result = typeof body === 'object' && body !== null && 'method' in body && body.method === 'namespaces.get' ? namespace : REGISTERED
+			return new Response(JSON.stringify({ result }), { status: 200, headers: { 'content-type': 'application/json' } })
+		})
+		return bodies
+	}
+	const registerArgs = (extra: string[]): string[] => [
+		`--manifest=${import.meta.dir}/fixtures/manifest.json`,
+		'--app=notes',
+		'--repo=https://github.com/acme/notes',
+		'--env=prod',
+		'--namespace=ns1',
+		'--installation-id=none',
+		...extra,
+	]
+
+	test('sets https://<domain> when the namespace serves the domain, and says so on stderr', async () => {
+		const bodies = routeFetch(NAMESPACE)
+		const stderr = await captureStderr(async () => {
+			await captureStdout(() => runControlCli('register', registerArgs(['--domain=proxy-8082.prg1.zerops.app']), 'zerops', CONTROL_ENV))
+		})
+		expect(bodies[0]).toEqual({ method: 'namespaces.get', input: { namespaceId: 'ns1' } })
+		expect(bodies[1]).toMatchObject({
+			method: 'register',
+			input: { domain: 'proxy-8082.prg1.zerops.app', publicOrigin: 'https://proxy-8082.prg1.zerops.app' },
+		})
+		expect(stderr).toContain('public origin https://proxy-8082.prg1.zerops.app: namespace ns1 serves proxy-8082.prg1.zerops.app')
+	})
+
+	test('leaves the origin unset for a domain the namespace does not list, and names the fix', async () => {
+		const bodies = routeFetch({ ...NAMESPACE, hosts: undefined })
+		const stderr = await captureStderr(async () => {
+			await captureStdout(() => runControlCli('register', registerArgs(['--domain=notes.example.com']), 'zerops', CONTROL_ENV))
+		})
+		expect(bodies[1]).toMatchObject({ method: 'register' })
+		expect(JSON.stringify(bodies[1])).not.toContain('publicOrigin')
+		expect(stderr).toContain('sign-in cannot return to notes/prod until `apps environments put` sets --public-origin')
+	})
+
+	test('keeps an explicit --public-origin and asks nothing', async () => {
+		const bodies = routeFetch(NAMESPACE)
+		await captureStdout(() =>
+			runControlCli(
+				'register',
+				registerArgs(['--domain=proxy-8082.prg1.zerops.app', '--public-origin=https://notes.example.com']),
+				'zerops',
+				CONTROL_ENV,
+			)
+		)
+		expect(bodies).toHaveLength(1)
+		expect(bodies[0]).toMatchObject({ method: 'register', input: { publicOrigin: 'https://notes.example.com' } })
+	})
+})
+
 describe('control apps variables', () => {
 	test('put and delete carry the optional environment scope, list omits it', async () => {
 		const put = captureFetch({ result: { appId: 'notes', env: 'prod', name: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test' } })
