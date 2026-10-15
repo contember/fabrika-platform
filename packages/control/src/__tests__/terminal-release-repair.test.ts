@@ -163,6 +163,25 @@ for (const backend of ['sqlite', 'postgres']) {
 			if (clean) await repositories.operationsReleases.markApplied(runId, 1)
 		}
 
+		/**
+		 * Settled history in one transaction, as `seed` + `owned.finish` leave it. Seeding it run by run costs six commits
+		 * per run, which made the 2500-row case outlast its timeout on a CI database.
+		 */
+		async function seedRetainedTerminal(runIds: readonly string[]): Promise<void> {
+			const run = database.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor, exit_code, finished_at)
+				VALUES (?, 'notes', 'prod', 'main', ?, 'manual', 'succeeded', 'user:test', 0, ?)`)
+			const release = database.prepare(`INSERT INTO operations_release_sync
+				(run_id, desired_revision, applied_revision, payload_json, last_success_at) VALUES (?, 1, 1, ?, ?)`)
+			await database.batch(runIds.flatMap((runId) => [
+				run.bind(runId, COMMIT, NOW_S + 10),
+				release.bind(
+					runId,
+					JSON.stringify({ ...frozen(runId), phase: 'terminal', outcome: 'succeeded', artifactState: 'complete' }),
+					NOW_S + 10,
+				),
+			]))
+		}
+
 		async function stored(runId: string): Promise<OperationsReleaseProjectionPayload> {
 			const row = await repositories.operationsReleases.get(runId)
 			if (row === null) throw new Error('expected frozen context')
@@ -192,11 +211,7 @@ for (const backend of ['sqlite', 'postgres']) {
 		})
 
 		test('2500 retained matching releases fit the database budget and leave pending delivery and leases healthy', async () => {
-			for (let index = 0; index < 2500; index++) {
-				const runId = `retained-${String(index).padStart(4, '0')}`
-				await seed(runId, { ...frozen(runId), phase: 'terminal', outcome: 'succeeded', artifactState: 'complete' }, true)
-				await owned.finish(runId, 'succeeded', 0)
-			}
+			await seedRetainedTerminal(Array.from({ length: 2500 }, (_, index) => `retained-${String(index).padStart(4, '0')}`))
 			await seed('z-pending')
 			const budget = new QueryBudgetDatabase(database)
 			const counted = createControlRepositories(budget)
