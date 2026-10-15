@@ -316,7 +316,7 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 				envVariables: {
 					FABRIKA_CONTRACT_DIGEST: contractDigest(notesContract),
 					// The TLS port, the database and the TLS mode are named, never left to the driver (zerops-platform.md).
-					FABRIKA_APP_DATABASE_URL: `\${${NOTES_DATABASE_SERVICE}_connectionTlsString}/\${${NOTES_DATABASE_SERVICE}_dbName}?sslmode=require`,
+					FABRIKA_APP_DATABASE_URL: `\${${NOTES_DATABASE_SERVICE}_connectionString}/\${${NOTES_DATABASE_SERVICE}_dbName}?sslmode=prefer`,
 					// The bucket reaches the runtime as references Zerops resolves; no storage credential passes through Fabrika.
 					FABRIKA_APP_STORAGE_BUCKET: `\${${NOTES_FILES_SERVICE}_bucketName}`,
 				},

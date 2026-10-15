@@ -400,7 +400,9 @@ const applicationDatabaseUrl = (
 	}
 	if (shared !== undefined) return shared.connectionString
 	const host = own[0]
-	return host === undefined ? null : `\${${host}_connectionTlsString}/\${${host}_dbName}?sslmode=require`
+	// The direct port, not `portTls`: the application's own roles (`app_<id>`, `run_<id>`) are refused by the TLS endpoint,
+	// which admits only the service's own users (measured 2026-10-15). `prefer` is TLS on `single`; `ha` offers none there.
+	return host === undefined ? null : `\${${host}_connectionString}/\${${host}_dbName}?sslmode=prefer`
 }
 
 /** The hostname the `FABRIKA_APP_STORAGE_*` references name: the application's one object-storage service. */
