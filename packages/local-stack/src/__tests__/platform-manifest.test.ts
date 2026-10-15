@@ -8,13 +8,9 @@
  * port is identical on both sides, so a table change cannot reach one and miss the other.
  */
 
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlMcpResource, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
-import {
-	PLATFORM_CONSOLE_APP_ID,
-	PLATFORM_PROXY_APPS,
-	type PlatformProxyApp,
-	platformProxyManifestTemplate,
-} from '@fabrika/platform-artifacts/proxy-manifest'
+import { PLATFORM_PROXY_APPS, type PlatformProxyApp, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
 import { type McpClient, platformServiceTableDigest } from '@fabrika/provider-zerops/installation'
 import { encodeProxyManifestJson, type InstallationProxyApp, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -86,7 +82,7 @@ describe('MCP authoring in the local composition', () => {
 		if (match?.[1] === undefined) throw new Error('compose.yaml names no FABRIKA_CONTROL_DOMAIN')
 		return match[1]
 	}
-	const consoleOf = (clients?: readonly McpClient[]) => localPlatformProxyManifest(clients).apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+	const consoleOf = (clients?: readonly McpClient[]) => localPlatformProxyManifest(clients).apps.find((app) => app.id === CONTROL_APP_ID)
 	const tableOf = (mcp: boolean) => serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp }).endpoints
 
 	test('is off by default: no OAuth row, no registered resource, and IAM OAuth disabled', () => {
@@ -107,7 +103,7 @@ describe('MCP authoring in the local composition', () => {
 
 	test('control reads the switch from the same composition: the digest of the table the proxy publishes', () => {
 		for (const clients of [undefined, [CLIENT]]) {
-			const digest = platformServiceTableDigest(localPlatformProxyManifest(clients), PLATFORM_CONSOLE_APP_ID)
+			const digest = platformServiceTableDigest(localPlatformProxyManifest(clients), CONTROL_APP_ID)
 			expect(digest).toBe(controlServiceDigest({ mcp: clients !== undefined }))
 		}
 		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')

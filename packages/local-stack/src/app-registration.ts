@@ -19,6 +19,7 @@
 
 import { reconcileSchema } from '@fabrika/auth'
 import type { AppSchema } from '@fabrika/auth-core'
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
 import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
@@ -51,7 +52,7 @@ function notesSchema(): AppSchema {
 }
 
 export const localApps: readonly LocalApp[] = [
-	{ id: 'vozka', schema: controlSchema, returnOrigins: ['http://control.fabrika.localhost:18080'] },
+	{ id: CONTROL_APP_ID, schema: controlSchema, returnOrigins: ['http://control.fabrika.localhost:18080'] },
 	{ id: LOCAL_NOTES_IAM_APP_ID, schema: notesSchema(), returnOrigins: ['http://notes.fabrika.localhost:18081'] },
 ]
 

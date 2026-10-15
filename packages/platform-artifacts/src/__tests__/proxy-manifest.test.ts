@@ -7,6 +7,7 @@
 // in the repository passes, which is exactly how the hand-written live one was wrong for two days.
 
 import type { MintFromKeyResult } from '@fabrika/auth-core'
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlMcpResource, controlMcpResourceMetadata, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
@@ -26,7 +27,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { APP, FakeIam, HOST, ISSUER, signToken, verifyRequest } from '../../../proxy-core/src/__tests__/helpers'
 import {
-	PLATFORM_CONSOLE_APP_ID,
 	PLATFORM_IAM_APP_ID,
 	PLATFORM_PROXY_APPS,
 	type PlatformProxyComposition,
@@ -93,8 +93,8 @@ describe('the service tables come from the modules that own them', () => {
 	const rows = ({ endpoints, reservedPrefixes }: ReturnType<typeof controlServiceContract>) => ({ endpoints, reservedPrefixes })
 
 	test('the console carries both of its tables, and Operations its `OPERATIONS_PUBLIC_SERVICE` table', () => {
-		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.table).toEqual(rows(controlServiceContract({ mcp: true })))
-		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.tableWithoutOAuth).toEqual(rows(controlServiceContract({ mcp: false })))
+		expect(byId.get(CONTROL_APP_ID)?.table).toEqual(rows(controlServiceContract({ mcp: true })))
+		expect(byId.get(CONTROL_APP_ID)?.tableWithoutOAuth).toEqual(rows(controlServiceContract({ mcp: false })))
 		expect(byId.get(OPERATIONS_APP_ID)?.table).toEqual({
 			endpoints: OPERATIONS_PUBLIC_SERVICE.endpoints,
 			reservedPrefixes: OPERATIONS_PUBLIC_SERVICE.reservedPrefixes,
@@ -116,7 +116,7 @@ describe('the service tables come from the modules that own them', () => {
 	})
 
 	test('and the console is NOT anonymous — the drift this item exists for', () => {
-		const console_ = byId.get(PLATFORM_CONSOLE_APP_ID)?.table.endpoints.find((row) => row.path === '/*')
+		const console_ = byId.get(CONTROL_APP_ID)?.table.endpoints.find((row) => row.path === '/*')
 		expect(console_?.kind).toBe('service')
 	})
 })
@@ -132,7 +132,7 @@ describe('resolving the template', () => {
 	})
 
 	test('names the three platform apps and nothing else', () => {
-		expect(manifest.apps.map((app) => app.id)).toEqual([PLATFORM_IAM_APP_ID, PLATFORM_CONSOLE_APP_ID, OPERATIONS_APP_ID])
+		expect(manifest.apps.map((app) => app.id)).toEqual([PLATFORM_IAM_APP_ID, CONTROL_APP_ID, OPERATIONS_APP_ID])
 	})
 
 	test('survives the wire format the proxy service reads it back through', () => {
@@ -220,7 +220,7 @@ describe('MCP authoring, resolved', () => {
 		},
 	}
 	const consoleOrigin = `https://${subdomainHost(8082)}`
-	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => manifest.apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => manifest.apps.find((app) => app.id === CONTROL_APP_ID)
 	const published = (mcp: boolean) => {
 		const { endpoints, reservedPrefixes } = serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp })
 		return { endpoints, reservedPrefixes }
@@ -251,12 +251,12 @@ describe('MCP authoring, resolved', () => {
 	test('the digest the deploy writes beside the console names the very table the proxy publishes, on and off', () => {
 		const on = resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...composition, authorizationServer: `https://${subdomainHost(8080)}` })
 		const off = resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition)
-		expect(platformServiceTableDigest(on, PLATFORM_CONSOLE_APP_ID)).toBe(controlServiceDigest({ mcp: true }))
-		expect(platformServiceTableDigest(off, PLATFORM_CONSOLE_APP_ID)).toBe(controlServiceDigest({ mcp: false }))
+		expect(platformServiceTableDigest(on, CONTROL_APP_ID)).toBe(controlServiceDigest({ mcp: true }))
+		expect(platformServiceTableDigest(off, CONTROL_APP_ID)).toBe(controlServiceDigest({ mcp: false }))
 	})
 
 	test('only the console serves OAuth clients', () => {
-		expect(PLATFORM_PROXY_APPS.filter((app) => app.oauthResource !== undefined).map((app) => app.id)).toEqual([PLATFORM_CONSOLE_APP_ID])
+		expect(PLATFORM_PROXY_APPS.filter((app) => app.oauthResource !== undefined).map((app) => app.id)).toEqual([CONTROL_APP_ID])
 	})
 })
 

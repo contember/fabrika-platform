@@ -15,6 +15,7 @@
 // never reaches this file.
 
 import type { BodyAdmission, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
+import { CONTROL_ACTIONS, CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
 import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlServiceContract } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
@@ -52,9 +53,6 @@ export {
  */
 export const PLATFORM_IAM_APP_ID = 'iam'
 
-/** The console's app id — the name its IAM schema, roles and grants are already registered under. */
-export const PLATFORM_CONSOLE_APP_ID = 'vozka'
-
 /**
  * The console's MCP endpoint (ADR-0049). The `authoring` scope grants only what the MCP tools call;
  * IAM still intersects it with the user's own grants, so a token never exceeds its holder.
@@ -64,7 +62,13 @@ const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
 	scopes: [CONTROL_MCP_SCOPE],
 	scopeGrants: [{
 		scope: CONTROL_MCP_SCOPE,
-		actions: ['source.workspace.read', 'source.workspace.write', 'source.pull-request.create', 'deploy.trigger', 'deploy.read'],
+		actions: [
+			CONTROL_ACTIONS.SOURCE_WORKSPACE_READ,
+			CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE,
+			CONTROL_ACTIONS.SOURCE_PULL_REQUEST_CREATE,
+			CONTROL_ACTIONS.DEPLOY_TRIGGER,
+			CONTROL_ACTIONS.DEPLOY_READ,
+		],
 	}],
 }
 
@@ -90,7 +94,7 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 		table: serviceTable(iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS)),
 	},
 	{
-		id: PLATFORM_CONSOLE_APP_ID,
+		id: CONTROL_APP_ID,
 		service: 'control',
 		port: 8082,
 		upstream: 'control:3000',

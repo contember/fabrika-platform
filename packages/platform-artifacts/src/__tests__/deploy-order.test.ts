@@ -5,6 +5,7 @@
 // honest: each one has to be a service BOTH platform tiers create AND a setup name the repository-root
 // `zerops.yaml` declares, because `triggerPipeline` selects the setup by that name.
 
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import {
 	PLATFORM_CONCURRENT_DEPLOY,
 	PLATFORM_DEPLOY_ORDER,
@@ -15,7 +16,7 @@ import {
 } from '@fabrika/provider-zerops/installation'
 import { compileTopology, fabrikaZeropsYaml, platformTopology, PROXY_HOSTNAME } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'
-import { PLATFORM_CONSOLE_APP_ID, PLATFORM_PROXY_APPS } from '../proxy-manifest'
+import { PLATFORM_PROXY_APPS } from '../proxy-manifest'
 
 const services = (tier: 'standard' | 'light'): string[] =>
 	compileTopology(platformTopology({ env: 'prod', tier }), 'prod').steady.document.services.map((service) => service.hostname)
@@ -56,5 +57,5 @@ describe('the four services a platform deploy touches', () => {
 })
 
 test('the app the deploy reconciles into IAM is the console, read off the template rather than restated', () => {
-	expect(platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id).toBe(PLATFORM_CONSOLE_APP_ID)
+	expect(platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id).toBe(CONTROL_APP_ID)
 })

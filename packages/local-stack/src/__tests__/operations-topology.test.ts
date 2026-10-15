@@ -1,6 +1,7 @@
 import { compileEndpointTable, planEndpoint } from '@fabrika/auth-core'
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { PLATFORM_CONSOLE_APP_ID, PLATFORM_IAM_APP_ID } from '@fabrika/platform-artifacts/proxy-manifest'
+import { PLATFORM_IAM_APP_ID } from '@fabrika/platform-artifacts/proxy-manifest'
 import { isApplicationEntry } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { localPlatformProxyManifest } from '../prepare'
@@ -29,7 +30,7 @@ describe('local Operations topology', () => {
 
 describe('local control topology', () => {
 	test('the console is fronted by its table: health and the webhook open, every other row credentialed', () => {
-		const control = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+		const control = localPlatformProxyManifest().apps.find((app) => app.id === CONTROL_APP_ID)
 		if (control === undefined || isApplicationEntry(control)) throw new Error('expected the console behind its service table')
 		const table = compileEndpointTable(control)
 		const selected = (method: string, path: string) => {

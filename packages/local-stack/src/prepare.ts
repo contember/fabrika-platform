@@ -7,7 +7,8 @@ import {
 	FABRIKA_SERVICE_TABLE_DIGEST,
 	proxySecretVariable,
 } from '@fabrika/auth-core'
-import { PLATFORM_CONSOLE_APP_ID, platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import {
 	type McpClient,
@@ -386,7 +387,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	// Rewritten on every prepare, so turning MCP off is unsetting the variable and running `local:up`.
 	await writeEnv(STATE_DIR, 'iam-oauth.env', { FABRIKA_IAM_OAUTH_CONFIG: localIamOAuthConfig(mcpClients) })
 	await writeEnv(STATE_DIR, 'control-table.env', {
-		[FABRIKA_SERVICE_TABLE_DIGEST]: platformServiceTableDigest(localPlatformProxyManifest(mcpClients), PLATFORM_CONSOLE_APP_ID),
+		[FABRIKA_SERVICE_TABLE_DIGEST]: platformServiceTableDigest(localPlatformProxyManifest(mcpClients), CONTROL_APP_ID),
 	})
 	await generateProxyConfigs(mcpClients)
 	await prepareNotesApplication()
