@@ -1,7 +1,7 @@
 ---
 id: 175
 title: A scoped user administrator lists every principal
-blocked-by: [./174-grant-user-administration-on-its-own.md]
+blocked-by: []
 ---
 
 # 175 — A scoped user administrator lists every principal
