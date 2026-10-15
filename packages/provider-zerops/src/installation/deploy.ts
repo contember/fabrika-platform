@@ -51,6 +51,7 @@ import {
 	type ZeropsService,
 	type ZeropsServiceEnv,
 } from '../index'
+import { assertCheckerPublished, type CheckerPublication } from './checker-release'
 import type { PlatformDeployInput } from './deploy-options'
 import { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
@@ -142,6 +143,7 @@ export interface PlatformServiceDeployCollaborators {
 /** Everything `deployPlatform` reaches the outside world through. */
 export interface PlatformDeployCollaborators extends PlatformServiceDeployCollaborators {
 	readonly prepareSource: PlatformSourcePreparer
+	readonly checkerPublished: CheckerPublication
 	readonly reconcileSchema: SchemaReconciler
 }
 
@@ -581,6 +583,7 @@ export const deployPlatform = async (
 	const source = await collaborators.prepareSource(input.sourceDir, collaborators.signal)
 	try {
 		validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
+		await assertCheckerPublished(collaborators.checkerPublished, collaborators.signal)
 		await deployPreparedPlatform(input, collaborators, source)
 	} finally {
 		await source.dispose()

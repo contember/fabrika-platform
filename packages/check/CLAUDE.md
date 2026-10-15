@@ -292,7 +292,9 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   resolution path to a rule, or the rules drift apart on the same source. Likewise every rule that follows a mapped
   specifier asks `mappedTargets(mappings, file, specifier)` for the importing module.
 - **The platform build runs this checker by version** (`bun x -p @fabrika/check@<version> fabrika-check`, from
-  `@fabrika/provider-zerops`'s generated build, ADR-0043), never the application's own copy. `package-replacement` is
+  `@fabrika/provider-zerops`'s generated build, ADR-0043), never the application's own copy. The version, like
+  `CHECKER_VERSION`, is read from `package.json`; installations run the git source, so a release sets it before
+  tagging (`release:bump`). `package-replacement` is
   what makes the application's frozen install the published `@fabrika/*`; it reads the root `.npmrc` and `bun.lock`,
   the only dot file and lockfile the checker reads.
 - **A hint never fails the check, and never reaches Control.** It is syntactic and easy to escape (destructured

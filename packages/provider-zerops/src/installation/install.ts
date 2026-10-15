@@ -12,6 +12,7 @@ import {
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep, readableContent, type ZeropsNamespaceProxySource } from '../index'
+import { assertCheckerPublished, npmCheckerPublication } from './checker-release'
 import {
 	deployPlatformService,
 	deployPreparedPlatform,
@@ -90,6 +91,7 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	const source = await collaborators.prepareSource(input.sourceDir, collaborators.signal)
 	try {
 		validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
+		await assertCheckerPublished(collaborators.checkerPublished, collaborators.signal)
 		const proxySource = await prepareNamespaceProxySource(source)
 		await installPreparedPlatform(input, collaborators, source, proxySource)
 	} finally {
@@ -251,6 +253,7 @@ export const consoleInstallCollaborators = (input: PlatformInstallInput, reconci
 	const prompts = installPrompts(input, process.stdin, (line) => consoleInfo(line))
 	return {
 		prepareSource: prepareInstallationSource,
+		checkerPublished: npmCheckerPublication(),
 		uploadFetch: (url, init) => fetch(url, init),
 		api: createZeropsApi({
 			token: input.accessToken,

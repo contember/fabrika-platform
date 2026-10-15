@@ -121,7 +121,8 @@ bun test
   `contract.digest`, from `contractDigest`), and an endpoint table without the contract is refused.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
-  the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`), `tsc` with the platform tsconfig and
+  the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`: Control runs the git checkout of its
+  tag, so it is the source version, which a release bumps before tagging), `tsc` with the platform tsconfig and
   the scripts. Keep the tests before every step that produces or checks what deploys. The start script runs
   `fabrika db migrate`, then `fabrika db codegen --verify`, then `fabrika db test-isolation` (the generated tests on
   a throwaway schema), then `exec`s the server, so a failed migration, a stale `schema.generated.ts` or a generated
@@ -223,6 +224,7 @@ Layout (under `src/installation/`):
   answers. `log.ts` — progress, with no secret-taking helper. `proxy-manifest.ts` — the manifest TEMPLATE
   type and `resolvePlatformProxyManifest`.
 - `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it.
+- `checker-release.ts` — the npm lookup of `@fabrika/check` at this checkout's version.
 - `topology/` — `setups.ts` (typed setups), `topology.ts` + `invariants.ts`, `artifacts.ts` (every
   generated artifact, as values), `installation-schemas.ts` + `validate.ts` (static schemas).
 - `generated/` — the proxy manifest template and the console schema, as DATA. Never hand-edit: the
@@ -289,6 +291,10 @@ Invariants:
   repository root from its own path). One committed archive is prepared before remote writes and shared by
   both passes; mutable Git-source flags are refused; no fallback after an upload failure. Namespace proxy
   source identity is a separate contract (ADR-0045).
+- **`install` and `deploy` refuse a checkout whose checker npm does not have**, after preparing the source and
+  before any Zerops call (`assertCheckerPublished`). Every application build fetches `@fabrika/check@<this version>`,
+  so such an installation could deploy no application. Only a 404 means unpublished; any other answer is an error.
+  The lookup is the `checkerPublished` collaborator, so tests fake it and never reach npm.
 - **The sidecar Environment holds no admission list.** No bootstrap-admin variable is written.
 - **`platform admin` writes a CROSS-APP (`app: null`) `admin` grant and prints the enrollment URL ONCE.**
   An app-scoped grant leaves the Access plane refusing while Delivery and Operations work. A re-run

@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { createZeropsApi, defaultSleep } from '../index'
 import { consoleAdminCollaborators, runPlatformAdmin } from './admin'
 import { parsePlatformAdminArgs, REISSUE_FLAG } from './admin-options'
+import { npmCheckerPublication } from './checker-release'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DEPLOY_ORDER, PLATFORM_SEQUENTIAL_DEPLOY } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, runInit } from './init'
@@ -352,6 +353,7 @@ const runDeploy = async (argv: readonly string[]): Promise<void> => {
 	const input = parsePlatformDeployArgs(argv, process.env)
 	await deployPlatform(input, {
 		prepareSource: prepareInstallationSource,
+		checkerPublished: npmCheckerPublication(),
 		uploadFetch: (url, init) => fetch(url, init),
 		api: createZeropsApi({
 			token: input.accessToken,

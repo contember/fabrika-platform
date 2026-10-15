@@ -1,6 +1,7 @@
 import type { Confirmations } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { Sleeper, ZeropsApi } from '../index'
+import type { CheckerPublication } from './checker-release'
 import type { PlatformSourcePreparer } from './installation-source'
 import type { InitLog } from './log'
 import type { PlatformUploadFetch } from './platform-upload'
@@ -11,6 +12,7 @@ export type InstallPrompts = Confirmations
 /** Everything `runInstall` reaches the outside world through. */
 export interface InstallCollaborators {
 	readonly prepareSource: PlatformSourcePreparer
+	readonly checkerPublished: CheckerPublication
 	readonly uploadFetch: PlatformUploadFetch
 	readonly api: ZeropsApi
 	readonly reconcileSchema: SchemaReconciler

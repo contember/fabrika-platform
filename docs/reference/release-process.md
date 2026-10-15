@@ -37,6 +37,8 @@ bun run release:bump --tag=v1.2.3
 
 `bump` refuses a version that is not newer than the source. It writes the version into every workspace package that declares one, rewrites the `@fabrika/*` ranges of `examples/*` to `^1.2.3`, which keeps bun linking the workspace, and stamps the application skill: `SKILL.md`'s version and the example pins of its references. It renders the template's `AGENTS.md` from that skill again and runs `bun install` for the lockfile. It commits nothing.
 
+Between the bump commit and the publish of its tag, the source names a version npm does not have yet. On Zerops `fabrika platform install` and `deploy` refuse such a checkout ([`zerops-platform.md`](zerops-platform.md#the-checker-version)), so a source install from `main` works again once the tag is published.
+
 ## Cutting a release
 
 1. On an up-to-date `main`, run `bun run release:bump --tag=v1.2.3`, review the diff, and run `bun run format`, `bun run typecheck` and `bun run test`.

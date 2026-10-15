@@ -1219,6 +1219,20 @@ known, but none was looked for. The service's
 superuser; that would be a decision of its own. If the second is false, the migration role's first connection fails
 with the server's authentication error.
 
+### The checker version
+
+Every contract application build fetches the checker by version: `bun x -p @fabrika/check@<version>`, where
+`<version>` is `FABRIKA_CHECK_VERSION`, the `package.json` version of `@fabrika/provider-zerops`. Control runs the
+git checkout of the installation's tag, not the published tarballs, so that version is the source version of the
+checkout. A release sets it before it is tagged
+([`release-process.md`](release-process.md#the-source-version)).
+
+`platform install` and `platform deploy` ask npm for `@fabrika/check@<version>` after they prepare the source and
+before they contact Zerops. A 404 refuses the checkout (`this checkout is version X, which is not published yet`);
+any other answer or no answer is an error, never a pass. Between a release's bump commit and its publish, `main`
+is refused this way. An earlier tag carries the source version `0.0.4`, which npm never had, so an installation
+needs a release whose source carries its version.
+
 ## Alpine custom runtime
 
 Zerops has an Alpine service type: "a minimal base environment for running

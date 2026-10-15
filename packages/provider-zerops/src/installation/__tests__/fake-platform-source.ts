@@ -26,6 +26,7 @@ export const fakeNamespaceProxySource = () => ({
 
 export const fakeSourceCollaborators = {
 	prepareSource: async () => fakePlatformSource(),
+	checkerPublished: async () => true,
 	uploadFetch: (async (_url, init) => {
 		await new Response(init.body).arrayBuffer()
 		return new Response(null, { status: 200 })

@@ -93,6 +93,11 @@ cd fabrika-platform && bun install --frozen-lockfile
 In this guide, `fabrika` means `bun <clone>/packages/cli/src/index.ts`. Do not edit the clone: a dirty
 checkout is refused, and a local commit is not on GitHub, so namespaces cannot fetch it.
 
+Install a released tag, not a branch. Every application build fetches `@fabrika/check` at the version of the
+checkout, so `install` and `deploy` refuse a checkout whose version npm does not have yet: `this checkout is
+version X, which is not published yet`. A `main` between a release's version bump and its publish is such a
+checkout.
+
 ## Step 1. Install the platform
 
 ```bash

@@ -16,8 +16,9 @@ export const ZEROPS_APPLICATION_PORT = 3000
 export const ZEROPS_APPLICATION_RUNTIME = 'alpine/bun@1.3'
 
 /**
- * The checker every build runs, pinned to this package's own version: the public packages are released together
- * (`release:validate`), so this is the checker of the installation that renders the build.
+ * The checker every build runs, pinned to this package's own version. Control runs the git checkout of its release
+ * tag, so this reads the source version, which `release:validate` holds equal to the tag; the public packages are
+ * released together, so it is the checker of the installation that renders the build.
  */
 export const FABRIKA_CHECK_VERSION: string = packageManifest.version
 
