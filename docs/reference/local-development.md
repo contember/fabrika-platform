@@ -276,8 +276,9 @@ IAM has no return origin for answers `400` naming the address rather than trying
 something else.
 
 Because the console is now a registered app, a **non-admin role is grantable
-locally**: `vozka`'s `operator` role and its action catalog are in IAM from the first
-`local:up`, so an inline `deploy.read` grant or a role assignment resolves. There is
+locally**: the console's roles (`observer`, `triager`, `deployer`, `operator`) and its
+action catalog are in IAM from the first `local:up`, so an inline `deploy.read` grant or
+a role assignment resolves. There is
 no persona switch to fall back on, and adding one back would be a second
 authentication model.
 

@@ -36,7 +36,19 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
 - **Sign-out is IAM's, not the console's** (`src/lib/session.ts`). The bar links to IAM's `GET /auth/logout`
   confirmation, whose same-origin POST revokes the IAM login and so every app session derived from it; IAM refuses a
   cross-site POST, so never post it from the console. IAM's origin comes from `/.well-known/fabrika-builder`. The
-  signed-in name is IAM's `me`, which answers installation administrators only, read with auth bounce disabled.
+  signed-in name is Control's `consoleAccess` principal, or IAM's `me` when Control does not answer.
+- **The console shows what its caller may use; it decides nothing** (`src/lib/console-access.ts`). `consoleSession()`
+  reads, once per load and without a login bounce, Control's `consoleAccess`, IAM's `me` (answers administrators only)
+  and `appPeople.apps`. `mayOpen` gives each rail page the rule its LOADER needs, so a page in the rail loads: the
+  overview needs `app.manage`, `namespace.manage` and `deploy.read` globally, Applications `app.manage` globally,
+  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope. The root layout drops the rest,
+  answers a hidden page reached by URL with "not available", and shows the no-access page when nothing is left. A
+  part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
+  `mayDo` at the object's app and environment (`ConsoleAccessContext`). Control's action strings are repeated in
+  `CONSOLE_ACTIONS` because `@fabrika/control` is a runtime package; keep them equal to its `src/actions.ts`.
+- **An IAM application reads as its display name** (`src/access/lib/app-names.tsx`). The Access layout reads
+  `apps.list` once and provides the names; `AppName` renders the name with the id as its tooltip, and a picker
+  option shows both. The console itself is `vozka`, named `Console`.
 
 - **`src/styles.css` is the console's ONLY design system.** `src/access/styles.css` holds styles for the
   Access-only widgets (pickers, grant grid, JSON view) written in these tokens. Do not put base, shell,

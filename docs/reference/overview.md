@@ -165,6 +165,18 @@ requests, health, and IAM principal lookup stay on the private platform network.
 An Operations outage does not roll back registry mutations or deploys; control
 records desired projections and replays them during maintenance.
 
+The console's IAM application keeps the durable id `vozka` and is named
+`Console` for people. Its schema (`packages/control/fabrika.schema.ts`) presets
+five roles, each grantable globally or at one app or environment: `observer`
+(`operations.read`), `triager` (`operations.read`, `operations.triage`),
+`deployer` (`deploy.*`), `operator` (`deploy.*`, `operations.*`) and `admin`
+(`*`). Registry, namespace, secret, source-connection and approval actions
+belong to no preset but `admin`. The console asks Control's `consoleAccess`
+which of these actions the caller holds, and IAM whether the caller
+administers IAM or an application's people. It shows only the pages the caller
+may use, and a caller who may use none sees that no role is granted yet. This
+is presentation: every procedure keeps its own authorization.
+
 Each registered application environment may carry an explicit canonical
 `publicOrigin`. It is independent of the provider routing domain and is the only
 origin Operations uses for active HTTP health checks. Control does not infer it
