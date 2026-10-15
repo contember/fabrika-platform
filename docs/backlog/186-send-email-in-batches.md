@@ -1,10 +1,10 @@
 ---
-id: 181
+id: 186
 title: Send email in batches
 blocked-by: []
 ---
 
-# 181 — Send email in batches
+# 186 — Send email in batches
 
 **Summary.** Add `sendBatch` to `EmailSender` and let adapters report `maxBatch` above 1, so a bulk send takes fewer
 provider requests and less of the provider's rate limit. Medium; decided, not scheduled.

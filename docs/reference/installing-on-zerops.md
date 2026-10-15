@@ -80,7 +80,7 @@ the environment only), the command validates the set and writes it on `iam` and 
 credentials sensitive and not in the secrets file: the operator already holds them. IAM sends its own mail
 with it, and Control hands it to every application whose job declares `mailer: 'installation'`
 ([outbound email](outbound-email.md#the-installations-transport)). Nothing writes it again later; changing
-it is the manual step in `platform guide` ([backlog 182](../backlog/182-set-or-rotate-the-installation-mail-transport.md)).
+it is the manual step in `platform guide` ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)).
 
 Both passes and the integration-token mint have run live on a fresh account
 ([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).

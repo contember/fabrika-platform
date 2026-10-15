@@ -75,7 +75,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [178](178-an-http-mail-relay-protocol-and-a-relay-adapter.md) — An installation transport can use only a built-in provider; a relay protocol and a `relay` adapter reach any adapter and add idempotency over a provider without it.
 - [179](179-build-a-platform-distribution-that-bundles-extra-email-adapters.md) — Build IAM and Control with extra email adapters as composition inputs; needs another build source, a version lock, and IAM's local-only `EMAIL_SENDER` guard kept.
 - [180](180-verify-the-smartemailing-adapter-on-a-live-account.md) — The SmartEmailing adapter is verified only against a stubbed `fetch`; six points of its mapping wait for a live account.
-- [181](181-send-email-in-batches.md) — Every adapter sends one message per call (`maxBatch: 1`); `sendBatch` would cut requests and rate-limit use for bulk sends.
-- [182](182-set-or-rotate-the-installation-mail-transport.md) — `fabrika platform mail` sets or rotates the installation's mail transport on IAM and Control and redeploys the environments that use it; today an application gets a change only at its next deploy.
 - [185](185-no-release-is-accepted-on-a-live-zerops-account.md) — Run a fresh-install acceptance (namespace, app with a database, one authenticated request, teardown) on a dedicated Zerops account per release.
+- [186](186-send-email-in-batches.md) — Every adapter sends one message per call (`maxBatch: 1`); `sendBatch` would cut requests and rate-limit use for bulk sends.
+- [187](187-set-or-rotate-the-installation-mail-transport.md) — `fabrika platform mail` sets or rotates the installation's mail transport on IAM and Control and redeploys the environments that use it; today an application gets a change only at its next deploy.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

@@ -1,10 +1,10 @@
 ---
-id: 182
+id: 187
 title: Set or rotate the installation's mail transport with one command
 blocked-by: []
 ---
 
-# 182 — Set or rotate the installation's mail transport with one command
+# 187 — Set or rotate the installation's mail transport with one command
 
 **Summary.** Add `fabrika platform mail`: it sets or rotates the installation's mail transport on IAM and Control and
 redeploys every application environment that sends through it. Small to medium; decided, not scheduled.

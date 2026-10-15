@@ -131,7 +131,7 @@ that declares a mailer has no such flow, so it does not start without a sender (
 - Control refuses such a deploy, before any effect, when the installation has no transport. It refuses at deploy, not
   at approval: the transport is installation state that can be added or removed after a contract was approved.
 - IAM and Control read the transport when they start. An application gets a changed transport at its next deploy;
-  nothing fans a change out yet ([backlog 182](../backlog/182-set-or-rotate-the-installation-mail-transport.md)).
+  nothing fans a change out yet ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)).
 
 ### 5. An application's own transport
 
@@ -178,7 +178,7 @@ origin is registered is sent in IAM's own wording.
   distribution that bundles it ([backlog 179](../backlog/179-build-a-platform-distribution-that-bundles-extra-email-adapters.md)).
 - A changed installation transport reaches an application only at its next deploy. Until then the application sends
   with the old one, and a provider key that was revoked fails its mail with `provider_unauthorized`
-  ([backlog 182](../backlog/182-set-or-rotate-the-installation-mail-transport.md)).
+  ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)).
 - On Zerops, every `FABRIKA_EMAIL_*` an application gets is sensitive, its provider name and address too, so the
   console cannot show them; the provider contract has no way to mark only some of a family secret.
 - Renaming the installation's IAM origin changes the key prefix of every application. A message whose send was in
@@ -190,7 +190,7 @@ origin is registered is sent in IAM's own wording.
   person. It confirms only that it queued a request. The status codes for a forbidden request, a server error and
   disabled sending, a text-only body, the format of `tag` and the wording of a daily-limit 429 are not verified.
 - Every adapter sends one message per call (`maxBatch: 1`); batches are
-  [backlog 181](../backlog/181-send-email-in-batches.md).
+  [backlog 186](../backlog/186-send-email-in-batches.md).
 - SMTP-only installations need a future adapter or an HTTP mail gateway. SMTP is not emulated through runtime-specific code in IAM.
 - No provider is a permanent platform contract. The registry and the conformance kit are.
 
