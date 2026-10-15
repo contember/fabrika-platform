@@ -153,8 +153,11 @@ bun test
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`
   marker on the deploy service, or listed in the stored target's `createdBuckets`: the first registration keeps
-  there the buckets its collision-refusing import created, and the deploy writes them into the marker. An
-  adopted bucket never gets evidence. A refusal fails the run before a
+  there the buckets its collision-refusing import created, and the deploy writes them into the marker. **The
+  import's answer is the only evidence of creation**, so `apply-import` merges the buckets it created into the
+  marker (`recordCreatedBuckets`) before any other step, on a signal only a lost lease aborts; never move that
+  write later. A sensitive marker (releases up to v0.4.2) names nothing and is rewritten readable. An
+  adopted bucket never gets evidence, and its refusal names the operator's remedies. A refusal fails the run before a
   version is reserved and raises an Operations alert through the application's own ingest DSN
   (`alertExposure`, best-effort).
 - **The run checkpoint is `{ appVersionId, triggered }` and recovery never resumes (ADR-0044).** `appVersionId`

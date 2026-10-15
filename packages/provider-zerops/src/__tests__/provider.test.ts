@@ -96,7 +96,10 @@ interface Overrides {
 	versionErrors?: number
 	importProcesses?: { id: string; status: ZeropsProcess['status'] }[]
 	pipelineStart?: string
+	/** The deploy service's variables; writes and deletes land in this array, so a second run can share it. */
 	serviceEnv?: StoredServiceEnv[]
+	/** A write of this key fails, the way issue #3's oversized value answered 500. */
+	envWriteFailure?: string
 	/** What `findService` answers per hostname; every service reads `subdomainAccess: false` by default. */
 	services?: Record<string, Partial<ZeropsService> | null>
 	/** The services the import reports, replacing the default one for `api`. */
@@ -206,12 +209,17 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		putServiceEnv: async ({ key, value, sensitive }) => {
 			recorded.calls.push(`putServiceEnv:${key}`)
 			recorded.timeline.push(`put:${key}`)
+			if (key === overrides.envWriteFailure) throw new ZeropsApiError('zerops: create service env failed (500)', 500, '')
 			recorded.envWrites.push({ key, value, sensitive })
+			const index = records.findIndex((record) => record.key === key)
+			records.splice(index === -1 ? records.length : index, index === -1 ? 0 : 1, { id: `env-${key}`, key, content: value, sensitive })
 		},
 		deleteServiceEnv: async ({ envId }) => {
 			recorded.calls.push(`deleteServiceEnv:${envId}`)
 			recorded.timeline.push(`delete:${envId}`)
 			recorded.envDeletes.push(envId)
+			const index = records.findIndex((record) => record.id === envId)
+			if (index !== -1) records.splice(index, 1)
 		},
 		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', sensitive: false, content: 'value' }),
 		getLogAccess: async () => LOG_ACCESS,
@@ -1114,14 +1122,15 @@ describe('the exposure read-back before activation', () => {
 		)
 	})
 
-	test('a bucket this import did not create and no marker names is refused', async () => {
+	test('a bucket this import did not create and no marker names is refused, with a remedy that needs no sudo', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } } }))
-		expect(stepError(await provider(runOf([BUCKET, API])), 'verify-exposure')).toContain(
-			'service `files` is a bucket the platform did not create private (no provenance)',
+		expect(stepError(await provider(runOf([BUCKET, API])), 'verify-exposure')).toBe(
+			"zerops: activation refused; service `files` is a bucket the platform did not create private (no provenance). If a Fabrika import created it (its `stack.create` process ran under the platform's Zerops token), set `FABRIKA_STORAGE_PROVENANCE` on `api` to `bucket-1`, not sensitive; otherwise delete the bucket and deploy again",
 		)
+		expect(recorded.envWrites).toEqual([])
 	})
 
-	test('a bucket this import created is recorded in the provenance marker, and a recorded one is accepted', async () => {
+	test('a bucket this import created is recorded by the import step itself, before anything else is read or written', async () => {
 		const created = createZeropsDeployer(() =>
 			makeCollaborators(recorded, {
 				services: { files: { id: 'bucket-1' } },
@@ -1129,7 +1138,16 @@ describe('the exposure read-back before activation', () => {
 			})
 		)
 		expect((await created(runOf([BUCKET, API]))).status).toBe('succeeded')
-		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false })
+		expect(recorded.calls.slice(0, 5)).toEqual([
+			'importServices',
+			'getProcess',
+			'listServiceEnv',
+			'putServiceEnv:FABRIKA_STORAGE_PROVENANCE',
+			'listServiceEnv',
+		])
+		expect(recorded.envWrites.filter((write) => write.key === 'FABRIKA_STORAGE_PROVENANCE')).toEqual([
+			{ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false },
+		])
 
 		recorded = fresh()
 		const marked = createZeropsDeployer(() =>
@@ -1142,19 +1160,104 @@ describe('the exposure read-back before activation', () => {
 		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_STORAGE_PROVENANCE')
 	})
 
-	test('a marker an older release wrote sensitive is no provenance; a created bucket of the stored target still is', async () => {
-		const legacyMarker: StoredServiceEnv = { id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: true }
-		const unproven = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } }, serviceEnv: [legacyMarker] }))
-		expect(stepError(await unproven(runOf([BUCKET, API])), 'verify-exposure')).toContain(
-			'service `files` is a bucket the platform did not create private (no provenance)',
+	test('a run that fails after its import created the bucket leaves the evidence behind, so the next run passes', async () => {
+		const serviceEnv: StoredServiceEnv[] = []
+		const failing = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv,
+				envWriteFailure: 'FABRIKA_PROXY_SECRET',
+				services: { files: { id: 'bucket-1' } },
+				importedServices: [{ id: 'bucket-1', name: 'files', processes: [{ id: 'create-1', actionName: 'stack.create' }] }],
+			})
 		)
+		expect(stepError(await failing(runOf([BUCKET, API])), 'write-service-env')).toContain('500')
 
 		recorded = fresh()
-		const registered = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } }, serviceEnv: [legacyMarker] }))
+		const rerun = createZeropsDeployer(() => makeCollaborators(recorded, { serviceEnv, services: { files: { id: 'bucket-1' } }, importedServices: [] }))
+		expect((await rerun(runOf([BUCKET, API]))).status).toBe('succeeded')
+	})
+
+	test('a cancel that arrives while the import settles does not separate the created bucket from its evidence', async () => {
+		const controller = new AbortController()
+		const collaborators = makeCollaborators(recorded, {
+			processStatuses: ['RUNNING', 'FINISHED'],
+			services: { files: { id: 'bucket-1' } },
+			importedServices: [{ id: 'bucket-1', name: 'files', processes: [{ id: 'create-1', actionName: 'stack.create' }] }],
+		})
+		const provider = createZeropsDeployer(() => ({
+			...collaborators,
+			sleep: async (ms) => {
+				recorded.sleeps.push(ms)
+				controller.abort()
+			},
+		}))
+		const result = await provider({ ...runOf([BUCKET, API]), signal: controller.signal })
+		await settled()
+
+		expect(result.status).toBe('failed')
+		expect(recorded.envWrites).toEqual([{ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false }])
+		expect(recorded.calls).not.toContain('findService:files')
+	})
+
+	test('when the evidence cannot be recorded, the run log names the bucket and the refusal names the remedy', async () => {
+		const serviceEnv: StoredServiceEnv[] = []
+		const failing = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv,
+				envWriteFailure: 'FABRIKA_STORAGE_PROVENANCE',
+				services: { files: { id: 'bucket-1' } },
+				importedServices: [{ id: 'bucket-1', name: 'files', processes: [{ id: 'create-1', actionName: 'stack.create' }] }],
+			})
+		)
+		expect(stepError(await failing(runOf([BUCKET, API])), 'apply-import')).toContain('500')
+		expect(recorded.logs).toContain(
+			'  [warn] this import created bucket(s) `files` (bucket-1), but FABRIKA_STORAGE_PROVENANCE on service-1 could not record them',
+		)
+
+		const rerun = () =>
+			createZeropsDeployer(() => makeCollaborators(recorded, { serviceEnv, services: { files: { id: 'bucket-1' } }, importedServices: [] }))
+		recorded = fresh()
+		expect(stepError(await rerun()(runOf([BUCKET, API])), 'verify-exposure')).toContain(
+			'set `FABRIKA_STORAGE_PROVENANCE` on `api` to `bucket-1`, not sensitive',
+		)
+
+		// The operator's remedy, after confirming who started the bucket's `stack.create` process.
+		serviceEnv.push({ id: 'env-by-hand', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: false })
+		recorded = fresh()
+		expect((await rerun()(runOf([BUCKET, API]))).status).toBe('succeeded')
+	})
+
+	test('a marker an older release wrote sensitive names no bucket, and the refusal says why', async () => {
+		const legacyMarker: StoredServiceEnv = { id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: true }
+		const unproven = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } }, serviceEnv: [legacyMarker] }))
+		expect(stepError(await unproven(runOf([BUCKET, API])), 'verify-exposure')).toBe(
+			"zerops: activation refused; service `files` is a bucket the platform did not create private (no provenance; `FABRIKA_STORAGE_PROVENANCE` on `api` was written sensitive by an earlier release and cannot be read). If a Fabrika import created it (its `stack.create` process ran under the platform's Zerops token), set `FABRIKA_STORAGE_PROVENANCE` on `api` to `bucket-1`, not sensitive; otherwise delete the bucket and deploy again",
+		)
+		expect(recorded.logs.some((line) => line.includes('FABRIKA_STORAGE_PROVENANCE was written sensitive by an earlier release'))).toBe(true)
+	})
+
+	test('a sensitive marker is rewritten readable from the stored target or from this import', async () => {
+		const legacyMarker = (): StoredServiceEnv => ({ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1', sensitive: true })
+		const registered = createZeropsDeployer(() =>
+			makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } }, serviceEnv: [legacyMarker()] })
+		)
 		const run = { ...runOf([BUCKET, API]), target: target({ createdBuckets: ['bucket-1'] }) }
 		expect((await registered(run)).status).toBe('succeeded')
-		// Rewritten readable, so the next deploy reads it back.
 		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1', sensitive: false })
+
+		recorded = fresh()
+		const serviceEnv = [legacyMarker()]
+		const created = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv,
+				services: { files: { id: 'bucket-2' } },
+				importedServices: [{ id: 'bucket-2', name: 'files', processes: [{ id: 'create-2', actionName: 'stack.create' }] }],
+			})
+		)
+		expect((await created(runOf([BUCKET, API]))).status).toBe('succeeded')
+		expect(serviceEnv.filter((record) => record.key === 'FABRIKA_STORAGE_PROVENANCE')).toEqual([
+			{ id: 'env-FABRIKA_STORAGE_PROVENANCE', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-2', sensitive: false },
+		])
 	})
 
 	test('a marker no bucket needs any more is removed', async () => {

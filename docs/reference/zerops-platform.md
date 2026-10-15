@@ -1197,7 +1197,15 @@ it, but an earlier enable survives every import. Zerops has no API to read a buc
 is accepted only when this run's import created it (a `stack.create` process for it) or the
 `FABRIKA_STORAGE_PROVENANCE` variable on the deploy service names its id. The first registration keeps the
 buckets its collision-refusing import created in the environment's stored target, and the first deploy writes
-them into that variable.
+them into that variable. A later import that creates a bucket records its id in the variable, not sensitive, as
+soon as the import's processes finish and before any other step: a re-apply reports no `stack.create` for a
+service that exists, so a run that failed after the import could otherwise never prove the bucket again. A
+cancel does not stop that write; a lost lease or a failed write does, and then the run log names the bucket.
+A variable written sensitive (releases up to v0.4.2) reads back `REDACTED` without sudo, so it names no bucket;
+the next deploy that proves its bucket rewrites it readable. The refusal of an unproven bucket names both
+remedies, neither of which needs sudo: when the bucket's `stack.create` process ran under the platform's token,
+set the variable on the deploy service to the bucket's service id, not sensitive; otherwise delete the bucket
+and deploy again.
 
 The build container has no database, so a contract application's start script runs `fabrika db migrate`, then
 `fabrika db codegen --verify`, then `fabrika db test-isolation`, then the server: a stale committed

@@ -45,6 +45,8 @@ import {
 	isObjectStorageType,
 	parseStorageProvenance,
 	STORAGE_PROVENANCE_KEY,
+	type StorageProvenanceMarker,
+	unprovenBucketReason,
 } from './exposure'
 import {
 	assertAuthoredManagedDocument,
@@ -450,6 +452,44 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 	}
 }
 
+const declaredBuckets = (artifact: FabrikaManifest): string[] =>
+	artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
+
+interface CreatedBucket {
+	readonly hostname: string
+	readonly id: string
+}
+
+/** The declared buckets this import reports creating. */
+const createdBucketsOf = (artifact: FabrikaManifest, created: ReadonlyMap<string, string>): CreatedBucket[] =>
+	declaredBuckets(artifact).flatMap((hostname) => {
+		const id = created.get(hostname)
+		return id === undefined ? [] : [{ hostname, id }]
+	})
+
+/**
+ * Record this import's buckets in the provenance marker before any other step can fail: the import's answer is the only
+ * evidence of creation, since a re-apply reports nothing for a service that exists. Merged here, never narrowed;
+ * `write-service-env` sets the verified set. A sensitive marker of an earlier release cannot be merged and is replaced.
+ */
+const recordCreatedBuckets = async (env: StepEnv, buckets: readonly CreatedBucket[], signal: AbortSignal): Promise<void> => {
+	const { zerops, log, run } = env
+	const serviceId = run.target.serviceId
+	try {
+		const records = await zerops.api.listServiceEnv({ serviceId, signal })
+		const recorded = parseStorageProvenance(readableContent(records.find((record) => record.key === STORAGE_PROVENANCE_KEY)))
+		if (buckets.every((bucket) => recorded.has(bucket.id))) return
+		const value = formatStorageProvenance([...recorded, ...buckets.map((bucket) => bucket.id)])
+		await zerops.api.putServiceEnv({ serviceId, key: STORAGE_PROVENANCE_KEY, value, sensitive: false, signal })
+		log(`  ${STORAGE_PROVENANCE_KEY}: recorded the bucket(s) this import created`)
+	} catch (error) {
+		// The run log is then the one record of the evidence; the refusal a later run raises names the remedy.
+		const named = buckets.map((bucket) => `\`${bucket.hostname}\` (${bucket.id})`).join(', ')
+		log(`  [warn] this import created bucket(s) ${named}, but ${STORAGE_PROVENANCE_KEY} on ${serviceId} could not record them`)
+		throw error
+	}
+}
+
 /**
  * The exposure read-back (ADR-0043): before a version can activate, every declared service must read
  * `subdomainAccess: false`, and every object-storage service must be one this import created or the provenance
@@ -463,10 +503,14 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 		return
 	}
 	const created = env.attempt.created ?? new Map<string, string>()
-	const buckets = artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
+	const buckets = declaredBuckets(artifact)
 	const records = buckets.length === 0 ? [] : await zerops.api.listServiceEnv({ serviceId: target.serviceId, signal })
-	const marker = readableContent(records.find((record) => record.key === STORAGE_PROVENANCE_KEY))
-	const known = new Set([...parseStorageProvenance(marker), ...(target.createdBuckets ?? [])])
+	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
+	const markerState: StorageProvenanceMarker = marker === undefined ? 'absent' : marker.sensitive ? 'sensitive' : 'readable'
+	if (markerState === 'sensitive') {
+		log(`  [warn] ${STORAGE_PROVENANCE_KEY} was written sensitive by an earlier release; it names no bucket until it is rewritten readable`)
+	}
+	const known = new Set([...parseStorageProvenance(readableContent(marker)), ...(target.createdBuckets ?? [])])
 	const findings: ExposureFinding[] = []
 	const bucketIds: string[] = []
 	for (const hostname of manifestServiceHostnames(artifact)) {
@@ -488,7 +532,10 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 		if (created.get(hostname) === service.id || known.has(service.id)) {
 			bucketIds.push(service.id)
 		} else {
-			findings.push({ hostname, reason: 'is a bucket the platform did not create private (no provenance); create it through a Fabrika import' })
+			findings.push({
+				hostname,
+				reason: unprovenBucketReason({ bucketId: service.id, deployService: artifact.target.deployService, marker: markerState }),
+			})
 		}
 	}
 	if (findings.length > 0) {
@@ -612,17 +659,27 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			const result = await zerops.api.importServices({ projectId: target.projectId, yaml: compiled.yaml, signal })
 			log(`  imported: ${result.services.map((service) => `${service.name} (${service.id})`).join(', ') || '(none reported)'}`)
 			attempt.created = createdServices(result)
+			const createdBuckets = createdBucketsOf(artifact, attempt.created)
+			// A cancel may not separate a created bucket from its evidence; only a lost lease stops the step then.
+			const settling = createdBuckets.length === 0 ? signal : followLeaseLoss(signal)
 			// An import ANSWERS before its services exist. Triggering a pipeline on a service Zerops is
 			// still creating answers 400 `projectImportInvalidParameter`, which is what the first deploy
 			// into a fresh namespace hit; a re-apply onto services that already exist reports none.
 			const pending = result.services.flatMap((service) => service.processes.map((process) => ({ service: service.name, id: process.id })))
 			for (const process of pending) {
-				assertRunning(signal)
-				await waitForProcess({ api: zerops.api, processId: process.id, sleep: zerops.sleep, signal, label: `the ${process.service} import` })
+				assertRunning(settling)
+				await waitForProcess({
+					api: zerops.api,
+					processId: process.id,
+					sleep: zerops.sleep,
+					signal: settling,
+					label: `the ${process.service} import`,
+				})
 			}
 			if (pending.length > 0) {
 				log(`  awaited ${pending.length} import process(es)`)
 			}
+			if (createdBuckets.length > 0) await recordCreatedBuckets(env, createdBuckets, settling)
 			return
 		}
 

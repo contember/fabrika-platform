@@ -7,6 +7,7 @@ import type { ZeropsImportResult } from './api'
 /**
  * The provenance marker: a service variable on the deploy service listing the object-storage service ids the platform
  * created, each from an import that carried `objectStoragePolicy: private`. A bucket adopted by hostname has none.
+ * The import's answer is the only evidence of creation, so `apply-import` records it here before any other step runs.
  */
 export const STORAGE_PROVENANCE_KEY = 'FABRIKA_STORAGE_PROVENANCE'
 
@@ -29,6 +30,17 @@ export const createdServices = (result: ZeropsImportResult): ReadonlyMap<string,
 			.filter((service) => service.processes.some((process) => process.actionName === CREATE_ACTION))
 			.map((service) => [service.name, service.id]),
 	)
+
+/** How the deploy service holds the marker: a release up to v0.4.2 wrote it sensitive, which reads back without its value. */
+export type StorageProvenanceMarker = 'absent' | 'readable' | 'sensitive'
+
+/** The refusal of a bucket no evidence names, with the two remedies an operator has without sudo. */
+export const unprovenBucketReason = (input: { bucketId: string; deployService: string; marker: StorageProvenanceMarker }): string => {
+	const unreadable = input.marker === 'sensitive'
+		? `; \`${STORAGE_PROVENANCE_KEY}\` on \`${input.deployService}\` was written sensitive by an earlier release and cannot be read`
+		: ''
+	return `is a bucket the platform did not create private (no provenance${unreadable}). If a Fabrika import created it (its \`${CREATE_ACTION}\` process ran under the platform's Zerops token), set \`${STORAGE_PROVENANCE_KEY}\` on \`${input.deployService}\` to \`${input.bucketId}\`, not sensitive; otherwise delete the bucket and deploy again`
+}
 
 export interface ExposureFinding {
 	readonly hostname: string

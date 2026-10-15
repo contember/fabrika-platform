@@ -134,9 +134,12 @@ The compiler refuses these fields on application services:
 
 A bucket is accepted only when the platform created it as private and it carries that provenance. The
 provenance is the `FABRIKA_STORAGE_PROVENANCE` variable on the deploy service: the ids of the buckets a
-Fabrika import created, each from a document that carried `objectStoragePolicy: private`. The first
-registration's collision-refusing import keeps its creation evidence in the environment's stored target,
-and the first deploy writes it into the variable, so no failed write loses it. A bucket that already
+Fabrika import created, each from a document that carried `objectStoragePolicy: private`. The import's
+answer is the only evidence of creation: a re-apply reports nothing for a service that already exists.
+So the evidence is persisted where it appears. The first registration's collision-refusing import keeps it
+in the environment's stored target, and the first deploy writes it into the variable. A deploy whose import
+creates a bucket records it in the variable inside the import step, before any other step runs, and a
+cancel does not interrupt that. A bucket that already
 existed under its hostname has no evidence and is refused. Before activation, the deploy reads back `subdomainAccess`
 of every declared service from Zerops and checks every bucket's provenance. A failed check blocks
 activation and raises an Operations alert: an error event in the application's own Operations project,
@@ -184,6 +187,12 @@ execution document carries the generated `run` and `build`.
   overrides of `@fabrika/*`.
 - An application is reachable only through the namespace proxy. A bucket policy changed outside
   Fabrika is not detected, because Zerops has no API to read a policy back.
+- Evidence can still be lost when the import step itself dies between the import's answer and the
+  variable write (a failed write, a lost lease, a killed process). The run log then names the bucket, and
+  the refusal of the next deploy names the two remedies: an operator who confirms the bucket's
+  `stack.create` process ran under the platform's token sets the variable by hand, not sensitive;
+  otherwise the bucket is deleted and the next deploy creates it. A variable a release up to v0.4.2
+  wrote sensitive reads back without its value and is treated as absent, with the same remedies.
 
 ## Alternatives considered
 
@@ -197,6 +206,14 @@ execution document carries the generated `run` and `build`.
   proved.
 - **A separate build for the SPA.** Deferred: it removes the toolchain-sabotage gap, but v1 keeps one
   build.
+- **Derive provenance from Zerops: accept a bucket whose `stack.create` process the platform's token
+  started.** Rejected: the same token creates the installation's and the namespaces' services and is
+  held by the operator, so it proves who created a bucket, not that an import of this application
+  created it private. An application could then adopt another service's bucket by hostname. It is the
+  check an operator makes before restoring the variable by hand.
+- **Keep the evidence in the environment's stored target on every deploy.** Rejected for now: a deploy
+  cannot write its stored target through the provider contract, and the variable write right after the
+  import closes the observed failure.
 - **An approval path for exposure.** Rejected: a public bucket or a subdomain bypasses the proxy, so
   no contract could describe what it exposes. Only CSP extensions are approvable.
 - **`FABRIKA_CONTRACT_DIGEST` as a service variable.** Rejected: a service variable is mutable across
