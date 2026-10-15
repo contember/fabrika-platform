@@ -19,6 +19,7 @@ import type {
 	AppSecretDto,
 	AppVarDto,
 	CompleteApprovalRequest,
+	ConsoleAccessDto,
 	CreateDeploymentNamespaceRequest,
 	CursorList,
 	DeploymentNamespaceDetailDto,
@@ -135,6 +136,7 @@ export interface GitHubSourceConnectionRpcContract {
 /** Portable Delivery control API shared by browser and machine callers. */
 export interface ControlRpcContract {
 	installation: RpcProcedure<void, InstallationDto>
+	consoleAccess: RpcProcedure<void, ConsoleAccessDto>
 	builderPairing: {
 		inspect: RpcProcedure<BuilderPairingProofRequest, InspectDeviceAuthorizationResult>
 		approve: RpcProcedure<BuilderPairingProofRequest, ApproveDeviceAuthorizationResult>

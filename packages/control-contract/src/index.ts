@@ -26,6 +26,25 @@ export interface InstallationDto {
 	readonly provider: string
 }
 
+/**
+ * The console actions the caller's verified token holds, in the shape of an application's caller document. The
+ * console shows and hides by it; it decides nothing, because every procedure checks its own action.
+ */
+export interface ConsoleAccessDto {
+	/** Null for a credential bound to no principal. */
+	readonly principal: { readonly id: string; readonly label: string } | null
+	/** The actions held as a global grant, so in every scope value. */
+	readonly global: readonly string[]
+	/** Each scope value the caller holds an action in, with those actions; sorted by dimension, then value. */
+	readonly scopes: readonly ConsoleScopedActionsDto[]
+}
+
+export interface ConsoleScopedActionsDto {
+	readonly type: string
+	readonly value: string
+	readonly actions: readonly string[]
+}
+
 export interface GitHubSourceRepositoryDto {
 	readonly owner: string
 	readonly name: string

@@ -68,6 +68,7 @@ import {
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
 import { describeConnector } from './connectors'
+import { consoleAccess } from './console-access'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
 import { startSourceConnection } from './github/connections/manifest'
@@ -206,6 +207,7 @@ export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
 	return rpc.router({
 		installation: rpc.procedure.query(({ ctx }) => ({ provider: ctx.provider.id })),
+		consoleAccess: rpc.procedure.query(({ ctx }) => consoleAccess(ctx.auth)),
 		builderPairing: rpc.router({
 			inspect: rpc.procedure.input(pairingProof).query(({ ctx, input }) => controlCall(() => inspectBuilderPairing(pairingContext(ctx), input))),
 			approve: rpc.procedure.input(pairingProof).mutation(({ ctx, input }) => controlCall(() => approveBuilderPairing(pairingContext(ctx), input))),
