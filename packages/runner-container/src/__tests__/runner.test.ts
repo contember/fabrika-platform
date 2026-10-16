@@ -484,6 +484,24 @@ describe('Runner pipeline', () => {
 		expect(absent).not.toHaveProperty('FABRIKA_INSTALLATION_APPS')
 	})
 
+	test("the environment's cross origins reach the executor as JSON, and no job-supplied name replaces or plants them", async () => {
+		const rec: RecordedSpawn[] = []
+		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
+		const executorEnv = async (job: CloudflareRunnerJob) => {
+			rec.length = 0
+			await new Runner(job, makeEnv(spawn)).run()
+			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+		}
+
+		const sent = await executorEnv(
+			baseJob({ crossOrigins: ['https://partner.example.org'], secrets: { FABRIKA_CROSS_ORIGINS: '["https://evil.example"]' } }),
+		)
+		expect(sent?.['FABRIKA_CROSS_ORIGINS']).toBe('["https://partner.example.org"]')
+
+		const absent = await executorEnv(baseJob({ vars: { FABRIKA_CROSS_ORIGINS: '["https://evil.example"]' } }))
+		expect(absent).not.toHaveProperty('FABRIKA_CROSS_ORIGINS')
+	})
+
 	test('credential, secret, var and managed environment values are redacted from log lines', async () => {
 		const spawn = makeSpawner([], (spec, handlers) => {
 			if (spec.command === 'fabrika-cloudflare-executor') {

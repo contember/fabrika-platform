@@ -172,6 +172,7 @@ const platformProxied = (authored: Worker, contract: ContractArtifact, run: Clou
 		appId: appEnvironmentId(run.appId, run.env),
 		appHost: run.domain ?? 'localhost',
 		...(run.domain === undefined ? {} : { domain: run.domain }),
+		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
 		endpoints: contractProxyTable(contract),
 		...operationsOrigin(run.managedEnvironment),
 		iamUrl: run.managedEnvironment[FABRIKA_IAM_ISSUER] ?? '',
@@ -414,6 +415,8 @@ export interface CloudflareDeployRun {
 	readonly appId: string
 	readonly env: string
 	readonly domain?: string
+	/** The environment's cross-origin list from Control's registry (ADR-0022); the proxy Worker's manifest entry lists it. */
+	readonly crossOrigins?: readonly string[]
 	/** Every origin IAM may hand this environment a session at, registered under `<app>@<env>`. */
 	readonly returnOrigins?: readonly string[]
 	readonly cwd: string

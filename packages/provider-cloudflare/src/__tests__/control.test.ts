@@ -692,6 +692,20 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: 'https://api.example.com' }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [42] }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [''] }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: 'api.example.com', crossOrigins: ['https://partner.example.org'] }).success)
+			.toBe(true)
+		for (
+			const crossOrigins of [
+				['https://partner.example.org/'],
+				['https://*.example.org'],
+				['https://key@partner.example.org'],
+				['https://partner.example.org', 'https://partner.example.org'],
+				['https://api.example.com'],
+				Array.from({ length: 17 }, (_, index) => `https://p${index}.example.org`),
+			]
+		) {
+			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: 'API.example.com', crossOrigins }).success).toBe(false)
+		}
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: ['notes@prod', 'api@production'] }).success).toBe(true)
 		for (const id of ['notes', 'notes@prod@eu', '@prod', 'notes@', 'notes @prod']) {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: [id] }).success).toBe(false)
@@ -1080,5 +1094,28 @@ describe('Cloudflare control provider', () => {
 		// No projected set → the field is absent, so the runner never asks IAM to change anything.
 		await provider.deploy(input)
 		expect(jobs[1]).not.toHaveProperty('returnOrigins')
+	})
+
+	test("the job carries the environment's cross origins, and none when it lists none", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+
+		await provider.deploy({ ...input, environment: { ...input.environment, crossOrigins: ['https://partner.example.org'] } })
+		expect(jobs[0]?.crossOrigins).toEqual(['https://partner.example.org'])
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+		await provider.deploy(input)
+		expect(jobs[1]).not.toHaveProperty('crossOrigins')
 	})
 })

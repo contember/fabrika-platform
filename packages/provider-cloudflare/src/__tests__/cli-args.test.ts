@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
-import { parseInstallationApps, parseReturnOrigins, readApprovedAccess } from '../command'
+import { parseCrossOrigins, parseInstallationApps, parseReturnOrigins, readApprovedAccess } from '../command'
 import type { RunnerApprovedAccess } from '../runner-protocol'
 
 describe('parseCloudflareArgs', () => {
@@ -83,6 +83,23 @@ describe('parseInstallationApps', () => {
 		expect(() => parseInstallationApps('notes@prod')).toThrow('FABRIKA_INSTALLATION_APPS is not a JSON array')
 		expect(() => parseInstallationApps('{"notes":"prod"}')).toThrow('is not a JSON array of strings')
 		expect(() => parseInstallationApps('["notes"]')).toThrow('holds `notes`, which is not `<app>@<env>`')
+	})
+})
+
+describe('parseCrossOrigins', () => {
+	test("decodes the environment's list the runner writes; absent or empty is none", () => {
+		expect(parseCrossOrigins('["https://partner.example.org","http://localhost:5173"]')).toEqual([
+			'https://partner.example.org',
+			'http://localhost:5173',
+		])
+		expect(parseCrossOrigins('[]')).toBeUndefined()
+		expect(parseCrossOrigins('')).toBeUndefined()
+		expect(parseCrossOrigins(undefined)).toBeUndefined()
+	})
+
+	test('anything malformed fails the deploy', () => {
+		expect(() => parseCrossOrigins('https://partner.example.org')).toThrow('FABRIKA_CROSS_ORIGINS is not a JSON array')
+		expect(() => parseCrossOrigins('[42]')).toThrow('is not a JSON array of strings')
 	})
 })
 

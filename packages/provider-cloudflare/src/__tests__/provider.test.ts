@@ -129,6 +129,7 @@ const deploy = (
 		readonly appId?: string
 		readonly managedEnvironment?: Readonly<Record<string, string | null>>
 		readonly returnOrigins?: readonly string[]
+		readonly crossOrigins?: readonly string[]
 		readonly domain?: string
 		readonly platformResources?: 'refuse' | 'allow'
 		readonly stateNamespace?: string
@@ -170,6 +171,7 @@ const deploy = (
 		env: options.env ?? 'stage',
 		domain: options.domain ?? 'stage.example.com',
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
+		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
 		cwd: '/repo',
 		configPath: 'fabrika.config.ts',
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
@@ -1080,6 +1082,18 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 				managedEnvironment: { FABRIKA_OPERATIONS_DSN: 'ftp://errors.test/1' },
 			}),
 		).rejects.toThrow('FABRIKA_OPERATIONS_DSN is not an http(s) URL with a literal host')
+	})
+
+	test("the platform's proxy entry lists the environment's cross origins, and none when it lists none", async () => {
+		const entry = async (crossOrigins?: readonly string[]) => {
+			rec.provisions.length = 0
+			await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, ...(crossOrigins === undefined ? {} : { crossOrigins }) })
+			const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+			const [app] = parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps ?? []
+			return app !== undefined && isApplicationEntry(app) ? app : null
+		}
+		expect((await entry(['https://partner.example.org']))?.crossOrigins).toEqual(['https://partner.example.org'])
+		expect(await entry()).not.toHaveProperty('crossOrigins')
 	})
 
 	test('a binding cannot overwrite, drop or add a framework variable in the generated config', async () => {

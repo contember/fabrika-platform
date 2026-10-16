@@ -51,7 +51,12 @@ this one import.
   with it, and `applicationRoot` hands it to Control, which reads the run's snapshot there. Never add a second.
 - **`cloudflareRunnerJobSchema` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading
   `-` and no whitespace, `[a-z0-9-]` env, contained relative `workerDir`/`configPath`, literal
-  `domain`. Every field becomes an argv element, a path or a hostname inside the container.
+  `domain`. Every field becomes an argv element, a path or a hostname inside the container. `crossOrigins` passes
+  `isCrossOrigin`, at most `MAX_CROSS_ORIGINS`, each once, never `domain`'s host.
+- **The environment's cross-origin list reaches the proxy Worker it builds** (ADR-0022 "Cross-origin endpoints"):
+  `ProviderEnvironment.crossOrigins` → `CloudflareRunnerJob.crossOrigins` → `FABRIKA_CROSS_ORIGINS` (a JSON array the
+  runner sets last, like `FABRIKA_INSTALLATION_APPS`) → `CloudflareDeployRun.crossOrigins` → `createCloudflareProxyWorker`.
+  There is no namespace proxy to republish: an operator's change applies on the environment's next deploy.
 - **The generated wrangler configs are the one thing checked** (`src/bounds.ts`), never the objects that
   emitted them: a checkout's own `Bindable`, a `ServiceReference` subclass or a raw option writes whatever it
   likes into a config. `generateWranglerConfigs` runs oblaka's own `ResourceProcessor` (a deep import of

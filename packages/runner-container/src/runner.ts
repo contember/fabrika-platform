@@ -11,6 +11,7 @@ import {
 	APPROVED_ACCESS_FILE_ENV,
 	checkoutRelativeDirectory,
 	type CloudflareRunnerJob,
+	CROSS_ORIGINS_ENV,
 	INSTALLATION_APPS_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
 	type RunnerIamReconcile,
@@ -469,6 +470,8 @@ export class Runner {
 		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
 		if (this.job.installationApps === undefined) delete env[INSTALLATION_APPS_ENV]
 		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
+		if (this.job.crossOrigins === undefined) delete env[CROSS_ORIGINS_ENV]
+		else env[CROSS_ORIGINS_ENV] = JSON.stringify(this.job.crossOrigins)
 		if (this.job.approvedAccess === undefined) delete env[APPROVED_ACCESS_FILE_ENV]
 		else env[APPROVED_ACCESS_FILE_ENV] = this.approvedAccessFilePath
 		return env

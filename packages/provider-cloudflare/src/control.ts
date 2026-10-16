@@ -25,6 +25,7 @@ import type {
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
 import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { isCrossOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
@@ -66,6 +67,8 @@ export interface CloudflareRunnerJob {
 	readonly configPath?: string
 	readonly stateNamespace?: string
 	readonly domain?: string
+	/** The environment's cross-origin list from Control's registry (ADR-0022); the proxy Worker's manifest entry lists it. */
+	readonly crossOrigins?: readonly string[]
 	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0022). */
 	readonly returnOrigins?: readonly string[]
 	/** `<app>@<env>` of every Cloudflare deployment in Control's registry; the deploy refuses another application's names. */
@@ -155,6 +158,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	configPath: z.string().refine(isContainedPath).optional(),
 	stateNamespace: z.string().min(1).optional(),
 	domain: z.string().refine((value) => isProxyHost(value.toLowerCase())).optional(),
+	crossOrigins: z.array(z.string().refine(isCrossOrigin)).max(MAX_CROSS_ORIGINS).optional(),
 	returnOrigins: z.array(z.string().min(1)).optional(),
 	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
 	approvedAccess: runnerApprovedAccessSchema.optional(),
@@ -172,7 +176,17 @@ export const cloudflareRunnerJobSchema = z.object({
 		runId: z.string().min(1),
 	}).optional(),
 }).refine((job) => job.dryRun === true || isCanonicalCommit(job.ref))
+	.refine((job) => crossOriginsFit(job.crossOrigins ?? [], job.domain))
 	.refine((job) => job.dryRun === true || job.approvedAccess !== undefined)
+
+/**
+ * Each origin once, never the environment's own domain: the rule the proxy manifest parser applies to the entry. A
+ * refinement also runs over an origin its element check refused, so the host is read only from a valid one.
+ */
+function crossOriginsFit(origins: readonly string[], domain: string | undefined): boolean {
+	const host = domain?.toLowerCase()
+	return new Set(origins).size === origins.length && origins.every((origin) => isCrossOrigin(origin) && new URL(origin).hostname !== host)
+}
 
 export interface CloudflareCloneSource {
 	readonly repoUrl: string
@@ -316,6 +330,9 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		configPath: artifact.configPath,
 		...(storedTarget.stateNamespace === undefined ? {} : { stateNamespace: storedTarget.stateNamespace }),
 		...(input.environment.domain === undefined ? {} : { domain: input.environment.domain }),
+		...(input.environment.crossOrigins === undefined || input.environment.crossOrigins.length === 0
+			? {}
+			: { crossOrigins: input.environment.crossOrigins }),
 		...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...(approvedAccess === undefined ? {} : { approvedAccess }),

@@ -22,6 +22,9 @@ export const RUNNER_OUTCOME_FILE_ENV = 'FABRIKA_RUNNER_OUTCOME_FILE'
 /** The executor's copy of `CloudflareRunnerJob.installationApps`: a JSON array of `<app>@<env>`. */
 export const INSTALLATION_APPS_ENV = 'FABRIKA_INSTALLATION_APPS'
 
+/** The executor's copy of `CloudflareRunnerJob.crossOrigins`: a JSON array of the environment's exact origins. */
+export const CROSS_ORIGINS_ENV = 'FABRIKA_CROSS_ORIGINS'
+
 /**
  * The access Control approved for a run (ADR-0050): the contract it read at the commit. The proxy table and
  * `FABRIKA_CONTRACT_DIGEST` follow this, never the checkout.

@@ -4,7 +4,13 @@ import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
 import { type CloudflareDeployResult, createCloudflareDeployer, type PlatformIamTarget } from './provider'
-import { APPROVED_ACCESS_FILE_ENV, INSTALLATION_APPS_ENV, type RunnerApprovedAccess, runnerApprovedAccessSchema } from './runner-protocol'
+import {
+	APPROVED_ACCESS_FILE_ENV,
+	CROSS_ORIGINS_ENV,
+	INSTALLATION_APPS_ENV,
+	type RunnerApprovedAccess,
+	runnerApprovedAccessSchema,
+} from './runner-protocol'
 
 const requiredEnvironmentValue = (name: string): string => {
 	const value = environmentValue(name)
@@ -47,6 +53,24 @@ export const parseReturnOrigins = (raw: string | undefined): readonly string[] |
 }
 
 const installationAppsSchema = z.array(z.string())
+const crossOriginsSchema = z.array(z.string())
+
+/**
+ * Decode `FABRIKA_CROSS_ORIGINS`, the environment's cross-origin list as the runner writes it. Undefined when absent or
+ * empty; anything malformed fails the deploy, and the proxy manifest's own parser judges each origin.
+ */
+export const parseCrossOrigins = (raw: string | undefined): readonly string[] | undefined => {
+	if (raw === undefined || raw === '') return undefined
+	let decoded: unknown
+	try {
+		decoded = JSON.parse(raw)
+	} catch {
+		throw new Error(`${CROSS_ORIGINS_ENV} is not a JSON array`)
+	}
+	const origins = crossOriginsSchema.safeParse(decoded)
+	if (!origins.success) throw new Error(`${CROSS_ORIGINS_ENV} is not a JSON array of strings`)
+	return origins.data.length === 0 ? undefined : origins.data
+}
 
 /**
  * Decode `FABRIKA_INSTALLATION_APPS`, the Cloudflare deployments Control registered, as the runner writes it.
@@ -130,10 +154,12 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
 	const installationApps = parseInstallationApps(environmentValue(INSTALLATION_APPS_ENV))
+	const crossOrigins = parseCrossOrigins(environmentValue(CROSS_ORIGINS_ENV))
 	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
 		...(domain === undefined ? {} : { domain }),
+		...(crossOrigins === undefined ? {} : { crossOrigins }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
 		...approved,
