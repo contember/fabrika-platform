@@ -629,7 +629,8 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 	throw new Error(`Unknown \`control runs\` verb: ${verb ?? '(missing)'}`)
 }
 
-const namespaceLine = (namespace: DeploymentNamespaceDto): string =>
+/** Also `fabrika namespace`'s row, which reads only these fields of Control's answer. */
+export const namespaceLine = (namespace: Pick<DeploymentNamespaceDto, 'id' | 'env' | 'state' | 'exclusiveAppId'>): string =>
 	`${namespace.id}\t${namespace.env}\t${namespace.state}\t${namespace.exclusiveAppId ?? '-'}`
 
 /** One line per host the placement serves: a `free` one is exactly what the next `--domain` accepts. */
@@ -657,7 +658,7 @@ const payloadRows = (path: string, value: JsonValue): string[] => {
 /** A value that would break a row — a line break or a tab — is shown by size only; `--json` prints it whole. */
 const cell = (value: string): string => /[\r\n\t]/.test(value) ? `(${new TextEncoder().encode(value).byteLength} bytes; --json prints it)` : value
 
-const namespacePlanLines = (plan: PlanDeploymentNamespaceResponse): string[] => [
+export const namespacePlanLines = (plan: PlanDeploymentNamespaceResponse): string[] => [
 	`namespace.id\t${plan.namespace.id}`,
 	`namespace.env\t${plan.namespace.env}`,
 	`namespace.exclusiveAppId\t${plan.namespace.exclusiveAppId ?? '-'}`,

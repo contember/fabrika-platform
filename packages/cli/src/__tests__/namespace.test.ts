@@ -1,6 +1,6 @@
-import { createZeropsArtifactSourceDescriptor, parseZeropsCliArgs } from '@fabrika/provider-zerops'
+import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { runZeropsNamespaceCommand } from '../namespace'
+import { parseZeropsNamespaceCommand, runZeropsNamespaceCommand } from '../namespace'
 
 interface Call {
 	readonly url: string
@@ -35,7 +35,7 @@ const recorder = (calls: Call[], status = 200) => (input: string | URL | Request
 		new Response(
 			status >= 400
 				? JSON.stringify({ error: { type: 'error', message: 'namespace request failed' } })
-				: JSON.stringify({ result: { id: 'namespace', state: 'ready' } }),
+				: JSON.stringify({ result: { id: 'namespace', env: 'prod', state: 'ready', exclusiveAppId: null } }),
 			{ status, headers: { 'content-type': 'application/json' } },
 		),
 	)
@@ -43,15 +43,16 @@ const recorder = (calls: Call[], status = 200) => (input: string | URL | Request
 
 describe('fabrika namespace commands', () => {
 	test('unwraps RPC results and rejects malformed success or HTTP failure', async () => {
-		const args = parseZeropsCliArgs(['namespace', 'reconcile', '--id=apps-prod'])
+		const args = parseZeropsNamespaceCommand('reconcile', ['--id=apps-prod', '--json'])
 		const output: string[] = []
 		await runZeropsNamespaceCommand(args, { source: source(), fetch: recorder([]), write: (value) => output.push(value) })
-		expect(JSON.parse(output.join(''))).toEqual({ id: 'namespace', state: 'ready' })
+		expect(JSON.parse(output.join(''))).toEqual({ id: 'namespace', env: 'prod', state: 'ready', exclusiveAppId: null })
 		for (
 			const response of [
 				Response.json({}),
 				Response.json({ result: null }),
-				Response.json({ result: { id: 'x', state: 'bogus' } }),
+				Response.json({ result: { id: 'x', env: 'prod', state: 'bogus', exclusiveAppId: null } }),
+				Response.json({ result: { id: 'x', state: 'ready' } }),
 				Response.json({ result: { id: 'x', state: 'ready' } }, { status: 503 }),
 			]
 		) {
@@ -65,7 +66,7 @@ describe('fabrika namespace commands', () => {
 		const calls: Call[] = []
 		const output: string[] = []
 		await runZeropsNamespaceCommand(
-			parseZeropsCliArgs(['namespace', 'plan', '--id=apps-prod', '--env=prod', '--preset=cheap']),
+			parseZeropsNamespaceCommand('plan', ['--id=apps-prod', '--env=prod', '--preset=cheap', '--json']),
 			{ source: source(), fetch: recorder(calls), write: (value) => output.push(value) },
 		)
 
@@ -83,17 +84,44 @@ describe('fabrika namespace commands', () => {
 		expect(plan.presentation.preset).toBe('cheap')
 	})
 
+	test('prints a plan as one row per field, the descriptor by size only', async () => {
+		const output: string[] = []
+		await runZeropsNamespaceCommand(
+			parseZeropsNamespaceCommand('plan', ['--id=apps-prod', '--env=prod', '--preset=cheap']),
+			{ source: source(), fetch: recorder([]), write: (value) => output.push(value) },
+		)
+
+		const rows = output.join('').trimEnd().split('\n')
+		expect(rows).toContain('namespace.id\tapps-prod')
+		expect(rows).toContain('namespace.env\tprod')
+		expect(rows).toContain('namespace.target.payload.projectName\tfabrika-prod-apps-prod')
+		expect(rows).toContain('presentation.preset\tcheap')
+		const descriptorBytes = new TextEncoder().encode(proxySource.descriptor.contents).byteLength
+		expect(rows).toContain(`namespace.target.payload.proxySource.descriptor.contents\t(${descriptorBytes} bytes; --json prints it)`)
+		expect(output.join('')).not.toContain('{')
+	})
+
+	test('prints the namespace Control answers as one row', async () => {
+		const output: string[] = []
+		await runZeropsNamespaceCommand(parseZeropsNamespaceCommand('reconcile', ['--id=apps-prod']), {
+			source: source(),
+			fetch: recorder([]),
+			write: (value) => output.push(value),
+		})
+
+		expect(output.join('')).toBe('namespace\tprod\tready\t-\n')
+	})
+
+	test('takes --json out before the provider parser, which refuses unknown options', () => {
+		expect(parseZeropsNamespaceCommand('plan', ['--id=apps-prod', '--json'])).toMatchObject({ json: true, args: { namespaceId: 'apps-prod' } })
+		expect(parseZeropsNamespaceCommand('plan', ['--id=apps-prod'])).toMatchObject({ json: false })
+		expect(() => parseZeropsNamespaceCommand('plan', ['--yaml'])).toThrow('Unknown option: --yaml')
+	})
+
 	test('creates a full namespace through the control API', async () => {
 		const calls: Call[] = []
 		await runZeropsNamespaceCommand(
-			parseZeropsCliArgs([
-				'namespace',
-				'create',
-				'--id=billing-prod',
-				'--env=prod',
-				'--preset=full',
-				'--exclusive-app=billing',
-			]),
+			parseZeropsNamespaceCommand('create', ['--id=billing-prod', '--env=prod', '--preset=full', '--exclusive-app=billing']),
 			{ source: source(), fetch: recorder(calls), write: () => {} },
 		)
 
@@ -116,18 +144,11 @@ describe('fabrika namespace commands', () => {
 		const calls: Call[] = []
 		const deps = { source: source(), fetch: recorder(calls), write: () => {} }
 		await runZeropsNamespaceCommand(
-			parseZeropsCliArgs([
-				'namespace',
-				'adopt',
-				'--id=legacy-prod',
-				'--env=prod',
-				'--preset=mid',
-				'--project-id=project-1',
-			]),
+			parseZeropsNamespaceCommand('adopt', ['--id=legacy-prod', '--env=prod', '--preset=mid', '--project-id=project-1']),
 			deps,
 		)
 		await runZeropsNamespaceCommand(
-			parseZeropsCliArgs(['namespace', 'reconcile', '--id=legacy-prod']),
+			parseZeropsNamespaceCommand('reconcile', ['--id=legacy-prod']),
 			deps,
 		)
 
@@ -147,7 +168,7 @@ describe('fabrika namespace commands', () => {
 
 	test('rejects missing coordinates and credentials before fetch', async () => {
 		const calls: Call[] = []
-		const args = parseZeropsCliArgs(['namespace', 'create', '--id=apps-prod', '--env=prod'])
+		const args = parseZeropsNamespaceCommand('create', ['--id=apps-prod', '--env=prod'])
 		await expect(runZeropsNamespaceCommand(args, {
 			source: {},
 			fetch: recorder(calls),
@@ -168,7 +189,7 @@ describe('fabrika namespace commands', () => {
 			) {
 				const calls: Call[] = []
 				const output: string[] = []
-				const args = parseZeropsCliArgs(['namespace', command, '--id=apps-prod', '--env=prod', '--preset=cheap', '--project-id=project-1'])
+				const args = parseZeropsNamespaceCommand(command, ['--id=apps-prod', '--env=prod', '--preset=cheap', '--project-id=project-1'])
 				await expect(runZeropsNamespaceCommand(args, {
 					source: { ...source(), FABRIKA_ZEROPS_PROXY_SOURCE_JSON: serialized },
 					fetch: recorder(calls),
@@ -183,7 +204,7 @@ describe('fabrika namespace commands', () => {
 	test('reconciles the persisted target without selecting a local source', async () => {
 		for (const serialized of [undefined, 'invalid unused JSON']) {
 			const calls: Call[] = []
-			await runZeropsNamespaceCommand(parseZeropsCliArgs(['namespace', 'reconcile', '--id=apps-prod']), {
+			await runZeropsNamespaceCommand(parseZeropsNamespaceCommand('reconcile', ['--id=apps-prod']), {
 				source: { ...source(), FABRIKA_ZEROPS_PROXY_SOURCE_JSON: serialized },
 				fetch: recorder(calls),
 				write: () => {},
@@ -198,7 +219,7 @@ describe('fabrika namespace commands', () => {
 		const output: string[] = []
 		try {
 			await runZeropsNamespaceCommand(
-				parseZeropsCliArgs(['namespace', 'reconcile', '--id=apps-prod']),
+				parseZeropsNamespaceCommand('reconcile', ['--id=apps-prod']),
 				{ source: source(), fetch: recorder(calls, 502), write: (value) => output.push(value) },
 			)
 			throw new Error('namespace command unexpectedly succeeded')

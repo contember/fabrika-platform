@@ -12,6 +12,7 @@ import {
 	zeropsNamespaceTargetCodec,
 } from '@fabrika/provider-zerops'
 import { z } from 'zod'
+import { namespaceLine, namespacePlanLines } from './control'
 
 export const NAMESPACE_USAGE = `fabrika namespace — Zerops deployment namespaces
 
@@ -34,13 +35,24 @@ Options:
   --postgres-type=<type>         Cheap-tier PostgreSQL type.
   --postgres-profile=<profile>   Cheap-tier PostgreSQL profile.
   --control-url=<url>            Control origin; or FABRIKA_CONTROL_URL.
+  --json                         Print the result as JSON instead of rows.
   -h, --help                     Show this help.
+
+\`plan\` prints one \`<path>\\t<value>\` row per field of the plan, keyed by its path in --json; a multi-line
+value such as the proxy's descriptor file is shown by size only. The other commands print one
+\`<id>\\t<env>\\t<state>\\t<exclusive app>\` row.
 
 Mutating namespace commands read the Bearer credential from FABRIKA_CONTROL_TOKEN.
 Plan/create/adopt require FABRIKA_ZEROPS_PROXY_SOURCE_JSON:
   {"repository":{"owner":"...","name":"..."},"commitSha":"...","descriptor":{"path":"zerops.yaml","contents":"...","sha256":"..."}}
 Reconcile uses the persisted namespace source.
 `
+
+export interface ZeropsNamespaceCommand {
+	readonly args: ZeropsCliArgs
+	/** The result as JSON; otherwise the rows `fabrika control namespaces` prints. */
+	readonly json: boolean
+}
 
 export interface ZeropsNamespaceCommandDependencies {
 	readonly source: Readonly<Record<string, string | undefined>>
@@ -146,14 +158,19 @@ const controlClient = (
 		},
 	})
 
-// Passthrough on purpose: the operator sees the whole namespace detail, this only checks it is one.
-const namespaceResponseSchema = z.object({ id: z.string(), state: z.enum(['pending', 'provisioning', 'ready', 'failed']) }).passthrough()
-const writeNamespace = (deps: ZeropsNamespaceCommandDependencies, result: unknown): void => {
+// Passthrough on purpose: `--json` shows the operator the whole namespace detail, this only checks it is one.
+const namespaceResponseSchema = z.object({
+	id: z.string(),
+	env: z.string(),
+	state: z.enum(['pending', 'provisioning', 'ready', 'failed']),
+	exclusiveAppId: z.string().nullable(),
+}).passthrough()
+const writeNamespace = (command: ZeropsNamespaceCommand, deps: ZeropsNamespaceCommandDependencies, result: unknown): void => {
 	const parsed = namespaceResponseSchema.safeParse(result)
 	if (!parsed.success) {
 		throw new Error('Control API returned an invalid namespace')
 	}
-	deps.write(outputJson(parsed.data))
+	deps.write(command.json ? outputJson(parsed.data) : `${namespaceLine(parsed.data)}\n`)
 }
 
 const createBody = (namespace: ProviderDeploymentNamespace): CreateDeploymentNamespaceRequest => ({
@@ -171,18 +188,20 @@ const adoptBody = (namespace: ProviderDeploymentNamespace): AdoptDeploymentNames
 
 /** Execute one namespace command. All command inputs are validated before the first fetch. */
 export const runZeropsNamespaceCommand = async (
-	args: ZeropsCliArgs,
+	command: ZeropsNamespaceCommand,
 	deps: ZeropsNamespaceCommandDependencies,
 ): Promise<void> => {
+	const { args } = command
 	const subcommand = required(args.subcommand, 'namespace command')
 	if (subcommand === 'plan') {
-		deps.write(outputJson(await namespacePlan(args, deps.source)))
+		const plan = await namespacePlan(args, deps.source)
+		deps.write(command.json ? outputJson(plan) : `${namespacePlanLines(plan).join('\n')}\n`)
 		return
 	}
 	if (subcommand === 'reconcile') {
 		const id = required(args.namespaceId, '--id')
 		const control = controlCoordinates(args, deps.source)
-		writeNamespace(deps, await controlClient(deps, control).namespaces.reconcile({ namespaceId: id }))
+		writeNamespace(command, deps, await controlClient(deps, control).namespaces.reconcile({ namespaceId: id }))
 		return
 	}
 	if (subcommand !== 'create' && subcommand !== 'adopt') {
@@ -192,7 +211,7 @@ export const runZeropsNamespaceCommand = async (
 	const planned = await namespacePlan(args, deps.source)
 	const control = controlCoordinates(args, deps.source)
 	if (subcommand === 'create') {
-		writeNamespace(deps, await controlClient(deps, control).namespaces.create(createBody(planned.namespace)))
+		writeNamespace(command, deps, await controlClient(deps, control).namespaces.create(createBody(planned.namespace)))
 		return
 	}
 
@@ -213,11 +232,17 @@ export const runZeropsNamespaceCommand = async (
 			}),
 		},
 	}
-	writeNamespace(deps, await controlClient(deps, control).namespaces.adopt({ namespaceId: namespace.id, namespace: adoptBody(namespace) }))
+	writeNamespace(command, deps, await controlClient(deps, control).namespaces.adopt({ namespaceId: namespace.id, namespace: adoptBody(namespace) }))
 }
 
+/** `--json` is this area's own flag, so it is taken out before the provider's parser, which refuses unknown options. */
+export const parseZeropsNamespaceCommand = (subcommand: string, argv: readonly string[]): ZeropsNamespaceCommand => ({
+	args: parseZeropsCliArgs(['namespace', subcommand, ...argv.filter((arg) => arg !== '--json')]),
+	json: argv.includes('--json'),
+})
+
 export const runZeropsNamespaceCli = (subcommand: string, argv: readonly string[]): Promise<void> =>
-	runZeropsNamespaceCommand(parseZeropsCliArgs(['namespace', subcommand, ...argv]), {
+	runZeropsNamespaceCommand(parseZeropsNamespaceCommand(subcommand, argv), {
 		source: process.env,
 		fetch: globalThis.fetch,
 		write: (value) => console.info(value.trimEnd()),

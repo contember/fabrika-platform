@@ -359,7 +359,9 @@ fabrika namespace reconcile --provider=zerops --id=<id>
 The CLI plan is local and uses the same provider operator implementation. Create
 and adopt submit the resulting envelope to the control API; reconcile invokes
 the stored lifecycle. CLI options cover project name, core package, public
-access, PostgreSQL type/profile, exclusive app, and proxy source.
+access, PostgreSQL type/profile, exclusive app, and proxy source. Output follows
+`fabrika control namespaces`: `plan` prints one `<path>\t<value>` row per field,
+the other commands one namespace row, and `--json` prints the result as JSON.
 
 The dashboard exposes namespace list, plan/review/create, detail, reconcile, and
 removal flows. A failed placement renders its failure code beside the message.
