@@ -170,6 +170,33 @@ describe('platform scaffold', () => {
 		})
 	})
 
+	test('the pipeline installs exactly the pinned lockfile', async () => {
+		await withTempDir(async (dir) => {
+			await materializePlatformScaffold(dir, 'mangoweb')
+			const workflow = await Bun.file(join(dir, '.github/workflows/platform.yml')).text()
+
+			const installs = stepsOf(workflow).filter((step) => step.run?.startsWith('bun install') === true)
+			expect(installs.map((step) => step.run)).toEqual(['bun install --frozen-lockfile'])
+		})
+	})
+
+	// Cloudflare has no `platform upgrade`: a re-run of `init` is what converges an existing sidecar's workflow.
+	test('a refresh rewrites a workflow an older CLI generated and keeps the operator pin', async () => {
+		await withTempDir(async (dir) => {
+			await materializePlatformScaffold(dir, 'mangoweb')
+			const current = await Bun.file(join(dir, '.github/workflows/platform.yml')).text()
+			const stale = current.replace('run: bun install --frozen-lockfile', 'run: bun install')
+			expect(stale).not.toBe(current)
+			await Bun.write(join(dir, '.github/workflows/platform.yml'), stale)
+			await Bun.write(join(dir, 'fabrika.ref'), 'v0.4.3\n')
+
+			await materializePlatformScaffold(dir, 'mangoweb')
+
+			expect(await Bun.file(join(dir, '.github/workflows/platform.yml')).text()).toBe(current)
+			expect(await Bun.file(join(dir, 'fabrika.ref')).text()).toBe('v0.4.3\n')
+		})
+	})
+
 	test('legacy two-ref scaffolds stop with explicit migration guidance', async () => {
 		await withTempDir(async (dir) => {
 			await Bun.write(join(dir, 'vozka.ref'), 'old-vozka\n')

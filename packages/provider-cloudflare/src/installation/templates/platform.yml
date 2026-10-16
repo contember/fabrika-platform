@@ -88,7 +88,7 @@ jobs:
 
       - name: Install fabrika
         working-directory: fabrika-platform
-        run: bun install
+        run: bun install --frozen-lockfile
 
       # The Cloudflare provider spawns a BARE `wrangler` (Bun.spawn), so the workspace bins must be on PATH.
       - name: Put fabrika workspace bins on PATH

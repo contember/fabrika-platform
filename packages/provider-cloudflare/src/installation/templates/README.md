@@ -70,3 +70,5 @@ and the Resend API key secret.
 Both paths rebuild the account-owned runner image from the exact checkout selected by `fabrika.ref`.
 
 `fabrika.ref` is operator-owned. `fabrika platform init` creates it once and does not overwrite later version pins.
+A bump does not rewrite this workflow. Re-run `fabrika platform init --provider=cloudflare {{ACCOUNT}}` with the same
+flags to bring `.github/workflows/platform.yml` to the one the current CLI generates.

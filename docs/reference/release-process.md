@@ -164,4 +164,6 @@ require separate operator-owned acceptance evidence.
 
 A Zerops installation rolls forward with one command: `fabrika platform upgrade --provider=zerops --to=<tag>` verifies the tag exists on this repository, writes `fabrika.ref` in the sidecar checkout, rewrites the sidecar workflow when it differs from the one the running CLI generates, commits and pushes both, prints the workflow run URL and watches the run to its end. The sidecar builds `iam` and `operations` concurrently, then `proxy`, then `control`.
 
+A Cloudflare installation has no `platform upgrade`: the operator bumps `fabrika.ref` in the per-account repository and pushes it. That push does not rewrite the sidecar workflow. Re-running `fabrika platform init --provider=cloudflare <account>` with the same flags does: it rewrites the CLI-owned `platform.yml`, `README.md` and `.gitignore` to the ones the running CLI generates, keeps `fabrika.ref`, and dispatches the workflow. Run it with the CLI of the release the pin names.
+
 Scaffold commits skip push CI because the GitHub Environment does not exist yet. `fabrika platform init` writes the account secrets and variables first, then explicitly dispatches the platform workflow.
