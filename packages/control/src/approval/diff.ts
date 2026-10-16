@@ -8,6 +8,7 @@ import {
 	canonicalJson,
 	type ColumnPolicyArtifact,
 	type ContractArtifact,
+	type CrossOriginForm,
 	type DeclaredReach,
 	type DimensionArtifact,
 	type EndpointDirectory,
@@ -367,7 +368,7 @@ export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDt
 
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): void {
 	compareKeyed(changes, endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
-		added: (id, row) => `New endpoint \`${id}\` (${row.method} ${row.path}) ${audience(row)}${answersFile(row)}`,
+		added: (id, row) => `New endpoint \`${id}\` (${row.method} ${row.path}) ${audience(row)}${answersFile(row)}${callableFrom(row)}`,
 		removed: () => [],
 		changed: endpointChanges,
 	})
@@ -399,9 +400,30 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): Access
 		...setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller'),
 		...valueChange(`${name} requirement`, from.requirement, to.requirement),
 		...admissionChanges(name, from, to),
+		...crossOriginChanges(name, from.crossOrigin, to.crossOrigin),
 		...schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input),
 		...outputChanges(name, from.output, to.output),
 	]
+}
+
+/**
+ * `, callable from …` for an endpoint a page on another origin may call (ADR-0022 "Cross-origin endpoints"): the
+ * approver sees which pages the contract lets in, the environment's list or every site.
+ */
+function callableFrom(row: EndpointRow): string {
+	return row.crossOrigin === undefined ? '' : `, callable from ${crossOriginReach(row.crossOrigin)}`
+}
+
+function crossOriginReach(form: CrossOriginForm): string {
+	return form === 'any' ? 'a page on any origin' : 'a page on an origin the environment lists'
+}
+
+/** Opening an endpoint to another origin widens, and so does `environment` → `any`; the reverse narrows. */
+function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to: CrossOriginForm | undefined): AccessChange[] {
+	if (from === to) return []
+	if (to === undefined) return [removal(`${name} is no longer callable from another origin`)]
+	if (from === 'any') return [removal(`${name} is callable only from ${crossOriginReach(to)}`)]
+	return [widening(`${name} becomes callable from ${crossOriginReach(to)}`)]
 }
 
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
