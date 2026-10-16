@@ -1815,6 +1815,15 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.envDeletes).toEqual(['env-1'])
 	})
 
+	test('deleting a secret the service no longer holds succeeds without a platform delete', async () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		if (control.secrets === undefined) {
+			throw new Error('expected Zerops managed secrets')
+		}
+		await control.secrets.delete({ environment: environment(), name: 'ALREADY_GONE' })
+		expect(recorded.envDeletes).toEqual([])
+	})
+
 	test('refuses a secret value that references a service the app does not own, before anything is written', async () => {
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		if (control.secrets === undefined) {

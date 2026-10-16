@@ -369,7 +369,14 @@ delayed failure from an older attempt cannot replace a newer successful retry.
 Secret edits follow the same registered service address but are not a deploy step.
 The control plane writes or deletes them immediately through the service-env API
 and stores only a `zerops:` reference. It never writes an app secret at project
-scope.
+scope. Deleting an app secret (`apps.secrets.delete`, the console, `fabrika control
+apps secrets delete`) removes the service variable first and the registry row
+after it; when the variable delete fails, the row stays and the same delete can be
+retried. A deploy never removes an app secret's variable: it removes only the
+platform's own variable families. Releases up to v0.5.1 deleted only the row and
+left the variable on the service. To remove such a variable, set the secret again
+and delete it through Control, or delete the variable on the service in the Zerops
+GUI.
 
 ## How auth works
 

@@ -33,13 +33,7 @@ import {
 } from './api/namespaces'
 import { providerEnvelopeSchema } from './api/provider-envelope'
 import { createAppUseCase, deleteAppUseCase, getAppUseCase, listAppsUseCase, updateAppUseCase } from './api/registry/apps'
-import {
-	deleteAppSecretUseCase,
-	deleteAppVarUseCase,
-	listAppSecretsUseCase,
-	listAppVarsUseCase,
-	putAppVarUseCase,
-} from './api/registry/configuration'
+import { deleteAppVarUseCase, listAppSecretsUseCase, listAppVarsUseCase, putAppVarUseCase } from './api/registry/configuration'
 import { type RegistryUseCaseContext } from './api/registry/context'
 import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase } from './api/registry/environments'
 import { registerAppUseCase } from './api/registry/registration'
@@ -55,7 +49,7 @@ import {
 	triggerDeployUseCase,
 } from './api/runs'
 import {
-	deleteAppSecretValueUseCase,
+	deleteAppSecretUseCase,
 	putAppSecretUseCase,
 	rotateAppSecretValueUseCase,
 	setAppSecretValueUseCase,
@@ -278,7 +272,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 					controlCall(() => putAppSecretUseCase(vaultContext(ctx), input.appId, input.secret))
 				),
 				delete: rpc.procedure.input(appNamedValue).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => deleteAppSecretUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))
+					controlCall(() => deleteAppSecretUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
 				),
 			}),
 			variables: rpc.router({
@@ -301,7 +295,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 				controlCall(() => rotateAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
 			),
 			delete: rpc.procedure.input(appNamedValue).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => deleteAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
+				controlCall(() => deleteAppSecretUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
 			),
 		}),
 		namespaces: rpc.router({

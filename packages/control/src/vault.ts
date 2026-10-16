@@ -31,6 +31,14 @@ import { type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 export type SecretScope = 'app' | 'app-env' | 'platform'
 
+/** A `vault:` ref names no row: the value was deleted, or never existed. */
+export class VaultSecretNotFoundError extends Error {
+	constructor() {
+		super('unresolvable vault ref: no such secret')
+		this.name = 'VaultSecretNotFoundError'
+	}
+}
+
 export interface VaultSecretPurpose {
 	scope: SecretScope
 	label: string
@@ -315,7 +323,7 @@ export class Vault {
 		const row = await this.d1.prepare('SELECT * FROM vault WHERE id = ?').bind(id).first<VaultRow>()
 		if (row === null) {
 			// Name only that the ref is unknown — never echo decrypted material.
-			throw new Error('unresolvable vault ref: no such secret')
+			throw new VaultSecretNotFoundError()
 		}
 		return row
 	}

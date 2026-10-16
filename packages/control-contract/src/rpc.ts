@@ -165,6 +165,7 @@ export interface ControlRpcContract {
 		secrets: {
 			list: RpcProcedure<AppIdInput, ListResponse<AppSecretDto>>
 			put: RpcProcedure<PutAppSecretInput, AppSecretDto>
+			/** Removes the value where it is stored (vault or provider), then the row; a failed value delete keeps the row. */
 			delete: RpcProcedure<AppNamedValueInput, OkResponse>
 		}
 		variables: {
@@ -176,6 +177,7 @@ export interface ControlRpcContract {
 	vault: {
 		set: RpcProcedure<SecretValueInput, SecretValueResponse>
 		rotate: RpcProcedure<SecretValueInput, OkResponse>
+		/** The same operation as `apps.secrets.delete`. */
 		delete: RpcProcedure<AppNamedValueInput, OkResponse>
 	}
 	namespaces: {

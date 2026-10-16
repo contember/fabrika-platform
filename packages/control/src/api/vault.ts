@@ -10,7 +10,7 @@ import {
 import type { AppEnvRow, AppSecretRow, ControlRepositories } from '../db'
 import { providerEnvironment } from '../run-lifecycle'
 import { appSecretPurpose } from '../secret-resolver'
-import { parseVaultRef, type Vault, type VaultSecretPurpose } from '../vault'
+import { parseVaultRef, type Vault, VaultSecretNotFoundError, type VaultSecretPurpose } from '../vault'
 import { fail } from './domain'
 import { toAppSecretDto } from './registry/configuration'
 import { assertNoFrameworkReference, assertUnmanagedName } from './registry/validation'
@@ -132,40 +132,45 @@ export async function rotateAppSecretValueUseCase(
 	return { ok: true }
 }
 
-export async function deleteAppSecretValueUseCase(
-	c: VaultUseCaseContext,
-	appId: string,
-	name: string,
-	env: string | null,
-): Promise<OkResponse> {
+/**
+ * Remove an app secret: its value first, then its registry row.
+ *
+ * The row is the only pointer to the value, so it goes last: a failed value delete keeps it and a retry
+ * finishes the job, and a value already gone (a retry after a failed row delete) is not an error.
+ */
+export async function deleteAppSecretUseCase(c: VaultUseCaseContext, appId: string, name: string, env: string | null): Promise<OkResponse> {
 	await requireApp(c, appId)
 	const valueRef = await findAppSecretRef(c.repositories, appId, env, name)
 	if (valueRef === null) fail(404, 'secret not found')
-	const target = await secretTarget(c, appId, env)
-	if (target.kind === 'provider') {
-		await target.secrets.delete({
-			environment: await providerEnvironment(c.repositories, target.appEnv),
-			name,
-		})
-		await c.auth.audit({
-			action: 'app.secret.value.delete',
-			resourceType: 'app_secret',
-			resourceId: `${appId}/${target.appEnv.env}/${name}`,
-			metadata: { name, env: target.appEnv.env },
-		})
-		return { ok: true }
-	}
-	if (parseVaultRef(valueRef) === null) fail(409, 'secret is not stored in the vault')
-	const deleteVault = await requireVault(c)
-	await assertVaultOwnership(deleteVault, valueRef, appSecretPurpose(appId, env, name))
-	const removed = await deleteVault.delete(valueRef)
+	await deleteAppSecretValue(c, appId, env, name, valueRef)
+	if (!(await c.repositories.registry.deleteAppSecret(appId, env, name))) fail(404, 'secret not found')
 	await c.auth.audit({
-		action: 'app.secret.value.delete',
+		action: 'app.secret.delete',
 		resourceType: 'app_secret',
 		resourceId: `${appId}/${env ?? '*'}/${name}`,
 		metadata: { name, env },
 	})
-	return { ok: removed }
+	return { ok: true }
+}
+
+async function deleteAppSecretValue(c: VaultUseCaseContext, appId: string, env: string | null, name: string, valueRef: string): Promise<void> {
+	if (parseVaultRef(valueRef) !== null) {
+		const vault = await requireVault(c)
+		try {
+			await assertVaultOwnership(vault, valueRef, appSecretPurpose(appId, env, name))
+		} catch (cause) {
+			if (cause instanceof VaultSecretNotFoundError) return
+			throw cause
+		}
+		await vault.delete(valueRef)
+		return
+	}
+	// A provider write always names an env; any other row is a legacy one that holds its value itself.
+	if (c.provider.secrets === undefined || env === null) return
+	const target = await secretTarget(c, appId, env)
+	if (target.kind === 'provider') {
+		await target.secrets.delete({ environment: await providerEnvironment(c.repositories, target.appEnv), name })
+	}
 }
 
 /** A provider's typed refusal of the value is the caller's to fix; any other failure stays a 500. */

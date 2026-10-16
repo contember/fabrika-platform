@@ -13,12 +13,6 @@ export async function listAppSecretsUseCase(c: RegistryUseCaseContext, appId: st
 	return { items: (await c.repositories.registry.listAppSecrets(appId)).map((row) => toAppSecretDto(row, c.provider)) }
 }
 
-export async function deleteAppSecretUseCase(c: RegistryUseCaseContext, appId: string, name: string, env: string | null): Promise<OkResponse> {
-	if (!(await c.repositories.registry.deleteAppSecret(appId, env, name))) fail(404, 'secret not found')
-	await c.auth.audit({ action: 'app.secret.delete', resourceType: 'app_secret', resourceId: `${appId}/${env ?? '*'}/${name}` })
-	return { ok: true }
-}
-
 export async function listAppVarsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppVarDto>> {
 	await requireApp(c, appId)
 	return { items: (await c.repositories.registry.listAppVars(appId)).map(toAppVarDto) }

@@ -106,7 +106,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		expect(await (await vault).getSecret(allEnv!.value_ref)).toBe('shared-v2')
 	})
 
-	test('vault.delete drops the vault entry', async () => {
+	test('vault.delete drops the vault entry and the registry row', async () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedApp(deps)
 		await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'GONE', value: 'bye' }), deps)
@@ -114,6 +114,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		const del = await rpcResult(rpcRequest('vault.delete', { appId: 'app', name: 'GONE' }), deps)
 		expect(del.status).toBe(200)
 		await expect((await vault).getSecret(ref)).rejects.toThrow()
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
 	})
 
 	test('a caller denied secret.manage gets 403 (app secret value)', async () => {
@@ -180,6 +181,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			'put:apps-prod:prod:API_KEY:v2',
 			'delete:apps-prod:prod:API_KEY',
 		])
+		expect(await db.registry.listAppSecrets('app')).toEqual([])
 	})
 
 	test('apps.secrets.put on a provider-managed installation hands the value to the provider; an all-env write is 400', async () => {
@@ -260,6 +262,103 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 	})
 })
 
+describe('apps.secrets.delete removes the value, then the row', () => {
+	function providerDeps(deleteValue: (name: string) => Promise<void>): { deps: ControlRpcDeps; audits: string[] } {
+		const { deps } = makeDeps(secretManager())
+		const audits: string[] = []
+		deps.auth = { ...secretManager(), audit: async (entry) => void audits.push(`${entry.action}:${entry.resourceId}`) }
+		deps.provider = {
+			id: 'harbor',
+			normalizeRegistration: (input) => input,
+			deploy: async () => ({ state: 'succeeded' }),
+			secrets: {
+				put: async ({ environment, name }) => ({ valueRef: `harbor:${environment.env}/${name}` }),
+				delete: async ({ name }) => deleteValue(name),
+			},
+		}
+		return { deps, audits }
+	}
+
+	async function seedProviderSecret(deps: ControlRpcDeps): Promise<void> {
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('harbor'))
+		await deps.repositories.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'harbor:prod/API_KEY' })
+	}
+
+	test('a provider-managed secret is deleted at the provider and then from the registry, and audited', async () => {
+		const deleted: string[] = []
+		const { deps, audits } = providerDeps(async (name) => void deleted.push(name))
+		await seedProviderSecret(deps)
+
+		const response = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)
+
+		expect(response.status).toBe(200)
+		expect(deleted).toEqual(['API_KEY'])
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+		expect(audits).toEqual(['app.secret.delete:app/prod/API_KEY'])
+	})
+
+	test('a failed provider delete keeps the row, so a retry finishes the job', async () => {
+		let failing = true
+		const { deps, audits } = providerDeps(async () => {
+			if (failing) throw new Error('platform unavailable')
+		})
+		await seedProviderSecret(deps)
+
+		const failed = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)
+		expect(failed.status).toBe(500)
+		expect((await deps.repositories.registry.listAppSecrets('app')).map((row) => row.name)).toEqual(['API_KEY'])
+		expect(audits).toEqual([])
+
+		failing = false
+		const retried = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)
+		expect(retried.status).toBe(200)
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	})
+
+	test('a value the provider no longer holds is not an error', async () => {
+		// The provider's own contract: deleting an absent value succeeds (the Zerops provider skips the platform call).
+		const { deps } = providerDeps(async () => {})
+		await seedProviderSecret(deps)
+		const response = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)
+		expect(response.status).toBe(200)
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	})
+
+	test('a vault secret loses its vault row and its registry row', async () => {
+		const { deps, vault } = makeDeps(secretManager())
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', value: 'v1', env: 'prod' } }), deps)
+		const ref = (await deps.repositories.registry.listAppSecrets('app'))[0]!.value_ref
+
+		const response = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)
+
+		expect(response.status).toBe(200)
+		await expect((await vault).getSecret(ref)).rejects.toThrow('no such secret')
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	})
+
+	test('a vault value already gone does not block removing the row', async () => {
+		const { deps, vault } = makeDeps(secretManager())
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', value: 'v1' } }), deps)
+		const ref = (await deps.repositories.registry.listAppSecrets('app'))[0]!.value_ref
+		expect(await (await vault).delete(ref)).toBe(true)
+
+		const response = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY' }), deps)
+
+		expect(response.status).toBe(200)
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	})
+
+	test('an unknown secret is a 404', async () => {
+		const { deps } = makeDeps(secretManager())
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		const response = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'MISSING' }), deps)
+		expect(response.status).toBe(404)
+	})
+})
+
 describe('vault not configured', () => {
 	test('vault routes 500 cleanly when no vault factory is wired', async () => {
 		const { db } = createHarness()
@@ -302,7 +401,7 @@ describe('a vault ref is owned by the app secret that created it', () => {
 		expect(await (await vault).getSecret(victim)).toBe('b-secret')
 	})
 
-	test('a stored ref that names another purpose is refused on rotate, delete, set and resolve', async () => {
+	test('a stored ref that names another purpose is refused on rotate, delete, set and resolve, and nothing is removed', async () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedTwoApps(deps)
 		// A ref planted before this rule existed: a `platform`-scoped row addressed by an app secret.
@@ -313,6 +412,8 @@ describe('a vault ref is owned by the app secret that created it', () => {
 		expect(rotate.status).toBe(403)
 		const removed = await rpcResult(rpcRequest('vault.delete', { appId: 'a', name: 'API_KEY', env: 'prod' }), deps)
 		expect(removed.status).toBe(403)
+		const deleted = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'a', name: 'API_KEY', env: 'prod' }), deps)
+		expect(deleted.status).toBe(403)
 		const overwritten = await rpcResult(rpcRequest('vault.set', { appId: 'a', name: 'API_KEY', value: 'attacker', env: 'prod' }), deps)
 		expect(overwritten.status).toBe(403)
 

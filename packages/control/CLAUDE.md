@@ -188,7 +188,9 @@ other environment, before the provider prepares anything, and the write maps a r
   plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.
   The resolver knows only `vault:`; any other stored ref — a row from before this rule — THROWS rather than
   deploy with a wrong or empty credential, and is never migrated. It handles ONLY per-app `pipeline.secrets`;
-  platform creds are fabrika's own Worker config.
+  platform creds are fabrika's own Worker config. `apps.secrets.delete` and `vault.delete` are one use case
+  (`deleteAppSecretUseCase`, `src/api/vault.ts`): the value goes first (vault row, or the provider's), the
+  registry row last, because the row is the only pointer to the value; an absent value is not an error.
 - **A `vault:` ref is OWNED by the app secret that minted it.** The vault is one table shared with every
   other app and with `scope='platform'` rows, and `app_secrets.value_ref` is the only pointer into it — so no
   API accepts a ref (a value that looks like one is just sealed), and every path that FOLLOWS a
