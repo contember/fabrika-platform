@@ -698,11 +698,17 @@ const raiseStartMemory = async (env: StepEnv): Promise<void> => {
 	log(`  minimum RAM of ${hostname}: ${before ?? 'the platform default'} → ${after} GB`)
 }
 
+/** What raising a minimum RAM calls; the deploy's collaborators, and the live platform-facts probe of the same path. */
+export interface MinRamRaise {
+	zerops: Pick<ZeropsCollaborators, 'api' | 'sleep'>
+	signal: AbortSignal
+}
+
 /**
  * Sets `service`'s minimum RAM to `minRam` and answers the minimum it reads back. It sends the custom autoscaling it
  * read WHOLE with only that field changed: the platform resets every field a request leaves out.
  */
-const raiseMinRam = async (env: StepEnv, service: ZeropsService, hostname: string, minRam: number, need: string): Promise<number> => {
+export const raiseMinRam = async (env: MinRamRaise, service: ZeropsService, hostname: string, minRam: number, need: string): Promise<number> => {
 	const { zerops, signal } = env
 	const custom = service.customAutoscaling
 	const current = service.currentAutoscaling

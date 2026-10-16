@@ -1302,8 +1302,9 @@ Zerops' documentation (PostgreSQL, "Connection limits" and "Scale & profiles", r
 
 - RAM counts in steps (0.25, 0.5, 1, 2, 4 GB, then multiples of 8 GB): 7 GB has the 4 GB limit.
 - 3 connections are kept for superusers, and Zerops itself uses up to 4 (monitoring, health checks, backups).
-- The limit cannot be overridden. Raising the minimum RAM to the next step raises it; crossing a step restarts a
-  single-node service (a short outage) and rolls through an HA one.
+- The limit cannot be overridden. Raising the minimum RAM to a higher step raises it. On a single-node service that
+  restarts PostgreSQL once (measured 2026-10-16, below); Zerops' documentation says an HA service rolls through its
+  nodes (not measured).
 - pgBouncer on `portTls` would multiplex, but it admits only `db`, `postgres` and `zps` (measured 2026-10-15,
   below), so an application's roles connect on `port` and count against `max_connections` directly.
 
@@ -1327,20 +1328,32 @@ $0.75 per 0.25 GB and 30 days); a namespace's shared `postgres` is never raised.
 slot on SQLSTATE 53300, and `fabrika db test-isolation` reports a refused connection as such
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).
 
-| Behaviour                                                                | Row                                       |
-| ------------------------------------------------------------------------ | ----------------------------------------- |
-| `max_connections` follows the minimum RAM; a full database answers 53300 | `postgres-max-connections-follow-min-ram` |
+#### Verified live (2026-10-16, account `prg1`, a disposable project) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections`
 
-#### UNVERIFIED: the autoscaling API raises the minimum RAM of a PostgreSQL service
+`size-database` raises a database with the read-modify-write that raises a runtime's minimum RAM (`raiseMinRam`,
+verified on `alpine/bun@1.3`, above). Measured twice on a `postgresql:single@18` imported with `profile: oltp-hobby`,
+through that same function. The SQL client was a small Bun service in the same project. It opened one fresh connection
+as the superuser `postgres` once a second and read `max_connections` and `pg_postmaster_start_time()`:
 
-`size-database` raises a database with the same `PUT /service-stack/{id}/autoscaling` body that raises a runtime's
-minimum RAM (verified on `alpine/bun@1.3`, above), and reads `currentAutoscaling` back. It was not tried on a
-PostgreSQL service, nor whether `max_connections` follows at once. If the platform refuses it or ignores it, the
-deploy fails before a version is reserved, saying so.
+| Measurement                                            | Result                                                                                               |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| The fresh service                                      | `autoscalingProfileId` `oltp-hobby`, `currentAutoscaling` minimum 0.25 GB, `max_connections` **20**  |
+| The same type imported without `profile`               | `oltp-staging`, minimum **1 GB**, `max_connections` 50                                               |
+| `raiseMinRam` from 0.25 to 1 GB                        | Accepted. `currentAutoscaling` reads 1 GB back when the call returns, 2.1 s and 4.1 s after it began |
+| `max_connections` after the raise                      | **50**, first read 15 s and 18 s after the raise began                                               |
+| `pg_postmaster_start_time()`                           | Changed in that same sample: the raise **restarts PostgreSQL once**, between two samples 1 s apart   |
+| Fresh connections during the restart (76 and 79 tries) | **None refused**; the slowest answer of the second run took 56 ms                                    |
 
-| Behaviour                                                             | Row                                                     |
-| --------------------------------------------------------------------- | ------------------------------------------------------- |
-| The custom autoscaling raises the minimum RAM of a PostgreSQL service | `unverified-postgres-custom-autoscaling-raises-min-ram` |
+So the limit follows the minimum RAM step and the documented table (0.25 GB: 20, 1 GB: 50), and `size-database` need
+not wait for it: the build that follows the step takes minutes, so the start script and the new containers meet the
+new limit. The version still serving sees its open connections closed once, by the restart; a fresh connection is not
+refused. A service whose minimum the platform does not report is sized as 0.25 GB, which never overstates its limit.
+The rows need a build and run with `FABRIKA_LIVE_ZEROPS_SLOW=1`.
+
+| Behaviour                                                                                 | Row                                          |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------- |
+| The custom autoscaling raises the minimum RAM of a PostgreSQL service, read back at once  | `postgres-custom-autoscaling-raises-min-ram` |
+| `max_connections` follows within 3 minutes, through one restart that refuses at most 10 s | `postgres-max-connections-follow-min-ram`    |
 
 #### Verified live (2026-10-15, account `prg1`) — an application's database roles and the two ports
 

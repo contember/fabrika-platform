@@ -238,8 +238,9 @@ execution document carries the generated `run` and `build`.
 - A database too small for its application's container range costs more RAM. At Zerops' price of $3 per GB and
   30 days, raising one database node from the 0.25 GB floor (1 container and 2 jobs) to 0.5 GB (2 containers and 2
   jobs) costs $0.75, to 1 GB (8 containers and 2 jobs) $2.25, and to 2 GB (10 containers) $5.25 per 30 days; an HA
-  service has three nodes. The Notes example (4 containers, 2 jobs) needs 1 GB. Crossing a RAM step restarts a single-node database once,
-  a short outage of the version still serving.
+  service has three nodes. The Notes example (4 containers, 2 jobs) needs 1 GB. Raising a single-node database
+  restarts it once, about 15 s after the raise (measured live, 2026-10-16): the version still serving loses its open
+  connections, and no fresh connection was refused.
 - A process serves at most as many requests at once as it has connections, because a request holds its connection
   for its transaction; more throughput comes from more containers or a larger database.
 - The share is computed at deploy. A maximum container count raised later in the Zerops GUI holds until the next

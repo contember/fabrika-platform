@@ -5,11 +5,12 @@
 //
 //   FABRIKA_LIVE_ZEROPS_TOKEN=<access token> FABRIKA_LIVE_ZEROPS_PROJECT_ID=<throwaway project> \
 //     bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts
-//   FABRIKA_LIVE_ZEROPS_SLOW=1 …    also runs the two build-length unpacker rows (minutes each)
+//   FABRIKA_LIVE_ZEROPS_SLOW=1 …    also runs the build-length rows (minutes each)
 //
 // WHAT IT DOES TO THE PROJECT. It imports four throwaway services named `wu1<run id>*`, writes and removes
-// a handful of `FABRIKA_FACT_*` variables on one of them, and deletes both services again — including when
-// a row failed. It never creates or deletes a project, never touches a service it did not create, and never
+// a handful of `FABRIKA_FACT_*` variables on one of them, and deletes every service it created again — including
+// when a row failed. The build-length PostgreSQL rows add a `postgresql:single@18` and a small SQL client
+// published on its subdomain, which answers the database's `max_connections` and nothing else. It never creates or deletes a project, never touches a service it did not create, and never
 // adopts one left behind by an earlier run: a leaked name is REPORTED at startup and left alone, because
 // adopting it would let an interrupted run silently change a later one's result.
 //
@@ -17,6 +18,10 @@
 // in a failure message.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { z } from 'zod'
+import { createZeropsApi } from '../api'
+import { zeropsPostgresMaxConnections } from '../database-budget'
+import { raiseMinRam } from '../provider'
 import {
 	assertLiveRowIsSafe,
 	awaitProcessTerminal,
@@ -30,7 +35,7 @@ import {
 	resolvePath,
 	runFact,
 } from './platform-facts'
-import { ECHO_FILES, probeArchive, probeDescriptor, type ProbeFailure } from './platform-facts-archive'
+import { ECHO_FILES, probeArchive, probeDescriptor, type ProbeFailure, SQL_PROBE_FILES } from './platform-facts-archive'
 
 const PREFIX = 'FABRIKA_LIVE_ZEROPS_'
 const TOKEN_VAR = `${PREFIX}TOKEN`
@@ -85,7 +90,7 @@ const hasLiveAccount = account !== null
 
 export const skipReason = `skipped: set ${TOKEN_VAR} and ${PROJECT_VAR} (plus ${SLOW_VAR}=1 for the build-length rows) to run `
 	+ `the platform-facts table against a real Zerops account — it imports four throwaway ${RUN_PREFIX}* services into that `
-	+ `project, writes and deletes their variables, and deletes every service it created again`
+	+ `project (six with ${SLOW_VAR}=1, a PostgreSQL among them), writes and deletes their variables, and deletes every service it created again`
 
 if (!hasLiveAccount) {
 	console.warn(`platform-facts.live.test.ts ${skipReason}`)
@@ -122,25 +127,25 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
 const unpackerProbe =
 	(options: { directoryEntries: boolean; expected: string; failure?: ProbeFailure }): FactScript => async ({ transport, context, fact }) => {
 		const hostname = required(context, 'hostname')
-		const settled = await deployProbe(transport, context, fact, {
+		const settled = await deployProbe(transport, fact, {
+			service: { id: required(context, 'serviceId'), hostname },
 			name: `${hostname}-${options.directoryEntries ? 'dirs' : 'flat'}`,
 			archive: probeArchive({ directoryEntries: options.directoryEntries }),
-			failure: options.failure,
+			descriptor: probeDescriptor(hostname, options.failure),
 		})
 		if (settled !== options.expected) {
 			throw new PlatformFactError(fact.id, fact.section, `the app version settled on ${settled}, expected ${options.expected}`)
 		}
 	}
 
-/** Reserve an upload-backed version on the throwaway service, upload `archive`, build it, and answer the status it settles on. */
+/** Reserve an upload-backed version on a throwaway service, upload `archive`, build it, and answer the status it settles on. */
 const deployProbe = async (
 	transport: FactTransport,
-	context: FactContext,
 	fact: PlatformFact,
-	probe: { name: string; archive: ArrayBuffer; failure?: ProbeFailure },
+	probe: { service: { id: string; hostname: string }; name: string; archive: ArrayBuffer; descriptor: string },
 ): Promise<string> => {
-	const serviceId = required(context, 'serviceId')
-	const hostname = required(context, 'hostname')
+	const serviceId = probe.service.id
+	const hostname = probe.service.hostname
 	const reserved = await callApi(transport, 'POST', `/service-stack/${serviceId}/app-version`, { name: probe.name })
 	if (reserved.status < 200 || reserved.status >= 300) {
 		throw new PlatformFactError(fact.id, fact.section, `reserving an app version answered ${reserved.status}`)
@@ -156,7 +161,7 @@ const deployProbe = async (
 		throw new PlatformFactError(fact.id, fact.section, `uploading the probe archive answered ${uploaded.status}`)
 	}
 	const started = await callApi(transport, 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
-		zeropsYaml: probeDescriptor(hostname, probe.failure),
+		zeropsYaml: probe.descriptor,
 		zeropsYamlSetup: hostname,
 	})
 	if (started.status < 200 || started.status >= 300) {
@@ -176,13 +181,33 @@ const SUBDOMAIN_POLL_ATTEMPTS = 24
 const authorizationForwarded: FactScript = async ({ transport, context, fact }) => {
 	const serviceId = required(context, 'serviceId')
 	const hostname = required(context, 'hostname')
-	const settled = await deployProbe(transport, context, fact, {
+	const settled = await deployProbe(transport, fact, {
+		service: { id: serviceId, hostname },
 		name: `${hostname}-echo`,
 		archive: probeArchive({ directoryEntries: true, files: ECHO_FILES }),
+		descriptor: probeDescriptor(hostname),
 	})
 	if (settled !== 'ACTIVE') {
 		throw new PlatformFactError(fact.id, fact.section, `the echo server settled on ${settled}, expected ACTIVE`)
 	}
+	const subdomain = await publishSubdomain(transport, fact, serviceId)
+	const sent = `Bearer fabrika-fact-${crypto.randomUUID()}`
+	for (let attempt = 0; attempt < SUBDOMAIN_POLL_ATTEMPTS; attempt++) {
+		const answered = await transport.fetch(subdomain, { headers: { Authorization: sent }, signal: transport.signal }).catch(() => null)
+		if (answered?.status === 200) {
+			const echoed = await answered.text()
+			if (echoed !== sent) {
+				throw new PlatformFactError(fact.id, fact.section, `the balancer changed Authorization: the echo is ${JSON.stringify(echoed)}`)
+			}
+			return
+		}
+		await transport.sleep(VERSION_POLL_INTERVAL_MS)
+	}
+	throw new PlatformFactError(fact.id, fact.section, 'the subdomain never answered 200')
+}
+
+/** Publish a deployed service on its subdomain (only if it is not published yet: a second enable fails its process) and answer the URL of its port 3000. */
+const publishSubdomain = async (transport: FactTransport, fact: PlatformFact, serviceId: string): Promise<string> => {
 	const service = await callApi(transport, 'GET', `/service-stack/${serviceId}`)
 	if (first(service.body, 'subdomainAccess') !== true) {
 		const enabled = await callApi(transport, 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`)
@@ -200,19 +225,7 @@ const authorizationForwarded: FactScript = async ({ transport, context, fact }) 
 	if (subdomain === undefined) {
 		throw new PlatformFactError(fact.id, fact.section, 'the deployed service has no zeropsSubdomain')
 	}
-	const sent = `Bearer fabrika-fact-${crypto.randomUUID()}`
-	for (let attempt = 0; attempt < SUBDOMAIN_POLL_ATTEMPTS; attempt++) {
-		const answered = await transport.fetch(subdomain, { headers: { Authorization: sent }, signal: transport.signal }).catch(() => null)
-		if (answered?.status === 200) {
-			const echoed = await answered.text()
-			if (echoed !== sent) {
-				throw new PlatformFactError(fact.id, fact.section, `the balancer changed Authorization: the echo is ${JSON.stringify(echoed)}`)
-			}
-			return
-		}
-		await transport.sleep(VERSION_POLL_INTERVAL_MS)
-	}
-	throw new PlatformFactError(fact.id, fact.section, 'the subdomain never answered 200')
+	return subdomain
 }
 
 const pollAppVersion = async (transport: FactTransport, appVersionId: string): Promise<string> => {
@@ -242,12 +255,274 @@ const required = (context: FactContext, name: string): string => {
 	return value
 }
 
+/** What the PostgreSQL probe raises its database to: the raise `size-database` makes for the Notes example, 0.25 → 1 GB. */
+const POSTGRES_PROBE_MIN_RAM_GB = 1
+/**
+ * The profile an application's own database is declared with, and its minimum RAM, which `size-database` also assumes
+ * when none is reported. Without a profile a `postgresql:single@18` gets `oltp-staging`, whose floor is 1 GB.
+ */
+const POSTGRES_PROBE_PROFILE = 'oltp-hobby'
+const POSTGRES_FRESH_MIN_RAM_GB = 0.25
+const POSTGRES_SAMPLE_INTERVAL_MS = 1_000
+/** Each sample is one fresh connection; the client gives up connecting after 3 s, the request after this. */
+const POSTGRES_SAMPLE_TIMEOUT_MS = 10_000
+/** How long `max_connections` may take to follow the raise before the row fails; measured 2026-10-16 at ~15 s. */
+const POSTGRES_FOLLOW_TIMEOUT_MS = 180_000
+/** The longest the database may refuse fresh connections while it restarts; measured 2026-10-16 at under one sample. */
+const POSTGRES_OUTAGE_BOUND_MS = 10_000
+/** After the new limit first answers, the samples must stay good this long for the row to read the outcome. */
+const POSTGRES_SETTLE_MS = 60_000
+/** ~5 minutes for the SQL client's first good answer after its deploy: a fresh subdomain and database warm up. */
+const POSTGRES_FIRST_ANSWER_ATTEMPTS = 60
+
+const postgresProbeImport = (database: string, client: string): string =>
+	[
+		'services:',
+		`  - hostname: ${database}`,
+		'    type: postgresql:single@18',
+		`    profile: ${POSTGRES_PROBE_PROFILE}`,
+		`  - hostname: ${client}`,
+		'    type: alpine/bun@1.3',
+		'    envIsolation: service',
+		'',
+	].join('\n')
+
+/** The SQL client's answer. Parsed here, where it enters the suite. */
+const sqlProbeAnswerSchema = z.discriminatedUnion('ok', [
+	z.object({ ok: z.literal(true), maxConnections: z.number(), startedAt: z.string() }),
+	z.object({ ok: z.literal(false), error: z.string() }),
+])
+
+type PostgresSample = { atMs: number; tookMs: number } & ({ ok: true; maxConnections: number; startedAt: string } | { ok: false; error: string })
+
+/** What the raise row leaves the follow row: the database it raised, what it read before, and the samples since. */
+interface PostgresRaise {
+	profile: string | undefined
+	before: { minRamGB: number; maxConnections: number; startedAt: string }
+	raiseStartedAtMs: number
+	raiseFinishedAtMs: number
+	samples: PostgresSample[]
+	stopSampling: () => Promise<void>
+}
+
+const sampleSqlClient = async (transport: FactTransport, url: string): Promise<PostgresSample> => {
+	const atMs = Date.now()
+	const signal = AbortSignal.any([transport.signal, AbortSignal.timeout(POSTGRES_SAMPLE_TIMEOUT_MS)])
+	const answered = await transport.fetch(url, { signal }).catch(() => null)
+	const body = answered?.status === 200 ? await answered.json().catch(() => null) : null
+	const tookMs = Date.now() - atMs
+	if (answered === null) return { atMs, tookMs, ok: false, error: 'no answer' }
+	if (answered.status !== 200) return { atMs, tookMs, ok: false, error: `http ${answered.status}` }
+	const parsed = sqlProbeAnswerSchema.safeParse(body)
+	return parsed.success ? { atMs, tookMs, ...parsed.data } : { atMs, tookMs, ok: false, error: 'unreadable answer' }
+}
+
+/** Sample the SQL client every second until stopped; the samples land in `samples` as they come. */
+const startSampling = (transport: FactTransport, url: string, samples: PostgresSample[]): () => Promise<void> => {
+	let stopped = false
+	const loop = (async () => {
+		while (!stopped && !transport.signal.aborted) {
+			const sample = await sampleSqlClient(transport, url)
+			samples.push(sample)
+			await transport.sleep(Math.max(0, sample.atMs + POSTGRES_SAMPLE_INTERVAL_MS - Date.now()))
+		}
+	})()
+	return async () => {
+		stopped = true
+		await loop
+	}
+}
+
+/** The longest run of failed samples, from the first failure to the next good sample, in ms. */
+const longestOutageMs = (samples: readonly PostgresSample[]): number => {
+	let longest = 0
+	let failedSinceMs: number | null = null
+	for (const sample of samples) {
+		if (!sample.ok) {
+			failedSinceMs ??= sample.atMs
+			continue
+		}
+		if (failedSinceMs !== null) longest = Math.max(longest, sample.atMs - failedSinceMs)
+		failedSinceMs = null
+	}
+	return longest
+}
+
+/**
+ * The two PostgreSQL rows. The first imports a `postgresql:single@18` and an SQL client beside it, deploys the client,
+ * reads `max_connections` as the superuser, starts sampling it every second, and raises the database's minimum RAM
+ * through the deploy step's own `raiseMinRam`. The second waits until the samples show the new limit and reads the
+ * outage and the restart off them. `stop` ends the sampling when the first row failed after starting it.
+ */
+const postgresProbe = (): { scripts: Record<string, FactScript>; stop: () => Promise<void> } => {
+	let raise: PostgresRaise | null = null
+
+	const raiseMinRamRow: FactScript = async ({ transport, context, fact }) => {
+		const projectId = required(context, 'projectId')
+		const database = required(context, 'postgresHostname')
+		const client = required(context, 'sqlClientHostname')
+		const imported = await callApi(transport, 'POST', `/project/${projectId}/service-stack/import`, { yaml: postgresProbeImport(database, client) })
+		if (imported.status !== 200) {
+			throw new PlatformFactError(fact.id, fact.section, `importing the database and its SQL client answered ${imported.status}`)
+		}
+		for (const processId of resolvePath(imported.body, 'serviceStacks[*].processes[*].id')) {
+			if (typeof processId === 'string') await awaitProcessTerminal(transport, processId)
+		}
+		const databaseId = await findServiceId(transport, projectId, database)
+		const clientId = await findServiceId(transport, projectId, client)
+		if (databaseId === null || clientId === null) {
+			throw new PlatformFactError(fact.id, fact.section, 'the import did not leave the database and its SQL client')
+		}
+		context.set('postgresServiceId', databaseId)
+		const databaseUrl =
+			`postgresql://\${${database}_superUser}:\${${database}_superUserPassword}@\${${database}_hostname}:\${${database}_port}/\${${database}_dbName}?sslmode=disable`
+		const settled = await deployProbe(transport, fact, {
+			service: { id: clientId, hostname: client },
+			name: `${client}-sql`,
+			archive: probeArchive({ directoryEntries: true, files: SQL_PROBE_FILES }),
+			descriptor: probeDescriptor(client, {}, { PROBE_DATABASE_URL: databaseUrl }),
+		})
+		if (settled !== 'ACTIVE') {
+			throw new PlatformFactError(fact.id, fact.section, `the SQL client settled on ${settled}, expected ACTIVE`)
+		}
+		const url = await publishSubdomain(transport, fact, clientId)
+		let baseline: PostgresSample | null = null
+		for (let attempt = 0; attempt < POSTGRES_FIRST_ANSWER_ATTEMPTS && baseline === null; attempt++) {
+			const sample = await sampleSqlClient(transport, url)
+			if (sample.ok) baseline = sample
+			else await transport.sleep(VERSION_POLL_INTERVAL_MS)
+		}
+		if (baseline === null || !baseline.ok) {
+			throw new PlatformFactError(fact.id, fact.section, 'the SQL client never read max_connections')
+		}
+
+		const api = createZeropsApi({ token: transport.token })
+		const service = await api.getService({ serviceId: databaseId, signal: transport.signal })
+		const minRamGB = service.currentAutoscaling?.vertical.minResource.memoryGBytes ?? null
+		const profile = service.autoscalingProfileId
+		console.info(
+			`platform-facts.live: ${database} (profile ${profile ?? 'none'}) at a minimum of ${
+				minRamGB ?? 'no'
+			} GB: max_connections ${baseline.maxConnections}`,
+		)
+		if (profile !== POSTGRES_PROBE_PROFILE) {
+			throw new PlatformFactError(fact.id, fact.section, `the database reads the profile ${profile ?? 'nothing'}, expected ${POSTGRES_PROBE_PROFILE}`)
+		}
+		if (minRamGB !== POSTGRES_FRESH_MIN_RAM_GB) {
+			throw new PlatformFactError(
+				fact.id,
+				fact.section,
+				`a fresh database reads a minimum RAM of ${minRamGB ?? 'nothing'} GB, expected ${POSTGRES_FRESH_MIN_RAM_GB}`,
+			)
+		}
+		if (baseline.maxConnections !== zeropsPostgresMaxConnections(minRamGB, profile)) {
+			throw new PlatformFactError(
+				fact.id,
+				fact.section,
+				`max_connections is ${baseline.maxConnections} at ${minRamGB} GB, expected ${zeropsPostgresMaxConnections(minRamGB, profile)}`,
+			)
+		}
+
+		const samples: PostgresSample[] = []
+		const stopSampling = startSampling(transport, url, samples)
+		const raiseStartedAtMs = Date.now()
+		raise = {
+			profile,
+			before: { minRamGB, maxConnections: baseline.maxConnections, startedAt: baseline.startedAt },
+			raiseStartedAtMs,
+			raiseFinishedAtMs: raiseStartedAtMs,
+			samples,
+			stopSampling,
+		}
+		const sleep = (ms: number): Promise<void> => transport.sleep(ms)
+		const after = await raiseMinRam(
+			{ zerops: { api, sleep }, signal: transport.signal },
+			service,
+			database,
+			POSTGRES_PROBE_MIN_RAM_GB,
+			'the probe needs',
+		)
+		raise.raiseFinishedAtMs = Date.now()
+		console.info(
+			`platform-facts.live: ${database} reads back a minimum of ${after} GB, ${raise.raiseFinishedAtMs - raiseStartedAtMs} ms after the raise began`,
+		)
+	}
+
+	const followRow: FactScript = async ({ transport, fact }) => {
+		const raised = raise
+		if (raised === null) {
+			throw new PlatformFactError(fact.id, fact.section, 'the raise row did not reach its raise, so there is nothing to follow')
+		}
+		const expected = zeropsPostgresMaxConnections(POSTGRES_PROBE_MIN_RAM_GB, raised.profile)
+		const deadlineMs = raised.raiseStartedAtMs + POSTGRES_FOLLOW_TIMEOUT_MS
+		const followedAt = (): PostgresSample | undefined => raised.samples.find((sample) => sample.ok && sample.maxConnections === expected)
+		const settled = (): boolean => {
+			const followed = followedAt()
+			const last = raised.samples.at(-1)
+			return followed !== undefined && last?.ok === true && last.atMs - followed.atMs >= POSTGRES_SETTLE_MS
+		}
+		while (!settled() && Date.now() < deadlineMs) {
+			await transport.sleep(POSTGRES_SAMPLE_INTERVAL_MS)
+		}
+		await raised.stopSampling()
+		const followed = followedAt()
+		const failed = raised.samples.filter((sample) => !sample.ok)
+		const restartedAt = raised.samples.find((sample) => sample.ok && sample.startedAt !== raised.before.startedAt)
+		const lastBeforeRestart = [...raised.samples].reverse().find((sample) => sample.ok && sample.startedAt === raised.before.startedAt)
+		const outageMs = longestOutageMs(raised.samples)
+		const slowestMs = Math.max(0, ...raised.samples.map((sample) => sample.tookMs))
+		const errors = [...new Set(failed.map((sample) => (sample.ok ? '' : sample.error)))]
+		console.info(
+			[
+				`platform-facts.live: ${raised.samples.length} samples over ${
+					Math.round(((raised.samples.at(-1)?.atMs ?? raised.raiseStartedAtMs) - raised.raiseStartedAtMs) / 1000)
+				} s;`,
+				`the raise call took ${raised.raiseFinishedAtMs - raised.raiseStartedAtMs} ms;`,
+				followed === undefined
+					? `max_connections never read ${expected};`
+					: `max_connections read ${expected} ${followed.atMs - raised.raiseStartedAtMs} ms after the raise began;`,
+				`${failed.length} failed sample(s), the longest outage ${outageMs} ms, the slowest sample ${slowestMs} ms${
+					errors.length === 0 ? '' : ` (${errors.join(', ')})`
+				};`,
+				restartedAt === undefined
+					? 'the postmaster did not restart'
+					: `the postmaster restarted, first seen ${restartedAt.atMs - raised.raiseStartedAtMs} ms after the raise began, ${
+						restartedAt.atMs - (lastBeforeRestart?.atMs ?? raised.raiseStartedAtMs)
+					} ms after the last sample of the old one`,
+			].join(' '),
+		)
+		if (followed === undefined) {
+			throw new PlatformFactError(
+				fact.id,
+				fact.section,
+				`max_connections never read ${expected} in ${POSTGRES_FOLLOW_TIMEOUT_MS / 1000} s after the raise`,
+			)
+		}
+		if (restartedAt === undefined) {
+			throw new PlatformFactError(fact.id, fact.section, 'max_connections changed without a restart of the single-node database')
+		}
+		if (outageMs > POSTGRES_OUTAGE_BOUND_MS) {
+			throw new PlatformFactError(fact.id, fact.section, `the database refused connections for ${outageMs} ms while it restarted`)
+		}
+	}
+
+	return {
+		scripts: { 'postgres-raise-min-ram': raiseMinRamRow, 'postgres-max-connections-follow': followRow },
+		stop: async () => {
+			await raise?.stopSampling()
+		},
+	}
+}
+
+const postgres = postgresProbe()
+
 const scripts: Record<string, FactScript> = {
 	'unpacker-flat-archive': unpackerProbe({ directoryEntries: false, expected: 'BUILD_FAILED' }),
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
 	'failing-exec-readiness': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { execReadiness: true } }),
 	'failing-init-command': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { initCommand: true } }),
 	'authorization-forwarded': authorizationForwarded,
+	...postgres.scripts,
 }
 
 describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerops account', () => {
@@ -279,7 +554,11 @@ describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerop
 		context.set('setupProbeHostname', `${hostname}s`)
 		// A syntactically well-formed id this account has never issued. The fact under test is the STATUS.
 		context.set('absentAppVersionId', 'AAAAAAAAAAAAAAAAAAAAAA')
+		context.set('postgresHostname', `${hostname}p`)
+		context.set('sqlClientHostname', `${hostname}q`)
 		created.push(hostname, `${hostname}d`, `${hostname}c`, `${hostname}n`)
+		// Only the build-length PostgreSQL rows create these two, so a run without them deletes nothing more.
+		cleanup.push(`${hostname}p`, `${hostname}q`)
 		// The `zeropsSetup` row expects a refusal; if the platform ever accepts it, the service is still ours.
 		cleanup.push(...created, `${hostname}s`)
 		console.info(`platform-facts.live: run ${runId} will create ${created.join(', ')} in the configured project`)
@@ -288,6 +567,7 @@ describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerop
 
 	afterAll(async () => {
 		if (account === null) return
+		await postgres.stop()
 		// Its OWN transport: the run-wide signal may already have fired, and an aborted signal would make
 		// every delete below a no-op while the suite reported nothing left behind.
 		const cleaner: FactTransport = {

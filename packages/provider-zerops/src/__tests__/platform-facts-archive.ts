@@ -30,6 +30,38 @@ export const ECHO_FILES: readonly ArchiveFile[] = [
 	{ path: 'src/index.ts', contents: "Bun.serve({ port: 3000, fetch: (request) => new Response(request.headers.get('authorization') ?? '') })\n" },
 ]
 
+/**
+ * A Bun application that answers every request from ONE fresh connection to `PROBE_DATABASE_URL`: the server's
+ * `max_connections` and the start of its postmaster, or the error code of a connection that failed. It is the
+ * PostgreSQL probe's SQL client inside the project, so the suite needs no VPN. It answers nothing it was sent.
+ */
+export const SQL_PROBE_FILES: readonly ArchiveFile[] = [
+	{ path: 'package.json', contents: `${JSON.stringify({ name: 'fabrika-postgres-probe', private: true, type: 'module' }, null, 2)}\n` },
+	{
+		path: 'src/index.ts',
+		contents: [
+			"import { SQL } from 'bun'",
+			'',
+			"const url = process.env.PROBE_DATABASE_URL ?? ''",
+			'Bun.serve({',
+			'\tport: 3000,',
+			'\tfetch: async () => {',
+			'\t\tconst sql = new SQL({ url, max: 1, connectionTimeout: 3, idleTimeout: 1 })',
+			'\t\ttry {',
+			"\t\t\tconst [row] = await sql`SELECT current_setting('max_connections') AS max_connections, pg_postmaster_start_time()::text AS started_at`",
+			'\t\t\treturn Response.json({ ok: true, maxConnections: Number(row.max_connections), startedAt: row.started_at })',
+			'\t\t} catch (error) {',
+			"\t\t\treturn Response.json({ ok: false, error: String(error?.code ?? error?.name ?? 'unknown') })",
+			'\t\t} finally {',
+			'\t\t\tawait sql.close({ timeout: 0 }).catch(() => {})',
+			'\t\t}',
+			'\t},',
+			'})',
+			'',
+		].join('\n'),
+	},
+]
+
 /** What a probe's descriptor makes fail on purpose, for the rows that ask whether a failure stops activation. */
 export interface ProbeFailure {
 	/** A `deploy.readinessCheck` whose `exec` command always fails. */
@@ -39,7 +71,7 @@ export interface ProbeFailure {
 }
 
 /** The build descriptor the probe deploys with. `setup` must equal the service's hostname. */
-export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}): string =>
+export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}, envVariables: Readonly<Record<string, string>> = {}): string =>
 	[
 		'zerops:',
 		`  - setup: ${hostname}`,
@@ -61,6 +93,8 @@ export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}): s
 			: []),
 		'    run:',
 		'      base: alpine/bun@1.3',
+		...(Object.keys(envVariables).length === 0 ? [] : ['      envVariables:']),
+		...Object.entries(envVariables).map(([key, value]) => `        ${key}: ${JSON.stringify(value)}`),
 		...(failure.initCommand === true ? ['      initCommands:', '        - "exit 1"'] : []),
 		'      start: bun src/index.ts',
 		'      ports:',

@@ -140,9 +140,8 @@ const SECTION_POSTGRES_ROLES =
 	"Verified live (2026-10-15) — an application's database roles and the two ports — docs/reference/zerops-platform.md:1259"
 const SECTION_UNVERIFIED_HA_NEW_ROLE =
 	'UNVERIFIED: a role fabrika creates connects on the direct port of `postgresql:ha@18` — docs/reference/zerops-platform.md:1293'
-const SECTION_CONNECTION_LIMITS = "Measured in production (2026-10-16) — an application's database connections — docs/reference/zerops-platform.md"
-const SECTION_UNVERIFIED_POSTGRES_MIN_RAM =
-	'UNVERIFIED: the autoscaling API raises the minimum RAM of a PostgreSQL service — docs/reference/zerops-platform.md'
+const SECTION_POSTGRES_MIN_RAM =
+	"Verified live (2026-10-16) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections` — docs/reference/zerops-platform.md"
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_UNVERIFIED_AUTHORIZATION = 'UNVERIFIED: the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md:506'
@@ -1243,24 +1242,27 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double serves no database',
 	},
 	{
-		id: 'postgres-max-connections-follow-min-ram',
-		section: SECTION_CONNECTION_LIMITS,
-		request: { method: 'GET', path: '/service-stack/{serviceId}' },
+		id: 'postgres-custom-autoscaling-raises-min-ram',
+		section: SECTION_POSTGRES_MIN_RAM,
+		// The import of a `postgresql:single@18` and of an SQL client beside it, the client's build, and the raise
+		// through the deploy step's own `raiseMinRam` all happen in the script; the request is what the raise sends.
+		request: { method: 'PUT', path: '/service-stack/{postgresServiceId}/autoscaling' },
 		expect: { status: 200 },
-		live: 'not-probed',
-		liveNote: "not an API fact: `SHOW max_connections` and a refused connection need a client inside the project's VXLAN",
-		emulator: false,
-		emulatorNote: 'the double serves no database',
-	},
-	{
-		id: 'unverified-postgres-custom-autoscaling-raises-min-ram',
-		section: SECTION_UNVERIFIED_POSTGRES_MIN_RAM,
-		request: { method: 'GET', path: '/service-stack/{serviceId}' },
-		expect: { status: 200 },
-		live: 'not-probed',
-		liveNote: 'needs a PostgreSQL service, which the suite does not create, and raising it restarts a single-node database',
+		script: 'postgres-raise-min-ram',
+		live: 'build',
 		emulator: false,
 		emulatorNote: 'the double keeps a minimum RAM of any service and models no PostgreSQL configuration',
+	},
+	{
+		id: 'postgres-max-connections-follow-min-ram',
+		section: SECTION_POSTGRES_MIN_RAM,
+		// Reads what the SQL client sampled every second since the row above raised the database.
+		request: { method: 'GET', path: '/service-stack/{postgresServiceId}' },
+		expect: { status: 200 },
+		script: 'postgres-max-connections-follow',
+		live: 'build',
+		emulator: false,
+		emulatorNote: 'the double serves no database',
 	},
 ]
 
