@@ -363,9 +363,7 @@ const assertUnmanagedNames = (kind: 'variable' | 'secret', appId: string, names:
 	const reserved = names.find(isFrameworkVariableName)
 	if (reserved === undefined) return
 	// A name a release before this one accepted (a new reserved family) lands here: say how to get past it.
-	const removal = kind === 'variable'
-		? `\`fabrika control apps variables delete --app=${appId} --name=${reserved}\` (add --env=<env> for one environment's)`
-		: `the application's secrets in the console`
+	const removal = `\`fabrika control apps ${kind}s delete --app=${appId} --name=${reserved}\` (add --env=<env> for one environment's)`
 	throw new Error(
 		`application ${kind} "${reserved}" is managed by Fabrika: delete it with ${removal}, rename it if the code reads it, and deploy again`,
 	)

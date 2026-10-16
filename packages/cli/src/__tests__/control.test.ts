@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CONTROL_USAGE, parseControlFlags, runControlCli } from '../control.js'
+import { CONTROL_USAGE, parseControlFlags, runControlCli, type SecretValueInput } from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 
@@ -290,6 +290,85 @@ describe('control apps variables', () => {
 
 		await expect(runControlCli('apps', ['variables', 'rotate', '--app=notes'], undefined, CONTROL_ENV)).rejects.toThrow(
 			'Unknown `control apps variables` verb: rotate',
+		)
+	})
+})
+
+describe('control apps secrets', () => {
+	const SECRET = 'n0t-for-any-log'
+	const piped = (text: string): SecretValueInput => ({ isTerminal: () => false, text: () => Promise.resolve(text) })
+	const terminal: SecretValueInput = { isTerminal: () => true, text: () => Promise.reject(new Error('a terminal is never read')) }
+	const stored = { appId: 'notes', env: 'prod', name: 'API_KEY', storage: 'vault', valueRef: 'vault:01', createdAt: 1 }
+
+	test('put sends the value read from stdin, less one trailing newline, and prints only the scope, name and ok', async () => {
+		const put = captureFetch({ result: stored })
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() =>
+				runControlCli('apps', ['secrets', 'put', '--app=notes', '--env=prod', '--name=API_KEY'], undefined, CONTROL_ENV, piped(`${SECRET}\n`))
+			)
+		})
+		expect(put.calls[0]?.body).toEqual({
+			method: 'apps.secrets.put',
+			input: { appId: 'notes', secret: { name: 'API_KEY', value: SECRET, env: 'prod' } },
+		})
+		expect(out).toBe('prod\tAPI_KEY\tok')
+		expect(`${out}\n${err}`).not.toContain(SECRET)
+	})
+
+	test('put keeps every character but the one final newline', async () => {
+		const put = captureFetch({ result: stored })
+		await captureStdout(() => runControlCli('apps', ['secrets', 'put', '--app=notes', '--name=API_KEY'], undefined, CONTROL_ENV, piped(' a\nb\n\n')))
+		expect(put.calls[0]?.body).toEqual({ method: 'apps.secrets.put', input: { appId: 'notes', secret: { name: 'API_KEY', value: ' a\nb\n' } } })
+	})
+
+	test('put refuses a terminal, an empty value and a --value flag before anything is sent', async () => {
+		const put = captureFetch({ result: stored })
+		const argv = ['secrets', 'put', '--app=notes', '--name=API_KEY']
+		await expect(runControlCli('apps', argv, undefined, CONTROL_ENV, terminal)).rejects.toThrow(
+			'openssl rand -base64 32 | fabrika control apps secrets put --app=notes --name=API_KEY',
+		)
+		await expect(runControlCli('apps', argv, undefined, CONTROL_ENV, piped('\n'))).rejects.toThrow('read an empty value from stdin')
+		await expect(runControlCli('apps', argv, undefined, CONTROL_ENV, piped(''))).rejects.toThrow('read an empty value from stdin')
+		await expect(runControlCli('apps', [...argv, `--value=${SECRET}`], undefined, CONTROL_ENV, piped(SECRET))).rejects.toThrow(
+			'takes no --value',
+		)
+		expect(put.calls).toEqual([])
+	})
+
+	test('put cuts the value out of a refusal that quotes it', async () => {
+		captureFetch({ error: { type: 'bad_request', message: `refused ${SECRET}` } })
+		const message = await runControlCli('apps', ['secrets', 'put', '--app=notes', '--name=API_KEY'], undefined, CONTROL_ENV, piped(SECRET))
+			.then(() => 'resolved', (error: unknown) => (error instanceof Error ? error.message : String(error)))
+		expect(message).toBe('bad_request: refused [secret value]')
+	})
+
+	test('list prints scope, name and storage, never a value or its reference', async () => {
+		const listed = captureFetch({ result: { items: [{ ...stored, env: null, name: 'SHARED' }, stored] } })
+		const out = await captureStdout(() => runControlCli('apps', ['secrets', 'list', '--app=notes'], undefined, CONTROL_ENV))
+		expect(listed.calls[0]?.body).toEqual({ method: 'apps.secrets.list', input: { appId: 'notes' } })
+		expect(out).toBe('*\tSHARED\tvault\nprod\tAPI_KEY\tvault')
+
+		captureFetch({ result: { items: [] } })
+		const err = await captureStderr(async () => {
+			await captureStdout(() => runControlCli('apps', ['secrets', 'list', '--app=notes'], undefined, CONTROL_ENV))
+		})
+		expect(err).toBe('app notes has no secrets')
+	})
+
+	test('delete carries the optional environment scope', async () => {
+		const removed = captureFetch({ result: { ok: true } })
+		const out = await captureStdout(() =>
+			runControlCli('apps', ['secrets', 'delete', '--app=notes', '--env=prod', '--name=FABRIKA_EMAIL_API_KEY'], undefined, CONTROL_ENV)
+		)
+		expect(removed.calls[0]?.body).toEqual({
+			method: 'apps.secrets.delete',
+			input: { appId: 'notes', name: 'FABRIKA_EMAIL_API_KEY', env: 'prod' },
+		})
+		expect(out).toBe('deleted')
+
+		await expect(runControlCli('apps', ['secrets', 'rotate', '--app=notes'], undefined, CONTROL_ENV)).rejects.toThrow(
+			'Unknown `control apps secrets` verb: rotate',
 		)
 	})
 })

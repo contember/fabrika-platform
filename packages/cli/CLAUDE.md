@@ -39,6 +39,12 @@ label the envelope a registration carries.
   ([ADR-0035](../../docs/decisions/0035-the-platform-owns-the-application-iam-issuer.md)).
   A platform-owned name — the IAM issuer, the release, the Operations keys — is
   refused too: the deploy writes those.
+- `apps secrets` writes an app's secrets, whose values are write-only. `put` reads
+  the value from STDIN only (one trailing newline dropped) and refuses a terminal,
+  an empty value and a `--value` flag, so a value never reaches argv or shell history.
+  No verb prints a value: `list` shows scope, name and storage, and a refusal has the
+  value cut out. A deploy that refuses a platform-owned secret name names
+  `apps secrets delete` as the fix.
 - `register` CREATES; a changed manifest goes through `apps environments put`,
   which replaces one environment's envelopes and clears every placement field
   left out. Both are one procedure of the contract, so neither invents a merge.

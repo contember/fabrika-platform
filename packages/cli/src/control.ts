@@ -13,6 +13,7 @@ import { createRpcClient, type InferRpcClient, RpcError } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import type {
 	AppDto,
+	AppSecretDto,
 	ControlRpcContract,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceDto,
@@ -20,6 +21,7 @@ import type {
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
 	PutAppEnvRequest,
+	PutAppSecretRequest,
 	PutAppVarRequest,
 	RegisterAppRequest,
 	RegisterAppResponse,
@@ -56,6 +58,9 @@ Usage:
   fabrika control apps variables list --app=<id>
   fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>]
   fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
+  fabrika control apps secrets list --app=<id>
+  fabrika control apps secrets put --app=<id> --name=<name> [--env=<name>]    (the value on stdin)
+  fabrika control apps secrets delete --app=<id> --name=<name> [--env=<name>]
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n|none>]
@@ -80,6 +85,13 @@ REQUIRED for it — on \`register\` and on \`apps environments put\` alike — a
 refused before anything is created. \`namespaces get\` lists the hosts a \`zerops-subdomain\` namespace
 serves and which of them are still free; a custom-domain namespace serves the domain you bound to its
 proxy. A manifest with no proxy target needs no domain.
+
+A variable's value is stored and printed in clear. A secret's value is write-only: \`apps secrets put\`
+reads it from STDIN, never from a flag, so it reaches neither shell history nor a process listing, and
+one trailing newline is dropped. No command prints it back; \`apps secrets list\` shows names, scope and
+storage only. Generate one in the pipe:
+
+  openssl rand -base64 32 | fabrika control apps secrets put --app=<id> --name=<name>
 
 \`--public-origin\` is where IAM may return a signed-in person: without one, sign-in to the environment is
 refused. When \`register\` is given none and the namespace lists \`--domain\` among its hosts, it sets
@@ -450,10 +462,10 @@ export type ManifestTextCompiler = (environment: string) => Promise<CompiledMani
 
 const IN_MEMORY_MANIFEST = 'the compiled manifest'
 
-/** The compile runs repository code that can read the environment, so its message may quote the key. */
-const failureMessage = (error: unknown, controlKey: string): string => {
+/** The message of a failure that ran with `value` in reach, with `value` cut out and named by `label`. */
+const failureMessage = (error: unknown, value: string, label: string): string => {
 	const message = error instanceof RpcError ? `${error.type}: ${error.message}` : error instanceof Error ? error.message : String(error)
-	return message.replaceAll(controlKey, '[FABRIKA_CONTROL_KEY]')
+	return message.replaceAll(value, `[${label}]`)
 }
 
 /**
@@ -483,13 +495,15 @@ export const registerCompiledManifest = async (
 		const manifest = parseJsonText(compiled.text, IN_MEMORY_MANIFEST)
 		body = registrationRequest(inputs, compiled.provider, manifest, IN_MEMORY_MANIFEST)
 	} catch (error) {
-		throw new Error(`Compile phase failed; nothing was registered. ${failureMessage(error, controlKey)}`)
+		throw new Error(`Compile phase failed; nothing was registered. ${failureMessage(error, controlKey, 'FABRIKA_CONTROL_KEY')}`)
 	}
 	let result: RegisterAppResponse
 	try {
 		result = await client.register(await withNamespacePublicOrigin(body, client))
 	} catch (error) {
-		throw new Error(`Register phase failed after a successful compile; no manifest file was written. ${failureMessage(error, controlKey)}`)
+		throw new Error(
+			`Register phase failed after a successful compile; no manifest file was written. ${failureMessage(error, controlKey, 'FABRIKA_CONTROL_KEY')}`,
+		)
 	}
 	emit(flags, result, () => registrationLine(result))
 }
@@ -573,12 +587,85 @@ const runVariables = async (verb: string | undefined, flags: Flags, env: Readonl
 	throw new Error(`Unknown \`control apps variables\` verb: ${verb ?? '(missing)'}`)
 }
 
+/** Where `apps secrets put` reads a secret's value. The CLI reads the process's stdin; a test hands its own. */
+export interface SecretValueInput {
+	readonly isTerminal: () => boolean
+	readonly text: () => Promise<string>
+}
+
+const processStdin: SecretValueInput = {
+	isTerminal: () => process.stdin.isTTY === true,
+	text: () => Bun.stdin.text(),
+}
+
+/** The value piped in, without the one newline `echo` or a heredoc ends it with. */
+const readSecretValue = async (input: SecretValueInput, appId: string, name: string): Promise<string> => {
+	if (input.isTerminal()) {
+		throw new Error(
+			'`apps secrets put` reads the value from stdin, and stdin is a terminal. Pipe the value in, for example: '
+				+ `openssl rand -base64 32 | fabrika control apps secrets put --app=${appId} --name=${name}`,
+		)
+	}
+	const value = (await input.text()).replace(/\r?\n$/, '')
+	if (value === '') {
+		throw new Error('`apps secrets put` read an empty value from stdin; nothing was stored')
+	}
+	return value
+}
+
+/**
+ * A secret's value is write-only: it comes in on stdin, never as a flag a shell history or a process listing
+ * keeps, and no verb prints it. Control seals it and keeps only a reference.
+ */
+const runSecrets = async (
+	verb: string | undefined,
+	flags: Flags,
+	env: Readonly<Record<string, string | undefined>>,
+	input: SecretValueInput,
+): Promise<void> => {
+	const client = controlClient(flags, env)
+	const appId = required(flags, 'app')
+	const scope = optional(flags, 'env')
+	if (verb === 'list') {
+		const result = await client.apps.secrets.list({ appId })
+		emitList(flags, result, (item) => `${item.env ?? '*'}\t${item.name}\t${item.storage}`, `app ${appId} has no secrets`)
+		return
+	}
+	if (verb === 'put') {
+		if (flags.values.has('value')) {
+			throw new Error('`apps secrets put` takes no --value: pipe the value in on stdin, so it stays out of shell history and process listings')
+		}
+		const name = required(flags, 'name')
+		const value = await readSecretValue(input, appId, name)
+		const secret: PutAppSecretRequest = { name, value, ...(scope === undefined ? {} : { env: scope }) }
+		let result: AppSecretDto
+		try {
+			result = await client.apps.secrets.put({ appId, secret })
+		} catch (error) {
+			throw new Error(failureMessage(error, value, 'secret value'))
+		}
+		emit(flags, result, () => `${result.env ?? '*'}\t${result.name}\tok`)
+		return
+	}
+	if (verb === 'delete') {
+		const result = await client.apps.secrets.delete({ appId, name: required(flags, 'name'), ...(scope === undefined ? {} : { env: scope }) })
+		emit(flags, result, () => (result.ok ? 'deleted' : 'not deleted'))
+		return
+	}
+	throw new Error(`Unknown \`control apps secrets\` verb: ${verb ?? '(missing)'}`)
+}
+
 const runApps = async (
 	verb: string | undefined,
 	flags: Flags,
 	provider: string | undefined,
 	env: Readonly<Record<string, string | undefined>>,
+	input: SecretValueInput,
 ): Promise<void> => {
+	if (verb === 'secrets') {
+		await runSecrets(flags.positional[1], flags, env, input)
+		return
+	}
 	if (verb === 'variables') {
 		await runVariables(flags.positional[1], flags, env)
 		return
@@ -791,6 +878,7 @@ export const runControlCli = async (
 	argv: readonly string[],
 	provider?: string,
 	env: Readonly<Record<string, string | undefined>> = process.env,
+	input: SecretValueInput = processStdin,
 ): Promise<void> => {
 	const flags = parseControlFlags(argv)
 	const verb = flags.positional[0]
@@ -804,7 +892,7 @@ export const runControlCli = async (
 				await runKeyIssue(flags, env)
 				return
 			case 'apps':
-				await runApps(verb, flags, provider, env)
+				await runApps(verb, flags, provider, env, input)
 				return
 			case 'runs':
 				await runRuns(verb, flags, env)

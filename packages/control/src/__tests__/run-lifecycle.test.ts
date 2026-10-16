@@ -897,10 +897,15 @@ describe('provider-neutral run lifecycle', () => {
 			const runId = await seedRun(db)
 			await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name, valueRef: await sealAppSecret('prod', name, 'attacker') })
 			const refused: ProviderDeployInput[] = []
+			const deps = makeDeps(db, makeProvider(refused, { state: 'succeeded' }))
+			const stored = memoryLogs()
+			deps.logs = stored.logs
 
-			expect(`${name}: ${(await executeDeploy(makeDeps(db, makeProvider(refused, { state: 'succeeded' })), { runId })).status}`)
-				.toBe(`${name}: failed`)
+			expect(`${name}: ${(await executeDeploy(deps, { runId })).status}`).toBe(`${name}: failed`)
 			expect(refused).toEqual([])
+			expect(stored.objects.get(`runs/${runId}/logs.ndjson`)).toContain(
+				`delete it with \`fabrika control apps secrets delete --app=app --name=${name}\``,
+			)
 			await db.registry.deleteAppSecret('app', 'prod', name)
 			await db.registry.deleteApp('app')
 		}
