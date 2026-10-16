@@ -80,7 +80,7 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [187](187-set-or-rotate-the-installation-mail-transport.md) — `fabrika platform mail` sets or rotates the installation's mail transport on IAM and Control and redeploys the environments that use it; today an application gets a change only at its next deploy.
 - [188](188-application-mail-review-follow-ups.md) — Application mail review follow-ups: two upgrade release notes, an IAM `delivery_failed` retry, and three `ctx.mail`/`then` runtime edges.
 - [189](189-cross-origin-endpoints-review-follow-ups.md) — Cross-origin endpoints review follow-ups: the `http://` host rule, `Vary: Origin` on every answer, an early refusal for an old namespace proxy pin, and the preflight's request headers.
-- [189](189-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
 - [190](190-the-overview-reads-each-applications-environments-separately.md): The console overview calls Control once per application for its environments; one read for many applications.
 - [191](191-the-audit-log-cannot-leave-out-admin-reads.md): `audit.list` cannot leave out admin reads, so the console pages past them in the browser.
+- [192](192-a-signed-in-person-cannot-manage-their-own-account.md): No self-service password change or sign-in list; an IAM account page, after rewriting ADR-0020.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

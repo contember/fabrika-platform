@@ -1,10 +1,10 @@
 ---
-id: 189
+id: 192
 title: A signed-in person cannot manage their own account
 blocked-by: []
 ---
 
-# 189: A signed-in person cannot manage their own account
+# 192: A signed-in person cannot manage their own account
 
 **Summary.** Give IAM an account page where a signed-in person changes their own password, sees and ends their own
 sign-ins, and sees who they are signed in as; link it from the console's account menu. Needs ADR-0020 rewritten first.
