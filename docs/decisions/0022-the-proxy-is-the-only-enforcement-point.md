@@ -669,7 +669,10 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   the approved contract did not mark. A changed list is a proxy rebuild on Zerops and a proxy Worker deploy on
   Cloudflare, like a changed domain. **Rollout:** nothing converges on upgrade, because nothing needs to: a contract
   without the flag keeps every digest byte for byte, `crossOrigins` is absent from every manifest until an operator
-  sets one, and Control's new column starts empty, so an upgraded installation answers exactly as before.
+  sets one, and Control's new column starts empty, so an upgraded installation answers exactly as before. One
+  operator step remains on Zerops: `upgrade` does not move a namespace's proxy source pin, and a proxy built from an
+  older pin refuses a manifest with either field. Before an application of a namespace declares `crossOrigin` or its
+  environment lists an origin, the operator re-pins that namespace (`namespaces update --proxy-source=current`).
 - **A cross-origin page reaches an endpoint only with a key.** A page that wants a person's own authority asks the
   person for a `user` key; the session never crosses origins.
 - **The proxy's public scheme comes from the manifest** (absent means `https`); behind a TLS-terminating

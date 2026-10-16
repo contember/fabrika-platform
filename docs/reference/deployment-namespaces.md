@@ -113,6 +113,15 @@ manifest entry as `crossOrigins`, omitted when empty. A change republishes the
 namespace proxy at once, like a changed domain; on Cloudflare, where there is no
 namespace proxy, the next deploy of the environment builds the proxy Worker with it.
 
+A namespace proxy parses its manifest strictly, and `fabrika platform upgrade` does
+not move a namespace's proxy source pin. A proxy built from a pin older than the
+release that added cross-origin endpoints refuses a manifest whose entry lists
+`crossOrigins` or whose row carries `crossOrigin`: the rebuild fails, the previous
+proxy version keeps serving, and every deploy that republishes the namespace fails
+until the pin moves. Before an application of an upgraded namespace declares
+`crossOrigin`, or its environment lists an origin, re-pin the namespace with
+`fabrika control namespaces update --namespace=<id> --proxy-source=current`.
+
 Deployment then adds control-owned managed environment values independently of
 the namespace and provider artifact. Providers reject an app-authored
 `FABRIKA_OPERATIONS_DSN` or `FABRIKA_RELEASE`, inject current values at their

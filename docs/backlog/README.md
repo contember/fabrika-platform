@@ -79,4 +79,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [186](186-send-email-in-batches.md) — Every adapter sends one message per call (`maxBatch: 1`); `sendBatch` would cut requests and rate-limit use for bulk sends.
 - [187](187-set-or-rotate-the-installation-mail-transport.md) — `fabrika platform mail` sets or rotates the installation's mail transport on IAM and Control and redeploys the environments that use it; today an application gets a change only at its next deploy.
 - [188](188-application-mail-review-follow-ups.md) — Application mail review follow-ups: two upgrade release notes, an IAM `delivery_failed` retry, and three `ctx.mail`/`then` runtime edges.
+- [189](189-cross-origin-endpoints-review-follow-ups.md) — Cross-origin endpoints review follow-ups: the `http://` host rule, `Vary: Origin` on every answer, an early refusal for an old namespace proxy pin, and the preflight's request headers.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
