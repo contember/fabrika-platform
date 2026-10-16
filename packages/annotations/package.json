@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/annotations",
-	"version": "0.4.8",
+	"version": "0.5.0",
 	"type": "module",
 	"description": "React annotation state, text/block/region locators, editor and feedback surface.",
 	"license": "MIT",
