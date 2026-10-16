@@ -223,6 +223,10 @@ bun test
 - **A contract member's manifest entry carries `operationsOrigin`** when Control handed the member one (the origin
   of its active ingest DSN, never the DSN): the proxy's header policy admits it in `connect-src`, as the framework
   does (ADR-0022 "Response headers"). `compileNamespaceProxyManifest` refuses one that is not an exact http(s) origin.
+- **A contract member's manifest entry lists `crossOrigins`** when Control handed the member a non-empty list (the
+  environment's registry row, ADR-0022 "Cross-origin endpoints"), and omits the field otherwise.
+  `compileNamespaceProxyManifest` refuses a list the manifest parser would: an origin that fails `isCrossOrigin`, a
+  duplicate, the member's own host, more than `MAX_CROSS_ORIGINS`. Control republishes the namespace when the list changes.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

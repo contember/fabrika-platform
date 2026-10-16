@@ -106,6 +106,38 @@ describe('namespace proxy manifest', () => {
 		)
 	})
 
+	test("a contract application's entry lists the cross origins its environment names, and omits an empty list", () => {
+		const notes = member('notes', 'notes.example.com', { access: approved(notesArtifact) })
+		const origins = ['https://partner.example.org', 'http://localhost:5173']
+		const manifest = compileNamespaceProxyManifest('apps-prod', [{ ...notes, crossOrigins: origins }])
+		expect(manifest.apps[0]).toEqual({
+			id: 'notes@prod',
+			hosts: ['notes.example.com'],
+			upstream: 'notes:3000',
+			scheme: 'https',
+			...TABLE,
+			crossOrigins: origins,
+		})
+		expect(parseProxyManifest(manifest)).toEqual(manifest)
+		expect(compileNamespaceProxyManifest('apps-prod', [{ ...notes, crossOrigins: [] }]).apps[0]).not.toHaveProperty('crossOrigins')
+	})
+
+	test('a cross-origin list the manifest parser would refuse fails the compile', () => {
+		const notes = member('notes', 'notes.example.com', { access: approved(notesArtifact) })
+		const refused = [
+			['https://partner.example.org/'],
+			['https://partner.example.org', 'https://partner.example.org'],
+			['https://notes.example.com'],
+			['https://*.example.org'],
+			Array.from({ length: 17 }, (_, index) => `https://p${index}.example.org`),
+		]
+		for (const crossOrigins of refused) {
+			expect(() => compileNamespaceProxyManifest('apps-prod', [{ ...notes, crossOrigins }])).toThrow(
+				'has a cross-origin list the proxy manifest refuses',
+			)
+		}
+	})
+
 	test('the table comes from the approved contract, never the artifact; a contract without approval is not routed', () => {
 		const narrowed: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
 		const routed = compileNamespaceProxyManifest('apps-prod', [member('notes', 'notes.example.com', { access: approved(narrowed) })])

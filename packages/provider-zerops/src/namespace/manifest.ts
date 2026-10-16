@@ -1,6 +1,6 @@
 import { appEnvironmentId } from '@fabrika/auth-core'
 import { decodeEnvelope, type ProviderNamespaceMember } from '@fabrika/provider-contract'
-import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
+import { isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
 
@@ -32,6 +32,14 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 		if (operationsOrigin !== undefined && !isPolicyOrigin(operationsOrigin, ['https:', 'http:'])) {
 			throw new Error(`Zerops proxy target ${member.appId}/${member.env} has an Operations ingest origin that is not an http(s) origin`)
 		}
+		const crossOrigins = member.crossOrigins ?? []
+		if (
+			crossOrigins.length > MAX_CROSS_ORIGINS
+			|| new Set(crossOrigins).size !== crossOrigins.length
+			|| crossOrigins.some((origin) => !isCrossOrigin(origin) || new URL(origin).hostname === host)
+		) {
+			throw new Error(`Zerops proxy target ${member.appId}/${member.env} has a cross-origin list the proxy manifest refuses`)
+		}
 		apps.push({
 			id,
 			hosts: [host],
@@ -41,6 +49,7 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 			scheme: 'https',
 			...contractProxyTable(access.contract),
 			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
+			...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
 		})
 	}
 	return { apps }
