@@ -989,8 +989,8 @@ The consumer side:
   a body still being read.
 - On Cloudflare the deployer binds `FABRIKA_CONNECT_<IMPORT>` to the owner's proxy Worker, which carries the
   call, its URL naming the owner's host; a binding routes by the binding, not by the URL. Elsewhere the call
-  goes to the owner's public origin with `fetch`. Whether the Zerops balancer forwards `Authorization`
-  unchanged is not verified yet ([zerops-platform.md](zerops-platform.md)).
+  goes to the owner's public origin with `fetch`. The Zerops balancer forwards `Authorization` unchanged
+  (verified live, [zerops-platform.md](zerops-platform.md)).
 
 Control joins the two sides (ADR-0022 "Principal kinds"):
 

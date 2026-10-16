@@ -417,15 +417,15 @@ The failing container started cleanly, connected to Postgres and served `/health
 only `/ready` was 503, and that alone failed the deploy about 70s after container start with
 `failureTimeout: 60s`. `run.healthCheck` is a different mechanism and gates nothing at deploy time.
 
-#### UNVERIFIED: what stops an activation besides an httpGet readiness check
+#### Verified live (2026-10-16) — an exec readiness check and a failed init command each stop an activation
 
-Neither row below has been measured. Both are rows of the platform-facts table (`live: 'build'`), probed on
-the throwaway service when `FABRIKA_LIVE_ZEROPS_SLOW=1` is set beside a live account.
+Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIVE_ZEROPS_SLOW=1`) on its throwaway
+`alpine/bun@1.3` service. Each probe deployed a version whose descriptor fails one thing and nothing else.
 
-| Behaviour                                                     | Expected if true    | Row                                               |
-| ------------------------------------------------------------- | ------------------- | ------------------------------------------------- |
-| A `deploy.readinessCheck` with an `exec` command that exits 1 | **`DEPLOY_FAILED`** | `unverified-exec-readiness-gates-a-deploy`        |
-| A `run.initCommands` entry that exits 1                       | **`DEPLOY_FAILED`** | `unverified-failed-init-command-stops-activation` |
+| Behaviour                                                                                             | Result              | Row                                    |
+| ----------------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------- |
+| A `deploy.readinessCheck` with an `exec` command `exit 1` (`retryPeriod: 10s`, `failureTimeout: 60s`) | **`DEPLOY_FAILED`** | `exec-readiness-gates-a-deploy`        |
+| A `run.initCommands` entry `exit 1`                                                                   | **`DEPLOY_FAILED`** | `failed-init-command-stops-activation` |
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) does not depend on
@@ -516,19 +516,17 @@ live:
 Read the service's `subdomainAccess` to know whether a subdomain is live, and `zeropsSubdomain` only to
 learn what it is called.
 
-#### UNVERIFIED: the balancer forwards `Authorization` unchanged
+#### Verified live (2026-10-16) — the balancer forwards `Authorization` unchanged
 
 A connector's consumer calls the owner's public proxy over HTTPS with `Authorization: Bearer <connector key>`
 ([application runtime](application-runtime.md#connectors)). That works only if the project L7 balancer passes the header
-through unchanged, from outside the project as from another namespace. Not measured yet. It is the row
-`unverified-balancer-forwards-authorization` of the platform-facts table (`live: 'build'`): it deploys an
-echo server on the throwaway service, enables its subdomain, and expects the body to be exactly the header
-it sent. It runs when `FABRIKA_LIVE_ZEROPS_SLOW=1` is set beside a live account; until it has, treat the
-behaviour as unknown.
+through unchanged. Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIVE_ZEROPS_SLOW=1`):
+it deploys an echo server on the throwaway service, enables its subdomain, and sends one request from outside the
+project with a random marker as the bearer.
 
-| Behaviour                                                         | Expected if true                         | Row                                          |
-| ----------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
-| A request to the subdomain with `Authorization: Bearer <a value>` | **200**, the echo is that value verbatim | `unverified-balancer-forwards-authorization` |
+| Behaviour                                                         | Result                                   | Row                               |
+| ----------------------------------------------------------------- | ---------------------------------------- | --------------------------------- |
+| A request to the subdomain with `Authorization: Bearer <a value>` | **200**, the echo is that value verbatim | `balancer-forwards-authorization` |
 
 ### Verified live (2026-08-08, account `prg1`, throwaway project `fabrika-wu1-probe`) — a proxy before it fronts anything
 

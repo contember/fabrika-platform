@@ -133,7 +133,7 @@ bun test
   `fabrika db migrate`, then `fabrika db codegen --verify`, then `fabrika db test-isolation` (the generated tests on
   a throwaway schema), then `exec`s the server, so a failed migration, a stale `schema.generated.ts` or a generated
   case that did not pass fails the httpGet readiness check whether or not a failed `initCommands` stops
-  activation (UNVERIFIED); the build has no database. The run section names the application's one PostgreSQL
+  activation (it does, verified live 2026-10-16); the build has no database. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
   references, so no credential passes through this package. That database URL is the service's SUPERUSER on the direct
   port (`zeropsProvisioningDatabaseUrl`, `src/manifest.ts`) and only the provisioning credential of the application's

@@ -144,9 +144,10 @@ const SECTION_POSTGRES_MIN_RAM =
 	"Verified live (2026-10-16) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections` — docs/reference/zerops-platform.md"
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
-const SECTION_UNVERIFIED_AUTHORIZATION = 'UNVERIFIED: the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md:506'
-const SECTION_UNVERIFIED_ACTIVATION =
-	'UNVERIFIED: what stops an activation besides an httpGet readiness check — docs/reference/zerops-platform.md:407'
+const SECTION_AUTHORIZATION_FORWARDED =
+	'Verified live (2026-10-16) — the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md'
+const SECTION_ACTIVATION_GATES =
+	'Verified live (2026-10-16) — an exec readiness check and a failed init command each stop an activation — docs/reference/zerops-platform.md'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
 const SECTION_VALUE_SIZE = 'Verified live (2026-10-15) — a service variable value over ~32 KB is a bare 500 — docs/reference/zerops-platform.md:767'
 const SECTION_USER_DATA_SENSITIVE_DEFAULT =
@@ -821,10 +822,10 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double has none of the three upload routes and runs no build',
 	},
 
-	// ── UNVERIFIED: activation gates the generated run section does not rely on ─────
+	// ── activation gates the generated run section does not rely on ─────
 	{
-		id: 'unverified-exec-readiness-gates-a-deploy',
-		section: SECTION_UNVERIFIED_ACTIVATION,
+		id: 'exec-readiness-gates-a-deploy',
+		section: SECTION_ACTIVATION_GATES,
 		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
 		expect: { status: 200 },
 		script: 'failing-exec-readiness',
@@ -833,8 +834,8 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double runs no build and no readiness check',
 	},
 	{
-		id: 'unverified-failed-init-command-stops-activation',
-		section: SECTION_UNVERIFIED_ACTIVATION,
+		id: 'failed-init-command-stops-activation',
+		section: SECTION_ACTIVATION_GATES,
 		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
 		expect: { status: 200 },
 		script: 'failing-init-command',
@@ -843,10 +844,10 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double runs no build and no init command',
 	},
 
-	// ── UNVERIFIED: what a connector's call over the public balancer relies on ─────
+	// ── what a connector's call over the public balancer relies on ─────
 	{
-		id: 'unverified-balancer-forwards-authorization',
-		section: SECTION_UNVERIFIED_AUTHORIZATION,
+		id: 'balancer-forwards-authorization',
+		section: SECTION_AUTHORIZATION_FORWARDED,
 		request: { method: 'PUT', path: '/service-stack/{serviceId}/enable-subdomain-access' },
 		expect: { status: 200 },
 		script: 'authorization-forwarded',

@@ -158,12 +158,11 @@ proxy-secret, job and connector credentials. Control's `assertUnmanagedName` and
 `MANAGED_KEYS` both use that list. Both refuse an authored variable or a secret under one of those
 names. The framework reads these variables and removes them from `process.env`.
 
-The generated `run` section does not depend on two unverified platform facts: whether exec readiness
-gates a Zerops deploy, and whether a failed `initCommands` stops activation. Its readiness check is an
-`httpGet` of the contract's health endpoint, which is verified to gate a deploy. Its start script runs
-`fabrika db migrate` again before it starts the server, so a failed migration leaves nothing to answer
-the readiness check. Each fact has an `UNVERIFIED` row in the
-[platform facts](../reference/zerops-platform.md), probed when a live account is configured.
+The generated `run` section does not depend on two platform facts: that an exec readiness check gates
+a Zerops deploy, and that a failed `initCommands` stops activation. Both are verified live
+([platform facts](../reference/zerops-platform.md)). Its readiness check is an `httpGet` of the contract's
+health endpoint, which is verified to gate a deploy. Its start script runs `fabrika db migrate` again
+before it starts the server, so a failed migration leaves nothing to answer the readiness check.
 
 ### Exposure is refused, with no approval path
 

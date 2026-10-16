@@ -275,7 +275,7 @@ const migrateScript = (appId: string): readonly string[] => [
 
 // The server starts only after the migrations it expects are applied, the committed schema types match the migrated
 // schema and every generated isolation test passed on a throwaway schema, so any failure fails the readiness check,
-// whether or not a failed `initCommands` stops the activation (an unverified platform fact). The build has no
+// whether or not a failed `initCommands` stops the activation (it does, verified live). The build has no
 // database, so this is where the types and the generated tests run.
 const startScript = (appId: string, database: boolean): readonly string[] => [
 	'#!/bin/sh',

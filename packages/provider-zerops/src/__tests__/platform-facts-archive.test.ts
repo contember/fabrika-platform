@@ -97,7 +97,7 @@ describe('the unpacker probe archives', () => {
 		expect(probeDescriptor('wu1abcdefghij')).toContain('- setup: wu1abcdefghij')
 	})
 
-	test('fails only what an UNVERIFIED activation row asks about, in a descriptor the platform parser accepts', () => {
+	test('fails only what an activation row asks about, in a descriptor the platform parser accepts', () => {
 		const readiness = parseZeropsDescriptor(probeDescriptor('wu1a', { execReadiness: true })).document
 		expect(JSON.stringify(readiness)).toContain('"readinessCheck":{"exec":{"command":"exit 1"}')
 		expect(JSON.stringify(readiness)).not.toContain('initCommands')
