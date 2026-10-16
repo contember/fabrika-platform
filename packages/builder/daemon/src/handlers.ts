@@ -1,5 +1,5 @@
 import { type AssertReadable, type CanvasScope, compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-kernel/server'
-import type { Route } from '@fabrika/daemon-kit'
+import { jsonResponse, type Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import type { z } from 'zod'
@@ -10,13 +10,6 @@ import { derivePhaseState, type GateOracle } from './phases'
 import { BuilderPlatform } from './platform'
 import { PlatformError } from './platform-storage'
 
-function jsonResponse(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: { 'Content-Type': 'application/json' },
-	})
-}
-
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error)
 }
@@ -25,14 +18,6 @@ function routeParam(match: URLPatternResult, name: string): string {
 	const value = match.pathname.groups[name]
 	if (value === undefined) throw new Error(`Missing route parameter: ${name}`)
 	return value
-}
-
-export function corsHeaders(port: number): Record<string, string> {
-	return {
-		'Access-Control-Allow-Origin': builderDaemonUrl(port),
-		'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-		'Access-Control-Allow-Headers': 'Content-Type',
-	}
 }
 
 export interface HandlerContext {
