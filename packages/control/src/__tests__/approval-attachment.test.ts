@@ -29,7 +29,7 @@ const ROW = 'z.strictObject({ id: z.uuid(), title: z.string() })'
 function lines(
 	from: string,
 	to: string,
-): { readonly outcome: string; readonly changes: readonly { readonly widens: boolean; readonly line: string }[] } {
+): { readonly outcome: string; readonly changes: readonly { readonly effect: string; readonly line: string }[] } {
 	return classifyAccess(snapshot(from), snapshot(to))
 }
 
@@ -38,7 +38,7 @@ describe('an attachment output in the approval diff', () => {
 		expect(lines(BASE, withExport(ROW, 1_000))).toEqual({
 			outcome: 'widening',
 			changes: [{
-				widens: true,
+				effect: 'widens',
 				line: 'New endpoint `api.notes` (POST /api/notes) for human callers with `notes.read` (over `workspace`), answering the CSV file `notes.csv`',
 			}],
 		})
@@ -47,15 +47,15 @@ describe('an attachment output in the approval diff', () => {
 	test('a larger file and a new column widen; a smaller file, a lost column and a new name do not', () => {
 		const base = withExport(ROW, 1_000)
 		expect(lines(base, withExport('z.strictObject({ id: z.uuid(), title: z.string(), body: z.string() })', 2_000)).changes).toEqual([
-			{ widens: true, line: 'Endpoint `api.notes` file size limit changes from 1000 to 2000' },
-			{ widens: true, line: 'Endpoint `api.notes` output gains field `body`' },
+			{ effect: 'widens', line: 'Endpoint `api.notes` file size limit changes from 1000 to 2000' },
+			{ effect: 'widens', line: 'Endpoint `api.notes` output gains field `body`' },
 		])
 		expect(lines(base, withExport('z.strictObject({ id: z.uuid() })', 500, 'all-notes.csv'))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [
-				{ widens: false, line: 'Endpoint `api.notes` file name changes from `notes.csv` to `all-notes.csv`' },
-				{ widens: false, line: 'Endpoint `api.notes` file size limit changes from 1000 to 500' },
-				{ widens: false, line: 'Endpoint `api.notes` output loses field `title`' },
+				{ effect: 'narrows', line: 'Endpoint `api.notes` file name changes from `notes.csv` to `all-notes.csv`' },
+				{ effect: 'narrows', line: 'Endpoint `api.notes` file size limit changes from 1000 to 500' },
+				{ effect: 'narrows', line: 'Endpoint `api.notes` output loses field `title`' },
 			],
 		})
 	})
@@ -64,8 +64,8 @@ describe('an attachment output in the approval diff', () => {
 		expect(lines(withExport(ROW, 10_000), withExport(ROW, 10_000, 'notes.xlsx', 'xlsx'))).toEqual({
 			outcome: 'widening',
 			changes: [
-				{ widens: true, line: 'Endpoint `api.notes` file format changes from `"csv"` to `"xlsx"`' },
-				{ widens: false, line: 'Endpoint `api.notes` file name changes from `notes.csv` to `notes.xlsx`' },
+				{ effect: 'widens', line: 'Endpoint `api.notes` file format changes from `"csv"` to `"xlsx"`' },
+				{ effect: 'narrows', line: 'Endpoint `api.notes` file name changes from `notes.csv` to `notes.xlsx`' },
 			],
 		})
 	})
@@ -77,7 +77,7 @@ describe('an attachment output in the approval diff', () => {
 			edited(IMPORTS, WITH_ATTACHMENT),
 		)
 		expect(lines(json, withExport(ROW, 1_000)).changes).toEqual([
-			{ widens: true, line: 'Endpoint `api.notes` output changes from JSON to the CSV file `notes.csv`' },
+			{ effect: 'widens', line: 'Endpoint `api.notes` output changes from JSON to the CSV file `notes.csv`' },
 		])
 	})
 })

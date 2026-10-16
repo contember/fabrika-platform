@@ -158,26 +158,47 @@ covers:
 - a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
 - a form's admission (its rate, honeypot and challenge): any change is shown and widens;
-- a form's or a mutation's `then` (the job a submission or a committed mutation kicks): shown, and it widens nothing,
-  because it reaches only a job of the same approved contract, which runs under its own declared actions;
+- a form's or a mutation's `then` (the job a submission or a committed mutation kicks): shown, and it leaves access
+  unchanged, because it reaches only a job of the same approved contract, which runs under its own declared actions;
 - CSP extensions, `script-src`, `frame-src`, `style-src` and `font-src` included;
 - each public variable a page reads from its browser config (an SPA mount's `public` list, a form challenge's
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.
 
-The rule has three outcomes:
+Each line carries one effect: it **widens** (it can grant access the baseline did not), it **narrows** (it can only
+take access away), or it leaves access **unchanged** (it admits no one new and takes nothing away, but the approver
+should know it). The console shows the three in their own sections. The rule has three outcomes:
 
-- **No change** passes.
-- **A change that only removes** passes, with two exceptions (below).
-- **Everything else** waits for approval on a protected environment.
+- **`none`**, no line at all, passes.
+- **`no-widening`**, lines that narrow or leave access unchanged and none that widens, passes. A removal is not
+  always such a line (the two exceptions below).
+- **`widening`**, everything else, waits for approval on a protected environment.
 
-**A removed endpoint can widen access.** The proxy selects the most specific endpoint
-([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a
-broader parameter or wildcard endpoint. Removing the literal would send its paths to the broader one.
-A removal of an endpoint therefore passes only when none of its former paths matches another endpoint
-in the candidate table: `planEndpoint` over the candidate table selects no endpoint for those paths, so
-they become denied. Otherwise Control classifies the removal as a widening, and it waits like any other.
+**A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
+or wildcard endpoint, and removing it sends its paths to the broader one. Control compares the callers each endpoint
+that now matches those paths admits with the callers the removed one admitted:
+
+- no endpoint matches (`planEndpoint` over the candidate table selects none): the paths become denied, and it narrows;
+- each one admits exactly the removed endpoint's callers, with no body and no other origin the removed one refused:
+  access is unchanged;
+- each one admits no caller more: it narrows;
+- otherwise it widens, and it waits like any other widening. A signed-in page falling through to a public SPA is
+  the typical case.
+
+"The same callers" is read narrowly. Two signed-in endpoints admit the same callers when they have the same kind, the
+same requirement, the same caller kinds and the same delegation (`endpointDelegation`, which the proxy applies too). A requirement whose scope is read from a path parameter is never the same,
+because a broader route reads it from another segment. A `link` caller is the same only on an endpoint of the same link
+mount, because a link key reaches only its own mount. An anonymous health check or public SPA admits anyone, so a
+signed-in endpoint after it admits fewer and another of those two kinds the same. A form and a webhook turn callers
+away themselves, with a challenge or a signature, so whatever takes over their paths widens.
+
+The line names who could open the paths before and who can now, so the approver does not have to know which
+endpoint is public. A removed mount takes all its endpoints with it, so it is one line: its routes, grouped by where
+they go now and by their effect, and the strongest effect among them. The mount also takes what is not a route: the
+public variables its pages read (named on the line), a form's admission, a link mount's grants. So only an SPA mount
+that served no public variable can leave access unchanged; any other removed mount narrows at least.
 
 **A removed column read policy widens access.** Without its own read policy, a column falls back to the
 table's read action. Removing a column's read policy is therefore a widening, and it waits. Removing a
@@ -230,6 +251,20 @@ cover them; the snapshot digest and the contract digest do.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
+
+**The environment's cross-origin list is not part of the change.** Which pages on other origins may call an endpoint
+the contract opens to them (`crossOrigin: true`) is a fact of the environment, not of the contract
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Cross-origin endpoints"). Whoever holds `app.manage` on
+the application sets it, and that includes the builder key the local agent holds
+([ADR-0042](0042-connect-local-builders-through-human-consent.md)), which carries `app.manage` on every environment of its application. Control
+republishes the namespace proxy at once, and no approval covers it, on a protected environment too. The list is left
+outside approval because it grants no authority: a request from a listed origin is bearer-only (ADR-0022 rule 3,
+no `Allow-Credentials`, the session cookie never read), so it reaches only what the `px_` key it carries already
+reaches from any server. Listing an origin lets a page in a browser use a key it already has; it does not let the page
+act as the person who visits it. What does widen is the contract opening an endpoint to the list at all, or a removed
+endpoint's paths falling to one that is open to it, and that line waits like any other widening. While a run waits for
+a decision, the approval page names the list as it stands beside each such line. A decided approval names none: the list may have changed since, and nothing records it with the
+decision. The environment page shows the list too.
 
 ### 4. Only production is protected by default
 
@@ -290,8 +325,9 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
   reads the plain-language lines and approves.
-- A removal deploys without a prompt, unless it uncovers a broader endpoint or removes a column read policy. A
-  change of handler code that leaves the shell and the migrations as they were deploys without a prompt too. A
+- A removal deploys without a prompt, unless the endpoints that answer its paths now admit a caller the removed one
+  did not, or it removes a column read policy. Moving a page's paths to another page for the same callers, the usual
+  refactor, does not prompt. A change of handler code that leaves the shell and the migrations as they were deploys without a prompt too. A
   change that declares a new step off the road, or widens one, waits like any other widening. Unprotected
   environments, including staging and MCP authoring targets by default, do not wait.
 - A deviation is not a refusal. The approver sees each one marked for closer review; what an admitted statement can
@@ -307,7 +343,14 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
   data is a bug.
 - The diff is conservative. It does not recognize a harmless addition and shows no head counts, so
   approvals on `prod` may be frequent. Approval fatigue is a real risk; the number of prompts per
-  deploy must be measured. A reachability classifier is the next step when it is needed.
+  deploy must be measured. For a removal it takes the smallest step towards a reachability classifier: it compares
+  who the endpoints that answer the removed paths admit with who the removed one admitted, field by field over every
+  field of an endpoint row and its delegation. The comparison is total over `EndpointRow`, so a field the proxy
+  comes to apply fails Control's typecheck until the comparison decides it; it is never waved through. Additions are
+  still all widenings.
+- Rolling Control back below the version that wrote three effects breaks reading every run that version classified
+  (the older schema is strict and knows only `widens`): the approval page, the approvals list and MCP's
+  `get_deployment` fail for those runs. Before 1.0 that is accepted; no dual format is written.
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
   the approver's own signed-in browser can approve. The skill forbids it; WebAuthn on
   `approvals.complete` is the next step.
@@ -335,6 +378,15 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
   every such hint would cost an approval.
 - **Recognize harmless additions automatically.** Deferred: it needs a reachability classifier. v1
   gives it up and treats every addition as a widening.
+- **Keep every removal that uncovers an endpoint a widening, and only improve its wording.** Rejected: the line reads
+  better, but the run still parks on a change that admits no one new, such as a public page whose paths move to
+  another public page. Only reclassifying it removes the prompt, and a prompt that is always safe to approve is the
+  fatigue this decision warns about.
+- **Classify a removal by comparing the digests of the rows.** Rejected: the digest covers the path, which differs by
+  definition, and it cannot say that one row admits fewer callers than another.
+- **Gate the environment's cross-origin list by approval.** Rejected: the list grants no authority (bearer only, see
+  section 3), it is not part of the contract the approval binds, and a registry write has no run to park. The
+  approval page names it beside each line that opens an endpoint to it.
 - **Protect every environment by default.** Rejected: staging and MCP authoring targets must apply at
   once by default, or the authoring loop stalls. A human can still protect any environment.
 - **Let the deploy permission approve.** Rejected: every operator holds `deploy.*`, and the builder key

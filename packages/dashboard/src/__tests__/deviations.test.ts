@@ -42,8 +42,8 @@ describe('deviations in the console', () => {
 			title: 'Widens access',
 			icon: 'alert',
 			changes: [
-				{ widens: true, line: 'Role `editor` gains `notes.delete`' },
-				{ widens: true, line: 'Endpoint `api.notes.summary` declares raw SQL (`read`)', review: 'closer' },
+				{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' },
+				{ effect: 'widens', line: 'Endpoint `api.notes.summary` declares raw SQL (`read`)', review: 'closer' },
 			],
 		}))
 		expect(items(markup)).toEqual([

@@ -327,8 +327,8 @@ for (const backend of backends) {
 				const classification = {
 					outcome: 'widening',
 					changes: [
-						{ widens: true, line: 'Role `editor` gains `notes.delete`' },
-						{ widens: true, line: 'Endpoint `api.notes.export` declares raw SQL (`read`)', review: 'closer' },
+						{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' },
+						{ effect: 'widens', line: 'Endpoint `api.notes.export` declares raw SQL (`read`)', review: 'closer' },
 					],
 					candidateDigest: `sha256:${'a'.repeat(64)}`,
 					baselineDigest: `sha256:${'b'.repeat(64)}`,

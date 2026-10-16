@@ -1,6 +1,7 @@
 import { createPage, Link } from '@buzola/router'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
+import { effectCounts } from '../../lib/access-changes'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
 
@@ -51,7 +52,7 @@ export default createPage()
 							<code>{shortSha(approval.run.commitSha)}</code>
 						</td>
 						<td>
-							{approval.changes.filter((change) => change.widens).length} widening, {approval.changes.filter((change) => !change.widens).length} narrowing
+							{effectCounts(approval.changes)}
 						</td>
 						<td className="muted small" title={fmtDate(approval.run.startedAt ?? approval.run.createdAt)}>
 							{fmtAgo(approval.run.startedAt ?? approval.run.createdAt)}

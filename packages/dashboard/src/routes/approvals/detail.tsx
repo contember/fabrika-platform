@@ -4,6 +4,7 @@ import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, RunStatus } from '../../components/Status'
+import { changesWith, EFFECT_SECTIONS, type EffectSection } from '../../lib/access-changes'
 import { type AccessChangeDto, api, ApiError, type ApprovalDto } from '../../lib/api'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 
@@ -18,8 +19,6 @@ export default createPage()
 		const { approval } = data
 		const { run } = approval
 		const waiting = run.status === 'awaiting_approval'
-		const widening = approval.changes.filter((change) => change.widens)
-		const narrowing = approval.changes.filter((change) => !change.widens)
 
 		return (
 			<>
@@ -74,16 +73,35 @@ export default createPage()
 					</div>
 				</section>
 
-				<ChangeList title="Widens access" icon="alert" changes={widening} />
-				<ChangeList title="Narrows access" icon="check" changes={narrowing} />
+				{EFFECT_SECTIONS.map((section) => (
+					<ChangeList
+						key={section.effect}
+						title={section.title}
+						icon={section.icon}
+						{...(section.hint === undefined ? {} : { hint: section.hint })}
+						{...(approval.crossOrigins === undefined ? {} : { crossOrigins: approval.crossOrigins })}
+						changes={changesWith(approval.changes, section.effect)}
+					/>
+				))}
 
 				{waiting && <Decision approval={approval} onDone={invalidate} />}
 			</>
 		)
 	})
 
-/** One side of the change; a line that steps off the paved road is marked for closer review. */
-export function ChangeList({ title, icon, changes }: { title: string; icon: 'alert' | 'check'; changes: readonly AccessChangeDto[] }) {
+/**
+ * One effect of the change; a line that steps off the paved road is marked for closer review. A line that opens an
+ * endpoint to the environment's cross-origin list names the list as it stands, when the approval carries it.
+ */
+export function ChangeList(
+	{ title, icon, hint, crossOrigins, changes }: {
+		title: string
+		icon: EffectSection['icon']
+		hint?: string
+		crossOrigins?: readonly string[]
+		changes: readonly AccessChangeDto[]
+	},
+) {
 	if (changes.length === 0) return null
 	return (
 		<section>
@@ -91,10 +109,12 @@ export function ChangeList({ title, icon, changes }: { title: string; icon: 'ale
 				<Icon name={icon} size={15} />
 				<h2>{title}</h2>
 			</div>
+			{hint !== undefined && <p className="hint">{hint}</p>}
 			<ul className="change-list">
 				{changes.map((change) => (
 					<li key={change.line}>
 						{change.line}
+						{change.environmentOrigins === true && crossOrigins !== undefined && <EnvironmentOrigins origins={crossOrigins} />}
 						{change.review === 'closer' && (
 							<>
 								{' '}
@@ -105,6 +125,28 @@ export function ChangeList({ title, icon, changes }: { title: string; icon: 'ale
 				))}
 			</ul>
 		</section>
+	)
+}
+
+/**
+ * The environment's cross-origin list beside the line that opens an endpoint to it. The list is the environment's: it
+ * is set there, applies at once and is not part of this approval (ADR-0050).
+ */
+function EnvironmentOrigins({ origins }: { origins: readonly string[] }) {
+	return (
+		<span className="muted small" title="Set on the environment; a change applies at once and is not part of this approval.">
+			{' '}
+			({origins.length === 0 ? 'the environment lists none yet' : (
+				<>
+					the environment lists {origins.map((origin, index) => (
+						<span key={origin}>
+							{index > 0 && ', '}
+							<code>{origin}</code>
+						</span>
+					))}
+				</>
+			)})
+		</span>
 	)
 }
 

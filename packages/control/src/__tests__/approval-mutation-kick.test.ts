@@ -38,19 +38,19 @@ function snapshot(then: keyof typeof KICKS): AccessSnapshot {
 describe("a mutation's then in the approval diff", () => {
 	test('a new then is shown and widens nothing, and is no deviation', () => {
 		expect(classifyAccess(snapshot('none'), snapshot('digest'))).toEqual({
-			outcome: 'removal',
-			changes: [{ widens: false, line: 'Endpoint `api.kicks.touch` starts job `digest` after each committed call, beside its schedule' }],
+			outcome: 'no-widening',
+			changes: [{ effect: 'neutral', line: 'Endpoint `api.kicks.touch` starts job `digest` after each committed call, beside its schedule' }],
 		})
 		expect(snapshotDeviations(snapshot('digest'))).toEqual([])
 	})
 
 	test('another job, or none, is shown and widens nothing', () => {
 		expect(classifyAccess(snapshot('digest'), snapshot('weekly')).changes).toEqual([
-			{ widens: false, line: 'Endpoint `api.kicks.touch` starts job `weekly` after each committed call, beside its schedule' },
+			{ effect: 'neutral', line: 'Endpoint `api.kicks.touch` starts job `weekly` after each committed call, beside its schedule' },
 		])
 		expect(classifyAccess(snapshot('digest'), snapshot('none'))).toEqual({
-			outcome: 'removal',
-			changes: [{ widens: false, line: 'Endpoint `api.kicks.touch` no longer starts job `digest` after a call' }],
+			outcome: 'no-widening',
+			changes: [{ effect: 'neutral', line: 'Endpoint `api.kicks.touch` no longer starts job `digest` after a call' }],
 		})
 	})
 })

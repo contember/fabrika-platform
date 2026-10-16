@@ -44,17 +44,17 @@ describe('script and frame origins in the approval diff', () => {
 		const classification = classifyAccess(snapshot(), snapshot(withCsp(`{ scriptSrc: [${WIDGET}], frameSrc: [${WIDGET}] }`)))
 		expect(classification.outcome).toBe('widening')
 		expect(classification.changes).toEqual([
-			{ widens: true, line: 'CSP `scriptSrc` allows `https://widgets.example.com`' },
-			{ widens: true, line: 'CSP `frameSrc` allows `https://widgets.example.com`' },
+			{ effect: 'widens', line: 'CSP `scriptSrc` allows `https://widgets.example.com`' },
+			{ effect: 'widens', line: 'CSP `frameSrc` allows `https://widgets.example.com`' },
 		])
 	})
 
 	test('a removed one narrows', () => {
 		const classification = classifyAccess(snapshot(withCsp(`{ scriptSrc: [${WIDGET}], frameSrc: [${WIDGET}] }`)), snapshot())
-		expect(classification.outcome).toBe('removal')
+		expect(classification.outcome).toBe('no-widening')
 		expect(classification.changes).toEqual([
-			{ widens: false, line: 'CSP `scriptSrc` no longer allows `https://widgets.example.com`' },
-			{ widens: false, line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' },
+			{ effect: 'narrows', line: 'CSP `scriptSrc` no longer allows `https://widgets.example.com`' },
+			{ effect: 'narrows', line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' },
 		])
 	})
 
@@ -63,8 +63,8 @@ describe('script and frame origins in the approval diff', () => {
 		const after = snapshot()
 		const classification = classifyAccess(before, after)
 		expect(classification).toEqual({
-			outcome: 'removal',
-			changes: [{ widens: false, line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' }],
+			outcome: 'no-widening',
+			changes: [{ effect: 'narrows', line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' }],
 		})
 		const frames = (contract: AccessSnapshot['contract']) => {
 			const policy = contract === null
@@ -81,9 +81,9 @@ describe('script and frame origins in the approval diff', () => {
 		const contract = stored.contract
 		if (contract === null) throw new Error('the base has a contract')
 		const older = parseSnapshot(JSON.stringify({ ...stored, contract: { ...contract, csp: { connectSrc: [], imgSrc: [], frameAncestors: [] } } }))
-		expect(classifyAccess(older, stored).outcome).toBe('unchanged')
+		expect(classifyAccess(older, stored).outcome).toBe('none')
 		expect(classifyAccess(older, snapshot(withCsp(`{ frameSrc: [${WIDGET}] }`))).changes).toEqual([
-			{ widens: true, line: 'CSP `frameSrc` allows `https://widgets.example.com`' },
+			{ effect: 'widens', line: 'CSP `frameSrc` allows `https://widgets.example.com`' },
 		])
 	})
 })
@@ -97,8 +97,8 @@ describe('style and font origins in the approval diff', () => {
 		const classification = classifyAccess(snapshot(), after)
 		expect(classification.outcome).toBe('widening')
 		expect(classification.changes).toEqual([
-			{ widens: true, line: 'CSP `styleSrc` allows `https://fonts.googleapis.com`' },
-			{ widens: true, line: 'CSP `fontSrc` allows `https://fonts.gstatic.com`' },
+			{ effect: 'widens', line: 'CSP `styleSrc` allows `https://fonts.googleapis.com`' },
+			{ effect: 'widens', line: 'CSP `fontSrc` allows `https://fonts.gstatic.com`' },
 		])
 		const contract = after.contract
 		if (contract === null) throw new Error('the candidate has a contract')
@@ -109,10 +109,10 @@ describe('style and font origins in the approval diff', () => {
 
 	test('a removed one narrows', () => {
 		const classification = classifyAccess(snapshot(withCsp(`{ styleSrc: [${FONTS_CSS}], fontSrc: [${FONTS}] }`)), snapshot())
-		expect(classification.outcome).toBe('removal')
+		expect(classification.outcome).toBe('no-widening')
 		expect(classification.changes).toEqual([
-			{ widens: false, line: 'CSP `styleSrc` no longer allows `https://fonts.googleapis.com`' },
-			{ widens: false, line: 'CSP `fontSrc` no longer allows `https://fonts.gstatic.com`' },
+			{ effect: 'narrows', line: 'CSP `styleSrc` no longer allows `https://fonts.googleapis.com`' },
+			{ effect: 'narrows', line: 'CSP `fontSrc` no longer allows `https://fonts.gstatic.com`' },
 		])
 	})
 })
@@ -124,18 +124,18 @@ describe('public variables in the approval diff', () => {
 	test("an SPA mount's public variable is shown by name, and so is a challenge's site key", () => {
 		const listed = snapshot(edited(SPA, "app: c.spa('/', { dir: 'dist/app', access: { member: true }, public: ['SIGNUP_URL'] }),"))
 		expect(classifyAccess(snapshot(), listed).changes).toEqual([
-			{ widens: true, line: 'Mount `app` serves its pages the public variable `SIGNUP_URL`' },
+			{ effect: 'widens', line: 'Mount `app` serves its pages the public variable `SIGNUP_URL`' },
 		])
 		expect(classifyAccess(listed, snapshot()).changes).toEqual([{
-			widens: false,
+			effect: 'narrows',
 			line: 'Mount `app` no longer serves the public variable `SIGNUP_URL`',
 		}])
 		const challenge = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"
 		const withSiteKey = ", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET', siteKey: 'TURNSTILE_SITE_KEY' }"
 		const changes = classifyAccess(snapshot(FORM(challenge), tables), snapshot(FORM(withSiteKey), tables)).changes
-		expect(changes).toEqual([{ widens: true, line: 'Form `apply` serves every page its challenge site key from `TURNSTILE_SITE_KEY`' }])
+		expect(changes).toEqual([{ effect: 'widens', line: 'Form `apply` serves every page its challenge site key from `TURNSTILE_SITE_KEY`' }])
 		expect(classifyAccess(snapshot(), snapshot(FORM(withSiteKey), tables)).changes).toContainEqual({
-			widens: true,
+			effect: 'widens',
 			line: 'New form mount `apply`, serving the public variable `TURNSTILE_SITE_KEY` to every page',
 		})
 	})
@@ -148,8 +148,8 @@ describe("a form's admission in the approval diff", () => {
 		const challenged = snapshot(FORM(", honeypot: 'website', challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"), tables)
 		const classification = classifyAccess(snapshot(FORM(''), tables), challenged)
 		expect(classification.outcome).toBe('widening')
-		expect(classification.changes).toContainEqual({ widens: true, line: 'CSP `scriptSrc` allows `https://challenges.cloudflare.com`' })
-		expect(classification.changes).toContainEqual({ widens: true, line: 'CSP `frameSrc` allows `https://challenges.cloudflare.com`' })
+		expect(classification.changes).toContainEqual({ effect: 'widens', line: 'CSP `scriptSrc` allows `https://challenges.cloudflare.com`' })
+		expect(classification.changes).toContainEqual({ effect: 'widens', line: 'CSP `frameSrc` allows `https://challenges.cloudflare.com`' })
 		expect(classification.changes.some((change) => change.line.startsWith('Mount `apply` changes from'))).toBe(true)
 	})
 
@@ -157,7 +157,7 @@ describe("a form's admission in the approval diff", () => {
 		const classification = classifyAccess(snapshot(FORM(''), tables), snapshot(FORM(', rate: { perClient: 60 }'), tables))
 		expect(classification.changes).toEqual([
 			{
-				widens: true,
+				effect: 'widens',
 				line:
 					'Mount `apply` changes from `{"appendTo":"applications","kind":"form","path":"/apply"}` to `{"appendTo":"applications","kind":"form","path":"/apply","rate":{"perClient":60}}`',
 			},

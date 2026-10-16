@@ -101,7 +101,8 @@ leaves active health unavailable rather than inventing an endpoint.
 
 An environment also lists the origins whose pages may call its cross-origin
 endpoints (ADR-0022 "Cross-origin endpoints"), kept in `app_envs.cross_origins_json`
-beside its domain. An operator sets them with a repeated `--cross-origin=<origin>` on
+beside its domain. Whoever holds `app.manage` on the application sets them (an operator, or the builder key of a
+local agent) with a repeated `--cross-origin=<origin>` on
 `fabrika control register` and `fabrika control apps environments put`
 (`crossOrigins` on the RPC). Each is an exact origin with a literal host, listed once,
 never the environment's own domain, at most 16; Control refuses anything else with a

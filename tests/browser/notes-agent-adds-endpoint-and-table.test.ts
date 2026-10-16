@@ -87,7 +87,7 @@ function current<T>(value: T | null, what: string): T {
 	return value
 }
 
-function changeList(title: 'Widens access' | 'Narrows access') {
+function changeList(title: 'Widens access' | 'Narrows access' | 'Access unchanged') {
 	return getPage().locator('section').filter({ has: byRole('heading', title, { exact: true, level: 2 }) }).locator('li')
 }
 
@@ -119,7 +119,8 @@ browserTest(
 			await expect(row).toContainText('notes')
 			await expect(row).toContainText('prod')
 			await expect(row).toContainText('awaiting approval')
-			await expect(row).toContainText(`${EXPECTED_CHANGES.length} widening, 0 narrowing`)
+			await expect(row).toContainText(`${EXPECTED_CHANGES.length} widening`)
+			await expect(row).not.toContainText('narrowing')
 			await row.getByRole('link', { name: 'awaiting approval' }).click()
 			await expect(getPage()).toHaveURL(`${CONTROL_URL}/approvals/${change.runId}`)
 		})
@@ -135,6 +136,7 @@ browserTest(
 			await expect(getPage().getByRole('link', { name: `run ${change.baselineRunId.slice(0, 8)}` })).toBeVisible()
 			await expect(changeList('Widens access')).toHaveText(EXPECTED_CHANGES, { useInnerText: true })
 			await expect(changeList('Narrows access')).toHaveCount(0)
+			await expect(changeList('Access unchanged')).toHaveCount(0)
 		})
 
 		await invariant('no existing endpoint, role or table policy appears as changed: the agent loosened nothing', async () => {

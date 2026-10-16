@@ -267,12 +267,15 @@ it, and the proxy decides both:
 - **The environment names the origins.** Which pages may call differs between staging and production, so the
   origins are a fact of the environment, not of the contract. Control keeps them in the environment's registry row,
   beside its domain (`fabrika control register` or `fabrika control apps environments put` with `--cross-origin=<origin>`,
-  repeatable), and an operator,
-  not the repository, sets them. Each is an exact `https://` origin with a literal host (`http://` for a local
+  repeatable), and whoever holds `app.manage` on the application sets them, not the repository. That includes the
+  builder key of a local agent ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). Each is an exact `https://` origin with a literal host (`http://` for a local
   host), never the environment's own domain, at most `MAX_CROSS_ORIGINS` (16). Control hands them to the provider,
   which writes them into the application's manifest entry as `crossOrigins`; the manifest parser refuses a malformed
   one and the entry of an installation service carries none. A `crossOrigin: true` endpoint of an environment that
-  lists no origin answers no preflight, as before.
+  lists no origin answers no preflight, as before. A change of the list applies at once and is not approval-gated, on
+  a protected environment too, because a listed origin grants no authority: its requests are bearer-only (rule 3
+  below). The page of an approval that waits for a decision names the list beside each line that opens an endpoint
+  to it, a decided approval names none, and the environment page shows it ([ADR-0050](0050-approved-access.md)).
 
 The proxy then decides, in the same pass as every other request of a contract application:
 
