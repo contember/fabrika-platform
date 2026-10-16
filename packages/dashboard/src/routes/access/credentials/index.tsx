@@ -47,7 +47,10 @@ export default createPage()
 						Provision key
 					</Link>
 				</div>
-				<p className="section-note">Bound to a service principal, so everything the key does is attributed to a name in the audit trail.</p>
+				<p className="section-note">
+					Bound to a service principal, so everything the key does is attributed to a name in the audit trail. Open a key to change its grants without
+					issuing a new one.
+				</p>
 				{/* A key's name and what it may do are one fact, so they share a cell — as two columns they fought over the same slack. */}
 				<Table
 					colSpan={3}
@@ -131,7 +134,7 @@ function ApiKeyRow({ apiKey, onDone }: { apiKey: ApiKeyDto; onDone: () => void }
 	return (
 		<tr>
 			<td>
-				{apiKey.label}
+				<Link to="access/credentials/keys/detail" params={{ id: apiKey.principalId }}>{apiKey.label}</Link>
 				<div className="muted small">
 					<GrantSummary grants={apiKey.grants} />
 				</div>

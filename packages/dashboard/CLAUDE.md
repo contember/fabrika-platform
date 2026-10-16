@@ -65,8 +65,10 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   Each answers a different question — what is the state of access, who are the people, what gets in
   without a person, what does a grant mean, what happened. It was seven pages that cut the same
   material three ways; don't add a sixth without retiring one.
-  - **Users are people.** A service principal has no page of its own: `apiKeys.list` returns every one
-    of them, so Credentials is the complete machine list and the Users list filters to `?type=user`.
+  - **Users are people.** A service principal's page is its API key's, under Credentials
+    (`credentials/keys/:id`, `apiKeys.get`), which edits its grants through `grants.*`; `apiKeys.list` returns every
+    one of them, so Credentials is the complete machine list and the Users list filters to `?type=user`. The key's grant
+    form offers only the app its key is bound to (`keyGrantTargets`).
   - **Credentials holds both API keys and share links** — both are `px_…` tokens shown once at issue.
     Neither section's button is filled: a page with two constructive steps has no single primary.
   - **Permissions is one page for roles, actions and scope dimensions**, with a policy edited inline in
