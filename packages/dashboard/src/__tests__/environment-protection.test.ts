@@ -44,7 +44,7 @@ const parkedRun = (id: string, appId: string, env: string): ApprovalDto => ({
 		finishedAt: null,
 	},
 	outcome: 'widening',
-	changes: [{ widens: true, line: 'Role `editor` gains `notes.delete`' }],
+	changes: [{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' }],
 	candidateDigest: 'candidate',
 	baselineDigest: 'baseline',
 	baselineRunId: null,

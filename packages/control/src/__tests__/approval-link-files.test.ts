@@ -51,10 +51,10 @@ describe('a link-holder file collection in the approval diff', () => {
 
 	test('naming the mounts it serves is shown, and so is going back to every link mount', () => {
 		expect(classifyAccess(snapshot(true), snapshot(['shared'])).changes).toEqual([
-			{ widens: false, line: 'File collection `attachments` is reachable only through the share links of mount `shared`' },
+			{ effect: 'narrows', line: 'File collection `attachments` is reachable only through the share links of mount `shared`' },
 		])
 		expect(classifyAccess(snapshot(['shared']), snapshot(true)).changes).toEqual([
-			{ widens: true, line: 'File collection `attachments` becomes reachable through the share links of every link mount bound to its owner' },
+			{ effect: 'widens', line: 'File collection `attachments` becomes reachable through the share links of every link mount bound to its owner' },
 		])
 		expect(classifyAccess(snapshot(['shared']), snapshot(['shared'])).outcome).toBe('unchanged')
 	})

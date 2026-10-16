@@ -4,6 +4,7 @@ import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, RunStatus } from '../../components/Status'
+import { changesWith, EFFECT_SECTIONS, type EffectSection } from '../../lib/access-changes'
 import { type AccessChangeDto, api, ApiError, type ApprovalDto } from '../../lib/api'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 
@@ -18,8 +19,6 @@ export default createPage()
 		const { approval } = data
 		const { run } = approval
 		const waiting = run.status === 'awaiting_approval'
-		const widening = approval.changes.filter((change) => change.widens)
-		const narrowing = approval.changes.filter((change) => !change.widens)
 
 		return (
 			<>
@@ -66,6 +65,22 @@ export default createPage()
 								)}
 						</Field>
 						<Field label="Created">{fmtDate(run.createdAt)}</Field>
+						{approval.crossOrigins !== undefined && (
+							<Field label="Cross-origin pages" wide>
+								{approval.crossOrigins.length === 0
+									? <span className="muted">none listed</span>
+									: approval.crossOrigins.map((origin, index) => (
+										<span key={origin}>
+											{index > 0 && ', '}
+											<code>{origin}</code>
+										</span>
+									))}
+								<p className="hint">
+									The pages on other origins that may call this environment's cross-origin endpoints. An operator sets the list on the environment; a change
+									applies at once and is not part of this approval.
+								</p>
+							</Field>
+						)}
 						{approval.approval !== null && (
 							<Field label="Approved" wide>
 								{approval.approval.label} · {fmtDate(approval.approval.approvedAt)}
@@ -74,16 +89,25 @@ export default createPage()
 					</div>
 				</section>
 
-				<ChangeList title="Widens access" icon="alert" changes={widening} />
-				<ChangeList title="Narrows access" icon="check" changes={narrowing} />
+				{EFFECT_SECTIONS.map((section) => (
+					<ChangeList
+						key={section.effect}
+						title={section.title}
+						icon={section.icon}
+						{...(section.hint === undefined ? {} : { hint: section.hint })}
+						changes={changesWith(approval.changes, section.effect)}
+					/>
+				))}
 
 				{waiting && <Decision approval={approval} onDone={invalidate} />}
 			</>
 		)
 	})
 
-/** One side of the change; a line that steps off the paved road is marked for closer review. */
-export function ChangeList({ title, icon, changes }: { title: string; icon: 'alert' | 'check'; changes: readonly AccessChangeDto[] }) {
+/** One effect of the change; a line that steps off the paved road is marked for closer review. */
+export function ChangeList(
+	{ title, icon, hint, changes }: { title: string; icon: EffectSection['icon']; hint?: string; changes: readonly AccessChangeDto[] },
+) {
 	if (changes.length === 0) return null
 	return (
 		<section>
@@ -91,6 +115,7 @@ export function ChangeList({ title, icon, changes }: { title: string; icon: 'ale
 				<Icon name={icon} size={15} />
 				<h2>{title}</h2>
 			</div>
+			{hint !== undefined && <p className="hint">{hint}</p>}
 			<ul className="change-list">
 				{changes.map((change) => (
 					<li key={change.line}>
