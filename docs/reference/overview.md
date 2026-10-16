@@ -83,6 +83,12 @@ builder, the bounded manifest-code exchange, installation-token minting, and
 webhook configuration. A public repository needs no App at all: it is fetched
 anonymously, or with the owning organization's App when that App is installed on it.
 
+An environment deploys on a push to its trigger ref: through the App's push webhook, or for a public repository
+without the App through a once-a-minute poll. Control stores the trigger ref as a full git ref, because a push names
+its ref in full and the match is exact. A bare name is a branch (`deploy/prod` is stored as `refs/heads/deploy/prod`);
+a tag needs `refs/tags/<tag>`, or a glob such as `refs/tags/v*`. An environment without a trigger ref deploys only
+when someone asks.
+
 ## The packages
 
 | Package                        | What it is                                                                                    |

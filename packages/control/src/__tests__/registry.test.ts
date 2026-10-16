@@ -12,11 +12,13 @@ import { registerAppUseCase } from '../api/registry/registration'
 import { normalizeRegistration } from '../api/registry/registration'
 import { AppEnvTriggerRefConflictError } from '../db'
 import type { AnonymousReadability, CommitSource } from '../github/source/commit-files'
-import { type ControlJobMessage, logsKey } from '../run-lifecycle'
+import { ConnectionWebhookVerifier } from '../github/triggers/push-event'
+import { handleWebhook } from '../github/triggers/webhook'
+import { type ControlJobMessage, type DeployJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { parseVaultRef, Vault } from '../vault'
 import { memoryCommits } from './helpers/commits'
-import { createHarness, type Harness } from './helpers/harness'
+import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureRuns, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
@@ -1204,5 +1206,130 @@ describe('provider registration normalization errors', () => {
 		expect(() => normalizeRegistration(throwing(new Error('bad target')), app, environment)).toThrow(
 			expect.objectContaining({ httpStatus: 400, type: 'bad_request', message: 'bad target' }),
 		)
+	})
+})
+
+describe('trigger refs are stored in their full form', () => {
+	const put = (deps: ControlRpcDeps, env: string, triggerRef: string | null) =>
+		rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env, environment: { ...registrationEnvelopes(), triggerRef } }), deps)
+
+	async function withApp(): Promise<ReturnType<typeof makeDeps>> {
+		const made = makeDeps()
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), made.deps)
+		return made
+	}
+
+	test('put stores a bare branch name as refs/heads/<name> and keeps a full ref or a tag glob as it is', async () => {
+		const { deps } = await withApp()
+		const cases: [string, string, string][] = [
+			['prod', 'deploy/prod', 'refs/heads/deploy/prod'],
+			['main', 'refs/heads/main', 'refs/heads/main'],
+			['release', 'refs/tags/v*', 'refs/tags/v*'],
+			['pinned', 'refs/tags/v1.2.0', 'refs/tags/v1.2.0'],
+			['family', 'release/*', 'refs/heads/release/*'],
+		]
+		for (const [env, requested, stored] of cases) {
+			const response = await put(deps, env, requested)
+			expect(response.status).toBe(200)
+			expect(await response.json()).toMatchObject({ env, triggerRef: stored })
+			expect((await deps.repositories.registry.getAppEnv('app', env))?.trigger_ref).toBe(stored)
+		}
+		expect((await put(deps, 'manual', null)).status).toBe(200)
+		expect((await deps.repositories.registry.getAppEnv('app', 'manual'))?.trigger_ref).toBeNull()
+	})
+
+	test('register stores a bare branch name as refs/heads/<name>', async () => {
+		const { deps } = makeDeps()
+		const response = await rpcResult(
+			rpcRequest('register', { ...registrationEnvelopes(), id: 'acme', repoUrl: 'https://github.com/acme/app', env: 'prod', triggerRef: 'deploy/prod' }),
+			deps,
+		)
+		expect(response.status).toBe(200)
+		expect((await deps.repositories.registry.getAppEnv('acme', 'prod'))?.trigger_ref).toBe('refs/heads/deploy/prod')
+	})
+
+	test('a value that is no git ref is a 400 naming the accepted forms, and nothing is written', async () => {
+		const { deps } = await withApp()
+		for (const invalid of ['', ' ', 'refs/', 'refs/heads/', 'refs/heads', 'deploy prod', ' main', 'a//b', '/main', 'main/', 'main\n']) {
+			const response = await put(deps, 'prod', invalid)
+			expect(response.status).toBe(400)
+			expect(await response.json()).toMatchObject({
+				error: expect.stringContaining('refs/heads/<branch>, refs/tags/<tag>, or a * glob such as refs/tags/v*'),
+			})
+		}
+		expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
+		const registered = await rpcResult(
+			rpcRequest('register', { ...registrationEnvelopes(), id: 'acme', repoUrl: 'https://github.com/acme/app', env: 'prod', triggerRef: 'refs/' }),
+			deps,
+		)
+		expect(registered.status).toBe(400)
+		expect(await deps.repositories.registry.getApp('acme')).toBeNull()
+	})
+
+	test('a bare name and its full ref are the same trigger ref, so a second environment cannot take either', async () => {
+		const { deps } = await withApp()
+		expect((await put(deps, 'prod', 'deploy/prod')).status).toBe(200)
+
+		for (const spelling of ['deploy/prod', 'refs/heads/deploy/prod']) {
+			const refused = await put(deps, 'stage', spelling)
+			expect(refused.status).toBe(409)
+			expect(await refused.json()).toMatchObject({
+				error: 'trigger ref refs/heads/deploy/prod is already used by environment prod of app app; each environment of an app needs its own trigger ref',
+			})
+		}
+		expect(await deps.repositories.registry.getAppEnv('app', 'stage')).toBeNull()
+		expect((await put(deps, 'prod', 'refs/heads/deploy/prod')).status).toBe(200)
+	})
+
+	test('a manual deploy without a ref deploys the stored full ref of a bare registration', async () => {
+		const { deps, queue } = await withApp()
+		expect((await put(deps, 'prod', 'deploy/prod')).status).toBe(200)
+
+		const response = await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod' }), deps)
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toMatchObject({ appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual' })
+		expect(queue).toHaveLength(1)
+	})
+
+	test('a push to the branch of a bare registration triggers a run', async () => {
+		const { deps, sqlite } = makeDeps()
+		const secret = 'canonical-webhook-secret'
+		insertSourceConnection(sqlite, 'connection-a', 'acme', 42)
+		await deps.repositories.registry.createApp({
+			id: 'app',
+			repoUrl: 'github.com/acme/app',
+			githubConnectionId: 'connection-a',
+			githubInstallationId: 42,
+		})
+		expect((await put(deps, 'prod', 'deploy/prod')).status).toBe(200)
+		const sent: DeployJobMessage[] = []
+
+		const response = await handleWebhook(
+			await pushWebhookRequest({
+				ref: 'refs/heads/deploy/prod',
+				cloneUrl: 'https://github.com/acme/app.git',
+				after: 'sha-1',
+				installationId: 42,
+				secret,
+			}),
+			{
+				repositories: deps.repositories,
+				verifier: new ConnectionWebhookVerifier({ getSecret: () => Promise.resolve(secret) }),
+				queue: {
+					send(message) {
+						sent.push(message)
+						return Promise.resolve()
+					},
+				},
+				connectionId: 'connection-a',
+			},
+		)
+
+		expect(response.status).toBe(200)
+		expect(sent).toHaveLength(1)
+		const [message] = sent
+		if (message === undefined) throw new Error('no deploy was enqueued')
+		expect(await deps.repositories.runs.getRun(message.runId)).toMatchObject({ env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'webhook' })
 	})
 })

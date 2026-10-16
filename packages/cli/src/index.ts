@@ -45,6 +45,8 @@ Run \`fabrika app dev --help\` for its surface.
 \`app register\` compiles the manifest in memory, exactly as \`app build\` would, and sends the request
 \`control register --manifest=<path>\` sends for it. It writes no file, CREATES only, and reads the
 control credential from FABRIKA_CONTROL_KEY alone; a changed manifest is \`control apps environments put\`.
+A bare \`--trigger-ref\` is a branch (\`deploy/prod\` deploys on a push to \`refs/heads/deploy/prod\`); a tag needs
+\`refs/tags/<tag>\` or a glob such as \`refs/tags/v*\`. \`fabrika control --help\` lists every form.
 
 \`fabrika db\` manages an application's Postgres schema: migration files, applying them (the template's
 \`run.initCommands\`), the generated types and the generated isolation tests. Run \`fabrika db --help\` for its surface.

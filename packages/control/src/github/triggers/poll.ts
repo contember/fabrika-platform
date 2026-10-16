@@ -167,6 +167,10 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 		}
 		const feedUrl = feedUrlFor(app.repo_url, triggerRef)
 		if (feedUrl === null) {
+			console.warn(
+				`repo poll: skipped ${app.id}/${appEnv.env}: it needs a GitHub repository and a refs/heads/… or refs/tags/… trigger ref, `
+					+ `and has trigger ref "${triggerRef}"`,
+			)
 			summary.skipped++
 			continue
 		}

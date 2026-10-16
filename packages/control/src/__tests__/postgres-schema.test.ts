@@ -148,6 +148,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0006_workload_credentials.sql' },
 			{ bundle: 'control', name: '0007_membership_keys.sql' },
 			{ bundle: 'control', name: '0008_connector_credentials.sql' },
+			{ bundle: 'control', name: '0009_canonical_trigger_refs.sql' },
 		])
 	})
 

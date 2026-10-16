@@ -616,6 +616,14 @@ export class ControlRegistryRepository {
 		return results
 	}
 
+	/** Every env whose trigger_ref lacks the `refs/` prefix: rows `0009_canonical_trigger_refs.sql` had to leave bare. */
+	async listBareTriggerEnvs(): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare("SELECT * FROM app_envs WHERE trigger_ref IS NOT NULL AND substr(trigger_ref, 1, 5) <> 'refs/' ORDER BY app_id, env")
+			.all<AppEnvRow>()
+		return results
+	}
+
 	/**
 	 * Upsert an (app, env) target. ON CONFLICT (app_id, env) overwrites the mutable columns and advances `generation`.
 	 * With `expected`, the write applies only if the environment is still what the caller read (`AppEnvChangedError`).

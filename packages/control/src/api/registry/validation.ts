@@ -1,6 +1,7 @@
 import { APP_ENVIRONMENT_SEPARATOR, frameworkVariableReference, isAppEnvironmentPart, isFrameworkVariableName } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../../public-origin'
+import { canonicalTriggerRef, TriggerRefValidationError } from '../../ref-match'
 import { fail } from '../domain'
 
 /** The longest a variable value may be; it is spliced into provider configuration, not stored opaquely. */
@@ -51,6 +52,17 @@ export function assertProxyDomain(domain: string | null | undefined): void {
 	if (domain === undefined || domain === null) return
 	if (!isProxyHost(domain.toLowerCase())) {
 		fail(400, `domain "${domain}" must be a literal hostname — no wildcard, port, path, or placeholder`)
+	}
+}
+
+/** A requested trigger ref in its stored form (`canonicalTriggerRef`); null keeps the environment manual-only. */
+export function triggerRefInput(value: string | null | undefined): string | null {
+	if (value === undefined || value === null) return null
+	try {
+		return canonicalTriggerRef(value)
+	} catch (cause) {
+		if (cause instanceof TriggerRefValidationError) fail(400, cause.message)
+		throw cause
 	}
 }
 

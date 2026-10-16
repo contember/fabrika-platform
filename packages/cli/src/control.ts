@@ -102,6 +102,12 @@ connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, 
 installation outright. With \`none\`, control reads the repository once without a token and refuses one
 GitHub hides: a private repository needs the GitHub App connected in the console first.
 
+\`--trigger-ref\` is the git ref whose push deploys the environment; without it the environment deploys only
+on \`deploy\`. A bare name is a branch: \`--trigger-ref=deploy/prod\` is stored as \`refs/heads/deploy/prod\`.
+A full ref is kept as given: \`refs/heads/<branch>\`, \`refs/tags/<tag>\`, or a \`*\` glob such as
+\`refs/tags/v*\`, which deploys every matching tag. A tag always needs the \`refs/tags/\` form. Each
+environment of an app needs its own trigger ref.
+
 Namespace placement options, each defaulting to what the preset would choose:
 
   --project=<name>                  the provider project the namespace owns; on Zerops the default is

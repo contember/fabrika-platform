@@ -8,6 +8,7 @@
 // sha, and the sweep is a guarded UPDATE by age.
 
 import { enqueueUnsettledNamespaces } from './api/namespaces'
+import type { ControlRegistryRepository } from './db'
 import type { Env } from './env'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './github/triggers/poll'
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
@@ -51,11 +52,12 @@ export interface MaintenanceOptions {
  * A poll-created run is serialized by the same per-app-env deploy lock as any other run (the consumer
  * takes it). The provider reconcile settles a run whose provider accepted it — on Cloudflare from the
  * status vozka-runner persists within ~18 min even when the relay is aborted. The sweep only fails runs
- * no provider ever accepted. Logs counts only — never a feed URL or a secret.
+ * no provider ever accepted. Logs counts, coordinates and trigger refs only — never a feed URL or a secret.
  */
 export async function runMaintenance(env: Env, options: MaintenanceOptions = {}): Promise<MaintenanceSummary> {
 	const persistence = repositories(env)
 	await enqueueUnsettledNamespaces(persistence.registry, env.DEPLOY_QUEUE)
+	await warnBareTriggerRefs(persistence.registry)
 	const poll = await pollPublicRepos({
 		repositories: persistence,
 		fetch: options.fetch ?? fetch,
@@ -83,4 +85,19 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
 	if (releases.failed > 0) console.warn(`operations release maintenance replay failed for ${releases.failed} run(s)`)
 	return { poll, reconcile, swept, operations, releases }
+}
+
+/**
+ * Name every environment whose trigger ref no push can match: a bare name `0009_canonical_trigger_refs.sql` left as it
+ * was because another environment of the app holds its `refs/heads/` form. Returns the `<app>/<env>` coordinates warned of.
+ */
+export async function warnBareTriggerRefs(registry: ControlRegistryRepository): Promise<string[]> {
+	const bare = await registry.listBareTriggerEnvs()
+	for (const row of bare) {
+		console.warn(
+			`trigger ref "${row.trigger_ref}" of ${row.app_id}/${row.env} is not a full git ref, so no push deploys it; `
+				+ `put ${row.app_id}/${row.env} again with a refs/heads/<branch> or refs/tags/<tag> trigger ref no other environment holds`,
+		)
+	}
+	return bare.map((row) => `${row.app_id}/${row.env}`)
 }

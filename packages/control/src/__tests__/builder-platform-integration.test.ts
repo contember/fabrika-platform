@@ -84,7 +84,8 @@ test('real daemon pairs through IAM and Control, completes two scoped exact-sour
 			namespace_id: placement.namespaceId,
 			domain: placement.domain,
 			public_origin: placement.publicOrigin,
-			trigger_ref: placement.triggerRef,
+			// A bare branch name is stored as its full ref, which is what a push names.
+			trigger_ref: 'refs/heads/release',
 		}])
 		if (!proof.attemptId) throw new Error('Missing attempt ID')
 		const issued = await f.iam.repositories.device.get(proof.attemptId)

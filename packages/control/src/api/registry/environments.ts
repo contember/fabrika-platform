@@ -21,7 +21,7 @@ import {
 	resolveRegistrationNamespace,
 	toAppEnvDto,
 } from './registration'
-import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin } from './validation'
+import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
 
 export async function listAppEnvsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppEnvDto>> {
 	await requireApp(c, appId)
@@ -32,6 +32,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	const app = await requireApp(c, appId)
 	assertAppEnvironmentPart('environment', env)
 	assertProxyDomain(input.domain)
+	const triggerRef = triggerRefInput(input.triggerRef)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
 	if (input.authoring === true) {
 		assertAuthoringTarget(c.provider.id, app)
@@ -39,7 +40,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		const other = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.authoring === 1 && row.env !== env)
 		if (other !== undefined) fail(409, `app ${appId} already authors environment ${other.env}; clear its authoring flag first`)
 	}
-	await assertTriggerRefFree(c, appId, env, input.triggerRef ?? null)
+	await assertTriggerRefFree(c, appId, env, triggerRef)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
 	const nextNamespaceId = namespace?.id ?? null
@@ -81,7 +82,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		env,
 		domain: registration.environment.domain ?? null,
 		publicOrigin: registration.environment.publicOrigin ?? null,
-		triggerRef: input.triggerRef ?? null,
+		triggerRef,
 		...(input.authoring === undefined ? {} : { authoring: input.authoring }),
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
@@ -106,7 +107,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		resourceType: 'app_env',
 		resourceId: `${appId}/${env}`,
 		metadata: {
-			triggerRef: input.triggerRef ?? null,
+			triggerRef,
 			...(input.authoring === undefined ? {} : { authoring: input.authoring }),
 			namespaceId: row.namespace_id,
 			previousNamespaceId: existing?.namespace_id ?? null,

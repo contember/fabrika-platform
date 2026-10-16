@@ -1,5 +1,26 @@
 import { describe, expect, test } from 'bun:test'
-import { isRefPattern, refMatches } from '../ref-match'
+import { canonicalTriggerRef, isRefPattern, refMatches, TriggerRefValidationError } from '../ref-match'
+
+describe('canonicalTriggerRef', () => {
+	test('a bare name is a branch; a full ref, a tag glob and a branch glob keep their form', () => {
+		expect(canonicalTriggerRef('main')).toBe('refs/heads/main')
+		expect(canonicalTriggerRef('deploy/prod')).toBe('refs/heads/deploy/prod')
+		expect(canonicalTriggerRef('release/*')).toBe('refs/heads/release/*')
+		expect(canonicalTriggerRef('refs/heads/deploy/prod')).toBe('refs/heads/deploy/prod')
+		expect(canonicalTriggerRef('refs/tags/v*')).toBe('refs/tags/v*')
+		expect(canonicalTriggerRef('refs/tags/v1.2.0')).toBe('refs/tags/v1.2.0')
+	})
+
+	test('the canonical form of a bare name matches the ref its push names', () => {
+		expect(refMatches(canonicalTriggerRef('deploy/prod'), 'refs/heads/deploy/prod')).toBe(true)
+	})
+
+	test('a value with whitespace, a control character or an empty segment is refused', () => {
+		for (const invalid of ['', ' ', 'refs/', 'refs/heads', 'refs/heads/', 'deploy prod', '\tmain', 'main\n', 'a//b', '/main', 'main/']) {
+			expect(() => canonicalTriggerRef(invalid)).toThrow(TriggerRefValidationError)
+		}
+	})
+})
 
 describe('isRefPattern', () => {
 	test('a ref with a * is a pattern; a plain ref is not', () => {

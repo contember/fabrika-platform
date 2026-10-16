@@ -86,7 +86,11 @@ poller (`src/github/triggers/poll.ts`, wired in `scheduled`) for PUBLIC repos wi
 GETs the repo's commits/tags Atom feed (ETag) and enqueues on a new head sha (`runs.trigger='poll'`).
 
 An env's `trigger_ref` is an exact git ref OR a `*`-GLOB (`src/ref-match.ts` `refMatches`), most usefully
-`refs/tags/v*` to deploy on every version tag. The DEPLOYED ref is always concrete — the pushed ref
+`refs/tags/v*` to deploy on every version tag. It is STORED IN FULL, because a push names its ref in full and the
+match is exact: every write path (`put`, `register`, a builder receipt) passes it through `canonicalTriggerRef`, which
+keeps a `refs/…` value, turns a bare name into `refs/heads/<name>`, and refuses a value with whitespace or an empty
+segment with a 400. `0009_canonical_trigger_refs.sql` rewrote older bare rows; one whose full form another env of the
+app held stays bare, and maintenance warns of it every pass (`warnBareTriggerRefs`). The DEPLOYED ref is always concrete — the pushed ref
 (webhook) or the resolved newest matching tag (poll) — never the pattern. NULL trigger_ref = manual-only;
 a glob trigger_ref falls back to the default branch for a no-ref manual deploy. An app's environments hold
 DISTINCT trigger refs (`idx_app_envs_trigger`): `apps.environments.put` refuses a taken one with a 409 that names the

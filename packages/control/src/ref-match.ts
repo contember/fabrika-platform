@@ -4,6 +4,35 @@
 // or the newest matching tag (poll). The concrete ref to deploy is always resolved at trigger time (the
 // pushed ref, or the resolved tag) — never the pattern itself.
 
+/** The prefix of every stored trigger_ref: a push event and the poller name a ref in full. */
+const REF_PREFIX = 'refs/'
+
+/** A trigger ref that is no git ref; its message names the forms `canonicalTriggerRef` accepts. */
+export class TriggerRefValidationError extends Error {
+	constructor(readonly triggerRef: string) {
+		super(
+			`trigger ref "${triggerRef}" must be a branch name (deploy/prod, stored as refs/heads/deploy/prod) or a full ref `
+				+ '(refs/heads/<branch>, refs/tags/<tag>, or a * glob such as refs/tags/v*)',
+		)
+		this.name = 'TriggerRefValidationError'
+	}
+}
+
+/**
+ * The stored form of a trigger ref. A full ref (`refs/…`) is kept; a bare name is a branch, `refs/heads/<name>`, because
+ * `refMatches` compares against the full ref a push names. A tag needs its full form. Throws `TriggerRefValidationError`
+ * for whitespace, a control character, or an empty path segment.
+ */
+export function canonicalTriggerRef(value: string): string {
+	const canonical = value.startsWith(REF_PREFIX) ? value : `refs/heads/${value}`
+	const segments = canonical.split('/')
+	// `refs`, a namespace (`heads`, `tags`, …), and at least one segment of the name.
+	if (segments.length < 3 || segments.includes('') || /[\s\p{Cc}]/u.test(canonical)) {
+		throw new TriggerRefValidationError(value)
+	}
+	return canonical
+}
+
 /** A trigger_ref is a PATTERN when it contains a `*` glob; otherwise it's an exact git ref. */
 export function isRefPattern(triggerRef: string): boolean {
 	return triggerRef.includes('*')

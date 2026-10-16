@@ -293,6 +293,11 @@ install the newest patch instead (step 6 upgrades an installation).
      the namespace cannot list, add `--public-origin=https://<domain>`.
    - `register` CREATES and refuses a second registration. A changed manifest goes through
      `control apps environments put` with the same placement flags. `put` derives no public origin.
+   - Without `--trigger-ref` the environment deploys only on `control deploy`. With it, a push deploys it:
+     `--trigger-ref=deploy/prod` is a branch, stored as `refs/heads/deploy/prod`. A tag needs the full form,
+     `--trigger-ref=refs/tags/v1.2.0`, or a glob, `--trigger-ref='refs/tags/v*'` (quote it for the shell). A push
+     reaches control only through the GitHub App's webhook; a public repository without the App is polled once a
+     minute instead. Each environment of an app needs its own trigger ref.
 
 3. **Deploy and follow it.**
 

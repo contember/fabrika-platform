@@ -7,7 +7,7 @@ import { fail } from './domain'
 import { requireApp, toAppDto } from './registry/apps'
 import type { RegistryUseCaseContext } from './registry/context'
 import { resolveRegistrationNamespace } from './registry/registration'
-import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin } from './registry/validation'
+import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin, triggerRefInput } from './registry/validation'
 
 export async function getBuilderConnectionReceipt(c: RegistryUseCaseContext, attemptId: string): Promise<BuilderConnectionReceiptDto> {
 	const receipt = await c.repositories.builderConnections.get(attemptId)
@@ -34,7 +34,7 @@ export async function createBuilderConnectionReceipt(
 		namespaceId: requested.namespaceId,
 		domain: requested.domain,
 		publicOrigin: canonicalOrigin(requested.publicOrigin, null),
-		triggerRef: requested.triggerRef,
+		triggerRef: triggerRefInput(requested.triggerRef),
 	}
 	assertAppEnvironmentPart('environment', environment.env)
 	assertProxyDomain(environment.domain)

@@ -9,7 +9,7 @@ import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
-import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin } from './validation'
+import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
 
 export async function registerAppUseCase(c: RegistryUseCaseContext, input: RegisterAppRequest): Promise<RegisterAppResponse> {
 	const { id, repoUrl, env } = input
@@ -17,6 +17,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	assertAppEnvironmentPart('environment', env)
 	if (await c.repositories.registry.getApp(id)) fail(409, 'an app with this id already exists')
 	assertProxyDomain(input.domain)
+	const triggerRef = triggerRefInput(input.triggerRef)
 	const normalized = normalizeRepoUrl(repoUrl)
 	const sourceBinding = await sourceBindingFields(c, input, normalized)
 	if ((sourceBinding.githubConnectionId ?? null) === null) await assertAnonymouslyReadable(c, normalized)
@@ -63,7 +64,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 		env: registration.environment.env,
 		domain: registration.environment.domain ?? null,
 		publicOrigin: registration.environment.publicOrigin ?? null,
-		triggerRef: input.triggerRef ?? null,
+		triggerRef,
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
