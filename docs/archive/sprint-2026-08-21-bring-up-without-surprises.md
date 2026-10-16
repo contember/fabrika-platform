@@ -394,7 +394,7 @@ identifiers redacted where they are credentials.
   repeats its "Refreshing run status" banner in a non-TTY transcript — cosmetic, a follow-up.
 - 2026-08-21 — WU5 witness. `namespaces get --namespace=apps-test2` listed no hosts before a
   reconcile (as documented), `reconcile` → `ready` in 20 s, then six lines: 8080 `taken by notes/test2`,
-  8082 `taken by notesmgw/test2`, 8083–8086 `free`. `register` of a proxy-target manifest without
+  8082 `taken by another app/env`, 8083–8086 `free`. `register` of a proxy-target manifest without
   `--domain` → `bad_request: Zerops proxy target`wu5probe/test2`requires a public domain: pass
   --domain with a host this namespace serves (`namespaces get apps-test2`lists them)`, exit 1,
   nothing created. (A manifest carries its app id, so the probe needed a copy with `app.id` changed.)
