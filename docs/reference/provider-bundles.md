@@ -309,8 +309,11 @@ setup state stores only nonsecret phases, hashes, verified identities and vault 
 
 For every new connection, Control then (`packages/control/src/github/connections/`):
 
-1. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
-   `push` event with the vault key;
+1. verifies the organization-owned App identity, visibility, permissions and sole `push` event with the
+   vault key. Contents and Pull requests may be read or write; any other permission except Metadata read
+   refuses the App. The manifest asks for both as write, for MCP authoring
+   ([ADR-0029](../decisions/0029-github-app-sources.md)); a deploy token is still minted with Contents read
+   only;
 2. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
    verifies the returned URL, JSON content type and TLS setting;
 3. verifies the organization or every requested repository through App-JWT endpoints before

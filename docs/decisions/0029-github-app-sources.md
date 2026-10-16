@@ -11,7 +11,8 @@ date: 2026-10-07
 
 Fabrika deploys application code from GitHub. Public repositories need no credential. Private
 repositories need a machine identity that is not a person, is short-lived at the point of use, and can
-be limited to read-only Contents on selected repositories. A GitHub App gives exactly that.
+be limited to selected repositories, each token to the permissions its operation needs. A GitHub App gives
+exactly that.
 
 Fabrika runs on two clouds. On Cloudflare, a runner container clones the repository and runs the
 build. On Zerops, the native GitHub integration does not help: the OAuth grant made in the Zerops GUI is not
@@ -63,7 +64,11 @@ A user principal with `source.connection.manage` (service tokens are refused) cr
    Control origin, the organization and the requested repositories. Only one nonterminal setup may
    exist at a time; connected rows do not block a new one.
 2. The browser runs GitHub's manifest flow. `@fabrika/github-app` builds the manifest: private App,
-   Contents read, the `push` event only, fixed `github.com`. No personal access token is ever asked for.
+   Contents and Pull requests write, the `push` event only, fixed `github.com`. No personal access token
+   is ever asked for. Deploys need only Contents read; the write permissions serve MCP authoring
+   ([ADR-0049](0049-author-applications-through-mcp-in-control.md)), which commits to workspace branches and
+   opens pull requests. Each token is narrower than the App: a deploy mints a repository-scoped token with
+   Contents read only, and only a workspace operation mints one with both write permissions.
 3. The callback requires the same authenticated principal, consumes the state once, exchanges the
    code, and writes the App id and private key into the vault **in the same transaction as the setup
    checkpoint, before it reports success**.

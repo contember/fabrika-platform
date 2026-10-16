@@ -88,7 +88,11 @@ make something pass; ask when a file is protected).
    FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
    ```
 2. **Give the GitHub App write access.** It needs `contents: write` and `pull_requests: write` on
-   the application's repository.
+   the application's repository: a workspace is a branch Control commits to, and `open_pull_request`
+   opens a pull request. An App created from the console asks for both. An App created before MCP
+   authoring has `contents: read` only: raise both in the App's settings on GitHub. GitHub then asks the
+   owner of each installation (the organization owner) to accept the new permissions, and the App keeps its
+   old ones until they do.
 3. **Mark one non-production environment as the authoring target** through `apps.environments.put`
    with `authoring: true`. Only a Zerops environment of an app with a GitHub connection is accepted.
    Control refuses a second authoring environment for the same app (`409`); clear the flag on the
