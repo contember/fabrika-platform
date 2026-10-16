@@ -27,7 +27,7 @@ const LEGACY_REF_FILES = ['vozka.ref', 'propustka.ref']
 export { INITIAL_SCAFFOLD_COMMIT_MESSAGE, REFRESH_SCAFFOLD_COMMIT_MESSAGE }
 
 export interface ScaffoldInput {
-	/** The base repo, e.g. `manGoweb/fabrika-platform`. */
+	/** The base repo, e.g. `acme/fabrika-platform`. */
 	repo: string
 	/** The account label (positional `init` arg) — substituted into the templates + the env/summary names. */
 	account: string

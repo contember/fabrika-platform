@@ -15,7 +15,7 @@ const RESUMED_NAMES: readonly string[] = [
 ]
 
 const COLLECTED: Collected = {
-	account: 'mangoweb',
+	account: 'acme',
 	accountId: 'cf-account-id',
 	apiToken: 'cf-api-token',
 	controlPlaneDomain: 'fabrika.example.com',
@@ -38,7 +38,7 @@ async function withOpenEnvFile(run: () => Promise<void>): Promise<void> {
 	const previous = process.env['XDG_CONFIG_HOME']
 	process.env['XDG_CONFIG_HOME'] = configHome
 	try {
-		await openEnvFile('mangoweb')
+		await openEnvFile('acme')
 		await run()
 	} finally {
 		if (previous === undefined) delete process.env['XDG_CONFIG_HOME']
@@ -154,7 +154,7 @@ describe('Cloudflare installer closing summary', () => {
 			const printed = await captured(() =>
 				finalNotes({
 					repo: 'acme/fabrika-platform',
-					account: 'mangoweb',
+					account: 'acme',
 					controlPlaneDomain: 'fabrika.example.com',
 					dir: '/tmp/checkout',
 					ref: 'v0.1.0',
@@ -165,7 +165,7 @@ describe('Cloudflare installer closing summary', () => {
 			)
 
 			expect(printed).toContain(envPath())
-			expect(envPath()).toContain('fabrika/cloudflare/mangoweb/.env')
+			expect(envPath()).toContain('fabrika/cloudflare/acme/.env')
 			expect(printed).not.toContain('gitignored')
 			expect(printed).toContain('Branch protection on main: applied.')
 			expect(printed).toContain('Environment deployment-branch policy: NOT applied (HTTP 403')
@@ -196,7 +196,7 @@ describe('Cloudflare installer env-file precedence', () => {
 describe('Cloudflare installer protection summary', () => {
 	const base = {
 		repo: 'acme/fabrika-platform',
-		account: 'mangoweb',
+		account: 'acme',
 		controlPlaneDomain: 'fabrika.example.com',
 		dir: '/tmp/checkout',
 		ref: 'v0.1.0',

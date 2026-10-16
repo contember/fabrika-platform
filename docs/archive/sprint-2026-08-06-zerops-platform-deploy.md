@@ -204,7 +204,7 @@ is why they are WUs here rather than separate items.
    The `confirm` prompt this needs shipped in `installation-cloudflare/src/prompt.ts`; WU4 moved it to
    `@fabrika/installation-init`, which is where both inits now read it from.
 5. **The sidecar repository is `contember/fabrika-zerops-test`**, following the
-   `contember/vozka-platform-mangoweb` precedent, named so its relation to the `fabrika-test`
+   precedent of a client installation's `vozka-platform-<account>` repository, named so its relation to the `fabrika-test`
    installation is obvious.
 
 ## Sequencing

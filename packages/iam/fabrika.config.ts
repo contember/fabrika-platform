@@ -13,7 +13,7 @@ import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/pr
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
 
-const KNOWN_ENVS = new Set(['local', 'stage', 'prod', 'mangoweb'])
+const KNOWN_ENVS = new Set(['local', 'stage', 'prod'])
 
 type EnvironmentSource = Readonly<Record<string, string | undefined>>
 

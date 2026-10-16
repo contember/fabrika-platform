@@ -81,11 +81,11 @@ describe('platform scaffold', () => {
 
 	test('fresh creation renders one repository checkout and one source pin offline', async () => {
 		await withTempDir(async (dir) => {
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 
 			const files = await snapshot(dir)
 			expect(files['fabrika.ref']).toBe('main\n')
-			expect(files['README.md']).toContain('# fabrika-platform (mangoweb)')
+			expect(files['README.md']).toContain('# fabrika-platform (acme)')
 			expect(files['.github/workflows/platform.yml']).toContain('repository: contember/fabrika-platform')
 			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/iam')
 			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/operations')
@@ -147,7 +147,7 @@ describe('platform scaffold', () => {
 
 	test('the pipeline installs the Bun of the pinned checkout, never `latest`', async () => {
 		await withTempDir(async (dir) => {
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 			const workflow = await Bun.file(join(dir, '.github/workflows/platform.yml')).text()
 
 			const steps = stepsOf(workflow)
@@ -168,11 +168,11 @@ describe('platform scaffold', () => {
 
 	test('unchanged refresh is byte-identical and preserves the operator pin', async () => {
 		await withTempDir(async (dir) => {
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 			await Bun.write(join(dir, 'fabrika.ref'), 'v1.2.3\n')
 			const before = await snapshot(dir)
 
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 
 			expect(await snapshot(dir)).toEqual(before)
 		})
@@ -180,7 +180,7 @@ describe('platform scaffold', () => {
 
 	test('the pipeline installs exactly the pinned lockfile', async () => {
 		await withTempDir(async (dir) => {
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 			const workflow = await Bun.file(join(dir, '.github/workflows/platform.yml')).text()
 
 			const installs = stepsOf(workflow).filter((step) => step.run?.startsWith('bun install') === true)
@@ -191,14 +191,14 @@ describe('platform scaffold', () => {
 	// Cloudflare has no `platform upgrade`: a re-run of `init` is what converges an existing sidecar's workflow.
 	test('a refresh rewrites a workflow an older CLI generated and keeps the operator pin', async () => {
 		await withTempDir(async (dir) => {
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 			const current = await Bun.file(join(dir, '.github/workflows/platform.yml')).text()
 			const stale = current.replace('run: bun install --frozen-lockfile', 'run: bun install')
 			expect(stale).not.toBe(current)
 			await Bun.write(join(dir, '.github/workflows/platform.yml'), stale)
 			await Bun.write(join(dir, 'fabrika.ref'), 'v0.4.3\n')
 
-			await materializePlatformScaffold(dir, 'mangoweb')
+			await materializePlatformScaffold(dir, 'acme')
 
 			expect(await Bun.file(join(dir, '.github/workflows/platform.yml')).text()).toBe(current)
 			expect(await Bun.file(join(dir, 'fabrika.ref')).text()).toBe('v0.4.3\n')
@@ -210,7 +210,7 @@ describe('platform scaffold', () => {
 			await Bun.write(join(dir, 'vozka.ref'), 'old-vozka\n')
 			await Bun.write(join(dir, 'propustka.ref'), 'old-propustka\n')
 
-			await expect(materializePlatformScaffold(dir, 'mangoweb')).rejects.toThrow(
+			await expect(materializePlatformScaffold(dir, 'acme')).rejects.toThrow(
 				'Choose the matching contember/fabrika-platform commit or tag',
 			)
 			expect(await Bun.file(join(dir, 'vozka.ref')).text()).toBe('old-vozka\n')

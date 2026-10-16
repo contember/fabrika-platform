@@ -148,7 +148,7 @@ export const readPinnedTag = async (dir: string): Promise<string> => {
 }
 
 /**
- * The default sidecar repository for an installation, following the `contember/vozka-platform-mangoweb`
+ * The default sidecar repository for an installation, following the predecessor's `vozka-platform-<account>`
  * precedent: named so its relation to the installation is obvious. A parameter, never a constant — one
  * operator's installations are not another's.
  */

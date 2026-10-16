@@ -37,7 +37,7 @@ describe('readEnvironmentName', () => {
 	})
 
 	test('every other environment name passes through untouched — the rule is about `local` only', () => {
-		for (const name of ['stage', 'prod', 'mangoweb']) {
+		for (const name of ['stage', 'prod', 'acme']) {
 			expect(readEnvironmentName(name, 'https://iam.example.com')).toBe(name)
 		}
 	})

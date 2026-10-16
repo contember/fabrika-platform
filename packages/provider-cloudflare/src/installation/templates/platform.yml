@@ -17,7 +17,7 @@ on:
       retire_legacy_propustka_worker:
         description: >-
           Name of a LEGACY propustka Worker to delete BEFORE Stage 1 (one-off migration off an old
-          deploy — e.g. a CF-Access-era `mangoweb-propustka-worker`). Deleting it releases its Custom
+          deploy — e.g. a CF-Access-era `<env>-propustka-worker`). Deleting it releases its Custom
           Domain so the new env-prod propustka can claim it. Empty = skip (the normal case).
         type: string
         default: ''

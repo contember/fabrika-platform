@@ -18,7 +18,7 @@ export interface Env {
 	/** Persistence capabilities selected by this runtime's composition root. */
 	REPOSITORIES: IamRepositories
 	/**
-	 * JSON array of email domains admitted as a HUMAN at login (e.g. `["mangoweb.cz","contember.com"]`).
+	 * JSON array of email domains admitted as a HUMAN at login (e.g. `["example.com","contember.com"]`).
 	 * A `*` entry means admit anyone. propustka owns this centrally — the login-admission allowlist for
 	 * self-provisioning a new identity. Consumed by `/auth/callback`.
 	 */

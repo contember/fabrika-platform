@@ -48,12 +48,12 @@ describe('Cloudflare installer env persistence', () => {
 describe('Cloudflare installer env file location', () => {
 	test('lives under the per-account config directory, never the cwd', async () => {
 		await withConfigHome(async (configHome) => {
-			const path = await openEnvFile('mangoweb')
+			const path = await openEnvFile('acme')
 
-			expect(path).toBe(join(configHome, 'fabrika', 'cloudflare', 'mangoweb', '.env'))
+			expect(path).toBe(join(configHome, 'fabrika', 'cloudflare', 'acme', '.env'))
 			expect(envPath()).toBe(path)
 			expect(path.startsWith(process.cwd())).toBe(false)
-			expect((await stat(join(configHome, 'fabrika', 'cloudflare', 'mangoweb'))).mode & 0o777).toBe(0o700)
+			expect((await stat(join(configHome, 'fabrika', 'cloudflare', 'acme'))).mode & 0o777).toBe(0o700)
 		})
 	})
 
@@ -65,13 +65,13 @@ describe('Cloudflare installer env file location', () => {
 	test('a persisted bundle lands there at 0600 and resumes into process.env', async () => {
 		await withConfigHome(async () => {
 			delete process.env['A_RESUMED_KEY']
-			await openEnvFile('mangoweb')
+			await openEnvFile('acme')
 			await persistEnvBundle({ A_RESUMED_KEY: 'kept-$value', A_RESUMED_PEM: '-----BEGIN-----\nbody\n-----END-----' })
 			expect((await stat(envPath())).mode & 0o777).toBe(0o600)
 
 			delete process.env['A_RESUMED_KEY']
 			delete process.env['A_RESUMED_PEM']
-			await openEnvFile('mangoweb')
+			await openEnvFile('acme')
 			expect(process.env['A_RESUMED_KEY']).toBe('kept-$value')
 			expect(process.env['A_RESUMED_PEM']).toBe('-----BEGIN-----\nbody\n-----END-----')
 			delete process.env['A_RESUMED_KEY']
