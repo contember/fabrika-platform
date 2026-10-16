@@ -70,6 +70,19 @@ export async function iamPrincipals(fetcher: RpcFetch = fetch): Promise<IamPrinc
 	}
 }
 
+/**
+ * The people whose name, email or external id holds `query`, as IAM searches them (`principals.list` with `q`), for the
+ * command palette. Asked of IAM rather than filtered from a first page, so the person past the first fifty is found.
+ * `null` when IAM refuses or cannot be reached.
+ */
+export async function findPeople(query: string, limit: number, fetcher: RpcFetch = fetch): Promise<IamPrincipalDto[] | null> {
+	try {
+		return (await quietIamClient(fetcher).principals.list({ type: 'user', q: query, limit })).items
+	} catch {
+		return null
+	}
+}
+
 /** IAM's `me` answers an administrator, of the installation or of applications' people, and refuses everyone else with 403. */
 export type IamAdministration =
 	| { status: 'administrator'; principal: SignedInPrincipal; scope: IamAdministrationScope }

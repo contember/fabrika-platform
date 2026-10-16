@@ -1,14 +1,18 @@
 import { Link, Outlet, useNavigate, useRoute } from '@buzola/router'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 // The console ships from the installation's own checkout, whose packages carry the release's version
 // (`release:validate` holds every package and the tag to it), so the console's version is the installation's.
 import { version as fabrikaVersion } from '../../package.json'
+import { type Command, CommandPalette, shortcutLabel, usePaletteShortcut } from '../components/CommandPalette'
 import { BrandMark, Icon, type IconName } from '../components/Icon'
 import { RouteError } from '../components/RouteError'
+import { api } from '../lib/api'
 import { type ConsoleCaller, mayOpen, type NavPage } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
+import { findPeople } from '../lib/iam'
 import { type ConsoleSession, consoleSession } from '../lib/session'
-import { effectiveTheme, pinTheme, type Theme } from '../lib/theme'
+import { effectiveTheme, pinTheme, type Theme, THEME_CHANGE_EVENT } from '../lib/theme'
+import { operationsClient } from '../operations/client'
 
 interface NavItem {
 	to: NavPage
@@ -111,6 +115,9 @@ export default function RootLayout() {
 	const { pathname } = useRoute()
 	const session = useConsoleSession()
 	useFoldedHead(pathname)
+	const [paletteOpen, setPaletteOpen] = useState(false)
+	// Only once the session is read: a press before that would open the palette seconds later, over whatever is then shown.
+	usePaletteShortcut(session !== null, setPaletteOpen)
 	const here = [LEAD, ...NAV.flatMap((section) => section.items)].find((item) => isActive(item, pathname)) ?? null
 
 	return (
@@ -124,6 +131,11 @@ export default function RootLayout() {
 						<span className="brand-name">fabrika</span>
 					</span>
 				</div>
+				<button type="button" className="palette-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Meta+K Control+K">
+					<Icon name="search" />
+					<span className="palette-trigger-label">Go to…</span>
+					<kbd>{shortcutLabel()}</kbd>
+				</button>
 				<div className="sidebar-scroll">
 					{session !== null && <Navigation caller={session} pathname={pathname} />}
 				</div>
@@ -142,8 +154,182 @@ export default function RootLayout() {
 						)}
 				</div>
 			</main>
+			{paletteOpen && session !== null && <Palette session={session} onClose={() => setPaletteOpen(false)} />}
 		</div>
 	)
+}
+
+/** How long the palette reuses the object lists it read: opening it again a moment later reads nothing. */
+const PALETTE_OBJECTS_TTL_MS = 60_000
+let paletteObjects: { at: number; commands: Command[] } | null = null
+
+/** The object lists the palette offers, read where the caller may open the page; a read that fails leaves its kind out. */
+async function readPaletteObjects(may: (page: NavPage) => boolean, navigate: ReturnType<typeof useNavigate>): Promise<Command[]> {
+	const reads: Array<Promise<Command[]>> = [
+		may('apps')
+			? api.apps.list().then((apps) =>
+				apps.items.map((app): Command => ({
+					id: `app:${app.id}`,
+					group: 'Applications',
+					icon: 'app',
+					title: app.id,
+					detail: app.repoUrl.replace(/^https?:\/\/(www\.)?/, ''),
+					keywords: [app.repoUrl],
+					run: () => navigate('apps/detail', { params: { id: app.id } }),
+				}))
+			)
+			: Promise.resolve([]),
+		may('namespaces')
+			? api.namespaces.list().then((namespaces) =>
+				namespaces.items.map((namespace): Command => ({
+					id: `namespace:${namespace.id}`,
+					group: 'Namespaces',
+					icon: 'bay',
+					title: namespace.id,
+					detail: `${namespace.provider} · ${namespace.env}`,
+					keywords: [namespace.provider, namespace.env],
+					run: () => navigate('namespaces/detail', { params: { id: namespace.id } }),
+				}))
+			)
+			: Promise.resolve([]),
+		may('operations')
+			? operationsClient.sources().then((sources) =>
+				sources.items.map((source): Command => ({
+					id: `source:${source.id}`,
+					group: 'Error sources',
+					icon: 'alert',
+					title: source.displayName,
+					detail: `${source.appId} · ${source.environment}`,
+					keywords: [source.appId, source.environment],
+					run: () => navigate('operations/sources/detail', { params: { sourceId: source.id } }),
+				}))
+			)
+			: Promise.resolve([]),
+	]
+	return (await Promise.all(reads.map((read) => read.catch((): Command[] => [])))).flat()
+}
+
+/**
+ * The spotlight's commands for this caller: the pages the rail shows them, what they can start, and the installation's
+ * applications, namespaces and error sources, read when it opens and kept for a minute. People are searched in IAM as
+ * the query is typed, because a directory is longer than the first page a list call returns.
+ */
+function Palette({ session, onClose }: { session: ConsoleSession; onClose: () => void }) {
+	const navigate = useNavigate()
+	const cached = paletteObjects !== null && Date.now() - paletteObjects.at < PALETTE_OBJECTS_TTL_MS ? paletteObjects.commands : null
+	const [objects, setObjects] = useState<Command[]>(cached ?? [])
+	const [loading, setLoading] = useState(cached === null)
+	const may = useCallback((page: NavPage) => mayOpen(session, page), [session])
+
+	useEffect(() => {
+		if (!loading) return
+		let cancelled = false
+		void readPaletteObjects(may, navigate).then((commands) => {
+			paletteObjects = { at: Date.now(), commands }
+			if (cancelled) return
+			setObjects(commands)
+			setLoading(false)
+		})
+		return () => {
+			cancelled = true
+		}
+	}, [loading, may, navigate])
+
+	const searchPeople = useCallback(async (query: string): Promise<Command[]> => {
+		if (!may('access/users')) return []
+		const people = await findPeople(query, 8)
+		return (people ?? []).map((person): Command => ({
+			id: `user:${person.id}`,
+			group: 'People',
+			icon: 'users',
+			title: person.label,
+			...(person.email === null || person.email === person.label ? {} : { detail: person.email }),
+			run: () => navigate('access/users/detail', { params: { id: person.id } }),
+		}))
+	}, [may, navigate])
+
+	const { lead, sections } = visibleNav(session)
+	const pages: Command[] = [
+		...(lead === null ? [] : [{ item: lead, section: '' }]),
+		...sections.flatMap((section) => section.items.map((item) => ({ item, section: section.label }))),
+	].map(({ item, section }) => ({
+		id: `page:${item.to}`,
+		group: 'Pages',
+		icon: item.icon,
+		title: item.accessibleLabel ?? item.label,
+		// The console's own overview belongs to no section, so it names none.
+		...(section === '' ? {} : { detail: section }),
+		keywords: [section, item.description],
+		run: () => navigate(item.to),
+	}))
+
+	const theme = effectiveTheme() === 'dark' ? 'light' : 'dark'
+	const signOutUrl = session.signOutUrl
+	const action = (command: Omit<Command, 'group'>): Command => ({ ...command, group: 'Actions' })
+	const actions: Command[] = [
+		...(may('apps')
+			? [action({ id: 'new-app', icon: 'plus', title: 'New application', keywords: ['create', 'register'], run: () => navigate('apps/new') })]
+			: []),
+		...(may('namespaces')
+			? [
+				action({
+					id: 'new-namespace',
+					icon: 'plus',
+					title: 'Provision a namespace',
+					keywords: ['new', 'create'],
+					run: () => navigate('namespaces/create'),
+				}),
+			]
+			: []),
+		...(may('access/users')
+			? [action({ id: 'invite-user', icon: 'plus', title: 'Invite user', keywords: ['new', 'person'], run: () => navigate('access/users/new') })]
+			: []),
+		...(may('access/credentials')
+			? [
+				action({
+					id: 'new-key',
+					icon: 'key',
+					title: 'New API key',
+					keywords: ['create', 'credential', 'token'],
+					run: () => navigate('access/credentials/keys/new'),
+				}),
+				action({
+					id: 'new-link',
+					icon: 'link',
+					title: 'New share link',
+					keywords: ['create', 'credential', 'token'],
+					run: () => navigate('access/credentials/links/new'),
+				}),
+			]
+			: []),
+		action({
+			id: 'builder',
+			icon: 'terminal',
+			title: 'Your builder connections',
+			keywords: ['agent', 'terminal'],
+			run: () => navigate('builder/authorize'),
+		}),
+		action({
+			id: 'theme',
+			icon: theme === 'dark' ? 'moon' : 'sun',
+			title: theme === 'dark' ? 'Dark theme' : 'Light theme',
+			keywords: ['theme', 'appearance', 'mode'],
+			run: () => pinTheme(theme),
+		}),
+		...(signOutUrl === null
+			? []
+			: [
+				action({
+					id: 'sign-out',
+					icon: 'arrow-right',
+					title: 'Sign out',
+					keywords: ['log out', 'logout'],
+					run: () => window.location.assign(signOutUrl),
+				}),
+			]),
+	]
+
+	return <CommandPalette commands={[...pages, ...actions, ...objects]} loading={loading} search={searchPeople} onClose={onClose} />
 }
 
 /**
@@ -439,8 +625,13 @@ export function initials(label: string): string {
 function ThemeToggle() {
 	const [theme, setTheme] = useState<Theme>('light')
 
-	// Read after mount: `effectiveTheme()` touches localStorage and matchMedia.
-	useEffect(() => setTheme(effectiveTheme()), [])
+	// Read after mount: `effectiveTheme()` touches localStorage and matchMedia. The palette can switch it too.
+	useEffect(() => {
+		const read = () => setTheme(effectiveTheme())
+		read()
+		window.addEventListener(THEME_CHANGE_EVENT, read)
+		return () => window.removeEventListener(THEME_CHANGE_EVENT, read)
+	}, [])
 
 	function flip() {
 		const next: Theme = theme === 'dark' ? 'light' : 'dark'

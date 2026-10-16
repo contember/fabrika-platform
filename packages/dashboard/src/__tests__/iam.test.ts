@@ -1,6 +1,6 @@
 import type { RpcFetch } from '@fabrika/app'
 import { describe, expect, test } from 'bun:test'
-import { iamPrincipals, recentAuditChanges } from '../lib/iam'
+import { findPeople, iamPrincipals, recentAuditChanges } from '../lib/iam'
 
 function iamFetch(methods: string[], bodies: string[] = []): RpcFetch {
 	return async (_input, init) => {
@@ -48,6 +48,25 @@ describe('IAM principals for the overview', () => {
 		})
 
 		expect(principals).toBeNull()
+	})
+})
+
+describe('IAM people for the command palette', () => {
+	test('asks IAM to search the people, so it is not limited to a first page', async () => {
+		const methods: string[] = []
+		const bodies: string[] = []
+		expect(await findPeople('ada', 8, iamFetch(methods, bodies))).toEqual([{ id: 'user-1' }])
+		expect(methods).toEqual(['principals.list'])
+		expect(bodies[0]).toContain('"q":"ada"')
+		expect(bodies[0]).toContain('"type":"user"')
+	})
+
+	test('stays quiet when IAM is unreachable', async () => {
+		expect(
+			await findPeople('ada', 8, async () => {
+				throw new Error('offline')
+			}),
+		).toBeNull()
 	})
 })
 

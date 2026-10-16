@@ -27,13 +27,17 @@ export function effectiveTheme(): Theme {
 	return readPinnedTheme() ?? systemTheme()
 }
 
+/** Fired on `window` when the pinned theme changes, so every control that shows the theme follows it. */
+export const THEME_CHANGE_EVENT = 'fabrika:theme'
+
 /** Pin a theme for this browser (or pass null to go back to following the OS). */
 export function pinTheme(theme: Theme | null): void {
 	if (theme === null) {
 		localStorage.removeItem(STORAGE_KEY)
 		document.documentElement.removeAttribute('data-theme')
-		return
+	} else {
+		localStorage.setItem(STORAGE_KEY, theme)
+		document.documentElement.setAttribute('data-theme', theme)
 	}
-	localStorage.setItem(STORAGE_KEY, theme)
-	document.documentElement.setAttribute('data-theme', theme)
+	window.dispatchEvent(new Event(THEME_CHANGE_EVENT))
 }

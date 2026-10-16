@@ -439,6 +439,44 @@ a:hover {
 	padding: var(--s-3) 0 var(--s-4);
 }
 
+/* The spotlight's way in for a mouse: a quiet row under the logo that names its shortcut. */
+.palette-trigger {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	flex: none;
+	margin-top: var(--s-2);
+	padding: 0.4375rem var(--s-3);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	background: transparent;
+	color: var(--rail-ink-3);
+	font: inherit;
+	font-size: var(--t-sm);
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.12s ease, color 0.12s ease;
+}
+
+.palette-trigger:hover {
+	background: var(--rail-hover);
+	color: var(--rail-ink);
+}
+
+.palette-trigger-label {
+	flex: 1;
+}
+
+.palette-trigger kbd,
+.palette kbd {
+	padding: 0.0625rem 0.3125rem;
+	border: 1px solid var(--rule-strong);
+	border-radius: var(--r-1);
+	color: var(--ink-3);
+	font-size: var(--t-xs);
+	line-height: 1.4;
+}
+
 
 .content {
 	min-width: 0;
@@ -3248,6 +3286,144 @@ th.numeric {
 	margin-top: var(--s-2);
 }
 
+/* ── Command palette ─────────────────────────────────────────────────────── */
+/* Set high on the screen, where the eye already is, and as wide as a sentence; the list scrolls under the field. */
+
+.palette-backdrop {
+	z-index: 60;
+	align-items: flex-start;
+	padding-top: 12vh;
+}
+
+.palette {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	max-width: 40rem;
+	max-height: min(32rem, 76vh);
+	overflow: hidden;
+	background: var(--plate-raised);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-3);
+	box-shadow: var(--lift);
+}
+
+.palette-field {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	padding: 0 var(--s-4);
+	border-bottom: 1px solid var(--rule);
+	color: var(--ink-3);
+}
+
+.palette-field input {
+	flex: 1;
+	min-width: 0;
+	height: 3.25rem;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--ink);
+	font: inherit;
+	font-size: var(--t-base);
+	outline: none;
+	box-shadow: none;
+}
+
+.palette-list {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--rule-strong) transparent;
+	padding: var(--s-2);
+}
+
+.palette-group {
+	padding: var(--s-3) var(--s-3) var(--s-1);
+	color: var(--ink-4);
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.palette-option {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	min-height: 2.5rem;
+	padding: 0 var(--s-3);
+	border-radius: var(--r-2);
+	color: var(--ink-2);
+	cursor: pointer;
+}
+
+.palette-option .icon {
+	flex: none;
+	color: var(--ink-4);
+}
+
+/* The chosen row reads like the rail's current page, a wash and a blueprint icon. The wash is lighter than the rail's:
+   on the raised panel the rail's own would glare. */
+.palette-option[aria-selected="true"] {
+	background: light-dark(rgba(14, 20, 32, 0.06), rgba(255, 255, 255, 0.05));
+	color: var(--ink);
+}
+
+.palette-option[aria-selected="true"] .icon {
+	color: var(--blueprint);
+}
+
+.palette-title {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.palette-detail {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--ink-4);
+	font-size: var(--t-sm);
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* The arrow keeps to the row's right end, with or without a detail before it. */
+.palette-go {
+	display: flex;
+	margin-left: auto;
+}
+
+.palette-empty {
+	margin: 0;
+	padding: var(--s-4) var(--s-3);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.palette-foot {
+	display: flex;
+	align-items: center;
+	gap: var(--s-4);
+	padding: var(--s-2) var(--s-4);
+	border-top: 1px solid var(--rule);
+	color: var(--ink-4);
+	font-size: var(--t-xs);
+}
+
+.palette-foot kbd + kbd {
+	margin-left: 0.125rem;
+}
+
+.palette-loading {
+	margin-left: auto;
+}
+
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
 
 .modal-backdrop {
@@ -3512,6 +3688,24 @@ th.numeric {
 
 	.sidebar .account-trigger {
 		padding: 0.1875rem;
+	}
+
+	/* The spotlight's button shrinks to its magnifier, left of the avatar. */
+	.palette-trigger {
+		position: absolute;
+		top: var(--s-2);
+		right: calc(var(--s-4) + 2.75rem);
+		margin: 0;
+		padding: 0.4375rem;
+		border: none;
+	}
+
+	.palette-trigger > :is(.palette-trigger-label, kbd) {
+		display: none;
+	}
+
+	.palette-backdrop {
+		padding-top: var(--s-4);
 	}
 
 	.sidebar .account-trigger > :is(.account-name, .icon) {
