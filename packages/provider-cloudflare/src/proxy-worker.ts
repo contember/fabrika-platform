@@ -13,6 +13,7 @@ import {
 	FORWARDED_URI_HEADER,
 	MemoryTokenCache,
 	OAUTH_METADATA_VERIFY_PATH,
+	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	stripFabrikaCookies,
@@ -21,8 +22,10 @@ import {
 import {
 	appFileTreatment,
 	appHeaderPolicy,
+	applyCrossOriginHeaders,
 	applyFileTreatment,
 	applyHeaderPolicy,
+	crossOriginHeaders,
 	type HeaderPolicy,
 	withResponseHeaders,
 } from '@fabrika/proxy-core/headers'
@@ -154,6 +157,8 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			}),
 		)
 		if (!verification.ok || isMetadata) return verification
+		// An admitted preflight: the decision's 2xx is the whole answer, and the application never sees the request.
+		if (verification.headers.get(PREFLIGHT_HEADER) === '1') return withResponseHeaders(verification, (headers) => headers.delete(PREFLIGHT_HEADER))
 
 		if (app === null) return new Response('not found', { status: 404 })
 		const treatment = answerHeaders.get(app.id)
@@ -183,9 +188,17 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			// Nothing of the error is answered or logged: it can carry the upstream request, a token header included.
 			answer = new Response('bad gateway', { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })
 		}
-		return treatment === undefined ? answer : withResponseHeaders(answer, treatment(verification.headers.get(ENDPOINT_HEADER)))
+		if (treatment === undefined) return answer
+		// The treatment deleted the application's own `Access-Control-*`; only the origin the decision admitted is set.
+		const allowOrigin = verification.headers.get(ALLOW_ORIGIN_HEADER)
+		return withResponseHeaders(answer, (headers) => {
+			treatment(verification.headers.get(ENDPOINT_HEADER))(headers)
+			if (allowOrigin !== null) applyCrossOriginHeaders(headers, crossOriginHeaders(allowOrigin))
+		})
 	}
 }
+
+const ALLOW_ORIGIN_HEADER = 'Access-Control-Allow-Origin'
 
 /**
  * What a contract application's answer is given, replacing whatever the application set (ADR-0022): the file

@@ -21,6 +21,12 @@ export const REQUEST_ID_HEADER = 'X-Request-Id'
 
 /** The auth service's decision endpoint (Caddy's `uri` subdirective). */
 export const DEFAULT_VERIFY_PATH = '/verify'
+/**
+ * Set on the auth service's 2xx to a preflight it admitted (ADR-0022 "Cross-origin endpoints"). The answer is the
+ * preflight's whole answer: the composition returns it to the browser, without the marker, and never dials the app.
+ */
+export const PREFLIGHT_HEADER = 'X-Fabrika-Preflight'
+
 /** Liveness endpoint on the auth service itself — never routed publicly. */
 export const DEFAULT_HEALTH_PATH = '/healthz'
 /**

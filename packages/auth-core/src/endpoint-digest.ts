@@ -27,7 +27,7 @@ export type EndpointDelegation = 'members' | 'creates'
  * installation row adds its OAuth scopes; an application row has no `oauth` field.
  */
 export type EndpointRules =
-	| (Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'> & {
+	| (Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin'> & {
 		readonly delegation: EndpointDelegation | null
 	})
 	| (Pick<InstallationEndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'oauth'> & {
@@ -64,7 +64,7 @@ export function endpointDigest(artifact: Pick<ContractArtifact, 'dimensions'>, r
 
 /**
  * The digest of what the proxy applies to an endpoint: its kind, method, path, callers, requirement, admission and
- * delegation, and an installation row's OAuth scopes.
+ * delegation, an installation row's OAuth scopes, and an application row's cross-origin form.
  * Caller, content-type and scope order carry no meaning, so they do not change it; input and output schemas are not
  * part of it, because the proxy does not apply them.
  */
@@ -79,9 +79,14 @@ export function requirementDigest(rules: EndpointRules): string {
 		admission: rules.admission === null ? null : canonicalAdmission(rules.admission),
 		delegation: rules.delegation,
 	}
-	// Only a row that admits `oauth` adds the key, so every application row keeps its digest byte for byte.
+	// Only a row that admits `oauth` or another origin adds the key, so every other row keeps its digest byte for byte.
 	const oauth = 'oauth' in rules ? rules.oauth : null
-	return digestOf(canonicalJson(oauth === null ? applied : { ...applied, oauth: { scopes: sortedCodeUnits(oauth.scopes) } }))
+	const crossOrigin = 'crossOrigin' in rules ? rules.crossOrigin : undefined
+	return digestOf(canonicalJson({
+		...applied,
+		...(oauth === null ? {} : { oauth: { scopes: sortedCodeUnits(oauth.scopes) } }),
+		...(crossOrigin === undefined ? {} : { crossOrigin }),
+	}))
 }
 
 function sortedCodeUnits(values: readonly string[]): string[] {

@@ -175,7 +175,62 @@ export function appFileTreatment(app: { readonly scheme: PublicScheme }): Header
  * Headers an application may not send at all: each names a reporting endpoint the policy never approved, and a
  * report-only CSP reports there whatever the enforced one says (`document-uri`, `blocked-uri`).
  */
-export const REMOVED_RESPONSE_HEADERS: readonly string[] = ['Content-Security-Policy-Report-Only', 'Report-To', 'Reporting-Endpoints', 'NEL']
+export const REMOVED_RESPONSE_HEADERS: readonly string[] = [
+	'Content-Security-Policy-Report-Only',
+	'Report-To',
+	'Reporting-Endpoints',
+	'NEL',
+	// Only the proxy opens an endpoint to another origin (ADR-0022 "Cross-origin endpoints"); a handler's own never passes.
+	'Access-Control-Allow-Origin',
+	'Access-Control-Allow-Credentials',
+	'Access-Control-Allow-Methods',
+	'Access-Control-Allow-Headers',
+	'Access-Control-Expose-Headers',
+	'Access-Control-Max-Age',
+]
+
+/** The most origins one environment may list for its cross-origin endpoints: Control and the manifest parser refuse more. */
+export const MAX_CROSS_ORIGINS = 16
+
+/**
+ * An origin an environment may list for its cross-origin endpoints: exact, a literal host, `https:` (or `http:`, which
+ * only a local host is served over). `null`, an opaque origin, never matches.
+ */
+export function isCrossOrigin(value: string): boolean {
+	return isPolicyOrigin(value, ['https:', 'http:'])
+}
+
+/** What a cross-origin page may send beside the safelisted headers: the key, and the JSON body's type. */
+export const CROSS_ORIGIN_REQUEST_HEADERS = 'Authorization, Content-Type'
+
+/** How long a browser may reuse an answered preflight, in seconds. */
+export const CROSS_ORIGIN_MAX_AGE = '600'
+
+/**
+ * The headers an answer to an admitted cross-origin request carries: the admitted origin, and `Vary: Origin` unless every
+ * origin is admitted. Never `Access-Control-Allow-Credentials`: a session does not cross origins.
+ */
+export function crossOriginHeaders(allowOrigin: string): HeaderPolicy {
+	return allowOrigin === '*' ? [['Access-Control-Allow-Origin', '*']] : [['Access-Control-Allow-Origin', allowOrigin], ['Vary', 'Origin']]
+}
+
+/** A preflight's answer on top of `crossOriginHeaders`: the endpoint's one method, the two headers, the cache lifetime. */
+export function preflightHeaders(allowOrigin: string, method: string): HeaderPolicy {
+	return [
+		...crossOriginHeaders(allowOrigin),
+		['Access-Control-Allow-Methods', method],
+		['Access-Control-Allow-Headers', CROSS_ORIGIN_REQUEST_HEADERS],
+		['Access-Control-Max-Age', CROSS_ORIGIN_MAX_AGE],
+	]
+}
+
+/** `crossOriginHeaders` over headers that already carry the answer's own policy; `Vary` is added to, never replaced. */
+export function applyCrossOriginHeaders(headers: Headers, policy: HeaderPolicy): void {
+	for (const [name, value] of policy) {
+		if (name === 'Vary') headers.append(name, value)
+		else headers.set(name, value)
+	}
+}
 
 /** `null` and anything but one allowlisted value is an attachment; `Headers` joins repeated fields with `, `, so two never match. */
 export function fileDisposition(contentType: string | null): 'inline' | 'attachment' {

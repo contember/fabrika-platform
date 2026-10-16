@@ -1,10 +1,13 @@
 import {
+	ANY_ORIGIN_KINDS,
 	APP_ENVIRONMENT_SEPARATOR,
 	type Caller,
 	compileEndpointTable,
 	type ContractArtifact,
 	contractDigest,
 	type CredentialedEndpoint,
+	CROSS_ORIGIN_KINDS,
+	type CrossOriginForm,
 	type EndpointDelegation,
 	endpointDelegation,
 	type EndpointRow,
@@ -16,7 +19,7 @@ import {
 	requirementDigest,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { type CspOrigins, cspOrigins, isPolicyOrigin, MAX_CSP_ORIGINS } from './headers'
+import { type CspOrigins, cspOrigins, isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS, MAX_CSP_ORIGINS } from './headers'
 import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
 
 export * from './oauth-resource'
@@ -46,6 +49,11 @@ export interface ContractProxyApp extends ProxyAppBase {
 	csp: CspOrigins
 	/** The installation's Operations ingest origin, admitted by `connect-src`; absent when the producer knows none. */
 	operationsOrigin?: string
+	/**
+	 * The origins the environment lists for its `crossOrigin: 'environment'` endpoints (ADR-0022 "Cross-origin
+	 * endpoints"), from Control's registry, never from the contract; absent when it lists none.
+	 */
+	crossOrigins?: string[]
 }
 
 /**
@@ -84,11 +92,14 @@ interface ProxyEndpointExtras {
 
 /** An endpoint row as the proxy applies it: the rules without the schemas, plus the digest and the delegation. */
 export type ProxyEndpointRow =
-	| (Pick<CredentialedEndpoint, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'> & ProxyEndpointExtras)
-	| (Pick<Extract<EndpointRow, { requirement: null }>, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'> & {
-		digest: string
-		delegation: null
-	})
+	| (Pick<CredentialedEndpoint, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin'> & ProxyEndpointExtras)
+	| (
+		& Pick<Extract<EndpointRow, { requirement: null }>, 'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin'>
+		& {
+			digest: string
+			delegation: null
+		}
+	)
 
 /** An installation row as the proxy applies it: the row with its digest and no delegation. */
 export type InstallationProxyEndpointRow = InstallationEndpointRow & { digest: string; delegation: null }
@@ -168,6 +179,7 @@ export const proxyEndpointRowSchema = z.union([
 		callers: z.array(callerSchema).nonempty(),
 		requirement: requirementSchema,
 		delegation: z.enum(['members', 'creates']).nullable(),
+		crossOrigin: z.literal('environment').optional(),
 	}).strict(),
 	z.object({
 		...endpointRuleFields,
@@ -175,6 +187,7 @@ export const proxyEndpointRowSchema = z.union([
 		callers: z.tuple([]),
 		requirement: z.null(),
 		delegation: z.null(),
+		crossOrigin: z.enum(['environment', 'any']).optional(),
 	}).strict(),
 	// A public SPA is a fixed static row: it serves GET only and admits no body.
 	z.object({
@@ -186,11 +199,31 @@ export const proxyEndpointRowSchema = z.union([
 		requirement: z.null(),
 		delegation: z.null(),
 	}).strict(),
-]).refine((row) => row.digest === requirementDigest(row), 'endpoint digest does not match its rules') satisfies z.ZodType<
+]).refine(
+	(row) => crossOriginAllowed(row.kind, 'crossOrigin' in row ? row.crossOrigin : undefined),
+	'this endpoint kind cannot be called cross-origin',
+).refine(
+	(row) => row.digest === requirementDigest(row),
+	'endpoint digest does not match its rules',
+) satisfies z.ZodType<
 	ProxyEndpointRow,
 	z.ZodTypeDef,
 	unknown
 >
+
+/** Only an RPC procedure and a form open to another origin, and only a form to any origin (ADR-0022). */
+function crossOriginAllowed(kind: ProxyEndpointRow['kind'], form: CrossOriginForm | undefined): boolean {
+	return form === undefined || (CROSS_ORIGIN_KINDS.includes(kind) && (form !== 'any' || ANY_ORIGIN_KINDS.includes(kind)))
+}
+
+/** Exact origins, each once, never one of the entry's own hosts: its own pages are not cross-origin. */
+function checkCrossOrigins(app: Pick<ContractProxyApp, 'hosts' | 'crossOrigins'>, ctx: z.RefinementCtx): void {
+	const origins = app.crossOrigins ?? []
+	// A refinement runs over an origin its element check already refused, so the host is read without throwing.
+	if (new Set(origins).size !== origins.length || origins.some((origin) => !isCrossOrigin(origin) || app.hosts.includes(new URL(origin).hostname))) {
+		ctx.addIssue({ code: 'custom', message: 'invalid cross-origin list' })
+	}
+}
 
 const cspOriginSchema = z.string().refine((value) => isPolicyOrigin(value))
 const cspDirectiveSchema = z.array(cspOriginSchema).max(MAX_CSP_ORIGINS)
@@ -214,7 +247,9 @@ export const contractProxyAppSchema = z.object({
 	snapshot: z.string().refine(isDigest),
 	csp: cspOriginsSchema,
 	operationsOrigin: z.string().refine((value) => isPolicyOrigin(value, ['https:', 'http:'])).optional(),
+	crossOrigins: z.array(z.string().refine(isCrossOrigin)).nonempty().max(MAX_CROSS_ORIGINS).optional(),
 }).strict().superRefine((app, ctx) => {
+	checkCrossOrigins(app, ctx)
 	checkEndpointTable(app, ctx)
 }) satisfies z.ZodType<ContractProxyApp, z.ZodTypeDef, unknown>
 
@@ -308,7 +343,13 @@ export const proxyAppSchema = z.union([contractProxyAppSchema, installationProxy
 export function contractProxyTable(artifact: ContractArtifact): ContractProxyTable {
 	return {
 		endpoints: artifact.endpoints.map((row): ProxyEndpointRow => {
-			const rules = { id: row.id, method: row.method, path: row.path, admission: row.admission }
+			const rules = {
+				id: row.id,
+				method: row.method,
+				path: row.path,
+				admission: row.admission,
+				...(row.crossOrigin === undefined ? {} : { crossOrigin: row.crossOrigin }),
+			}
 			if (row.requirement === null) {
 				const anonymous = { ...rules, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
 				return { ...anonymous, digest: requirementDigest(anonymous) }

@@ -29,6 +29,8 @@ interface CloudflareContractProxyOptions {
 	readonly installation?: never
 	/** The Operations ingest origin a contract application's `connect-src` admits, from its managed DSN. */
 	readonly operationsOrigin?: string
+	/** The origins the environment lists for its cross-origin endpoints, from Control's registry (ADR-0022). */
+	readonly crossOrigins?: readonly string[]
 }
 
 /**
@@ -110,5 +112,14 @@ function proxyApp(placement: Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'schem
 	}
 	const { endpoints, reservedPrefixes, snapshot, csp } = options.endpoints
 	const operationsOrigin = options.operationsOrigin
-	return { ...placement, endpoints, reservedPrefixes, snapshot, csp, ...(operationsOrigin === undefined ? {} : { operationsOrigin }) }
+	const crossOrigins = options.crossOrigins ?? []
+	return {
+		...placement,
+		endpoints,
+		reservedPrefixes,
+		snapshot,
+		csp,
+		...(operationsOrigin === undefined ? {} : { operationsOrigin }),
+		...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
+	}
 }

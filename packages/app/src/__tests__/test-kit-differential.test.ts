@@ -81,6 +81,8 @@ function expected(decision: Decision): string {
 			return `deny ${decision.status}`
 		case 'handoff':
 			return 'handoff'
+		case 'preflight':
+			return 'preflight'
 	}
 }
 

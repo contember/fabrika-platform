@@ -43,6 +43,7 @@ import {
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
 	FORWARDED_URI_HEADER,
+	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 } from './constants'
@@ -50,10 +51,13 @@ import { type HandoffAttempt, handoffCookieName } from './handoff'
 import {
 	appFileTreatment,
 	appHeaderPolicy,
+	applyCrossOriginHeaders,
 	applyFileTreatment,
 	applyHeaderPolicy,
 	BASE_HEADER_POLICY,
+	crossOriginHeaders,
 	type HeaderPolicy,
+	preflightHeaders,
 	transportPolicy,
 } from './headers'
 import type { DelegationIssuer, IamGateway } from './iam'
@@ -179,12 +183,26 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				if (decision.delegation !== null) {
 					headers.set(DELEGATION_HEADER, decision.delegation)
 				}
+				// The composition writes it onto the application's answer, after the policy deleted the application's own.
+				if (decision.crossOrigin !== null) {
+					applyCrossOriginHeaders(headers, crossOriginHeaders(decision.crossOrigin))
+				}
 				return new Response(null, { status: 204, headers })
 			}
+			const policy = policies.get(resolved.app.id) ?? BASE_HEADER_POLICY
+			if (decision.outcome === 'preflight') {
+				logger.info('preflight', fields)
+				// A 2xx the composition answers as-is, so the preflight never reaches the application.
+				const answer = withPolicy(new Response(null, { status: 204, headers: { 'cache-control': 'no-store', [PREFLIGHT_HEADER]: '1' } }), policy)
+				applyCrossOriginHeaders(answer.headers, preflightHeaders(decision.allowOrigin, decision.method))
+				return answer
+			}
 			const answer = decision.outcome === 'handoff' ? handoff(logger, fields, decision) : denied(logger, fields, decision, isCallback)
-			return isDownload(resolved, forwarded)
-				? withFileTreatment(answer, appFileTreatment(resolved.app))
-				: withPolicy(answer, policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
+			const treated = isDownload(resolved, forwarded) ? withFileTreatment(answer, appFileTreatment(resolved.app)) : withPolicy(answer, policy)
+			if (decision.outcome === 'deny' && decision.crossOrigin !== undefined) {
+				applyCrossOriginHeaders(treated.headers, crossOriginHeaders(decision.crossOrigin))
+			}
+			return treated
 		} catch {
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
 			// error can stringify a URL, a header or a body, any of which may carry a credential.

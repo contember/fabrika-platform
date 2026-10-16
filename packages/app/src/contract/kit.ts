@@ -336,6 +336,7 @@ interface EndpointOptions<Access> extends DeclaredDeclaration {
 	readonly input?: Schema | null
 	readonly output: Schema
 	readonly access: Access
+	readonly crossOrigin?: true
 }
 
 function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): PendingSite<ProcedureDeclaration<Schema, Access>> {
@@ -345,6 +346,7 @@ function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): Pe
 		input: def.input ?? null,
 		output: def.output,
 		access: def.access,
+		...(def.crossOrigin === undefined ? {} : { crossOrigin: def.crossOrigin }),
 		declared: declaredOf(def),
 		unknownOptions: kitUnknownOptions(def, 'procedure'),
 	}

@@ -2,10 +2,12 @@
 // object is strict and every field required, so a value that is not exactly an artifact is refused, not coerced.
 
 import {
+	ANY_ORIGIN_KINDS,
 	type ArrayShape,
 	type AttachmentShape,
 	BUILTIN_ROLE_KEYS,
 	type ContractArtifact,
+	CROSS_ORIGIN_KINDS,
 	displayNameProblem,
 	type EndpointRow,
 	JOB_MAILERS,
@@ -134,12 +136,14 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		kind: z.enum(['query', 'mutation', 'spa', 'upload', 'download']),
 		callers: z.tuple([caller], caller),
 		requirement,
+		crossOrigin: z.literal('environment').optional(),
 	}),
 	z.strictObject({
 		...rowBase,
 		kind: z.enum(['health', 'form', 'webhook', 'link-spa']),
 		callers: z.tuple([]),
 		requirement: z.null(),
+		crossOrigin: z.enum(['environment', 'any']).optional(),
 	}),
 	// A public SPA is a fixed static row: GET only, no body, no schemas.
 	z.strictObject({
@@ -152,7 +156,13 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		callers: z.tuple([]),
 		requirement: z.null(),
 	}),
-])
+]).refine(
+	// Only an RPC procedure and a form open to another origin, and only a form to any (ADR-0022).
+	(row) =>
+		!('crossOrigin' in row) || row.crossOrigin === undefined
+		|| (CROSS_ORIGIN_KINDS.includes(row.kind) && (row.crossOrigin !== 'any' || ANY_ORIGIN_KINDS.includes(row.kind))),
+	'this endpoint kind cannot be called cross-origin',
+)
 
 const scopeBinding = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('app') }),

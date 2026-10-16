@@ -385,6 +385,7 @@ class SurfaceReader {
 					honeypot: optionalText(options.get('honeypot'), 'honeypot'),
 					challenge: formChallenge(options.get('challenge')),
 					then: optionalText(options.get('then'), 'then'),
+					...crossOriginOption(options.get('crossOrigin')),
 					unknownOptions: optionKeys(options, 'form'),
 				}
 			}
@@ -544,6 +545,7 @@ class SurfaceReader {
 			input: input === undefined || input.kind === 'null' ? null : this.#schema(input, builder, 'input'),
 			output: this.#output(options.get('output'), builder),
 			access: access(options.get('access'), builder),
+			...crossOriginOption(options.get('crossOrigin')),
 			...(kit === 'endpoints'
 				? { declared: declared(options), unknownOptions: kitOptionKeys(options, 'procedure') }
 				: { unknownOptions: optionKeys(options, 'procedure') }),
@@ -852,6 +854,13 @@ function directoryOf(value: LiteralValue, owner: Owner): 'labels' {
 		throw new Refused(value.at, `directory is '${directory}'`, "directory: 'labels'")
 	}
 	return directory
+}
+
+/** `crossOrigin` as written, `true` or a string; the build decides which a builder admits. Absent stays absent. */
+function crossOriginOption(value: LiteralValue | undefined): { readonly crossOrigin?: boolean | string } {
+	if (value === undefined) return {}
+	if (value.kind === 'boolean' || value.kind === 'string') return { crossOrigin: value.value }
+	throw new Refused(value.at, `crossOrigin is a ${describeKind(value)}`, "crossOrigin: true, or crossOrigin: '*' on a form")
 }
 
 function optionalText(value: LiteralValue | undefined, field: string): string | undefined {

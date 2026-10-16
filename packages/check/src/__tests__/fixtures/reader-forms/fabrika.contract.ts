@@ -35,7 +35,7 @@ export const contract = defineContract({
 		projects: {
 			create: c.mutation({ input: NewProject, output: ById, access: { action: 'projects.create', creates: 'project' } }),
 		},
-		me: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true } }),
+		me: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true }, crossOrigin: true }),
 	}),
 	shared: c.link('/share', {
 		spa: 'dist/share',
@@ -50,7 +50,7 @@ export const contract = defineContract({
 	}),
 	console: c.spa('/console', { dir: 'dist/console', access: { action: 'tasks.read', over: 'project' } }),
 	health: c.health('/healthz'),
-	feedback: c.form('/feedback', { input: Feedback, appendTo: 'feedback', maxBytes: 8192 }),
+	feedback: c.form('/feedback', { input: Feedback, appendTo: 'feedback', maxBytes: 8192, crossOrigin: '*' }),
 	github: c.webhook('/hooks/github', {
 		scheme: 'github-sha256',
 		boundTo: 'project',

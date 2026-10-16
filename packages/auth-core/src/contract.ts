@@ -108,7 +108,20 @@ interface EndpointRowBase {
 	readonly admission: BodyAdmission | null
 	readonly input: SchemaShape | null
 	readonly output: OutputShape | null
+	/**
+	 * Whether a page on another origin may call the endpoint (ADR-0022 "Cross-origin endpoints"): `environment` from
+	 * the origins its environment lists, `any` (a form only) from every origin. Absent unless declared, so every other
+	 * row keeps its digest. Only an RPC procedure and a form may carry it.
+	 */
+	readonly crossOrigin?: CrossOriginForm
 }
+
+/** How an endpoint admits another origin: from the environment's list, or (a form only) from any origin. */
+export type CrossOriginForm = 'environment' | 'any'
+
+/** The endpoint kinds that may declare `crossOrigin`, and the one of them that may admit any origin. */
+export const CROSS_ORIGIN_KINDS: readonly EndpointKind[] = ['query', 'mutation', 'form']
+export const ANY_ORIGIN_KINDS: readonly EndpointKind[] = ['form']
 
 export interface CredentialedEndpoint extends EndpointRowBase {
 	readonly kind: CredentialedEndpointKind

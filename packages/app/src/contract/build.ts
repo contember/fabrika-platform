@@ -11,6 +11,7 @@ import {
 	canonicalizeArtifact,
 	type ChallengeProvider,
 	type ContractArtifact,
+	type CrossOriginForm,
 	type CspExtensions,
 	type CspSource,
 	type DeclaredReach,
@@ -527,7 +528,15 @@ class ArtifactBuilder {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
 				this.#nonEmpty(`${where} appendTo`, mount.appendTo)
-				this.#anonymous(name, 'form', 'POST', mount.path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes), mount.input)
+				this.#anonymous(
+					name,
+					'form',
+					'POST',
+					mount.path,
+					this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes),
+					mount.input,
+					this.#crossOrigin(where, mount.crossOrigin, true),
+				)
 				return {
 					kind: 'form',
 					path: mount.path,
@@ -739,6 +748,7 @@ class ArtifactBuilder {
 			const id = `${name}.${path}`
 			const requirement = this.#linkRequirement(`procedure '${id}'`, procedure.access, mount)
 			this.#procedureSchemas(`procedure '${id}'`, procedure)
+			this.#noCrossOrigin(`procedure '${id}'`, procedure.crossOrigin, 'a link holder')
 			this.#declare(`procedure '${id}'`, id, procedure.declared, { kind: 'link', readOnly: procedure.type === 'query' })
 			if (requirement !== null) {
 				this.#row({
@@ -776,6 +786,9 @@ class ArtifactBuilder {
 		const where = `procedure '${id}'`
 		this.#procedureSchemas(where, procedure)
 		const requirement = this.#requirement(where, procedure)
+		const crossOrigin = source.kind === 'mount'
+			? this.#crossOrigin(where, procedure.crossOrigin, false)
+			: this.#noCrossOrigin(where, procedure.crossOrigin, 'a consuming application, from its server')
 		if (requirement !== null) {
 			this.#row({
 				id,
@@ -788,8 +801,36 @@ class ArtifactBuilder {
 				admission: JSON_ADMISSION,
 				input: procedure.input,
 				output: this.#output(where, procedure),
+				...crossOrigin,
 			})
 		}
+	}
+
+	/**
+	 * A procedure's or a form's `crossOrigin` (ADR-0022 "Cross-origin endpoints"): `true` admits the origins the
+	 * environment lists, `'*'` (a form only, `any`) every origin. Absent stays absent, so the row keeps its digest.
+	 */
+	#crossOrigin(where: string, value: unknown, anyOrigin: boolean): { readonly crossOrigin?: CrossOriginForm } {
+		if (value === undefined) {
+			return {}
+		}
+		if (value === true) {
+			return { crossOrigin: 'environment' }
+		}
+		if (anyOrigin && value === '*') {
+			return { crossOrigin: 'any' }
+		}
+		const allowed = anyOrigin ? "crossOrigin: true for the environment's listed origins, or crossOrigin: '*' for any" : 'crossOrigin: true'
+		this.#problem(where, `crossOrigin ${JSON.stringify(value)} is not a cross-origin form (allowed: ${allowed})`)
+		return {}
+	}
+
+	/** A procedure no page on another origin may call: `caller` is who calls it instead. */
+	#noCrossOrigin(where: string, value: unknown, caller: string): { readonly crossOrigin?: CrossOriginForm } {
+		if (value !== undefined) {
+			this.#problem(where, `is called by ${caller}, never cross-origin (only an RPC procedure of c.rpc and a form take crossOrigin)`)
+		}
+		return {}
 	}
 
 	/**
@@ -854,8 +895,21 @@ class ArtifactBuilder {
 		path: string,
 		admission: BodyAdmission | null,
 		input: SchemaShape | null,
+		crossOrigin: { readonly crossOrigin?: CrossOriginForm } = {},
 	): void {
-		this.#row({ id: name, source: { kind: 'mount', name }, kind, method, path, callers: [], requirement: null, admission, input, output: null })
+		this.#row({
+			id: name,
+			source: { kind: 'mount', name },
+			kind,
+			method,
+			path,
+			callers: [],
+			requirement: null,
+			admission,
+			input,
+			output: null,
+			...crossOrigin,
+		})
 	}
 
 	#row(row: EndpointRow): void {

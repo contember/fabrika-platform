@@ -138,7 +138,8 @@ export async function integrationFixture() {
 					headers,
 					requestId: crypto.randomUUID(),
 				})
-				if (decision.outcome !== 'allow') return new Response(null, { status: decision.status })
+				// An installation entry has no cross-origin form, so it never answers a preflight.
+				if (decision.outcome !== 'allow') return new Response(null, { status: decision.outcome === 'preflight' ? 403 : decision.status })
 				if (decision.token) headers.set('X-Fabrika-Token', decision.token)
 				if (decision.endpoint) headers.set('X-Fabrika-Endpoint', decision.endpoint)
 				return controlApp.fetch(new Request(request, { headers }), {

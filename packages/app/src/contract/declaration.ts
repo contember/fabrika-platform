@@ -47,11 +47,11 @@ export interface BuilderFields {
 }
 
 export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
-	procedure: { options: ['input', 'output', 'access'], owned: ['~kind', 'type'] },
+	procedure: { options: ['input', 'output', 'access', 'crossOrigin'], owned: ['~kind', 'type'] },
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
-	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then'], owned: ['kind', 'path'] },
+	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then', 'crossOrigin'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
@@ -155,6 +155,8 @@ export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends Opt
 	readonly input: S | null
 	readonly output: S
 	readonly access: Access
+	/** `true` opens the procedure to the environment's listed origins, as written; `buildArtifact` refuses anything else. */
+	readonly crossOrigin?: unknown
 	/** What a procedure of the staged kit declares off the paved road; a `defineContract` procedure has none. */
 	readonly declared?: unknown
 	/**
@@ -237,6 +239,8 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly challenge?: { readonly provider: ChallengeProvider; readonly secret: string; readonly siteKey?: string }
 	/** The cron job of the contract that each accepted submission kicks. */
 	readonly then?: string
+	/** `true` (the environment's listed origins) or `'*'` (any origin), as written; `buildArtifact` refuses anything else. */
+	readonly crossOrigin?: unknown
 }
 
 export interface WebhookMountDeclaration<S> extends OptionsRecord {

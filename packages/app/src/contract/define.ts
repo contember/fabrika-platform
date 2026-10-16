@@ -220,6 +220,8 @@ export interface ProcedureDef<I, O, Acc> extends Owned<'~kind' | 'type'> {
 	readonly input?: I & NotLoose<I>
 	readonly output: O & NotLoose<O>
 	readonly access: Acc
+	/** A page on one of the environment's listed origins may call it, with a key (ADR-0022). An RPC procedure only. */
+	readonly crossOrigin?: true
 }
 
 export interface RpcMount<C extends readonly [RpcCaller, ...RpcCaller[]], T extends ProcedureTree> extends RpcMountDeclaration<Schema> {
@@ -322,6 +324,8 @@ export type FormOptions<I, T> =
 		readonly challenge?: FormChallengeOption
 		/** The cron job each accepted submission kicks, in the background of the constant answer. */
 		readonly then?: T
+		/** A page on another origin may submit it: `true` from the environment's listed origins, `'*'` from any. */
+		readonly crossOrigin?: true | '*'
 	}
 	& Owned<'kind' | 'path'>
 
@@ -435,6 +439,7 @@ function procedure<T extends ProcedureType, I extends InputSchema | null, O exte
 		input: def.input ?? null,
 		output: def.output,
 		access: def.access,
+		...(def.crossOrigin === undefined ? {} : { crossOrigin: def.crossOrigin }),
 		unknownOptions: unknownOptions(def, 'procedure'),
 	}
 }
@@ -488,6 +493,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			honeypot: options.honeypot,
 			challenge: options.challenge,
 			then: options.then,
+			...(options.crossOrigin === undefined ? {} : { crossOrigin: options.crossOrigin }),
 			unknownOptions: unknownOptions(options, 'form'),
 		}),
 		webhook: (path, options) => ({

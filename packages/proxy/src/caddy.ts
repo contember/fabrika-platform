@@ -34,6 +34,7 @@ import {
 	FORWARDED_URI_HEADER,
 	LOGIN_REDIRECT_PARAM,
 	OAUTH_METADATA_VERIFY_PATH,
+	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
@@ -65,6 +66,7 @@ const CLIENT_IP_PLACEHOLDER = '{http.vars.client_ip}'
 
 export interface CaddyHeaderOps {
 	set?: Record<string, string[]>
+	add?: Record<string, string[]>
 	delete?: string[]
 	replace?: Record<string, CaddyHeaderReplacement[]>
 }
@@ -76,6 +78,8 @@ export interface CaddyHeaderReplacement {
 
 /** `RespHeaderOps`: with `require` the operations wait until the response is written and run only when it matches. */
 export interface CaddyResponseHeaderOps extends CaddyHeaderOps {
+	/** The operations wait until the response is written; implied by `require`. */
+	deferred?: boolean
 	/** A `null` header value matches only when that header is absent (`matchHeaders`, v2.10.2). */
 	/** A one-digit `status_code` matches its class: `1` is every informational answer. */
 	require?: { status_code?: number[]; headers?: Record<string, string[] | null> }
@@ -95,8 +99,15 @@ export interface CaddyStaticResponseHandler {
 	body?: string
 }
 
+/** Every key but `handler` is a variable; a string value is expanded as a placeholder when the handler runs. */
 export interface CaddyVarsHandler {
 	handler: 'vars'
+	[variable: string]: string
+}
+
+/** Inside `handle_response`: the proxied response's status, headers and body to the client (verified on 2.10.2). */
+export interface CaddyCopyResponseHandler {
+	handler: 'copy_response'
 }
 
 export interface CaddySubrouteHandler {
@@ -105,7 +116,7 @@ export interface CaddySubrouteHandler {
 }
 
 export interface CaddyResponseHandler {
-	match?: { status_code?: number[] }
+	match?: { status_code?: number[]; headers?: Record<string, string[]> }
 	routes?: CaddyRoute[]
 }
 
@@ -119,6 +130,7 @@ export interface CaddyReverseProxyHandler {
 }
 
 export type CaddyHandler =
+	| CaddyCopyResponseHandler
 	| CaddyHeadersHandler
 	| CaddyReverseProxyHandler
 	| CaddyStaticResponseHandler
@@ -461,8 +473,13 @@ function contractUpstream(
 			}),
 		],
 	}
+	// A download is never cross-origin, so only the answer route is decorated.
 	const answer: CaddyRoute = {
-		handle: [INFORMATIONAL_WITHOUT_HEADERS, upstream({ set: headerValues(policy), delete: removedHeaders(app) })],
+		handle: [
+			...(opensCrossOrigin(app) ? [crossOriginDecoration()] : []),
+			INFORMATIONAL_WITHOUT_HEADERS,
+			upstream({ set: headerValues(policy), delete: removedHeaders(app) }),
+		],
 	}
 	return [...(downloads.length === 0 ? [] : [download]), answer]
 }
@@ -510,14 +527,67 @@ function errorRoutes(manifest: ProxyManifest): CaddyRoute[] {
 function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHandler {
 	return {
 		...authRequest(app, authUpstream, DEFAULT_VERIFY_PATH),
-		handle_response: [{
+		handle_response: [...(opensCrossOrigin(app) ? [PREFLIGHT_ANSWER] : []), {
 			match: { status_code: [2] },
 			routes: [
 				{ handle: [{ handler: 'vars' }] },
+				// The origin the decision admitted, for step 3's answer; an unset header expands to ''.
+				...(opensCrossOrigin(app)
+					? [{ handle: [{ handler: 'vars', [CROSS_ORIGIN_VAR]: `{http.reverse_proxy.header.${ALLOW_ORIGIN_HEADER}}` }] } satisfies CaddyRoute]
+					: []),
 				...(isApplicationEntry(app) ? [withoutCredentialUnlessMinted()] : []),
 				...PROXY_ASSERTED_HEADERS.map(copyResponseHeader),
 			],
 		}],
+	}
+}
+
+/**
+ * A preflight the decision admitted is answered here, from the auth service's own 2xx, and never reaches the app
+ * (ADR-0022 "Cross-origin endpoints"). The answer already carries the policy and the preflight headers, which
+ * `copy_response` copies with it; a deferred delete drops only the marker. The first `handle_response` entry that
+ * matches wins, so this one precedes the allow.
+ */
+const PREFLIGHT_ANSWER: CaddyResponseHandler = {
+	match: { status_code: [2], headers: { [PREFLIGHT_HEADER]: ['1'] } },
+	routes: [{ handle: [{ handler: 'headers', response: { deferred: true, delete: [PREFLIGHT_HEADER] } }, { handler: 'copy_response' }] }],
+}
+
+const ALLOW_ORIGIN_HEADER = 'Access-Control-Allow-Origin'
+
+/**
+ * Whether any endpoint of the entry may be called cross-origin. Only then does the chain carry the preflight answer and
+ * the decoration, so every other entry's config is what it was; the decision admits no origin for it anyway.
+ */
+function opensCrossOrigin(app: ProxyApp): app is ContractProxyApp {
+	return isApplicationEntry(app) && app.endpoints.some((row) => 'crossOrigin' in row && row.crossOrigin !== undefined)
+}
+
+/** The request variable step 2 leaves the admitted origin in: the value, `*`, or '' when none is admitted. */
+const CROSS_ORIGIN_VAR = 'fabrika_cross_origin'
+
+/**
+ * Step 3's decoration of a contract app's answer to an admitted cross-origin request: the origin the decision admitted,
+ * and `Vary: Origin` unless every origin is. Deferred handlers around the upstream, so they run after its response
+ * operations deleted the application's own `Access-Control-*` headers; never on a 1xx, which leaves with no header.
+ * Caddy decides nothing here: the value is the auth service's.
+ */
+function crossOriginDecoration(): CaddySubrouteHandler {
+	const value = `{http.vars.${CROSS_ORIGIN_VAR}}`
+	const final = { status_code: [2, 3, 4, 5] }
+	// A subroute's routes wrap the handlers after it, so its non-terminal routes defer around the upstream.
+	return {
+		handler: 'subroute',
+		routes: [
+			{
+				match: [{ not: [{ vars: { [value]: [''] } }] }],
+				handle: [{ handler: 'headers', response: { require: final, set: { [ALLOW_ORIGIN_HEADER]: [value] } } }],
+			},
+			{
+				match: [{ not: [{ vars: { [value]: ['', '*'] } }] }],
+				handle: [{ handler: 'headers', response: { require: final, add: { Vary: ['Origin'] } } }],
+			},
+		],
 	}
 }
 

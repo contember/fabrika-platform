@@ -80,7 +80,18 @@ function upstreamOf(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
 }
 
 const INFORMATIONAL: CaddyHeadersHandler = { handler: 'headers', response: { require: { status_code: [1] }, delete: ['*'] } }
-const REMOVED = ['Content-Security-Policy-Report-Only', 'Report-To', 'Reporting-Endpoints', 'NEL']
+const REMOVED = [
+	'Content-Security-Policy-Report-Only',
+	'Report-To',
+	'Reporting-Endpoints',
+	'NEL',
+	'Access-Control-Allow-Origin',
+	'Access-Control-Allow-Credentials',
+	'Access-Control-Allow-Methods',
+	'Access-Control-Allow-Headers',
+	'Access-Control-Expose-Headers',
+	'Access-Control-Max-Age',
+]
 
 function proxyHandler(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
 	const handler = route?.handle[0]

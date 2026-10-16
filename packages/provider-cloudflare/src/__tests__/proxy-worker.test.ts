@@ -16,13 +16,18 @@ import {
 	contractProxyTable,
 	encodeProxyManifestJson,
 	type InstallationProxyEndpointRow,
+	isApplicationEntry,
 	type OAuthProtectedResource,
+	parseProxyManifestJson,
 } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
+	anonymousRow,
 	APP,
+	contractAppWith,
+	endpointRow,
 	FakeIam,
 	HOST,
 	installationAppWith,
@@ -835,5 +840,144 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		const response = await createCloudflareProxyHandler(contractEnvironment(new FakeIam(), seen))(new Request(`https://${HOST}/api/unknown`))
 		expect(response.status).toBe(403)
 		expect(seen).toEqual([])
+	})
+})
+
+describe('Cloudflare proxy Worker, cross-origin (ADR-0022 "Cross-origin endpoints")', () => {
+	const PARTNER = 'https://partner.example'
+	const OPEN = endpointRow({
+		id: 'api.me',
+		kind: 'query',
+		method: 'POST',
+		path: '/api/me',
+		callers: ['machine'],
+		requirement: { kind: 'member' },
+		admission: { contentTypes: ['application/json'], maxBytes: 65_536 },
+		crossOrigin: 'environment',
+	})
+	const SIGNUP = anonymousRow({
+		id: 'signup',
+		kind: 'form',
+		method: 'POST',
+		path: '/signup',
+		admission: { contentTypes: ['application/json'], maxBytes: 4096 },
+		crossOrigin: 'any',
+	})
+	const contractEnvironment = async () => {
+		const calls: Request[] = []
+		const token = await signToken({ type: 'service', permissions: [{ action: 'notes.read', scope: null, source: 'grant' }] })
+		const env: CloudflareProxyEnv = {
+			IAM: new FakeIam({ mintFromKey: { ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 } }),
+			FABRIKA_IAM_ISSUER: ISSUER,
+			FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
+				apps: [contractAppWith([OPEN, SIGNUP], ['/api'], { upstream: 'APP', crossOrigins: [PARTNER] })],
+			}),
+			APP: {
+				fetch: (request: Request) => {
+					calls.push(request)
+					return Promise.resolve(
+						new Response('ok', {
+							headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Credentials': 'true', Vary: 'Accept-Encoding' },
+						}),
+					)
+				},
+			},
+		}
+		return { env, calls }
+	}
+
+	test('an admitted preflight is the decision answer, without the marker, and never reaches the application', async () => {
+		const { env, calls } = await contractEnvironment()
+		const response = await createCloudflareProxyHandler(env)(
+			new Request(`https://${HOST}/api/me`, { method: 'OPTIONS', headers: { Origin: PARTNER, 'Access-Control-Request-Method': 'POST' } }),
+		)
+		expect(response.status).toBe(204)
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
+		expect(response.headers.get('Access-Control-Allow-Methods')).toBe('POST')
+		expect(response.headers.get('X-Fabrika-Preflight')).toBeNull()
+		expect(calls).toHaveLength(0)
+	})
+
+	test('a refused preflight is a 403 that never reaches the application', async () => {
+		const { env, calls } = await contractEnvironment()
+		const response = await createCloudflareProxyHandler(env)(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'OPTIONS',
+				headers: { Origin: 'https://stranger.example', 'Access-Control-Request-Method': 'POST' },
+			}),
+		)
+		expect(response.status).toBe(403)
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull()
+		expect(calls).toHaveLength(0)
+	})
+
+	test("the application's answer carries only the origin the decision admitted", async () => {
+		const { env, calls } = await contractEnvironment()
+		const response = await createCloudflareProxyHandler(env)(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'POST',
+				headers: { Origin: PARTNER, Authorization: 'Bearer px_machine', 'Content-Type': 'application/json' },
+				body: '{}',
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(calls).toHaveLength(1)
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
+		expect(response.headers.get('Access-Control-Allow-Credentials')).toBeNull()
+		expect(response.headers.get('Vary')).toBe('Accept-Encoding, Origin')
+	})
+
+	test("an unadmitted origin loses the application's own CORS and gains none", async () => {
+		const { env } = await contractEnvironment()
+		const response = await createCloudflareProxyHandler(env)(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'POST',
+				headers: { Origin: 'https://stranger.example', Authorization: 'Bearer px_machine', 'Content-Type': 'application/json' },
+				body: '{}',
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull()
+		expect(response.headers.get('Access-Control-Allow-Credentials')).toBeNull()
+	})
+
+	test('a form open to any origin answers `*`', async () => {
+		const { env } = await contractEnvironment()
+		const response = await createCloudflareProxyHandler(env)(
+			new Request(`https://${HOST}/signup`, {
+				method: 'POST',
+				headers: { Origin: 'https://stranger.example', 'Content-Type': 'application/json' },
+				body: '{}',
+			}),
+		)
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+		expect(response.headers.get('Vary')).toBe('Accept-Encoding')
+	})
+
+	test("the deployer's origins land in the manifest entry, and none leave the key out", () => {
+		const app = new Worker({ dir: '.', name: APP, main: './src/index.ts', compatibility_flags: [], bindings: {}, routes: [], workers_dev: false })
+		const entryOf = (worker: Worker) => {
+			const entry = parseProxyManifestJson(String(worker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']))?.apps[0]
+			if (entry === undefined || !isApplicationEntry(entry)) throw new Error('expected a contract entry')
+			return entry
+		}
+		const listed = createCloudflareProxyWorker({
+			name: 'proxy',
+			app,
+			appId: APP,
+			appHost: HOST,
+			endpoints: contractProxyTable(notesArtifact),
+			crossOrigins: [PARTNER],
+		})
+		expect(entryOf(listed).crossOrigins).toEqual([PARTNER])
+		const none = createCloudflareProxyWorker({
+			name: 'proxy',
+			app,
+			appId: APP,
+			appHost: HOST,
+			endpoints: contractProxyTable(notesArtifact),
+			crossOrigins: [],
+		})
+		expect(entryOf(none).crossOrigins).toBeUndefined()
 	})
 })

@@ -57,8 +57,16 @@ describe('requirementDigest', () => {
 		['the row made anonymous', { ...row, kind: 'health', callers: [], requirement: null }],
 		['only the delegation, to members', { ...row, delegation: 'members' }],
 		['only the delegation, to creates', { ...row, delegation: 'creates' }],
+		["the endpoint opened to the environment's origins", { ...row, crossOrigin: 'environment' }],
+		['the endpoint opened to any origin', { ...row, crossOrigin: 'any' }],
 	])('changes when %s changes', (_name, changed) => {
 		expect(requirementDigest(changed)).not.toBe(requirementDigest(row))
+	})
+
+	test('tells the two cross-origin forms apart, and an absent one from neither', () => {
+		const environment = requirementDigest({ ...row, crossOrigin: 'environment' })
+		expect(requirementDigest({ ...row, crossOrigin: 'any' })).not.toBe(environment)
+		expect(requirementDigest({ ...row, crossOrigin: undefined })).toBe(requirementDigest(row))
 	})
 
 	test('ignores caller and content-type order, schemas, the source and the id', () => {

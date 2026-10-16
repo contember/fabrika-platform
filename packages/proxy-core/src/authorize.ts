@@ -2,7 +2,8 @@
  * The proxy authorization core ([ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
  *
  * Every entry — a contract application or an installation service — is protected by its endpoint table, in one pass
- * over ONE selected endpoint: `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session
+ * over ONE selected endpoint. A contract application's preflight is decided first, from the endpoint the requested
+ * method selects, and never reaches a credential. Then: `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session
  * when `human` may call → the requirement (`satisfies`) → admission → the delegation grant. There is no fall-through
  * to another endpoint. On an installation row that admits `oauth`, a bearer that is not a `px_` key is an OAuth
  * resource token, verified locally. A key or a session is exchanged with IAM once, cached, and thereafter verified
@@ -37,7 +38,14 @@ import { LOGIN_REDIRECT_PARAM } from './constants'
 import { readBearer, readCookie } from './credentials'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
-import { type ManifestEndpointRow, type OAuthBearerChallenge, type OAuthProtectedResource, oauthResourceOfRow, type ProxyApp } from './manifest'
+import {
+	isApplicationEntry,
+	type ManifestEndpointRow,
+	type OAuthBearerChallenge,
+	type OAuthProtectedResource,
+	oauthResourceOfRow,
+	type ProxyApp,
+} from './manifest'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
@@ -69,6 +77,8 @@ export type DenyReason =
 	| 'cross_site'
 	/** The request's `Content-Type` is not one the endpoint admits. */
 	| 'content_type'
+	/** A preflight for an endpoint the contract does not open to another origin, or from an origin it does not admit. */
+	| 'cross_origin'
 	/** IAM refused the delegation grant a membership or scope-creating endpoint needs. */
 	| 'delegation_refused'
 	/** The `Host` maps to no app in the manifest. */
@@ -93,6 +103,8 @@ export type Decision =
 		endpoint: string
 		/** The single-use delegation grant for `X-Fabrika-Delegation`, when the endpoint spends one. */
 		delegation: string | null
+		/** The `Access-Control-Allow-Origin` the answer carries: the request's admitted origin, `*`, or none. */
+		crossOrigin: string | null
 	}
 	| {
 		outcome: 'deny'
@@ -101,7 +113,14 @@ export type Decision =
 		clearHandoffState?: string
 		/** Set on an `oauth` row's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */
 		challenge?: OAuthBearerChallenge
+		/** Set when the request's origin is admitted, so the page can read why it was refused. */
+		crossOrigin?: string
 	}
+	/**
+	 * A contract application's preflight that the selected endpoint admits (ADR-0022 "Cross-origin endpoints"). The
+	 * proxy answers it itself; it never reaches the application. `method` is the endpoint's.
+	 */
+	| { outcome: 'preflight'; allowOrigin: string; method: string }
 	/**
 	 * A human reached an endpoint `human` may call without a usable session. `location` is where they must go to sign
 	 * in; `status` is only how they are TOLD — 302 for a document navigation, 401 for anything else,
@@ -158,6 +177,12 @@ const FETCH_MODE_HEADER = 'Sec-Fetch-Mode'
 
 /** Fetch metadata the browser writes and page script cannot: `same-origin` only for a request from this origin. */
 const FETCH_SITE_HEADER = 'Sec-Fetch-Site'
+
+/** The origin a browser names on every CORS request; page script cannot set it. */
+const ORIGIN_HEADER = 'Origin'
+
+/** What makes an `OPTIONS` request a preflight: the method the page wants to send. */
+const PREFLIGHT_METHOD_HEADER = 'Access-Control-Request-Method'
 
 /** Why a session attempt failed — mirrors `mintToken`'s reasons. */
 type SessionFailureReason = 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled'
@@ -230,6 +255,10 @@ export class Authorizer {
 		table: CompiledEndpointTable<ManifestEndpointRow>,
 		request: ForwardedRequest,
 	): Promise<Decision> {
+		const preflight = this.decidePreflight(table, app, request)
+		if (preflight !== null) {
+			return preflight
+		}
 		const plan = planEndpoint(table, request.method, request.rawPath)
 		if (plan.outcome === 'non-canonical') {
 			return { outcome: 'deny', status: 400, reason: 'non_canonical_path' }
@@ -238,9 +267,41 @@ export class Authorizer {
 			return { outcome: 'deny', status: 403, reason: 'no_endpoint' }
 		}
 		const row = plan.endpoint
+		const origin = request.headers.get(ORIGIN_HEADER)
+		const crossOrigin = origin === null ? null : admittedOrigin(app, row, origin)
+		const decision = await this.decideRow(app, row, request, crossOrigin)
+		return crossOrigin === null || decision.outcome !== 'deny' ? decision : { ...decision, crossOrigin }
+	}
+
+	/**
+	 * A preflight is decided from the endpoint the REQUESTED method selects, before any credential: it carries none
+	 * (ADR-0022 "Cross-origin endpoints"). Only a contract application's: an installation row of method `*` serves
+	 * `OPTIONS` itself.
+	 */
+	private decidePreflight(table: CompiledEndpointTable<ManifestEndpointRow>, app: ProxyApp, request: ForwardedRequest): Decision | null {
+		const origin = request.headers.get(ORIGIN_HEADER)
+		const method = request.headers.get(PREFLIGHT_METHOD_HEADER)
+		if (!isApplicationEntry(app) || request.method !== 'OPTIONS' || origin === null || method === null) {
+			return null
+		}
+		const plan = planEndpoint(table, method, request.rawPath)
+		if (plan.outcome === 'non-canonical') {
+			return { outcome: 'deny', status: 400, reason: 'non_canonical_path' }
+		}
+		if (plan.outcome === 'no-endpoint') {
+			return { outcome: 'deny', status: 403, reason: 'no_endpoint' }
+		}
+		const allowOrigin = admittedOrigin(app, plan.endpoint, origin)
+		return allowOrigin === null
+			? { outcome: 'deny', status: 403, reason: 'cross_origin' }
+			: { outcome: 'preflight', allowOrigin, method: plan.endpoint.method }
+	}
+
+	/** The selected row's checks. `crossOrigin` is the admitted origin of a cross-origin request, `*` or none. */
+	private async decideRow(app: ProxyApp, row: ManifestEndpointRow, request: ForwardedRequest, crossOrigin: string | null): Promise<Decision> {
 		const endpoint = formatEndpointHeader(row.id, row.digest)
 		if (row.requirement === null) {
-			return admitBody(row, request.headers) ?? { outcome: 'allow', token: null, subject: null, endpoint, delegation: null }
+			return admitBody(row, request.headers) ?? { outcome: 'allow', token: null, subject: null, endpoint, delegation: null, crossOrigin }
 		}
 		const oauth = oauthBindingOf(app, row)
 		if (oauth === 'unregistered') {
@@ -248,7 +309,8 @@ export class Authorizer {
 			return { outcome: 'deny', status: 403, reason: 'internal_error' }
 		}
 		const callers: readonly TokenCaller[] = row.callers
-		const caller = await this.endpointCaller(app, oauth, callers, request)
+		// A listed origin's request is never session-authenticated: a session does not cross origins.
+		const caller = await this.endpointCaller(app, oauth, callers, request, crossOrigin !== null)
 		if (!caller.ok) {
 			return caller.decision
 		}
@@ -276,6 +338,7 @@ export class Authorizer {
 			subject: caller.claims.sub,
 			endpoint,
 			delegation: delegation?.grant ?? null,
+			crossOrigin,
 		}
 	}
 
@@ -288,6 +351,7 @@ export class Authorizer {
 		oauth: OAuthBinding | null,
 		callers: readonly TokenCaller[],
 		request: ForwardedRequest,
+		crossOrigin: boolean,
 	): Promise<EndpointCaller> {
 		const authorization = request.headers.get('Authorization')
 		if (authorization !== null && authorization.trim() !== '') {
@@ -301,8 +365,9 @@ export class Authorizer {
 				? { ok: true, token: key.token, claims: key.claims, session: false }
 				: { ok: false, decision: withBearerChallenge(key.denial, oauth) }
 		}
-		if (!callers.includes('human')) {
-			// No session reaches an endpoint a person may not call, so there is nothing to sign in to.
+		if (!callers.includes('human') || crossOrigin) {
+			// No session reaches an endpoint a person may not call, nor one called from another origin, so there is
+			// nothing to sign in to.
 			const denial: Denial = { outcome: 'deny', status: 401, reason: 'no_credential' }
 			return { ok: false, decision: oauth === null ? denial : { ...denial, challenge: { resource_metadata: oauth.resource.resourceMetadata } } }
 		}
@@ -547,6 +612,19 @@ export class Authorizer {
 		setHandoffParams(login, handoff)
 		return login.toString()
 	}
+}
+
+/**
+ * The `Access-Control-Allow-Origin` a request from `origin` gets on `row`: `*` on a row open to any origin, the origin
+ * itself when the row takes the environment's list and the entry lists it, and `null` otherwise. An installation row
+ * has no cross-origin form.
+ */
+function admittedOrigin(app: ProxyApp, row: ManifestEndpointRow, origin: string): string | null {
+	const form = 'crossOrigin' in row ? row.crossOrigin : undefined
+	if (form === 'any') {
+		return '*'
+	}
+	return form === 'environment' && isApplicationEntry(app) && (app.crossOrigins ?? []).includes(origin) ? origin : null
 }
 
 function invalidKey(): Denial {

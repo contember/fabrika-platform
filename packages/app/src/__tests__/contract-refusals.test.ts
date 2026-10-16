@@ -212,6 +212,42 @@ describe('compileContract refuses what the types let through', () => {
 		])
 	})
 
+	test('a link procedure and an export procedure never open to another origin', () => {
+		const contract = defineContract(vocabulary, (c) => ({
+			api: c.rpc('/api', { callers: ['human', 'machine'] }, {
+				open: c.query({ output: Id, access: { member: true }, crossOrigin: true }),
+			}),
+			shared: c.link('/share', {
+				spa: 'dist/share',
+				dimension: 'task',
+				grants: ['tasks.read'],
+				issuedBy: 'tasks.write',
+				maxDays: 7,
+				procedures: (l) => ({ task: l.query({ output: Id, access: { action: 'tasks.read' }, crossOrigin: true }) }),
+			}),
+			exports: {
+				tasks: c.export({
+					version: 1,
+					consumers: ['billing'],
+					audience: 'any consumer user',
+					procedures: { get: c.query({ input: Id, output: Id, access: { action: 'tasks.read', over: 'workspace' }, crossOrigin: true }) },
+				}),
+			},
+		}))
+		expect(compileProblems(contract)).toEqual([
+			"procedure 'shared.task': is called by a link holder, never cross-origin (only an RPC procedure of c.rpc and a form take crossOrigin)",
+			"procedure 'tasks.v1.get': is called by a consuming application, from its server, never cross-origin (only an RPC procedure of c.rpc and a form take crossOrigin)",
+		])
+		expect(
+			compileContract(
+				defineContract(vocabulary, (c) => ({
+					api: c.rpc('/api', { callers: ['human'] }, { open: c.query({ output: Id, access: { member: true }, crossOrigin: true }) }),
+				})),
+				{},
+			).endpoints.find((row) => row.id === 'api.open')?.crossOrigin,
+		).toBe('environment')
+	})
+
 	test('the compiled artifact is parsed before it is returned', () => {
 		const reference: TablePolicyArtifact = {
 			scope: { mode: 'reference', reason: '' },
@@ -287,6 +323,25 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 			"procedure 'api.typo': 'notes.raed' is not an action of the contract — did you mean 'notes.read'?",
 			"procedure 'api.optional': access.from 'id' is not a required string field of the input (allowed: a string, a string literal or an enum)",
 			"procedure 'api.create': creates a 'workspace' in a query (allowed: c.mutation)",
+		])
+	})
+
+	test('a cross-origin form a builder does not take', () => {
+		const problems = build(withMounts({
+			...base.mounts,
+			api: {
+				...api,
+				procedures: {
+					any: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, crossOrigin: '*' },
+					off: { '~kind': 'procedure', type: 'query', input: null, output, access: { member: true }, crossOrigin: false },
+				},
+			},
+			contact: { kind: 'form', path: '/contact', input: { type: 'object', fields: {} }, appendTo: 'contact', crossOrigin: 'yes' },
+		}))
+		expect(problems.filter((problem) => problem.includes('crossOrigin'))).toEqual([
+			`procedure 'api.any': crossOrigin "*" is not a cross-origin form (allowed: crossOrigin: true)`,
+			"procedure 'api.off': crossOrigin false is not a cross-origin form (allowed: crossOrigin: true)",
+			`mount 'contact': crossOrigin "yes" is not a cross-origin form (allowed: crossOrigin: true for the environment's listed origins, or crossOrigin: '*' for any)`,
 		])
 	})
 
