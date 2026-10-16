@@ -35,7 +35,7 @@ export class RepoPollingRepository {
 					a.github_connection_id AS a_github_connection_id, a.github_installation_id AS a_github_installation_id,
 					a.created_at AS a_created_at,
 						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.public_origin AS e_public_origin,
-						e.trigger_ref AS e_trigger_ref,
+						e.cross_origins_json AS e_cross_origins_json, e.trigger_ref AS e_trigger_ref,
 						e.authoring AS e_authoring,
 						e.published_run_id AS e_published_run_id, e.generation AS e_generation, e.protected AS e_protected,
 						e.protection_revision AS e_protection_revision, e.published_snapshot_json AS e_published_snapshot_json,
@@ -65,6 +65,7 @@ export class RepoPollingRepository {
 				env: r.e_env,
 				domain: r.e_domain,
 				public_origin: r.e_public_origin,
+				cross_origins_json: r.e_cross_origins_json,
 				trigger_ref: r.e_trigger_ref,
 				authoring: r.e_authoring,
 				published_run_id: r.e_published_run_id,
@@ -131,6 +132,7 @@ interface PollEligibleJoinRow {
 	e_env: string
 	e_domain: string | null
 	e_public_origin: string | null
+	e_cross_origins_json: string
 	e_trigger_ref: string | null
 	e_authoring: number
 	e_published_run_id: string | null

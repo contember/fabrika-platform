@@ -210,6 +210,8 @@ export interface AppEnvDto {
 	env: string
 	domain: string | null
 	publicOrigin: string | null
+	/** The exact origins whose pages may call this environment's cross-origin endpoints (ADR-0022); empty lists none. */
+	crossOrigins: string[]
 	triggerRef: string | null
 	/** An MCP authoring target (ADR-0049): users with `source.workspace.*` grants may edit and deploy it. */
 	authoring: boolean
@@ -240,6 +242,8 @@ export interface DeviationSubjectDto {
 export interface PutAppEnvRequest {
 	domain?: string | null
 	publicOrigin?: string | null
+	/** Replaces the stored list; omitted keeps it, and an empty list clears it. */
+	crossOrigins?: string[]
 	triggerRef?: string | null
 	/** Omitted keeps the stored value. Only a Zerops environment of an app with a GitHub connection qualifies. */
 	authoring?: boolean
@@ -419,6 +423,8 @@ export interface RegisterAppRequest extends AppOptionalFields {
 	env: string
 	domain?: string | null
 	publicOrigin?: string | null
+	/** The environment's cross-origin list (ADR-0022); omitted lists none. */
+	crossOrigins?: string[]
 	triggerRef?: string | null
 	namespaceId?: string | null
 	target: ProviderEnvelopeDto

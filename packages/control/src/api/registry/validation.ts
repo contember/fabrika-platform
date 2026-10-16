@@ -1,4 +1,5 @@
 import { APP_ENVIRONMENT_SEPARATOR, frameworkVariableReference, isAppEnvironmentPart, isFrameworkVariableName } from '@fabrika/auth-core'
+import { isCrossOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../../public-origin'
 import { canonicalTriggerRef, TriggerRefValidationError } from '../../ref-match'
@@ -63,6 +64,27 @@ export function triggerRefInput(value: string | null | undefined): string | null
 	} catch (cause) {
 		if (cause instanceof TriggerRefValidationError) fail(400, cause.message)
 		throw cause
+	}
+}
+
+/**
+ * The environment's cross-origin list (ADR-0022 "Cross-origin endpoints"), judged by the rule the manifest parser applies,
+ * so an operator learns here rather than from a failed proxy build: each an exact origin with a literal host, each once,
+ * never the environment's own domain, at most `MAX_CROSS_ORIGINS`.
+ */
+export function assertCrossOrigins(origins: readonly string[], domain: string | null): void {
+	if (origins.length > MAX_CROSS_ORIGINS) fail(400, `an environment lists at most ${MAX_CROSS_ORIGINS} cross origins, not ${origins.length}`)
+	const own = domain?.toLowerCase() ?? null
+	const seen = new Set<string>()
+	for (const [index, origin] of origins.entries()) {
+		// An origin carrying a user or password is refused without echoing it.
+		const named = origin.includes('@') ? `#${index + 1}` : `"${origin.slice(0, 200)}"`
+		if (!isCrossOrigin(origin)) {
+			fail(400, `cross origin ${named} must be an exact http(s) origin with a literal host, such as https://app.example.com`)
+		}
+		if (seen.has(origin)) fail(400, `cross origin ${named} is listed twice`)
+		seen.add(origin)
+		if (new URL(origin).hostname === own) fail(400, `cross origin ${named} is this environment's own domain, which is not cross-origin`)
 	}
 }
 

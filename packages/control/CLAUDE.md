@@ -243,6 +243,14 @@ other environment, before the provider prepares anything, and the write maps a r
 - **A namespace member carries `operationsOrigin`, the origin of its active ingest DSN** (`namespaceMembers` in
   `src/api/namespaces.ts`), so a Zerops proxy's header policy admits the same Operations origin the framework
   does. The DSN carries the ingest key; only its origin leaves Control this way.
+- **`app_envs.cross_origins_json` is the environment's cross-origin list (ADR-0022 "Cross-origin endpoints")**, set by
+  an operator beside `domain` and read through `appEnvCrossOrigins` / `crossOriginsField` (`src/db/registry-types.ts`).
+  `assertCrossOrigins` (`src/api/registry/validation.ts`) judges it with proxy-core's `isCrossOrigin` and
+  `MAX_CROSS_ORIGINS`, each once, never the environment's own domain, and names the bad origin in its 400 (by position
+  when it carries a userinfo). `apps.environments.put` omission KEEPS the stored list and `[]` clears it, so a put of a
+  changed manifest never drops what the operator set; the list a put keeps is judged against the put's domain too. It
+  reaches the provider as `ProviderEnvironment.crossOrigins` on every deploy and as `ProviderNamespaceMember.crossOrigins`
+  on every republish, absent when empty, and a changed list triggers the same `namespaceProxyChanged` a changed domain does.
 - **A job's and a webhook's key come from the APPROVED contract (`src/workload-credentials.ts`, ADR-0022 "Principal
   kinds").** `executeDeploy` reconciles one key per job and per webhook declaration of
   `registration.environment.access.contract` before the provider runs (never on a dry run): a recorded key with more
@@ -364,7 +372,7 @@ other environment, before the provider prepares anything, and the write maps a r
   `provisioning` with a `reconcile` job queued (ADR-0044). Three callers: `executeDeploy` takes the
   namespace lease AFTER the run lease (lock order is always app/env → namespace; a namespace path never
   takes an app/env lease), defers when it is busy, republishes with `wait: 'active'` and releases it
-  before `provider.deploy`; `deleteApp`, `deleteAppEnv`, a changed `domain` and a changed namespace
+  before `provider.deploy`; `deleteApp`, `deleteAppEnv`, a changed `domain` or cross-origin list and a changed namespace
   assignment await `namespaceProxyChanged`, wired in `buildControlRpcDeps` only when the provider declares
   `republish`; and `namespaces.reconcile` republishes a `ready` namespace as the operator's repair verb.
   The registry hook waits for the manifest to PUBLISH and the roll to start (`wait: 'started'`), not

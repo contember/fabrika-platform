@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 // ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
 
 export interface AppRow {
@@ -17,6 +19,11 @@ export interface AppEnvRow {
 	env: string
 	domain: string | null
 	public_origin: string | null
+	/**
+	 * The origins this environment lists for its cross-origin endpoints (ADR-0022), a JSON array of exact origins; `[]`
+	 * lists none. Read it through `appEnvCrossOrigins`.
+	 */
+	cross_origins_json: string
 	/** Optional provider-owned placement boundary. */
 	namespace_id: string | null
 	/** The statically composed provider that owns both envelopes. */
@@ -40,6 +47,21 @@ export interface AppEnvRow {
 	/** Advanced by every change of `protected`; a publication names the revision it classified under. */
 	protection_revision: number
 	created_at: number
+}
+
+const storedCrossOrigins = z.array(z.string())
+
+/** The environment's stored cross-origin list. Only Control writes the column, so a malformed one is a fault, not input. */
+export function appEnvCrossOrigins(row: Pick<AppEnvRow, 'app_id' | 'env' | 'cross_origins_json'>): string[] {
+	const parsed = storedCrossOrigins.safeParse(JSON.parse(row.cross_origins_json))
+	if (!parsed.success) throw new Error(`stored cross-origin list of ${row.app_id}/${row.env} is not an array of strings`)
+	return parsed.data
+}
+
+/** The list as a provider takes it (`ProviderEnvironment`, `ProviderNamespaceMember`): absent when the environment lists none. */
+export function crossOriginsField(row: Pick<AppEnvRow, 'app_id' | 'env' | 'cross_origins_json'>): { readonly crossOrigins?: readonly string[] } {
+	const origins = appEnvCrossOrigins(row)
+	return origins.length === 0 ? {} : { crossOrigins: origins }
 }
 
 export type DeploymentNamespaceState = 'pending' | 'provisioning' | 'ready' | 'failed'
@@ -73,6 +95,8 @@ export interface AppEnvInput {
 	env: string
 	domain?: string | null
 	publicOrigin?: string | null
+	/** Omitted keeps the stored list; a new environment starts with none. */
+	crossOrigins?: readonly string[]
 	triggerRef?: string | null
 	/** Omitted keeps the stored flag; a new environment starts as not an authoring target. */
 	authoring?: boolean

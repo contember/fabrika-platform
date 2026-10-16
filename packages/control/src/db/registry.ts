@@ -36,10 +36,10 @@ export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, '
  * default, `prod` protected) and its counters (ADR-0050).
  */
 const APP_ENV_INSERT_SQL = `INSERT INTO app_envs (
-		app_id, env, domain, public_origin, trigger_ref, namespace_id, provider,
+		app_id, env, domain, public_origin, cross_origins_json, trigger_ref, namespace_id, provider,
 		provider_target_json, provider_artifact_json, authoring, protected, generation, protection_revision
 	)
-	SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0),
+	SELECT ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?, ?, ?, COALESCE(?, 0),
 		COALESCE(kept.protected, ?), COALESCE(kept.generation, 0), COALESCE(kept.protection_revision, 0)
 	FROM (SELECT 1 AS one) AS fresh
 	LEFT JOIN app_env_protection AS kept ON kept.app_id = ? AND kept.env = ?
@@ -50,6 +50,7 @@ const appEnvInsertValues = (input: AppEnvInput): (string | number | null)[] => [
 	input.env,
 	input.domain ?? null,
 	input.publicOrigin ?? null,
+	crossOriginsJson(input.crossOrigins),
 	input.triggerRef ?? null,
 	input.namespaceId,
 	input.provider,
@@ -758,9 +759,10 @@ export class ControlRegistryRepository {
 					provider_target_json = excluded.provider_target_json,
 					provider_artifact_json = excluded.provider_artifact_json,
 					authoring = COALESCE(?, app_envs.authoring),
+					cross_origins_json = COALESCE(?, app_envs.cross_origins_json),
 					generation = app_envs.generation + 1
 				RETURNING *`)
-			.bind(...appEnvInsertValues(input), authoringFlag(input.authoring))
+			.bind(...appEnvInsertValues(input), authoringFlag(input.authoring), crossOriginsJson(input.crossOrigins))
 	}
 
 	/**
@@ -781,7 +783,7 @@ export class ControlRegistryRepository {
 			.prepare(`UPDATE app_envs SET
 					domain = ?, public_origin = ?, trigger_ref = ?, namespace_id = ?, provider = ?,
 					provider_target_json = ?, provider_artifact_json = ?, authoring = COALESCE(?, authoring),
-					generation = generation + 1
+					cross_origins_json = COALESCE(?, cross_origins_json), generation = generation + 1
 				WHERE app_id = ? AND env = ? AND generation = ?
 				RETURNING *`)
 			.bind(
@@ -793,6 +795,7 @@ export class ControlRegistryRepository {
 				input.providerTargetJson,
 				input.providerArtifactJson,
 				authoringFlag(input.authoring),
+				crossOriginsJson(input.crossOrigins),
 				input.appId,
 				input.env,
 				expected.generation,
@@ -1054,3 +1057,6 @@ function githubRepositoryOwner(repoUrl: string): string | null {
 }
 
 const authoringFlag = (authoring: boolean | undefined): number | null => authoring === undefined ? null : authoring ? 1 : 0
+
+/** Omitted is NULL, which keeps the stored list (and starts a new environment with none). */
+const crossOriginsJson = (origins: readonly string[] | undefined): string | null => origins === undefined ? null : JSON.stringify(origins)

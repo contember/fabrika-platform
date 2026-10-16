@@ -9,6 +9,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		env: 'dev',
 		domain: null,
 		publicOrigin: null,
+		crossOrigins: ['https://partner.example.org'],
 		triggerRef: '',
 		authoring: false,
 		protected: false,
@@ -23,8 +24,8 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 	expect(() => parseEnvironments({ items: [environment] })).toThrow(PlatformError)
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, ignored: true }], cursor: 'next' }))
 		.toEqual([{ ...environment, triggerRef: null }])
-	const { deviationSubjects: _, ...fromOlderControl } = { ...environment, triggerRef: null }
-	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([{ ...environment, triggerRef: null, deviationSubjects: [] }])
+	const { deviationSubjects: _, crossOrigins: __, ...fromOlderControl } = { ...environment, triggerRef: null }
+	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([{ ...environment, triggerRef: null, deviationSubjects: [], crossOrigins: [] }])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')
 	const run: ReturnType<typeof parseRun> = { id: 'run', appId: 'app', env: 'dev', ref: 'sha', commitSha: null, status: 'running' }

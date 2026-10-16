@@ -3,6 +3,7 @@ import type { ProviderApp, ProviderRegistration } from '@fabrika/provider-contra
 import { requireHumanForProtectedDelete } from '../../approval/human'
 import {
 	AppEnvChangedError,
+	appEnvCrossOrigins,
 	type AppEnvExpectation,
 	type AppEnvRow,
 	AppEnvTriggerRefConflictError,
@@ -21,7 +22,7 @@ import {
 	resolveRegistrationNamespace,
 	toAppEnvDto,
 } from './registration'
-import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
+import { assertAppEnvironmentPart, assertCrossOrigins, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
 
 export async function listAppEnvsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppEnvDto>> {
 	await requireApp(c, appId)
@@ -34,6 +35,8 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	assertProxyDomain(input.domain)
 	const triggerRef = triggerRefInput(input.triggerRef)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
+	// Omitted keeps the stored list, which the new domain may now collide with, so the list in effect is what is judged.
+	assertCrossOrigins(input.crossOrigins ?? (existing === null ? [] : appEnvCrossOrigins(existing)), input.domain ?? null)
 	if (input.authoring === true) {
 		assertAuthoringTarget(c.provider.id, app)
 		// ADR-0049: one stage environment per app.
@@ -82,6 +85,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		env,
 		domain: registration.environment.domain ?? null,
 		publicOrigin: registration.environment.publicOrigin ?? null,
+		...(input.crossOrigins === undefined ? {} : { crossOrigins: input.crossOrigins }),
 		triggerRef,
 		...(input.authoring === undefined ? {} : { authoring: input.authoring }),
 		namespaceId: registration.environment.namespace?.id ?? null,
@@ -109,15 +113,17 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		metadata: {
 			triggerRef,
 			...(input.authoring === undefined ? {} : { authoring: input.authoring }),
+			...(input.crossOrigins === undefined ? {} : { crossOrigins: input.crossOrigins }),
 			namespaceId: row.namespace_id,
 			previousNamespaceId: existing?.namespace_id ?? null,
 		},
 	})
 	notifyCatalogChanged(c)
-	// The manifest carries the host, the namespace, and the artifact's `upstream` — and this call rewrites all
-	// three. A MOVE touches both proxies: the one losing the host and the one gaining it.
+	// The manifest carries the host, the namespace, the artifact's `upstream` and the cross-origin list, and this call
+	// rewrites all four. A MOVE touches both proxies: the one losing the host and the one gaining it.
 	if (
 		(existing?.domain ?? null) !== row.domain
+		|| (existing?.cross_origins_json ?? '[]') !== row.cross_origins_json
 		|| (existing?.namespace_id ?? null) !== row.namespace_id
 		|| existing?.provider_artifact_json !== persistence.providerArtifactJson
 	) {

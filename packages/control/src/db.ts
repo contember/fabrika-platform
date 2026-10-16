@@ -13,6 +13,7 @@ export { RepoPollingRepository, type RepoPollStateRow } from './db/polling'
 export { ControlRegistryRepository, isUnconfirmedNamespaceUpdate } from './db/registry'
 export {
 	AppEnvChangedError,
+	appEnvCrossOrigins,
 	type AppEnvExpectation,
 	type AppEnvInput,
 	type AppEnvRow,
@@ -21,6 +22,7 @@ export {
 	type AppRow,
 	type AppSecretRow,
 	type AppVarRow,
+	crossOriginsField,
 	type DeploymentNamespaceInput,
 	type DeploymentNamespaceRow,
 	type DeploymentNamespaceState,

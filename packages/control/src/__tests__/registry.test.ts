@@ -313,6 +313,106 @@ describe('onboarding + registry CRUD', () => {
 		expect((await deps.repositories.registry.getAppEnv('origin-app', 'prod'))?.public_origin).toBeNull()
 	})
 
+	test('stores the cross-origin list on register, keeps it when a put omits it, replaces it, and clears it with []', async () => {
+		const { deps } = makeDeps()
+		const registered = await rpcResult(
+			rpcRequest('register', {
+				...registrationEnvelopes(),
+				id: 'cors-app',
+				repoUrl: 'https://github.com/acme/cors-app',
+				env: 'prod',
+				domain: 'cors.example.com',
+				crossOrigins: ['https://partner.example.org', 'http://localhost:5173'],
+			}),
+			deps,
+		)
+		expect(registered.status).toBe(200)
+		expect(await registered.json()).toMatchObject({ env: { crossOrigins: ['https://partner.example.org', 'http://localhost:5173'] } })
+		const put = (crossOrigins?: string[]) =>
+			rpcResult(
+				rpcRequest('apps.environments.put', {
+					appId: 'cors-app',
+					env: 'prod',
+					environment: { ...registrationEnvelopes(), domain: 'cors.example.com', ...(crossOrigins === undefined ? {} : { crossOrigins }) },
+				}),
+				deps,
+			)
+		const listed = async () => {
+			const response = await rpcResult(rpcRequest('apps.environments.list', { appId: 'cors-app' }), deps)
+			const body: { items: Array<{ crossOrigins: string[] }> } = await response.json()
+			return body.items.map((item) => item.crossOrigins)
+		}
+
+		expect((await put()).status).toBe(200)
+		expect(await listed()).toEqual([['https://partner.example.org', 'http://localhost:5173']])
+		const replaced = await put(['https://other.example.org'])
+		expect(await replaced.json()).toMatchObject({ crossOrigins: ['https://other.example.org'] })
+		expect(await listed()).toEqual([['https://other.example.org']])
+		expect((await put([])).status).toBe(200)
+		expect(await listed()).toEqual([[]])
+		expect((await deps.repositories.registry.getAppEnv('cors-app', 'prod'))?.cross_origins_json).toBe('[]')
+	})
+
+	test('refuses a cross-origin list the proxy manifest would refuse, naming the origin, and stores nothing', async () => {
+		const { deps } = makeDeps()
+		await rpcResult(rpcRequest('apps.create', { id: 'cors-bad', repoUrl: 'https://github.com/acme/cors-bad' }), deps)
+		const refused: Array<{ crossOrigins: string[]; message: string }> = [
+			{ crossOrigins: ['https://partner.example.org/'], message: 'cross origin "https://partner.example.org/" must be an exact http(s) origin' },
+			{ crossOrigins: ['https://*.example.org'], message: 'cross origin "https://*.example.org" must be an exact' },
+			{ crossOrigins: ['ftp://partner.example.org'], message: 'cross origin "ftp://partner.example.org" must be an exact' },
+			{ crossOrigins: ['https://Partner.example.org'], message: 'cross origin "https://Partner.example.org" must be an exact' },
+			{ crossOrigins: ['https://key@partner.example.org'], message: 'cross origin #1 must be an exact' },
+			{ crossOrigins: ['https://a.example.org', 'https://a.example.org'], message: 'cross origin "https://a.example.org" is listed twice' },
+			{ crossOrigins: ['https://cors.example.com'], message: 'cross origin "https://cors.example.com" is this environment\'s own domain' },
+			{ crossOrigins: ['http://cors.example.com:8080'], message: "is this environment's own domain" },
+			{ crossOrigins: Array.from({ length: 17 }, (_, index) => `https://p${index}.example.org`), message: 'at most 16 cross origins, not 17' },
+		]
+		for (const { crossOrigins, message } of refused) {
+			const response = await rpcResult(
+				rpcRequest('apps.environments.put', {
+					appId: 'cors-bad',
+					env: 'prod',
+					environment: { ...registrationEnvelopes(), domain: 'CORS.example.com', crossOrigins },
+				}),
+				deps,
+			)
+			expect(response.status).toBe(400)
+			const body: { error: string } = await response.json()
+			expect(body.error).toContain(message)
+			expect(body.error).not.toContain('key@')
+			expect(await deps.repositories.registry.getAppEnv('cors-bad', 'prod')).toBeNull()
+		}
+		const registered = await rpcResult(
+			rpcRequest('register', {
+				...registrationEnvelopes(),
+				id: 'cors-new',
+				repoUrl: 'https://github.com/acme/cors-new',
+				env: 'prod',
+				domain: 'cors.example.com',
+				crossOrigins: ['https://cors.example.com'],
+			}),
+			deps,
+		)
+		expect(registered.status).toBe(400)
+		expect(await deps.repositories.registry.getApp('cors-new')).toBeNull()
+	})
+
+	test('a new domain is judged against the stored list a put keeps', async () => {
+		const { deps } = makeDeps()
+		await rpcResult(rpcRequest('apps.create', { id: 'cors-move', repoUrl: 'https://github.com/acme/cors-move' }), deps)
+		const put = (environment: Record<string, unknown>) =>
+			rpcResult(
+				rpcRequest('apps.environments.put', { appId: 'cors-move', env: 'prod', environment: { ...registrationEnvelopes(), ...environment } }),
+				deps,
+			)
+		expect((await put({ domain: 'cors.example.com', crossOrigins: ['https://partner.example.org'] })).status).toBe(200)
+		const moved = await put({ domain: 'partner.example.org' })
+		expect(moved.status).toBe(400)
+		const body: { error: string } = await moved.json()
+		expect(body.error).toContain('cross origin "https://partner.example.org" is this environment\'s own domain')
+		expect((await deps.repositories.registry.getAppEnv('cors-move', 'prod'))?.domain).toBe('cors.example.com')
+	})
+
 	test('rejects malformed public origins without storing an environment', async () => {
 		const { deps } = makeDeps()
 		await rpcResult(rpcRequest('apps.create', { id: 'invalid-origin', repoUrl: 'https://github.com/acme/invalid-origin' }), deps)
@@ -1181,6 +1281,25 @@ describe('the namespace proxy follows the registry', () => {
 			triggerRef: 'refs/tags/v*',
 		})
 		expect(recording.synced).toEqual([])
+	})
+
+	test('a changed cross-origin list republishes; a put that keeps or repeats it republishes nothing', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod'])
+		const recording: ProxyRecording = { synced: [] }
+		const environment = { ...registrationEnvelopes(), namespaceId: 'apps-prod', domain: 'notes-prod.example.com' }
+
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', { ...environment, crossOrigins: ['https://partner.example.org'] })
+		expect(recording.synced).toEqual(['apps-prod'])
+
+		recording.synced.length = 0
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', environment)
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', { ...environment, crossOrigins: ['https://partner.example.org'] })
+		expect(recording.synced).toEqual([])
+
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', { ...environment, crossOrigins: [] })
+		expect(recording.synced).toEqual(['apps-prod'])
 	})
 })
 

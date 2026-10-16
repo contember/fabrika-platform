@@ -3,13 +3,13 @@ import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrik
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { snapshotDeviations } from '../../approval/diff'
 import { approvedSnapshot } from '../../approval/snapshot'
-import { type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
+import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../github/triggers/push-event'
 import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
-import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
+import { assertAppEnvironmentPart, assertCrossOrigins, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
 
 export async function registerAppUseCase(c: RegistryUseCaseContext, input: RegisterAppRequest): Promise<RegisterAppResponse> {
 	const { id, repoUrl, env } = input
@@ -18,6 +18,8 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	if (await c.repositories.registry.getApp(id)) fail(409, 'an app with this id already exists')
 	assertProxyDomain(input.domain)
 	const triggerRef = triggerRefInput(input.triggerRef)
+	const crossOrigins = input.crossOrigins ?? []
+	assertCrossOrigins(crossOrigins, input.domain ?? null)
 	const normalized = normalizeRepoUrl(repoUrl)
 	const sourceBinding = await sourceBindingFields(c, input, normalized)
 	if ((sourceBinding.githubConnectionId ?? null) === null) await assertAnonymouslyReadable(c, normalized)
@@ -64,6 +66,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 		env: registration.environment.env,
 		domain: registration.environment.domain ?? null,
 		publicOrigin: registration.environment.publicOrigin ?? null,
+		crossOrigins,
 		triggerRef,
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
@@ -234,6 +237,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		env: row.env,
 		domain: row.domain,
 		publicOrigin: row.public_origin,
+		crossOrigins: appEnvCrossOrigins(row),
 		triggerRef: row.trigger_ref,
 		authoring: row.authoring === 1,
 		protected: row.protected === 1,

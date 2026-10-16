@@ -30,6 +30,8 @@ const environmentsSchema = z.object({
 		env: storedTextSchema,
 		domain: storedTextSchema.nullable(),
 		publicOrigin: storedTextSchema.nullable(),
+		// A Control older than the field lists none.
+		crossOrigins: z.array(storedTextSchema).default([]),
 		triggerRef: storedTextSchema.nullable(),
 		authoring: z.boolean(),
 		protected: z.boolean(),

@@ -91,7 +91,7 @@ function now(): number {
 const providerEnvironment = (
 	appId: string,
 	env: string,
-	options: { domain?: string | null; publicOrigin?: string | null; triggerRef?: string | null } = {},
+	options: { domain?: string | null; publicOrigin?: string | null; crossOrigins?: readonly string[]; triggerRef?: string | null } = {},
 ) => ({
 	appId,
 	env,
@@ -149,6 +149,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0007_membership_keys.sql' },
 			{ bundle: 'control', name: '0008_connector_credentials.sql' },
 			{ bundle: 'control', name: '0009_canonical_trigger_refs.sql' },
+			{ bundle: 'control', name: '0010_cross_origins.sql' },
 		])
 	})
 
@@ -297,9 +298,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			providerEnvironment('acme', 'prod', {
 				domain: 'acme.example',
 				publicOrigin: 'https://public.acme.example',
+				crossOrigins: ['https://partner.acme.example'],
 				triggerRef: 'refs/heads/main',
 			}),
 		)
+		expect(prod.cross_origins_json).toBe('["https://partner.acme.example"]')
 		expect(prod.domain).toBe('acme.example')
 		expect(prod.public_origin).toBe('https://public.acme.example')
 		expect(prod.provider).toBe('harbor')
@@ -308,9 +311,15 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		const again = await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme2.example', triggerRef: 'refs/tags/v*' }))
 		expect(again.domain).toBe('acme2.example')
 		expect(again.public_origin).toBeNull()
+		// Omitted keeps the stored list; an empty one clears it.
+		expect(again.cross_origins_json).toBe('["https://partner.acme.example"]')
+		const cleared = await db.registry.upsertAppEnv(
+			providerEnvironment('acme', 'prod', { domain: 'acme2.example', triggerRef: 'refs/tags/v*', crossOrigins: [] }),
+		)
+		expect(cleared.cross_origins_json).toBe('[]')
 		expect(again.trigger_ref).toBe('refs/tags/v*')
 
-		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
+		expect((await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).cross_origins_json).toBe('[]')
 		expect((await db.registry.listAppEnvs('acme')).map((e) => e.env)).toEqual(['prod', 'stage'])
 		expect((await db.registry.getAppEnv('acme', 'prod'))?.env).toBe('prod')
 		expect((await db.registry.getAppEnvByTriggerRef('acme', 'refs/tags/v*'))?.env).toBe('prod')

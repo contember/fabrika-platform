@@ -34,6 +34,7 @@ import {
 import { approvedProviderAccess } from '../approval/snapshot'
 import {
 	type ControlRepositories,
+	crossOriginsField,
 	type DeploymentNamespaceRow,
 	type DeploymentNamespaceState,
 	isUnconfirmedNamespaceUpdate,
@@ -381,6 +382,7 @@ async function namespaceMembers(
 			appId: row.app_id,
 			env: row.env,
 			...(row.domain === null ? {} : { domain: row.domain }),
+			...crossOriginsField(row),
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			...(proxySecret === undefined ? {} : { proxySecret }),
 			...(operationsOrigin === undefined ? {} : { operationsOrigin }),

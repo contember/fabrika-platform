@@ -60,6 +60,12 @@ export interface ProviderEnvironment {
 	readonly domain?: string
 	/** Canonical externally reachable HTTP(S) origin; independent of provider domain routing. */
 	readonly publicOrigin?: string
+	/**
+	 * The exact origins whose pages may call the environment's cross-origin endpoints, as the operator listed them in
+	 * Control's registry (ADR-0022 "Cross-origin endpoints"). Absent when it lists none. A provider writes them into the
+	 * application's proxy manifest entry as `crossOrigins`.
+	 */
+	readonly crossOrigins?: readonly string[]
 	readonly namespace?: ProviderDeploymentNamespace
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope
@@ -289,6 +295,8 @@ export interface ProviderNamespaceMember {
 	readonly appId: string
 	readonly env: string
 	readonly domain?: string
+	/** See `ProviderEnvironment.crossOrigins`: the namespace proxy's entry for this member lists them. */
+	readonly crossOrigins?: readonly string[]
 	readonly artifact: ProviderEnvelope
 	/**
 	 * The secret the namespace proxy authenticates itself to this application environment with (ADR-0022 rule 5).

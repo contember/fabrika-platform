@@ -116,9 +116,12 @@ const appEnvironment = z.object({ appId: nonEmpty, env: nonEmpty })
 const appNamedValue = z.object({ appId: nonEmpty, name: nonEmpty, env: nullableString })
 const updateAppInput = z.object({ appId: nonEmpty, app: z.object({ repoUrl: z.string().optional(), ...appOptionalFields }) })
 const createAppInput = z.object({ id: nonEmpty, repoUrl: nonEmpty, ...appOptionalFields })
+// Shape only: `assertCrossOrigins` judges each origin against the environment's domain and answers which one is wrong.
+const crossOrigins = z.array(z.string()).optional()
 const appEnvironmentBody = z.object({
 	domain: nullableString,
 	publicOrigin: nullableString,
+	crossOrigins,
 	triggerRef: nullableString,
 	authoring: z.boolean().optional(),
 	namespaceId: nullableString,
@@ -173,6 +176,7 @@ const registerInput = z.object({
 	env: nonEmpty,
 	domain: nullableString,
 	publicOrigin: nullableString,
+	crossOrigins,
 	triggerRef: nullableString,
 	namespaceId: nullableString,
 	target: providerEnvelopeSchema,
