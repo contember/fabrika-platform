@@ -265,7 +265,9 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
 - **Runs record their actor**, including runs created through MCP. MCP's `get_deployment` reports a
   parked run with the approval link, and names the run's closer-review lines (`deviations`), parked or not.
 - **The environment page lists the published snapshot's deviations**, protected or not, so the steps off the road
-  an environment runs with stay visible after their approval.
+  an environment runs with stay visible after their approval. Control groups them by site and migration
+  (`AppEnvDto.deviationSubjects`). The page is an inventory of published access, so it carries no closer-review mark:
+  that mark belongs to the access change of a deploy.
 
 **Invariant: only a human user principal approves an access change.** No credential that an agent or a
 workload can hold completes an approval.

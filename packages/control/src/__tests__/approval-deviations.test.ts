@@ -167,13 +167,18 @@ describe('declared reach in the reviewed snapshot', () => {
 		expect([...w.logs.values()].join('\n')).toContain('access: access widens on protected `prod` (1 changes, 1 widening, 1 needing closer review;')
 
 		// The environment page lists the published snapshot's deviations, protected or not.
-		expect(toAppEnvDto(await environment(w, 'stage')).deviations).toEqual([line])
-		expect(toAppEnvDto(await environment(w, 'prod')).deviations).toEqual([])
+		expect(toAppEnvDto(await environment(w, 'stage')).deviationSubjects).toEqual([
+			{ subject: 'Endpoint `api.notes.summary`', steps: ['declares raw SQL (`read`)'] },
+		])
+		expect(toAppEnvDto(await environment(w, 'prod')).deviationSubjects).toEqual([])
 	})
 
 	test('`read` → `write` and a new `unscoped` table each widen with closer review; the way back narrows', async () => {
 		const base = await snapshotOf(commitOf({ retitle: "sql: 'read', unscoped: { notes: 'read' }" }))
 		const writes = await snapshotOf(commitOf({ retitle: "sql: 'write', unscoped: { notes: 'write' }" }))
+		expect(snapshotDeviations(writes)).toEqual([
+			{ subject: 'Endpoint `api.notes.retitle`', steps: ['declares raw SQL (`write`)', 'declares table `notes` unscoped (`write`)'] },
+		])
 		const wider = classifyAccess(base, writes)
 		expect(wider.outcome).toBe('widening')
 		expect(closer(wider)).toEqual([
@@ -209,13 +214,15 @@ describe('declared reach in the reviewed snapshot', () => {
 		const w = await world()
 		w.files = commitOf({ summary: "sql: 'read'" })
 		await publish(w, 'prod')
-		expect(toAppEnvDto(await environment(w, 'prod')).deviations).toEqual(['Endpoint `api.notes.summary` declares raw SQL (`read`)'])
+		expect(toAppEnvDto(await environment(w, 'prod')).deviationSubjects).toEqual([
+			{ subject: 'Endpoint `api.notes.summary`', steps: ['declares raw SQL (`read`)'] },
+		])
 
 		w.files = commitOf()
 		const removal = await deploy(w, 'prod')
 		expect(removal.status).toBe('succeeded')
 		expect(classified(removal).changes).toEqual([{ widens: false, line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
-		expect(toAppEnvDto(await environment(w, 'prod')).deviations).toEqual([])
+		expect(toAppEnvDto(await environment(w, 'prod')).deviationSubjects).toEqual([])
 	})
 
 	test('a contract that leaves the staged kit cannot be classified site by site: it widens with closer review', async () => {
@@ -247,9 +254,11 @@ describe('database code in the reviewed snapshot', () => {
 		])
 
 		await publish(w, 'stage')
-		expect(toAppEnvDto(await environment(w, 'stage')).deviations).toEqual([
-			`Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares function \`record_retitle\``,
-			`Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares trigger \`notes.audit_retitle\``,
+		expect(toAppEnvDto(await environment(w, 'stage')).deviationSubjects).toEqual([
+			{
+				subject: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\``,
+				steps: ['declares function `record_retitle`', 'declares trigger `notes.audit_retitle`'],
+			},
 		])
 	})
 
@@ -325,14 +334,16 @@ describe('the snapshot digest', () => {
 		expect(snapshotDigest(stored)).toBe(snapshotDigest(snapshot))
 		const { databaseCode: _, ...withoutCode } = snapshot
 		expect(snapshotDigest(withoutCode)).not.toBe(snapshotDigest(snapshot))
-		expect(snapshotDeviations(
-			approvedSnapshot({
-				app_id: 'notes',
-				env: 'prod',
-				published_run_id: 'run-1',
-				published_snapshot_json: serializeSnapshot(snapshot),
-				generation: 1,
-			}).snapshot,
-		)).toHaveLength(2)
+		expect(
+			snapshotDeviations(
+				approvedSnapshot({
+					app_id: 'notes',
+					env: 'prod',
+					published_run_id: 'run-1',
+					published_snapshot_json: serializeSnapshot(snapshot),
+					generation: 1,
+				}).snapshot,
+			).flatMap((subject) => subject.steps),
+		).toHaveLength(2)
 	})
 })

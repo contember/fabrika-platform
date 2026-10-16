@@ -21,12 +21,13 @@ function snapshot(issues: boolean): AccessSnapshot {
 }
 
 const LINE = 'Job `invite` issues share links of mount `shared`'
+const STEP = 'issues share links of mount `shared`'
 
 describe("a job's issues in the approval diff", () => {
 	test('a job that starts issuing widens with closer review, and the environment lists it as a deviation', () => {
 		const classification = classifyAccess(snapshot(false), snapshot(true))
 		expect(classification).toEqual({ outcome: 'widening', changes: [{ widens: true, line: LINE, review: 'closer' }] })
-		expect(snapshotDeviations(snapshot(true))).toEqual([LINE])
+		expect(snapshotDeviations(snapshot(true))).toEqual([{ subject: 'Job `invite`', steps: [STEP] }])
 	})
 
 	test('a job that stops issuing narrows', () => {

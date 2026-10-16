@@ -237,7 +237,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		authoring: row.authoring === 1,
 		protected: row.protected === 1,
 		publishedRunId: row.published_run_id,
-		deviations: snapshotDeviations(approvedSnapshot(row).snapshot),
+		deviationSubjects: snapshotDeviations(approvedSnapshot(row).snapshot),
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),

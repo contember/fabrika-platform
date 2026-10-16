@@ -28,6 +28,7 @@ import {
 	type StringShape,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
+import type { DeviationSubjectDto } from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
 import { type AccessSnapshot, deviationKey } from './snapshot'
 
@@ -255,29 +256,34 @@ const NO_REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: 
 
 function reachChanges(site: string, from: DeclaredReach, to: DeclaredReach): AccessChange[] {
 	const name = siteName(site)
-	const changes: AccessChange[] = [...modeChange(name, 'raw SQL', from.sql, to.sql)]
+	return reachSteps(from, to).map((step) => ({ ...step, line: `${name} ${step.line}` }))
+}
+
+/** The changes of one site's declared reach, each line phrased to follow the site's name. */
+function reachSteps(from: DeclaredReach, to: DeclaredReach): AccessChange[] {
+	const changes: AccessChange[] = [...modeChange('raw SQL', from.sql, to.sql)]
 	for (const table of union(Object.keys(from.unscoped), Object.keys(to.unscoped))) {
-		changes.push(...modeChange(name, `table \`${table}\` unscoped`, from.unscoped[table] ?? null, to.unscoped[table] ?? null))
+		changes.push(...modeChange(`table \`${table}\` unscoped`, from.unscoped[table] ?? null, to.unscoped[table] ?? null))
 	}
 	for (const connector of union(from.connect, to.connect)) {
-		if (!from.connect.includes(connector)) changes.push(closerWidening(`${name} calls connector \`${connector}\``))
-		else if (!to.connect.includes(connector)) changes.push(removal(`${name} no longer calls connector \`${connector}\``))
+		if (!from.connect.includes(connector)) changes.push(closerWidening(`calls connector \`${connector}\``))
+		else if (!to.connect.includes(connector)) changes.push(removal(`no longer calls connector \`${connector}\``))
 	}
 	if (from.issues !== to.issues) {
-		if (to.issues !== null) changes.push(closerWidening(`${name} issues share links of mount \`${to.issues}\``))
-		if (from.issues !== null) changes.push(removal(`${name} no longer issues share links of mount \`${from.issues}\``))
+		if (to.issues !== null) changes.push(closerWidening(`issues share links of mount \`${to.issues}\``))
+		if (from.issues !== null) changes.push(removal(`no longer issues share links of mount \`${from.issues}\``))
 	}
-	changes.push(...mailerChange(name, from.mailer, to.mailer))
+	changes.push(...mailerChange(from.mailer, to.mailer))
 	return changes
 }
 
 /** Undeclared reaches no transport, `own` the application's, and `installation` the installation's credentials. */
-function mailerChange(name: string, from: JobMailer | undefined, to: JobMailer | undefined): AccessChange[] {
+function mailerChange(from: JobMailer | undefined, to: JobMailer | undefined): AccessChange[] {
 	if (from === to) return []
-	if (to === undefined) return [removal(`${name} no longer sends e-mail`)]
-	if (to === 'installation') return [closerWidening(`${name} sends e-mail through the installation's mail transport`)]
-	if (from === undefined) return [widening(`${name} sends e-mail through its own transport`)]
-	return [removal(`${name} sends e-mail through its own transport, no longer the installation's`)]
+	if (to === undefined) return [removal('no longer sends e-mail')]
+	if (to === 'installation') return [closerWidening("sends e-mail through the installation's mail transport")]
+	if (from === undefined) return [widening('sends e-mail through its own transport')]
+	return [removal("sends e-mail through its own transport, no longer the installation's")]
 }
 
 /** A kick starts a job the contract already schedules, so it widens nothing, like a form's `then`. */
@@ -291,19 +297,15 @@ function endpointKickChange(site: string, before: string | undefined, after: str
 }
 
 /** `null` is undeclared; `write` reaches more than `read`. */
-function modeChange(name: string, reach: string, from: 'read' | 'write' | null, to: 'read' | 'write' | null): AccessChange[] {
+function modeChange(reach: string, from: 'read' | 'write' | null, to: 'read' | 'write' | null): AccessChange[] {
 	if (from === to) return []
-	if (to === null) return [removal(`${name} no longer declares ${reach}`)]
-	if (from === null) return [closerWidening(declaredLine(name, reach, to))]
+	if (to === null) return [removal(`no longer declares ${reach}`)]
+	if (from === null) return [closerWidening(`declares ${reach} (\`${to}\`)`)]
 	return [
 		to === 'write'
-			? closerWidening(`${name} ${reach} changes from \`read\` to \`write\``)
-			: removal(`${name} ${reach} changes from \`write\` to \`read\``),
+			? closerWidening(`${reach} changes from \`read\` to \`write\``)
+			: removal(`${reach} changes from \`write\` to \`read\``),
 	]
-}
-
-function declaredLine(name: string, reach: string, mode: 'read' | 'write'): string {
-	return `${name} declares ${reach} (\`${mode}\`)`
 }
 
 function siteName(site: string): string {
@@ -323,16 +325,16 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 		const from = before.get(key)
 		const to = after.get(key)
 		if (to === undefined) {
-			if (from !== undefined) changes.add(removal(`Migration \`${from.file}\` no longer declares ${databaseObject(from)}`))
-		} else if (from === undefined) changes.add(closerWidening(databaseCodeLine(to)))
+			if (from !== undefined) changes.add(removal(`${migrationName(from.file)} no longer declares ${databaseObject(from)}`))
+		} else if (from === undefined) changes.add(closerWidening(`${migrationName(to.file)} declares ${databaseObject(to)}`))
 		else if (beforeFiles.get(to.file)?.checksum !== afterFiles.get(to.file)?.checksum) {
-			changes.add(closerWidening(`Migration \`${to.file}\` changes, and declares ${databaseObject(to)}`))
+			changes.add(closerWidening(`${migrationName(to.file)} changes, and declares ${databaseObject(to)}`))
 		}
 	}
 }
 
-function databaseCodeLine(deviation: MigrationDeviation): string {
-	return `Migration \`${deviation.file}\` declares ${databaseObject(deviation)}`
+function migrationName(file: string): string {
+	return `Migration \`${file}\``
 }
 
 function databaseObject(deviation: MigrationDeviation): string {
@@ -342,15 +344,23 @@ function databaseObject(deviation: MigrationDeviation): string {
 }
 
 /**
- * Every step off the paved road a snapshot holds, one line each: the reach its sites declare and the database code its
- * migrations declare. Each needs closer review; the environment page lists them for the published snapshot.
+ * Every step off the paved road a snapshot holds, grouped by the site or migration that takes it: the reach its sites
+ * declare and the database code its migrations declare. The environment page lists them for the published snapshot.
  */
-export function snapshotDeviations(snapshot: AccessSnapshot): string[] {
+export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDto[] {
 	const sites = Object.entries(snapshot.contract?.declared ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-	return [
-		...sites.flatMap(([site, reach]) => reachChanges(site, NO_REACH, reach).map((change) => change.line)),
-		...(snapshot.databaseCode ?? []).map(databaseCodeLine),
-	]
+	const declared = sites.map(([site, reach]) => ({
+		subject: siteName(site),
+		steps: reachSteps(NO_REACH, reach).map((change) => change.line),
+	}))
+	const migrations = new Map<string, string[]>()
+	for (const deviation of snapshot.databaseCode ?? []) {
+		const steps = migrations.get(deviation.file) ?? []
+		steps.push(`declares ${databaseObject(deviation)}`)
+		migrations.set(deviation.file, steps)
+	}
+	const databaseCode = [...migrations].map(([file, steps]) => ({ subject: migrationName(file), steps }))
+	return [...declared, ...databaseCode].filter((subject) => subject.steps.length > 0)
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────────────────────────────────

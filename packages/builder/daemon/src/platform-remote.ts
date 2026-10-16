@@ -35,7 +35,7 @@ const environmentsSchema = z.object({
 		protected: z.boolean(),
 		publishedRunId: storedTextSchema.nullable(),
 		// A Control older than the field lists none.
-		deviations: z.array(storedTextSchema).default([]),
+		deviationSubjects: z.array(z.object({ subject: storedTextSchema, steps: z.array(storedTextSchema) })).default([]),
 		namespaceId: storedTextSchema.nullable(),
 		provider: storedTextSchema,
 		target: envelopeSchema,

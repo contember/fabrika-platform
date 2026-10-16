@@ -218,15 +218,23 @@ export interface AppEnvDto {
 	/** The run whose snapshot is this environment's active access; null until a run publishes one. */
 	publishedRunId: string | null
 	/**
-	 * The published snapshot's steps off the paved road, one line each: the reach its sites declare and the database code
-	 * its migrations declare. Each needs closer review; listed whether or not the environment is protected.
+	 * The published snapshot's steps off the paved road, grouped by the site or migration that takes them: the reach its
+	 * sites declare and the database code its migrations declare. Listed whether or not the environment is protected.
 	 */
-	deviations: string[]
+	deviationSubjects: DeviationSubjectDto[]
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto
 	artifact: ProviderEnvelopeDto
 	createdAt: number
+}
+
+/** One endpoint, job or migration of a published snapshot and its steps off the paved road. */
+export interface DeviationSubjectDto {
+	/** `Endpoint \`id\``, `Job \`name\`` or `Migration \`file\``. */
+	subject: string
+	/** Each step, phrased to follow the subject: `declares raw SQL (\`read\`)`. */
+	steps: string[]
 }
 
 export interface PutAppEnvRequest {

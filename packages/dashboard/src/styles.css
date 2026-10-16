@@ -2552,3 +2552,28 @@ td.numeric {
 	display: grid;
 	gap: 0.35rem;
 }
+
+/* An environment's published steps off the paved road (app detail): a summary line that opens on the list. */
+.deviations {
+	margin-top: var(--s-3);
+}
+
+.deviations summary {
+	cursor: pointer;
+}
+
+.deviations summary > * + * {
+	margin-left: var(--s-2);
+}
+
+.deviation-subjects {
+	margin: var(--s-2) 0 0;
+	padding-left: 1.25rem;
+	display: grid;
+	gap: var(--s-2);
+}
+
+.deviation-subjects .change-list {
+	margin-top: var(--s-1);
+	color: var(--ink-2);
+}

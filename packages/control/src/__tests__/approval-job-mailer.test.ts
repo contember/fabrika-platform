@@ -34,12 +34,14 @@ describe("a job's mailer in the approval diff", () => {
 			outcome: 'widening',
 			changes: [{ widens: true, line: INSTALLATION, review: 'closer' }],
 		})
-		expect(snapshotDeviations(snapshot('installation'))).toEqual([INSTALLATION])
+		expect(snapshotDeviations(snapshot('installation'))).toEqual([
+			{ subject: 'Job `digest`', steps: ["sends e-mail through the installation's mail transport"] },
+		])
 	})
 
 	test('a job that starts sending through its own transport widens', () => {
 		expect(classifyAccess(snapshot(undefined), snapshot('own'))).toEqual({ outcome: 'widening', changes: [{ widens: true, line: OWN }] })
-		expect(snapshotDeviations(snapshot('own'))).toEqual([OWN])
+		expect(snapshotDeviations(snapshot('own'))).toEqual([{ subject: 'Job `digest`', steps: ['sends e-mail through its own transport'] }])
 	})
 
 	test("moving from the installation's transport to its own, or dropping mail, narrows", () => {

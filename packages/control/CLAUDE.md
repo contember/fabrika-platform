@@ -435,7 +435,8 @@ other environment, before the provider prepares anything, and the write maps a r
   that leaves the staged kit widen with `review: 'closer'`; removals narrow. `databaseCode` is absent when empty and
   the digest appends it only when present, so stored digests stay valid. A refused statement in a file the environment
   has not published unchanged fails the read (`migrations-refused`, a count, never the statement), as the runner
-  refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviations` lists the published snapshot's.
+  refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviationSubjects` lists the published
+  snapshot's, grouped by site and migration.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the
