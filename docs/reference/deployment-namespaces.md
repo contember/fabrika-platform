@@ -99,6 +99,20 @@ the existing value, while explicit `null` clears it. Control projects the value
 to Operations, where active HTTP checks use it as their origin. A missing origin
 leaves active health unavailable rather than inventing an endpoint.
 
+An environment also lists the origins whose pages may call its cross-origin
+endpoints (ADR-0022 "Cross-origin endpoints"), kept in `app_envs.cross_origins_json`
+beside its domain. An operator sets them with a repeated `--cross-origin=<origin>` on
+`fabrika control register` and `fabrika control apps environments put`
+(`crossOrigins` on the RPC). Each is an exact origin with a literal host, listed once,
+never the environment's own domain, at most 16; Control refuses anything else with a
+400 naming the origin, judged by `@fabrika/proxy-core/headers` `isCrossOrigin`. Unlike
+`domain`, a PUT that omits the list keeps it, and an empty list (`--cross-origin=`
+alone) clears it. Control hands the list to the provider (`ProviderEnvironment` and
+`ProviderNamespaceMember.crossOrigins`), which writes it into the application's proxy
+manifest entry as `crossOrigins`, omitted when empty. A change republishes the
+namespace proxy at once, like a changed domain; on Cloudflare, where there is no
+namespace proxy, the next deploy of the environment builds the proxy Worker with it.
+
 Deployment then adds control-owned managed environment values independently of
 the namespace and provider artifact. Providers reject an app-authored
 `FABRIKA_OPERATIONS_DSN` or `FABRIKA_RELEASE`, inject current values at their

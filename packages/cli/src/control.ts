@@ -13,6 +13,7 @@ import { createRpcClient, type InferRpcClient, RpcError } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import type {
 	AppDto,
+	AppEnvDto,
 	AppSecretDto,
 	ControlRpcContract,
 	DeploymentNamespaceDetailDto,
@@ -55,6 +56,7 @@ Usage:
   fabrika control apps environments list --app=<id>
   fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
+                           [--cross-origin=<origin> ...]
   fabrika control apps variables list --app=<id>
   fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>]
   fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
@@ -63,7 +65,7 @@ Usage:
   fabrika control apps secrets delete --app=<id> --name=<name> [--env=<name>]
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
-                           [--namespace=<id>] [--installation-id=<n|none>]
+                           [--namespace=<id>] [--installation-id=<n|none>] [--cross-origin=<origin> ...]
   fabrika control namespaces list
   fabrika control namespaces get     --namespace=<id>
   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
@@ -96,6 +98,13 @@ storage only. Generate one in the pipe:
 \`--public-origin\` is where IAM may return a signed-in person: without one, sign-in to the environment is
 refused. When \`register\` is given none and the namespace lists \`--domain\` among its hosts, it sets
 \`https://<domain>\` and says so on stderr. A custom domain needs the flag.
+
+\`--cross-origin\` names an origin whose pages may call the environment's cross-origin endpoints (ADR-0022), and
+repeats: the flags given are the environment's whole list. Each is an exact origin with a literal host
+(\`https://app.example.com\`; \`http://\` only for a local one), never the environment's own domain, at most 16.
+\`apps environments put\` without the flag keeps the stored list, and a lone empty \`--cross-origin=\` clears it.
+On Zerops the change reaches the namespace proxy at once; on Cloudflare the next deploy of the environment
+applies it.
 
 \`--installation-id\` has three states: omitted resolves the installation from the organization's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
@@ -162,6 +171,8 @@ const DEFAULT_CONTROL_APP_ID = 'vozka'
 
 interface Flags {
 	readonly values: ReadonlyMap<string, string>
+	/** Every value of every option, in order; `values` keeps the last. Only a repeatable option reads it. */
+	readonly repeated: ReadonlyMap<string, readonly string[]>
 	readonly json: boolean
 	readonly positional: readonly string[]
 }
@@ -169,6 +180,7 @@ interface Flags {
 /** Split `--key=value` options from positional words; `--json` is the one flag every verb shares. */
 export const parseControlFlags = (argv: readonly string[]): Flags => {
 	const values = new Map<string, string>()
+	const repeated = new Map<string, string[]>()
 	const positional: string[] = []
 	let json = false
 	for (const arg of argv) {
@@ -179,12 +191,15 @@ export const parseControlFlags = (argv: readonly string[]): Flags => {
 			if (eq === -1) {
 				throw new Error(`Option ${arg} needs a value: ${arg}=<value>`)
 			}
-			values.set(arg.slice(2, eq), arg.slice(eq + 1))
+			const name = arg.slice(2, eq)
+			const value = arg.slice(eq + 1)
+			values.set(name, value)
+			repeated.set(name, [...(repeated.get(name) ?? []), value])
 		} else {
 			positional.push(arg)
 		}
 	}
-	return { values, json, positional }
+	return { values, repeated, json, positional }
 }
 
 const required = (flags: Flags, name: string): string => {
@@ -198,6 +213,20 @@ const required = (flags: Flags, name: string): string => {
 const optional = (flags: Flags, name: string): string | undefined => {
 	const value = flags.values.get(name)
 	return value === undefined || value === '' ? undefined : value
+}
+
+/**
+ * `--cross-origin=<origin>`, repeatable: the environment's whole list. Omitted keeps the stored list on
+ * `apps environments put`; a lone empty `--cross-origin=` sends an empty list, which clears it.
+ */
+const crossOrigins = (flags: Flags): string[] | undefined => {
+	const given = flags.repeated.get('cross-origin')
+	if (given === undefined) return undefined
+	if (given.length === 1 && given[0] === '') return []
+	if (given.includes('')) {
+		throw new Error('An empty --cross-origin= clears the list and takes no other --cross-origin')
+	}
+	return [...given]
 }
 
 const positiveInteger = (raw: string, name: string): number => {
@@ -386,6 +415,7 @@ const registrationInputs = (flags: Flags): RegistrationInputs => {
 	const anonymousSource = installationId === 'none'
 	const domain = optional(flags, 'domain')
 	const publicOrigin = optional(flags, 'public-origin')
+	const origins = crossOrigins(flags)
 	const triggerRef = optional(flags, 'trigger-ref')
 	const namespaceId = optional(flags, 'namespace')
 	return {
@@ -400,6 +430,7 @@ const registrationInputs = (flags: Flags): RegistrationInputs => {
 			: { githubInstallationId: positiveInteger(installationId, 'installation-id') }),
 		...(domain === undefined ? {} : { domain }),
 		...(publicOrigin === undefined ? {} : { publicOrigin }),
+		...(origins === undefined ? {} : { crossOrigins: origins }),
 		...(triggerRef === undefined ? {} : { triggerRef }),
 		...(namespaceId === undefined ? {} : { namespaceId }),
 	}
@@ -531,7 +562,7 @@ const runEnvironments = async (
 	if (verb === 'list') {
 		const appId = required(flags, 'app')
 		const result = await client.apps.environments.list({ appId })
-		emitList(flags, result, (item) => `${item.appId}\t${item.env}\t${item.provider}\t${item.domain ?? '-'}`, `app ${appId} has no environments`)
+		emitList(flags, result, environmentLine, `app ${appId} has no environments`)
 		return
 	}
 	if (verb === 'put') {
@@ -543,6 +574,7 @@ const runEnvironments = async (
 		const version = manifestVersion(manifest, manifestPath)
 		const domain = optional(flags, 'domain')
 		const publicOrigin = optional(flags, 'public-origin')
+		const origins = crossOrigins(flags)
 		const triggerRef = optional(flags, 'trigger-ref')
 		const namespaceId = optional(flags, 'namespace')
 		const environment: PutAppEnvRequest = {
@@ -551,6 +583,7 @@ const runEnvironments = async (
 			artifact: { provider, version, payload: manifest },
 			...(domain === undefined ? {} : { domain }),
 			...(publicOrigin === undefined ? {} : { publicOrigin }),
+			...(origins === undefined ? {} : { crossOrigins: origins }),
 			...(triggerRef === undefined ? {} : { triggerRef }),
 			...(namespaceId === undefined ? {} : { namespaceId }),
 		}
@@ -560,6 +593,12 @@ const runEnvironments = async (
 	}
 	throw new Error(`Unknown \`control apps environments\` verb: ${verb ?? '(missing)'}`)
 }
+
+/** One environment per line; the cross origins are comma-joined, `-` when it lists none (a Control older than the field included). */
+export const environmentLine = (item: Pick<AppEnvDto, 'appId' | 'env' | 'provider' | 'domain'> & Partial<Pick<AppEnvDto, 'crossOrigins'>>): string =>
+	`${item.appId}\t${item.env}\t${item.provider}\t${item.domain ?? '-'}\t${
+		item.crossOrigins === undefined || item.crossOrigins.length === 0 ? '-' : item.crossOrigins.join(',')
+	}`
 
 /**
  * A variable is NOT a secret: its value is stored and read back in clear, so it takes a flag. The one

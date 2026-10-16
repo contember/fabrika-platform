@@ -48,6 +48,10 @@ label the envelope a registration carries.
 - `register` CREATES; a changed manifest goes through `apps environments put`,
   which replaces one environment's envelopes and clears every placement field
   left out. Both are one procedure of the contract, so neither invents a merge.
+- `--cross-origin=<origin>` is the one REPEATABLE option (`Flags.repeated`; every other option keeps its last value):
+  the flags given are the environment's whole cross-origin list on `register` and `apps environments put`. Unlike the
+  placement flags, `put` without it keeps the stored list, and a lone empty `--cross-origin=` clears it; an empty one
+  beside another is refused. Every option takes `=<value>`, which is why clearing is the empty value, not a `--no-` flag.
 - `app register` compiles the manifest in memory and sends the create-only request `register`
   builds (`registerCompiledManifest` in `src/control.ts`). The router loads the app code in the `app`
   area — provider inference included — and hands over only the provider and the compiled text; the

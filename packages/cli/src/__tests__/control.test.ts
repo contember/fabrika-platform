@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CONTROL_USAGE, parseControlFlags, runControlCli, type SecretValueInput } from '../control.js'
+import { CONTROL_USAGE, environmentLine, parseControlFlags, runControlCli, type SecretValueInput } from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 
@@ -68,6 +68,12 @@ describe('control flag parsing', () => {
 		expect(flags.positional).toEqual(['list'])
 		expect(flags.values.get('app')).toBe('notes')
 		expect(flags.json).toBe(true)
+	})
+
+	test('keeps every value of a repeated option, in order, and the last as its single value', () => {
+		const flags = parseControlFlags(['--cross-origin=https://a.example', '--cross-origin=https://b.example'])
+		expect(flags.repeated.get('cross-origin')).toEqual(['https://a.example', 'https://b.example'])
+		expect(flags.values.get('cross-origin')).toBe('https://b.example')
 	})
 
 	test('refuses an option with no value rather than guessing one', () => {
@@ -249,6 +255,21 @@ describe('control register public origin', () => {
 		expect(stderr).toContain('sign-in cannot return to notes/prod until `apps environments put` sets --public-origin')
 	})
 
+	test('register carries every --cross-origin', async () => {
+		const bodies = routeFetch(NAMESPACE)
+		await captureStderr(async () => {
+			await captureStdout(() =>
+				runControlCli(
+					'register',
+					registerArgs(['--domain=proxy-8082.prg1.zerops.app', '--cross-origin=https://a.example', '--cross-origin=https://b.example']),
+					'zerops',
+					CONTROL_ENV,
+				)
+			)
+		})
+		expect(bodies[1]).toMatchObject({ method: 'register', input: { crossOrigins: ['https://a.example', 'https://b.example'] } })
+	})
+
 	test('keeps an explicit --public-origin and asks nothing', async () => {
 		const bodies = routeFetch(NAMESPACE)
 		await captureStdout(() =>
@@ -397,6 +418,40 @@ describe('control apps environments', () => {
 				},
 			},
 		})
+	})
+
+	test('a repeated --cross-origin is the whole list, a lone empty one clears it, and none keeps the stored list', async () => {
+		const manifest = `${import.meta.dir}/fixtures/manifest.json`
+		const put = async (extra: string[]) => {
+			const captured = captureFetch({ result: { appId: 'notes', env: 'prod', provider: 'zerops' } })
+			await captureStdout(() =>
+				runControlCli('apps', ['environments', 'put', '--app=notes', '--env=prod', `--manifest=${manifest}`, ...extra], 'zerops', CONTROL_ENV)
+			)
+			const body = captured.calls[0]?.body
+			return typeof body === 'object' && body !== null && 'input' in body ? body.input : null
+		}
+		expect(await put(['--cross-origin=https://partner.example.org', '--cross-origin=http://localhost:5173'])).toMatchObject({
+			environment: { crossOrigins: ['https://partner.example.org', 'http://localhost:5173'] },
+		})
+		expect(await put(['--cross-origin='])).toMatchObject({ environment: { crossOrigins: [] } })
+		expect(JSON.stringify(await put([]))).not.toContain('crossOrigins')
+		await expect(
+			runControlCli(
+				'apps',
+				['environments', 'put', '--app=notes', '--env=prod', `--manifest=${manifest}`, '--cross-origin=', '--cross-origin=https://a.example'],
+				'zerops',
+				CONTROL_ENV,
+			),
+		).rejects.toThrow('An empty --cross-origin= clears the list and takes no other --cross-origin')
+	})
+
+	test('list prints the cross origins of each environment, comma-joined, and - for none', () => {
+		const base = { appId: 'notes', env: 'prod', provider: 'zerops', domain: 'notes.example.com' }
+		expect(environmentLine({ ...base, crossOrigins: ['https://a.example', 'https://b.example'] })).toBe(
+			'notes\tprod\tzerops\tnotes.example.com\thttps://a.example,https://b.example',
+		)
+		expect(environmentLine({ ...base, domain: null, crossOrigins: [] })).toBe('notes\tprod\tzerops\t-\t-')
+		expect(environmentLine(base)).toBe('notes\tprod\tzerops\tnotes.example.com\t-')
 	})
 
 	test('list reaches the nested procedure and put still refuses to invent the provider', async () => {
