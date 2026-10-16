@@ -144,6 +144,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   one app was spendable installation-wide. A principal-bound credential may be cross-app (`NULL`) —
   it carries no frozen authority and its permissions resolve per app through `grants`. An app
   mismatch is reported as `invalid_key`, never as a distinct reason.
+- **AN API KEY'S PERMISSIONS ARE ITS SERVICE PRINCIPAL'S GRANTS, RESOLVED AT EVERY EXCHANGE.** Both provisioning paths
+  (`apiKeys.provision`, `issueKey`'s service mode) write the principal, one grant and a credential with no inline grants,
+  so `resolveCredential` reads the grants live. Editing a key is `grants.create`/`grants.delete` on its principal, an
+  installation administrator's only (`requireGrantablePrincipal`), under the rules provisioning applies; the secret
+  stays. A token minted before the change keeps its `perms` until it expires (`DEFAULT_TOKEN_TTL_SECONDS`, the
+  proxy's cache included). A grant at an app other than the credential's binding never reaches the key's token.
 - **EVERY KEY `issueKey` WRITES EXPIRES, AT MOST 30 DAYS OUT** (`MAX_KEY_LIFETIME_SECONDS`,
   `@fabrika/auth-core`), in all three modes — service, standalone, self-bound. A self-bound key
   carries the issuer's live permissions, so without a bound a 300-second access token could mint a
@@ -175,8 +181,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   with its declared actions app-wide (never more than its token carries), and revokes only links it issued of that
   mount. Without the declaration, for another mount, another app, and for every webhook or connector token, the answer
   is a refusal. `createLinkCredential` inserts a job's link only while the job's whole checked declaration still holds. An
-  issuing job is app-wide for its mount: the link is bound to one object, the job is not. `apiKeys.list`, `rotate` and
-  `revoke` do not see workload principals.
+  issuing job is app-wide for its mount: the link is bound to one object, the job is not. `apiKeys.list`, `get`,
+  `rotate` and `revoke` do not see workload principals.
 - **AN APPLICATION WITHOUT A BINDING CALLS `/membership/<method>`, AND ITS KEY ONLY PINS THE APPLICATION** (ADR-0022
   rule 6, `src/membership-http.ts`, mounted by the Bun composition only). The bearer is the environment's membership
   transport key (`membership_transport_keys`, hash only, no `credentials` row, so no `px_` path finds it and it mints
@@ -296,7 +302,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   `appPeople`). The procedures in `USER_ADMINISTRATION` (`__tests__/helpers/admin-router.ts`) carry no `.require`;
   `context` refuses a caller without an administration. For a `users` caller: a grant write (`grants.create`,
   `grants.delete`) only at a registered app that is not a platform audience and is in its scope, never cross-app
-  (`requireManagedApp`), and with no "holds what it grants" rule, because nothing granted there reaches the
+  (`requireManagedApp`), never on a service principal, whose grants are an API key's (`requireGrantablePrincipal`),
+  and with no "holds what it grants" rule, because nothing granted there reaches the
   installation; an action on a principal (`principals.update`, `sessions.*`, `passwords.*`) only when every active
   grant of that principal is one it could have written, and never on a service or a bootstrap mailbox
   (`requireActableTarget`). Without an email sender it receives a manual password URL only for the enrollment of a

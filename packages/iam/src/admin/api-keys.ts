@@ -1,7 +1,9 @@
 import { API_KEY_PREFIX } from '@fabrika/auth-core'
 
 import {
+	type ApiKeyDetail,
 	type ApiKeyDto,
+	type ApiKeyIdInput,
 	type CursorList,
 	type ListApiKeysInput,
 	type OkResponse,
@@ -13,7 +15,7 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
 import { contractGrantProblem } from '../contract-rules'
-import { principalStatus } from '../db'
+import { type GrantRow, type PrincipalRow, principalStatus } from '../db'
 import { generateToken, hashToken } from '../secret'
 import { type AdminContext, adminEvent, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
@@ -36,15 +38,33 @@ export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInpu
 	const cache = new RoleKnownCache(c.services)
 	const items: ApiKeyDto[] = []
 	for (const principal of principals) {
-		items.push({
-			principalId: principal.id,
-			label: principal.label,
-			status: principalStatus(principal),
-			grants: await toGrantDtos(grants.get(principal.id) ?? [], c.services, cache),
-			createdAt: principal.created_at,
-		})
+		items.push(await toApiKeyDto(c, principal, grants.get(principal.id) ?? [], cache))
 	}
 	return { items, nextCursor: cursorOf(items, limit, (item) => item.principalId) }
+}
+
+/** One key with its grants and its live credential, for the console's key page. A workload's key is not an API key. */
+export async function getApiKeyUseCase(c: AdminContext, input: ApiKeyIdInput): Promise<ApiKeyDetail> {
+	const { principalId } = input
+	const { principals, grants, credentials } = c.services.repositories
+	const principal = await principals.getPrincipalById(principalId)
+	if (principal?.type !== 'service' || (await grants.isWorkloadPrincipal(principalId))) {
+		return fail(404, 'service principal not found')
+	}
+	// `listCredentialsForPrincipal` is newest-first and rotation revokes every older key, so this is the live one.
+	const live = (await credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)
+	const dto = await toApiKeyDto(c, principal, await grants.listGrants(principalId), new RoleKnownCache(c.services))
+	return { ...dto, credential: live === undefined ? null : { app: live.app, expiresAt: live.expires_at } }
+}
+
+async function toApiKeyDto(c: AdminContext, principal: PrincipalRow, grants: GrantRow[], cache: RoleKnownCache): Promise<ApiKeyDto> {
+	return {
+		principalId: principal.id,
+		label: principal.label,
+		status: principalStatus(principal),
+		grants: await toGrantDtos(grants, c.services, cache),
+		createdAt: principal.created_at,
+	}
 }
 
 export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyRequest): Promise<ProvisionApiKeyResponse> {

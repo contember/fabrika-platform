@@ -229,6 +229,21 @@ export interface ApiKeyDto {
 	createdAt: number
 }
 
+/**
+ * One API key with its live credential. Its permissions are its grants, edited with `grants.create` and
+ * `grants.delete` by an installation administrator and read again at every token exchange.
+ */
+export interface ApiKeyDetail extends ApiKeyDto {
+	/** The key's live credential, or null when none is live (a revoked key). */
+	credential: ApiKeyCredentialDto | null
+}
+
+export interface ApiKeyCredentialDto {
+	/** The app the key mints tokens for; null = every app. A grant at another app never reaches the key's token. */
+	app: string | null
+	expiresAt: number | null
+}
+
 export interface ProvisionApiKeyRequest {
 	label: string
 	type: 'service'
@@ -641,6 +656,7 @@ export interface IamAdminRpcContract {
 	}
 	apiKeys: {
 		list: RpcProcedure<ListApiKeysInput, CursorList<ApiKeyDto>>
+		get: RpcProcedure<ApiKeyIdInput, ApiKeyDetail>
 		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
 		rotate: RpcProcedure<RotateApiKeyInput, RotateApiKeyResponse>
 		revoke: RpcProcedure<ApiKeyIdInput, OkResponse>

@@ -102,7 +102,7 @@ administrators admits a caller that holds `iam.admin` globally, or holds `iam.us
 | `principals.list`, `get`, `invite`, `update`                         | `apps.setReturnOrigins`                         |
 | `sessions.list`, `revoke`, `revokeAll`                               | `policies.create`, `update`, `delete`           |
 | `passwords.issueEnrollment`, `issueReset`, `disable`                 | `apiKeys.*`, `workloads.*`, `membershipKeys.*`  |
-| `grants.create`, `delete`                                            | `shareLinks.*`                                  |
+| `grants.create`, `delete` of a person                                | `shareLinks.*`, a grant of an API key           |
 | `apps.list`, `apps.getSchema`, `roles.list`, `policies.list` (reads) | `audit.*`, and the closed `/admin/*` REST paths |
 
 The rules below apply only to a caller without `iam.admin`.
@@ -129,7 +129,9 @@ The caller is refused:
 
 - a cross-app grant (`app: null`);
 - any grant at `propustka`, `vozka`, `operations` or another platform audience;
-- deleting a grant there.
+- deleting a grant there;
+- creating or deleting a grant of a service principal. An API key's permissions are its principal's grants, so such a
+  write edits the key, and keys stay `iam.admin`'s with the rest of `apiKeys.*`.
 
 So a user administrator cannot make another user administrator; that stays with `iam.admin`.
 

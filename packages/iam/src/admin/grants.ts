@@ -3,7 +3,7 @@ import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
 import { ExternalGrantError, type GrantRow } from '../db'
 import { type AdminContext, adminEvent, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
-import { requireManagedApp } from './user-admin'
+import { requireGrantablePrincipal, requireManagedApp } from './user-admin'
 
 export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantDto> {
 	const principalId = input.principalId
@@ -34,6 +34,7 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
+	requireGrantablePrincipal(c, principal)
 	const external = await externalGrantProblem(c.services.repositories.appSchema, principal, app, roleOrInline)
 	if (external !== null) {
 		return fail(409, external)
@@ -83,6 +84,11 @@ export async function deleteGrantUseCase(c: AdminContext, input: { id: string })
 		return fail(404, 'grant not found')
 	}
 	requireManagedApp(c, grant.app)
+	const principal = await c.services.repositories.principals.getPrincipalById(grant.principal_id)
+	if (!principal) {
+		return fail(404, 'grant not found')
+	}
+	requireGrantablePrincipal(c, principal)
 	await c.services.repositories.grants.deleteGrant(
 		id,
 		adminEvent(c, {

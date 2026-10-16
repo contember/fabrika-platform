@@ -194,3 +194,70 @@ describe('rotate / revoke invalidate the native key', () => {
 		expect((await resolveKey(h, body.apiKey)).failed).toBe('invalid_key')
 	})
 })
+
+/** One `/admin/rpc` call: its status and its `result`, or its `error` when it failed. */
+async function adminRpc(h: Harness, bearer: string, method: string, input: unknown): Promise<{ status: number; result: unknown }> {
+	const response = await createIamApp().fetch(
+		new Request(`${ORIGIN}/admin/rpc`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+			body: JSON.stringify({ method, input }),
+		}),
+		env(h),
+		exec,
+	)
+	const body: unknown = await response.json()
+	return { status: response.status, result: prop(body, 'result') ?? prop(body, 'error') }
+}
+
+describe("an issued key's grants are edited in place", () => {
+	test('a grant added or removed changes what the SAME key resolves to at its next exchange, and each change is recorded', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const key = await provision(h, token)
+		seedAppAction(h.sqlite, 'opice', 'secret.manage')
+		const [original] = await h.repositories.grants.listGrants(key.principalId)
+		if (original === undefined) throw new Error('provisioning wrote no grant')
+
+		const added = await adminRpc(h, token, 'grants.create', { principalId: key.principalId, app: 'opice', permissions: ['secret.manage'] })
+		expect(added.status).toBe(200)
+		const addedId = prop(added.result, 'id')
+		const widened = (await resolveKey(h, key.apiKey)).claims?.perms ?? []
+		expect(permits(widened, 'secret.manage')).toBe(true)
+		expect(permits(widened, 'report.write')).toBe(true)
+
+		const detail = await adminRpc(h, token, 'apiKeys.get', { principalId: key.principalId })
+		expect(detail.status).toBe(200)
+		expect(prop(detail.result, 'credential')).toEqual({ app: 'opice', expiresAt: null })
+		const grants = prop(detail.result, 'grants')
+		expect(Array.isArray(grants) ? grants.map((grant: unknown) => prop(grant, 'id')).sort() : null).toEqual([original.id, addedId].sort())
+
+		expect((await adminRpc(h, token, 'grants.delete', { id: original.id })).status).toBe(200)
+		const narrowed = (await resolveKey(h, key.apiKey)).claims?.perms ?? []
+		expect(permits(narrowed, 'report.write')).toBe(false)
+		expect(permits(narrowed, 'secret.manage')).toBe(true)
+
+		const changes = await h.repositories.audit.listAuditEvents({ resourceType: 'grant', limit: 10 })
+		const recorded = changes.map((event) => [event.action, event.resource_id, prop(JSON.parse(event.metadata ?? 'null'), 'principalId')])
+		expect(recorded).toContainEqual(['iam.grant.create', addedId, key.principalId])
+		expect(recorded).toContainEqual(['iam.grant.revoke', original.id, key.principalId])
+	})
+
+	test('apiKeys.get answers 404 for a user and for an unknown id', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const user = seedUser(h.sqlite, { sub: 'sub-person', email: 'person@example.com' })
+		for (const principalId of [user, 'nobody']) {
+			expect([principalId, (await adminRpc(h, token, 'apiKeys.get', { principalId })).status]).toEqual([principalId, 404])
+		}
+	})
+
+	test('a revoked key has no live credential and no grant', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const key = await provision(h, token)
+		expect((await run(h, req(`/admin/api-keys/${key.principalId}`, 'DELETE', token))).status).toBe(200)
+		const detail = await adminRpc(h, token, 'apiKeys.get', { principalId: key.principalId })
+		expect([prop(detail.result, 'status'), prop(detail.result, 'credential'), prop(detail.result, 'grants')]).toEqual(['disabled', null, []])
+	})
+})

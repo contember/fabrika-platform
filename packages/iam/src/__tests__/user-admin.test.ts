@@ -175,6 +175,21 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 			expect(await i.f.repositories.grants.listGrants(deployer.id)).toHaveLength(1)
 		})
 
+		test("an API key's grants are out of reach at an application it administers: adding and removing one are refused", async () => {
+			const i = await installation(repositories())
+			const admin = await i.userAdmin()
+			const provisioned = await i.f.adminRpc('apiKeys.provision', { label: 'crm-sync', type: 'service', app: CRM, roleKey: 'viewer' })
+			const keyId = prop(prop(await provisioned.json(), 'result'), 'principalId')
+			if (typeof keyId !== 'string') throw new Error('no key provisioned')
+			const [held] = await i.f.repositories.grants.listGrants(keyId)
+			if (held === undefined) throw new Error('no grant')
+
+			const added = await consoleRpc(i.f, admin.id, 'grants.create', { principalId: keyId, app: CRM, permissions: ['crm.write'] })
+			expect([added.status, errorType(added.body)]).toEqual([403, 'forbidden'])
+			expect(await status(consoleRpc(i.f, admin.id, 'grants.delete', { id: held.id }))).toBe(403)
+			expect((await i.f.repositories.grants.listGrants(keyId)).map((grant) => grant.id)).toEqual([held.id])
+		})
+
 		test('a user admin scoped to one application grants and acts only there', async () => {
 			const i = await installation(repositories())
 			const scoped = await i.userAdmin([CRM])

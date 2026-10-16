@@ -38,6 +38,12 @@ export function requireManagedApp(c: AdminContext, app: string | null): void {
 	return fail(403, `'${app}' is outside the applications you administer`)
 }
 
+/** Refuse a user administrator a grant write on a service principal: an API key's grants are edited like the rest of `apiKeys.*`. */
+export function requireGrantablePrincipal(c: AdminContext, principal: Pick<PrincipalRow, 'type'>): void {
+	if (c.administration.kind === 'installation' || principal.type !== 'service') return
+	return fail(403, "an API key's grants are changed only by an installation administrator")
+}
+
 /**
  * Refuse to act on `principal` unless the caller could have made every grant it holds. That keeps an installation
  * administrator, a deployer, a console admin, a bootstrap mailbox and every other user administrator out of reach.

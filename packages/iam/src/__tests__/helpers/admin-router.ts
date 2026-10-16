@@ -114,6 +114,7 @@ const INPUTS: Record<string, unknown> = {
 	'policies.update': { app: 'nowhere', key: 'k', policy: { name: 'n', permissions: ['*'] } },
 	'policies.delete': { app: 'nowhere', key: 'k' },
 	'apiKeys.provision': { label: 'l', type: 'service', permissions: ['*'] },
+	'apiKeys.get': { principalId: 'nobody' },
 	'apiKeys.rotate': { principalId: 'nobody' },
 	'apiKeys.revoke': { principalId: 'nobody' },
 	'workloads.issueKey': { app: 'nowhere@prod', kind: 'job', name: 'nightly', expiresAt: 4_102_444_800, keep: null },

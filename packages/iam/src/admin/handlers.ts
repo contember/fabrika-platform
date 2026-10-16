@@ -1,4 +1,11 @@
-import { listApiKeysUseCase, parseProvisionApiKeyRequest, provisionApiKeyUseCase, revokeApiKeyUseCase, rotateApiKeyUseCase } from './api-keys'
+import {
+	getApiKeyUseCase,
+	listApiKeysUseCase,
+	parseProvisionApiKeyRequest,
+	provisionApiKeyUseCase,
+	revokeApiKeyUseCase,
+	rotateApiKeyUseCase,
+} from './api-keys'
 import { getAppSchemaUseCase, listAppsUseCase, listRolesUseCase, setReturnOriginsUseCase } from './app-schema'
 import { listAuditUseCase, listAuthLogUseCase } from './audit'
 import { type AdminContext } from './context'
@@ -65,6 +72,7 @@ export const adminUseCases = {
 	updatePolicy: updatePolicyUseCase,
 	deletePolicy: deletePolicyUseCase,
 	listApiKeys: listApiKeysUseCase,
+	getApiKey: getApiKeyUseCase,
 	provisionApiKey: provisionApiKeyUseCase,
 	rotateApiKey: rotateApiKeyUseCase,
 	revokeApiKey: revokeApiKeyUseCase,

@@ -125,6 +125,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 		list: t.procedure.input(z.object(pageInput).default({})).require(ADMIN_ACTION).query(({ ctx, input }) =>
 			adminUseCases.listApiKeys(context(ctx), input)
 		),
+		get: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getApiKey(context(ctx), input)),
 		provision: t.procedure
 			.input(z.object({ label: nonEmpty, type: z.literal('service'), ...authorization }))
 			.require(ADMIN_ACTION)

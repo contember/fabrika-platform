@@ -195,6 +195,17 @@ describe('grants at a contract application', () => {
 		expect(result.message).toContain('not the wildcard: *')
 	})
 
+	test('a grant added to a provisioned api key refuses a wildcard, as provisioning does', async () => {
+		const admin = await withContractApp()
+		expect((await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, permissions: ['note.read'] })).status).toBe(200)
+		const [key] = await admin.h.repositories.principals.listPrincipals({ type: 'service', limit: 1 })
+		if (key === undefined) throw new Error('no key principal')
+		const wildcard = await rpc(admin, 'grants.create', { principalId: key.id, app: NOTES, permissions: ['*'] })
+		expect([wildcard.status, wildcard.message]).toEqual([400, expect.stringContaining('not the wildcard: *')])
+		expect((await rpc(admin, 'grants.create', { principalId: key.id, app: NOTES, roleKey: 'admin' })).status).toBe(400)
+		expect((await rpc(admin, 'grants.create', { principalId: key.id, app: NOTES, permissions: ['note.write'] })).status).toBe(200)
+	})
+
 	test('a custom policy refuses a wildcard on create and on update', async () => {
 		const admin = await withContractApp()
 		const created = await rpc(admin, 'policies.create', { app: NOTES, policy: { key: 'p1', name: 'P1', permissions: ['note.*'] } })
