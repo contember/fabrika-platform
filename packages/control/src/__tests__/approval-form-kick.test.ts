@@ -45,7 +45,7 @@ function snapshot(contract: string): AccessSnapshot {
 describe("a form's then in the approval diff", () => {
 	test('a new then is shown and widens nothing', () => {
 		expect(classifyAccess(snapshot(FORM('')), snapshot(FORM(", then: 'welcome'")))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'neutral', line: 'Form `apply` starts job `welcome` after each accepted submission, beside its schedule' }],
 		})
 	})
@@ -55,7 +55,7 @@ describe("a form's then in the approval diff", () => {
 			{ effect: 'neutral', line: 'Form `apply` starts job `digest` after each accepted submission, beside its schedule' },
 		])
 		expect(classifyAccess(snapshot(FORM(", then: 'welcome'")), snapshot(FORM('')))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'neutral', line: 'Form `apply` no longer starts job `welcome` after a submission' }],
 		})
 	})

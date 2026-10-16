@@ -65,7 +65,7 @@ describe('application-wide data in the approval diff', () => {
 			{ effect: 'widens', line: 'Table `candidates` is counted app-wide with `candidates.count`' },
 		])
 		const lost = classifyAccess(snapshot(files), snapshot(narrower))
-		expect(lost.outcome).toBe('removal')
+		expect(lost.outcome).toBe('no-widening')
 		expect(lost.changes).toEqual([
 			{ effect: 'narrows', line: 'Table `candidates` is no longer read app-wide with `candidates.export`' },
 			{ effect: 'narrows', line: 'Table `candidates` is no longer counted app-wide with `candidates.count`' },

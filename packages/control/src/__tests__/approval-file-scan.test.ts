@@ -40,10 +40,10 @@ describe('classifyAccess of a file collection that scans', () => {
 			changes: [{ effect: 'widens', line: 'File collection `attachments` stops scanning uploads for malware' }],
 		})
 		expect(classifyAccess(plain, scanning)).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'File collection `attachments` scans every upload for malware before serving it' }],
 		})
-		expect(classifyAccess(plain, snapshot(withFiles(', scan: false')))).toEqual({ outcome: 'unchanged', changes: [] })
+		expect(classifyAccess(plain, snapshot(withFiles(', scan: false')))).toEqual({ outcome: 'none', changes: [] })
 	})
 
 	test("a new collection's list query is a new endpoint for the collection's read action on its owner", () => {

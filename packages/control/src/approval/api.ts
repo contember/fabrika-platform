@@ -120,12 +120,14 @@ async function requireClassifiedRun(c: ApprovalUseCaseContext, runId: string): P
 }
 
 /**
- * The run's environment's cross-origin list as it stands now, while the run waits for a decision: context for the
- * approver, not part of the change. A decided run gets none, since the list may have changed since and no approval
- * covers it; nor does a run whose environment is gone, since its list is unknown rather than empty.
+ * The run's environment's cross-origin list as it stands now, while the run waits for a decision and one of its lines
+ * opens an endpoint to that list: context for the approver, not part of the change. A decided run gets none, since the
+ * list may have changed since and no approval covers it; nor does a run whose environment is gone, since its list is
+ * unknown rather than empty.
  */
 async function pendingCrossOrigins(c: ApprovalUseCaseContext, run: RunRow): Promise<string[] | undefined> {
-	if (run.status !== 'awaiting_approval') return undefined
+	if (run.status !== 'awaiting_approval' || run.classification_json === null) return undefined
+	if (!parseClassification(run.classification_json).changes.some((change) => change.environmentOrigins === true)) return undefined
 	const appEnv = await c.repositories.registry.getAppEnv(run.app_id, run.env)
 	return appEnv === null ? undefined : appEnvCrossOrigins(appEnv)
 }
@@ -141,6 +143,7 @@ function toApprovalDto(run: RunRow, crossOrigins?: string[]): ApprovalDto {
 			effect: change.effect,
 			line: change.line,
 			...(change.review === undefined ? {} : { review: change.review }),
+			...(change.environmentOrigins === undefined ? {} : { environmentOrigins: change.environmentOrigins }),
 		})),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,

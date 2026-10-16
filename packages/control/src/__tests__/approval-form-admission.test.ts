@@ -51,7 +51,7 @@ describe('script and frame origins in the approval diff', () => {
 
 	test('a removed one narrows', () => {
 		const classification = classifyAccess(snapshot(withCsp(`{ scriptSrc: [${WIDGET}], frameSrc: [${WIDGET}] }`)), snapshot())
-		expect(classification.outcome).toBe('removal')
+		expect(classification.outcome).toBe('no-widening')
 		expect(classification.changes).toEqual([
 			{ effect: 'narrows', line: 'CSP `scriptSrc` no longer allows `https://widgets.example.com`' },
 			{ effect: 'narrows', line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' },
@@ -63,7 +63,7 @@ describe('script and frame origins in the approval diff', () => {
 		const after = snapshot()
 		const classification = classifyAccess(before, after)
 		expect(classification).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'CSP `frameSrc` no longer allows `https://widgets.example.com`' }],
 		})
 		const frames = (contract: AccessSnapshot['contract']) => {
@@ -81,7 +81,7 @@ describe('script and frame origins in the approval diff', () => {
 		const contract = stored.contract
 		if (contract === null) throw new Error('the base has a contract')
 		const older = parseSnapshot(JSON.stringify({ ...stored, contract: { ...contract, csp: { connectSrc: [], imgSrc: [], frameAncestors: [] } } }))
-		expect(classifyAccess(older, stored).outcome).toBe('unchanged')
+		expect(classifyAccess(older, stored).outcome).toBe('none')
 		expect(classifyAccess(older, snapshot(withCsp(`{ frameSrc: [${WIDGET}] }`))).changes).toEqual([
 			{ effect: 'widens', line: 'CSP `frameSrc` allows `https://widgets.example.com`' },
 		])
@@ -109,7 +109,7 @@ describe('style and font origins in the approval diff', () => {
 
 	test('a removed one narrows', () => {
 		const classification = classifyAccess(snapshot(withCsp(`{ styleSrc: [${FONTS_CSS}], fontSrc: [${FONTS}] }`)), snapshot())
-		expect(classification.outcome).toBe('removal')
+		expect(classification.outcome).toBe('no-widening')
 		expect(classification.changes).toEqual([
 			{ effect: 'narrows', line: 'CSP `styleSrc` no longer allows `https://fonts.googleapis.com`' },
 			{ effect: 'narrows', line: 'CSP `fontSrc` no longer allows `https://fonts.gstatic.com`' },

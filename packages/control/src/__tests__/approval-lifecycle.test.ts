@@ -375,11 +375,27 @@ describe('approved access through the run lifecycle', () => {
 		expect(w.republished.at(-1)?.members.map((member) => member.access?.contractDigest)).toEqual([DIGEST])
 	})
 
-	test("a waiting approval shows the environment's cross-origin list as it stands now, which no approval covers", async () => {
+	test("an approval whose lines open no endpoint to the environment's origins carries no cross-origin list", async () => {
 		const w = world()
 		await seed(w)
 		const parked = await deploy(w, 'prod')
+		const approval = await getApprovalUseCase(approvals(w, auth()), parked.runId)
+		expect(approval.changes.some((change) => change.environmentOrigins === true)).toBe(false)
+		expect(approval.crossOrigins).toBeUndefined()
+	})
+
+	test("a waiting approval that opens an endpoint to the environment's origins shows the list as it stands now, which no approval covers", async () => {
+		const w = world()
+		w.contract = edited(
+			"get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),",
+			"get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' }, crossOrigin: true }),",
+		)
+		await seed(w)
+		const parked = await deploy(w, 'prod')
 		const read = () => getApprovalUseCase(approvals(w, auth()), parked.runId)
+		expect((await read()).changes.filter((change) => change.environmentOrigins === true).map((change) => change.line)).toEqual([
+			'New endpoint `api.get` (POST /api/get) for human callers with `notes.read` (on `note`), callable from a page on an origin the environment lists',
+		])
 		expect((await read()).crossOrigins).toEqual([])
 
 		await w.db.registry.upsertAppEnv({
@@ -399,9 +415,9 @@ describe('approved access through the run lifecycle', () => {
 		expect((await read()).crossOrigins).toBeUndefined()
 	})
 
-	test('a run classified before lines carried an effect reads them by what they did: a job start leaves access unchanged', () => {
+	test("a run classified before effects and today's outcome names reads by what it did: a job start leaves access unchanged", () => {
 		const digest = `sha256:${'0'.repeat(64)}`
-		const stored = parseClassification(JSON.stringify({
+		const raw = JSON.stringify({
 			outcome: 'widening',
 			changes: [
 				{ widens: true, line: 'Role `editor` gains `notes.delete`' },
@@ -413,7 +429,11 @@ describe('approved access through the run lifecycle', () => {
 			baselineDigest: digest,
 			baselineRunId: null,
 			protected: true,
-		}))
+		})
+		const stored = parseClassification(raw)
+		expect(stored.outcome).toBe('widening')
+		const legacyOutcome = (outcome: string) => parseClassification(JSON.stringify({ ...JSON.parse(raw), outcome, changes: [] })).outcome
+		expect([legacyOutcome('unchanged'), legacyOutcome('removal')]).toEqual(['none', 'no-widening'])
 		expect(stored.changes).toEqual([
 			{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' },
 			{ effect: 'narrows', line: 'Mount `old` is removed', review: 'closer' },
@@ -497,8 +517,27 @@ describe('approved access through the run lifecycle', () => {
 		const removal = await deploy(w, 'prod')
 		expect(removal.status).toBe('succeeded')
 		const classification = parseClassification((await run(w, removal.runId)).classification_json ?? '')
-		expect(classification.outcome).toBe('removal')
+		expect(classification.outcome).toBe('no-widening')
 		expect(await published(w, 'prod')).toEqual({ runId: removal.runId, generation: 2 })
+	})
+
+	test('a change whose lines leave access unchanged publishes on prod without approval', async () => {
+		const w = world()
+		const PUBLIC = "app: c.spa('/', { dir: 'dist/app', access: { public: true } }),"
+		const ROOT = "app: c.spa('/', { dir: 'dist/app', access: { member: true } }),"
+		w.contract = edited(ROOT, `${PUBLIC}\n\tinterest: c.spa('/interest', { dir: 'dist/interest', access: { public: true } }),`)
+		await seed(w)
+		const first = await deploy(w, 'prod')
+		await approve(w, first.runId)
+		await executeDeploy(deps(w), { runId: first.runId })
+
+		w.contract = edited(ROOT, PUBLIC)
+		const neutral = await deploy(w, 'prod')
+		expect(neutral.status).toBe('succeeded')
+		const classification = parseClassification((await run(w, neutral.runId)).classification_json ?? '')
+		expect(classification.outcome).toBe('no-widening')
+		expect(classification.changes.map((change) => change.effect)).toEqual(['neutral'])
+		expect(await published(w, 'prod')).toEqual({ runId: neutral.runId, generation: 2 })
 	})
 
 	test('the run log carries counts and codes, never a name from the checkout, parked or refused', async () => {

@@ -65,22 +65,6 @@ export default createPage()
 								)}
 						</Field>
 						<Field label="Created">{fmtDate(run.createdAt)}</Field>
-						{approval.crossOrigins !== undefined && (
-							<Field label="Cross-origin pages" wide>
-								{approval.crossOrigins.length === 0
-									? <span className="muted">none listed</span>
-									: approval.crossOrigins.map((origin, index) => (
-										<span key={origin}>
-											{index > 0 && ', '}
-											<code>{origin}</code>
-										</span>
-									))}
-								<p className="hint">
-									The pages on other origins that may call this environment's cross-origin endpoints. An operator sets the list on the environment; a change
-									applies at once and is not part of this approval.
-								</p>
-							</Field>
-						)}
 						{approval.approval !== null && (
 							<Field label="Approved" wide>
 								{approval.approval.label} · {fmtDate(approval.approval.approvedAt)}
@@ -95,6 +79,7 @@ export default createPage()
 						title={section.title}
 						icon={section.icon}
 						{...(section.hint === undefined ? {} : { hint: section.hint })}
+						{...(approval.crossOrigins === undefined ? {} : { crossOrigins: approval.crossOrigins })}
 						changes={changesWith(approval.changes, section.effect)}
 					/>
 				))}
@@ -104,9 +89,18 @@ export default createPage()
 		)
 	})
 
-/** One effect of the change; a line that steps off the paved road is marked for closer review. */
+/**
+ * One effect of the change; a line that steps off the paved road is marked for closer review. A line that opens an
+ * endpoint to the environment's cross-origin list names the list as it stands, when the approval carries it.
+ */
 export function ChangeList(
-	{ title, icon, hint, changes }: { title: string; icon: EffectSection['icon']; hint?: string; changes: readonly AccessChangeDto[] },
+	{ title, icon, hint, crossOrigins, changes }: {
+		title: string
+		icon: EffectSection['icon']
+		hint?: string
+		crossOrigins?: readonly string[]
+		changes: readonly AccessChangeDto[]
+	},
 ) {
 	if (changes.length === 0) return null
 	return (
@@ -120,6 +114,7 @@ export function ChangeList(
 				{changes.map((change) => (
 					<li key={change.line}>
 						{change.line}
+						{change.environmentOrigins === true && crossOrigins !== undefined && <EnvironmentOrigins origins={crossOrigins} />}
 						{change.review === 'closer' && (
 							<>
 								{' '}
@@ -130,6 +125,28 @@ export function ChangeList(
 				))}
 			</ul>
 		</section>
+	)
+}
+
+/**
+ * The environment's cross-origin list beside the line that opens an endpoint to it. The list is the environment's: it
+ * is set there, applies at once and is not part of this approval (ADR-0050).
+ */
+function EnvironmentOrigins({ origins }: { origins: readonly string[] }) {
+	return (
+		<span className="muted small" title="Set on the environment; a change applies at once and is not part of this approval.">
+			{' '}
+			({origins.length === 0 ? 'the environment lists none yet' : (
+				<>
+					the environment lists {origins.map((origin, index) => (
+						<span key={origin}>
+							{index > 0 && ', '}
+							<code>{origin}</code>
+						</span>
+					))}
+				</>
+			)})
+		</span>
 	)
 }
 

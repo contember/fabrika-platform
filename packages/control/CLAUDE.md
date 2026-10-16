@@ -244,7 +244,8 @@ other environment, before the provider prepares anything, and the write maps a r
   `src/api/namespaces.ts`), so a Zerops proxy's header policy admits the same Operations origin the framework
   does. The DSN carries the ingest key; only its origin leaves Control this way.
 - **`app_envs.cross_origins_json` is the environment's cross-origin list (ADR-0022 "Cross-origin endpoints")**, set by
-  an operator beside `domain` and read through `appEnvCrossOrigins` / `crossOriginsField` (`src/db/registry-types.ts`).
+  whoever holds `app.manage` (the builder key included) beside `domain`, applied at once without approval (it grants no
+  authority: its requests are bearer-only), and read through `appEnvCrossOrigins` / `crossOriginsField` (`src/db/registry-types.ts`).
   `assertCrossOrigins` (`src/api/registry/validation.ts`) judges it with proxy-core's `isCrossOrigin` and
   `MAX_CROSS_ORIGINS`, each once, never the environment's own domain, and names the bad origin in its 400 (by position
   when it carries a userinfo). `apps.environments.put` omission KEEPS the stored list and `[]` clears it, so a put of a

@@ -21,12 +21,14 @@ describe('a cross-origin endpoint in the approval diff', () => {
 		expect(classification.changes).toContainEqual({
 			effect: 'widens',
 			line: 'Endpoint `api.get` becomes callable from a page on an origin the environment lists',
+			environmentOrigins: true,
 		})
 	})
 
 	test('closing it again narrows', () => {
 		const classification = classifyAccess(snapshot(edited(GET, OPENED)), snapshot())
 		expect(classification.changes).toContainEqual({ effect: 'narrows', line: 'Endpoint `api.get` is no longer callable from another origin' })
+		expect(classification.changes.some((change) => change.environmentOrigins === true)).toBe(false)
 		expect(classification.outcome).not.toBe('widening')
 	})
 
@@ -36,5 +38,6 @@ describe('a cross-origin endpoint in the approval diff', () => {
 		expect(classification.changes.map((change) => change.line)).toContainEqual(
 			expect.stringMatching(/^New endpoint `api\.peek` .*, callable from a page on an origin the environment lists$/),
 		)
+		expect(classification.changes.find((change) => change.line.startsWith('New endpoint `api.peek`'))?.environmentOrigins).toBe(true)
 	})
 })

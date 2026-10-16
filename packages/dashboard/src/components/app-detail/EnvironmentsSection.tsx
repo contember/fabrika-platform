@@ -138,6 +138,16 @@ function EnvRow(
 				<div className="cell-stack">
 					{env.domain === null ? <span className="muted">no domain</span> : <span>{env.domain}</span>}
 					{env.publicOrigin === null ? <span className="muted small">no public origin</span> : <code className="small">{env.publicOrigin}</code>}
+					{env.crossOrigins.length > 0 && (
+						<span className="muted small" title="Pages on these origins may call the endpoints the contract opens to the environment's list.">
+							cross-origin pages: {env.crossOrigins.map((origin, index) => (
+								<span key={origin}>
+									{index > 0 && ', '}
+									<code>{origin}</code>
+								</span>
+							))}
+						</span>
+					)}
 				</div>
 			</td>
 			<td>{env.triggerRef === null ? <span className="muted">manual-only</span> : <code>{shortRef(env.triggerRef)}</code>}</td>

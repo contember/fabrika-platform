@@ -11,8 +11,8 @@ import {
 	type CrossOriginForm,
 	type DeclaredReach,
 	type DimensionArtifact,
+	endpointDelegation,
 	type EndpointDirectory,
-	type EndpointKind,
 	endpointMembers,
 	type EndpointRequirement,
 	type EndpointRow,
@@ -50,13 +50,18 @@ export interface AccessChange {
 	readonly effect: AccessEffect
 	readonly line: string
 	readonly review?: 'closer'
+	/**
+	 * The line opens an endpoint to the pages on the origins the environment lists (`crossOrigin: 'environment'`). The
+	 * list is the environment's, not the contract's, so the approval page shows it beside this line.
+	 */
+	readonly environmentOrigins?: true
 }
 
 /**
- * `unchanged` and `removal` publish at once; `widening` waits for a human on a protected environment. `removal` is
- * every change without a widening line, neutral lines included; the stored name stays for the runs that carry it.
+ * `none`: no line at all. `no-widening`: lines, none of which widens (they narrow or leave access unchanged). Both
+ * publish at once; `widening` waits for a human on a protected environment.
  */
-export type AccessOutcome = 'unchanged' | 'removal' | 'widening'
+export type AccessOutcome = 'none' | 'no-widening' | 'widening'
 
 export interface AccessClassification {
 	readonly outcome: AccessOutcome
@@ -73,7 +78,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 	})
 	compareDatabaseCode(changes, baseline, candidate)
 	const list = changes.list
-	return { outcome: list.length === 0 ? 'unchanged' : list.some((change) => change.effect === 'widens') ? 'widening' : 'removal', changes: list }
+	return { outcome: list.length === 0 ? 'none' : list.some((change) => change.effect === 'widens') ? 'widening' : 'no-widening', changes: list }
 }
 
 class Changes {
@@ -384,7 +389,10 @@ export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDt
  */
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): ReadonlySet<string> {
 	compareKeyed(changes, endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
-		added: (id, row) => `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}`,
+		added: (id, row) => {
+			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}`
+			return row.crossOrigin === 'environment' ? { ...widening(line), environmentOrigins: true } : line
+		},
 		removed: () => [],
 		changed: endpointChanges,
 	})
@@ -397,10 +405,10 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
 			removedMounts.set(row.source.name, [...(removedMounts.get(row.source.name) ?? []), row])
 			continue
 		}
-		const { effect, words } = fallThrough(row, candidate)
+		const { effect, words } = fallThrough(row, baseline, candidate)
 		changes.add({ effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${words(true)}` })
 	}
-	for (const [mount, rows] of removedMounts) changes.add(removedMountChange(mount, baseline.mounts[mount], rows, candidate))
+	for (const [mount, rows] of removedMounts) changes.add(removedMountChange(mount, rows, baseline, candidate))
 	return new Set(removedMounts.keys())
 }
 
@@ -410,15 +418,11 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
  * more than its routes with it (the public variables its pages read, a form's admission, a link mount's grants), so
  * only an SPA mount that served no public variable can leave access unchanged; any other narrows at least.
  */
-function removedMountChange(
-	mount: string,
-	artifact: MountArtifact | undefined,
-	rows: readonly EndpointRow[],
-	candidate: ContractArtifact,
-): AccessChange {
+function removedMountChange(mount: string, rows: readonly EndpointRow[], baseline: ContractArtifact, candidate: ContractArtifact): AccessChange {
+	const artifact: MountArtifact | undefined = baseline.mounts[mount]
 	const groups = new Map<string, { readonly fate: Fate; readonly routes: string[] }>()
 	for (const row of rows) {
-		const fate = fallThrough(row, candidate)
+		const fate = fallThrough(row, baseline, candidate)
 		const key = `${fate.effect} ${fate.words(true)}`
 		const group = groups.get(key)
 		if (group === undefined) groups.set(key, { fate, routes: [route(row)] })
@@ -450,7 +454,7 @@ interface Fate {
  * narrows, endpoints that admit exactly the removed one's callers change nothing, endpoints that admit no caller more
  * narrow, and any other widens.
  */
-function fallThrough(row: EndpointRow, candidate: ContractArtifact): Fate {
+function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: ContractArtifact): Fate {
 	const reserved = reservedPrefixOf(row.path, candidate.reservedPrefixes)
 	const reached = candidate.endpoints.filter((other) =>
 		other.method === row.method && pathsOverlap(row.path, other.path) && (reserved === null || other.path.startsWith(`${reserved}/`))
@@ -458,8 +462,10 @@ function fallThrough(row: EndpointRow, candidate: ContractArtifact): Fate {
 	if (reached.length === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied') }
 	const reach = (plural: boolean) => (plural ? 'now reach' : 'now reaches')
 	const was = audience(row)
-	const fewer = reached.every((other) => admitsNoMoreThan(other, row))
-	const same = fewer && reached.every((other) => admitsNoMoreThan(row, other))
+	const removed = { row, artifact: baseline }
+	const answering = reached.map((other) => ({ row: other, artifact: candidate }))
+	const fewer = answering.every((other) => admitsNoMoreThan(other, removed))
+	const same = fewer && answering.every((other) => admitsNoMoreThan(removed, other))
 	if (same && reached.every((other) => audience(other) === was)) {
 		const ids = listOf(reached.map((other) => other.id), 'none')
 		return { effect: 'neutral', words: (plural) => `${reach(plural)} ${ids} ${was}, as before` }
@@ -471,31 +477,67 @@ function fallThrough(row: EndpointRow, candidate: ContractArtifact): Fate {
 	}
 }
 
+/** A row and the artifact it is read from, for what the proxy derives from the artifact (its delegation). */
+interface SidedRow {
+	readonly row: EndpointRow
+	readonly artifact: ContractArtifact
+}
+
 /**
  * Whether `after` admits only callers `before` admitted on the same paths. Conservative: any difference it cannot show
- * to admit no one more admits more.
+ * to admit no one more admits more. Every field of the row has its say (`ADMITS_NO_MORE`), and so does the one input of
+ * the proxy's decision a row does not carry: its delegation, derived from the artifact (`endpointDelegation`).
+ */
+function admitsNoMoreThan(after: SidedRow, before: SidedRow): boolean {
+	const fields = Object.values(ADMITS_NO_MORE).every((admits) => admits(after.row, before.row))
+	return fields && canonicalJson(endpointDelegation(after.artifact, after.row)) === canonicalJson(endpointDelegation(before.artifact, before.row))
+}
+
+/**
+ * How each field of an endpoint row bears on who may call it: whether `after` admits no one `before` did not, as far as
+ * that field goes. The record is total over the row's fields, so a field auth-core adds to `EndpointRow` fails this
+ * file's typecheck until it is placed here. A field the proxy applies (ADR-0022; `requirementDigest` covers them) is
+ * compared, never waved through: a removal it would let pass unapproved must not slip in through a new field.
  *
- * - Neither may admit a body or another origin `before` refused.
  * - An anonymous endpoint anyone opens (a health check, a public SPA) admits no one more than any endpoint does after
  *   it: a signed-in one admits fewer, another one anyone opens the same. A form and a webhook turn callers away
  *   themselves (a challenge, a signature), so no other endpoint is shown to admit no one more than they did.
  * - A signed-in endpoint: the same kind and requirement and no caller kind more. A requirement whose scope is read from
  *   a path parameter (`from`) is read from another segment of a broader route, so it is never the same. A `link`
  *   caller holds one link mount's keys, so it is the same caller only on a row of the same mount.
+ * - Neither may admit a body or another origin `before` refused.
  */
-function admitsNoMoreThan(after: EndpointRow, before: EndpointRow): boolean {
-	if (after.admission !== null && canonicalJson(after.admission) !== canonicalJson(before.admission)) return false
-	if (crossOriginRank(after.crossOrigin) > crossOriginRank(before.crossOrigin)) return false
-	if (before.requirement === null) return OPEN_KINDS.includes(before.kind) && (after.requirement !== null || OPEN_KINDS.includes(after.kind))
-	if (readsPathParameter(after) || readsPathParameter(before)) return false
-	const sameSource = after.source.kind === before.source.kind && after.source.name === before.source.name
-	return after.kind === before.kind
-		&& canonicalJson(after.requirement) === canonicalJson(before.requirement)
-		&& after.callers.every((caller: string) => (caller !== 'link' || sameSource) && before.callers.some((other: string) => other === caller))
+const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: EndpointRow, before: EndpointRow) => boolean } = {
+	// Applied by the proxy.
+	kind: (after, before) =>
+		before.requirement === null ? opensToAnyone(before) && (after.requirement !== null || opensToAnyone(after)) : after.kind === before.kind,
+	requirement: (after, before) => {
+		if (before.requirement === null) return opensToAnyone(before)
+		if (after.requirement === null || readsPathParameter(after) || readsPathParameter(before)) return false
+		return canonicalJson(after.requirement) === canonicalJson(before.requirement)
+	},
+	callers: (after, before) => {
+		if (before.requirement === null) return opensToAnyone(before)
+		const sameMount = after.source.kind === before.source.kind && after.source.name === before.source.name
+		return after.callers.every((caller: string) => (caller !== 'link' || sameMount) && before.callers.some((other: string) => other === caller))
+	},
+	admission: (after, before) => after.admission === null || canonicalJson(after.admission) === canonicalJson(before.admission),
+	crossOrigin: (after, before) => crossOriginRank(after.crossOrigin) <= crossOriginRank(before.crossOrigin),
+	// The rows that answer the removed row's paths now were selected by its method; the paths are the removed row's.
+	method: (after, before) => after.method === before.method,
+	path: () => true,
+	// Not applied by the proxy. The id names the row; its mount matters only to a `link` caller (`callers`). The
+	// handler of the answering row, schemas included, was approved for its whole route.
+	id: () => true,
+	source: () => true,
+	input: () => true,
+	output: () => true,
 }
 
-/** The anonymous kinds that turn no caller away: anyone who asks gets the answer. */
-const OPEN_KINDS: readonly EndpointKind[] = ['health', 'public-spa']
+/** An anonymous endpoint that turns no caller away: anyone who asks gets the answer. */
+function opensToAnyone(row: EndpointRow): boolean {
+	return row.kind === 'health' || row.kind === 'public-spa'
+}
 
 /** Whether the row's requirement takes its scope from one of the row's path parameters. */
 function readsPathParameter(row: EndpointRow): boolean {
@@ -550,8 +592,10 @@ export function crossOriginReach(form: CrossOriginForm): string {
 function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to: CrossOriginForm | undefined): AccessChange[] {
 	if (from === to) return []
 	if (to === undefined) return [narrowing(`${name} is no longer callable from another origin`)]
-	if (from === 'any') return [narrowing(`${name} is callable only from ${crossOriginReach(to)}`)]
-	return [widening(`${name} becomes callable from ${crossOriginReach(to)}`)]
+	const line = from === 'any'
+		? narrowing(`${name} is callable only from ${crossOriginReach(to)}`)
+		: widening(`${name} becomes callable from ${crossOriginReach(to)}`)
+	return [to === 'environment' ? { ...line, environmentOrigins: true } : line]
 }
 
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
@@ -980,7 +1024,7 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 // ── Generic comparisons ─────────────────────────────────────────────────────────────────────────
 
 interface KeyedLines<T> {
-	added(key: string, value: T): string
+	added(key: string, value: T): string | AccessChange
 	removed(key: string, value: T): string | readonly AccessChange[]
 	changed(key: string, before: T, after: T): readonly AccessChange[]
 }
@@ -990,8 +1034,10 @@ function compareKeyed<T>(changes: Changes, before: ReadonlyMap<string, T>, after
 	for (const key of union([...before.keys()], [...after.keys()])) {
 		const from = before.get(key)
 		const to = after.get(key)
-		if (from === undefined && to !== undefined) changes.add(widening(lines.added(key, to)))
-		else if (from !== undefined && to === undefined) {
+		if (from === undefined && to !== undefined) {
+			const added = lines.added(key, to)
+			changes.add(typeof added === 'string' ? widening(added) : added)
+		} else if (from !== undefined && to === undefined) {
 			const removed = lines.removed(key, from)
 			if (typeof removed === 'string') changes.add(narrowing(removed))
 			else changes.add(...removed)

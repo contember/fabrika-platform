@@ -51,7 +51,7 @@ describe('an attachment output in the approval diff', () => {
 			{ effect: 'widens', line: 'Endpoint `api.notes` output gains field `body`' },
 		])
 		expect(lines(base, withExport('z.strictObject({ id: z.uuid() })', 500, 'all-notes.csv'))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [
 				{ effect: 'narrows', line: 'Endpoint `api.notes` file name changes from `notes.csv` to `all-notes.csv`' },
 				{ effect: 'narrows', line: 'Endpoint `api.notes` file size limit changes from 1000 to 500' },
