@@ -526,7 +526,7 @@ should hold. The generated tests skip the other-scope leak case for such an endp
 
 A page on another site (a partner's page, a separate marketing site, another application in the browser) calls an RPC
 endpoint only when the endpoint says `crossOrigin: true` beside its `access`, and an operator lists that page's origin
-for the environment in Control (`fabrika control env update --cross-origin=https://partner.example`). Both halves are
+for the environment in Control (`--cross-origin=https://partner.example` on `fabrika control apps environments put`). Both halves are
 needed: the contract says which endpoints, the environment says from where, so staging and production can list
 different pages. The approver sees the flag like any other access change.
 

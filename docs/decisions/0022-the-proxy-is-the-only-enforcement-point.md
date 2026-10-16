@@ -266,7 +266,8 @@ it, and the proxy decides both:
   manifest parser.
 - **The environment names the origins.** Which pages may call differs between staging and production, so the
   origins are a fact of the environment, not of the contract. Control keeps them in the environment's registry row,
-  beside its domain (`fabrika control env register|update --cross-origin=<origin>`, repeatable), and an operator,
+  beside its domain (`fabrika control register` or `fabrika control apps environments put` with `--cross-origin=<origin>`,
+  repeatable), and an operator,
   not the repository, sets them. Each is an exact `https://` origin with a literal host (`http://` for a local
   host), never the environment's own domain, at most `MAX_CROSS_ORIGINS` (16). Control hands them to the provider,
   which writes them into the application's manifest entry as `crossOrigins`; the manifest parser refuses a malformed
