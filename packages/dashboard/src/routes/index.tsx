@@ -23,26 +23,26 @@ const DAY_SECONDS = 86_400
 
 export default createPage()
 	.loader(async () => {
-		const [apps, namespaces, runs, iam] = await Promise.all([
+		const [apps, namespaces, runs, latestFailures, iam] = await Promise.all([
 			api.apps.list(),
 			api.namespaces.list(),
 			api.runs.list({ limit: RUN_WINDOW }),
+			api.runs.latestFailures(),
 			iamSnapshot(),
 		])
-		return { apps: apps.items, namespaces: namespaces.items, runs: runs.items, iam }
+		return { apps: apps.items, namespaces: namespaces.items, runs: runs.items, latestFailures: latestFailures.items, iam }
 	})
 	.route('/')
 	.render(({ data }) => {
-		const { apps, namespaces, runs, iam } = data
+		const { apps, namespaces, runs, latestFailures, iam } = data
 		const nowSeconds = Math.floor(Date.now() / 1000)
 
 		const inFlight = runs.filter((run) => run.status === 'pending' || run.status === 'running')
 		const settledToday = runs.filter((run) => run.createdAt >= nowSeconds - DAY_SECONDS && (run.status === 'succeeded' || run.status === 'failed'))
 		const okToday = settledToday.filter((run) => run.status === 'succeeded').length
-		const failedRecently = runs.filter((run) => run.status === 'failed').slice(0, 4)
 		const brokenNamespaces = namespaces.filter((namespace) => namespace.state === 'failed')
 		const readyNamespaces = namespaces.filter((namespace) => namespace.state === 'ready').length
-		const attention = brokenNamespaces.length + failedRecently.length
+		const attention = brokenNamespaces.length + latestFailures.length
 
 		if (apps.length === 0 && namespaces.length === 0) {
 			return <ColdStart />
@@ -202,7 +202,7 @@ export default createPage()
 								<div className="card-body flush">
 									<div className="feed">
 										{brokenNamespaces.map((namespace) => <BrokenNamespaceRow key={namespace.id} namespace={namespace} />)}
-										{failedRecently.map((run) => (
+										{latestFailures.map((run) => (
 											<Link key={run.id} to="runs/detail" params={{ id: run.id }} className="feed-row">
 												<StatusLamp lamp="stop" />
 												<span className="feed-main">
