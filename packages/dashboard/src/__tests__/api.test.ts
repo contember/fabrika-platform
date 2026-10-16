@@ -201,7 +201,7 @@ describe('Delivery RPC client', () => {
 	})
 
 	test("the proxy's own 401 envelope, byte for byte, bounces the console to IAM", async () => {
-		// An expired session on an RPC POST is refused by the PROXY, not by control — the console never
+		// An expired session on an RPC POST is refused by the PROXY, not by control; the console never
 		// reaches its upstream. `packages/proxy/src/service.ts` (`loginRequired`) writes exactly this,
 		// and `packages/proxy/src/authorize.ts` (`loginUrl`) builds exactly that URL. Both are copied
 		// here verbatim: if either changes shape, this fails and the console stops signing users in.
@@ -263,7 +263,7 @@ describe('Delivery RPC client', () => {
 interface StubbedBrowser {
 	/** Every URL `window.location.assign` was called with, in order. */
 	readonly assignments: string[]
-	/** Resolves with the FIRST assignment — the bounce is fire-and-forget, so the test must await it. */
+	/** Resolves with the FIRST assignment: the bounce is fire-and-forget, so the test must await it. */
 	readonly assigned: Promise<string>
 	restore(): void
 }

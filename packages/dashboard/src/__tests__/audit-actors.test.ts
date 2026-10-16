@@ -37,7 +37,7 @@ const withRouter = (element: React.ReactElement): React.ReactElement =>
 		router: new Router({
 			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
 			adapter: createMemoryNavigationAdapter(),
-			pageRegistry: { 'access/users/detail': '/access/users/:id' },
+			pageRegistry: { 'access/users/detail': '/access/users/:id', 'access/audit': '/access/audit' },
 		}),
 	}, element)
 
@@ -76,17 +76,18 @@ describe('audit actors', () => {
 		expect(auditActor(event({ principalId: null, principalLabel: 'anonymous' }), resolved)).toEqual({ kind: 'label', label: 'anonymous' })
 	})
 
-	test('links a user to its page and keeps the id in the title', () => {
+	test('a name narrows the log to its principal, as the rest of the row does', () => {
 		const markup = cell({ kind: 'principal', principalId: USER_ID, label: 'Ada@Example.com', isUser: true })
 
-		expect(markup).toContain('>Ada@Example.com</a>')
-		expect(markup).toContain(`href="/access/users/${USER_ID}"`)
-		expect(markup).toContain(`title="${USER_ID}"`)
+		expect(markup).toContain(`href="/access/audit?principalId=${USER_ID}"`)
+		expect(markup).toContain('>Ada@Example.com</span></a>')
+		expect(markup).toContain(`(${USER_ID})`)
 	})
 
-	test('falls back to the id, unlinked, for a principal that was not resolved', () => {
-		const markup = cell({ kind: 'principal', principalId: USER_ID, label: USER_ID, isUser: false })
-
-		expect(markup).toBe(`<span title="${USER_ID}">${USER_ID}</span>`)
+	test('a person also keeps a way to their page, and a machine or an unread principal does not', () => {
+		expect(cell({ kind: 'principal', principalId: USER_ID, label: 'Ada@Example.com', isUser: true })).toContain(`href="/access/users/${USER_ID}"`)
+		const unread = cell({ kind: 'principal', principalId: USER_ID, label: USER_ID, isUser: false })
+		expect(unread).not.toContain('/access/users/')
+		expect(unread).toContain(`href="/access/audit?principalId=${USER_ID}"`)
 	})
 })

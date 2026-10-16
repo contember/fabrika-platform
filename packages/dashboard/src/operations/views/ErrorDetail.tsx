@@ -174,18 +174,18 @@ export function ErrorDetailView({
 				<Fact label="First seen" value={fmtDate(issue.firstSeen / 1000)} />
 				<Fact label="Last seen" value={fmtAgo(issue.lastSeen / 1000)} />
 				<Fact label="Assigned to" value={issue.assignedTo?.label ?? issue.assignedTo?.id ?? 'Unassigned'} />
-				<Fact label="Release" value={issue.latestOccurrence?.release ?? '—'} />
+				<Fact label="Release" value={issue.latestOccurrence?.release ?? 'none'} />
 				<Fact
 					label="Resolved in release"
 					value={issue.resolvedInRelease === null
-						? '—'
+						? 'none'
 						: (
 							<Link to="operations/releases/detail" params={{ releaseId: issue.resolvedInRelease.id }}>
 								{issue.resolvedInRelease.name}
 							</Link>
 						)}
 				/>
-				<Fact label="Environment" value={eventDetail?.environment ?? '—'} />
+				<Fact label="Environment" value={eventDetail?.environment ?? 'none'} />
 			</div>
 
 			<section>
@@ -410,10 +410,10 @@ function EventContext({ event }: { event: EventDetail }) {
 				</div>
 				<div className="card-body">
 					<div className="detail-grid">
-						<Fact label="Trace" value={event.traceId ?? '—'} />
-						<Fact label="Server" value={event.serverName ?? '—'} />
-						<Fact label="User" value={event.user?.email ?? event.user?.username ?? event.user?.id ?? '—'} />
-						<Fact label="Event ID" value={event.eventId ?? '—'} />
+						<Fact label="Trace" value={event.traceId ?? 'none'} wide />
+						<Fact label="Server" value={event.serverName ?? 'none'} />
+						<Fact label="User" value={event.user?.email ?? event.user?.username ?? event.user?.id ?? 'none'} />
+						<Fact label="Event ID" value={event.eventId ?? 'none'} wide />
 					</div>
 					<details className="ops-raw">
 						<summary>Raw event</summary>
@@ -470,9 +470,9 @@ function ActivityEntry({ item }: { item: ActivityItem }) {
 	)
 }
 
-function Fact({ label, value }: { label: string; value: ReactNode }) {
+function Fact({ label, value, wide }: { label: string; value: ReactNode; wide?: boolean }) {
 	return (
-		<div>
+		<div className={wide ? 'wide' : undefined}>
 			<dt>{label}</dt>
 			<dd>{value}</dd>
 		</div>

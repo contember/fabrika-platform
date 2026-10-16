@@ -55,7 +55,8 @@ export function BuilderAuthorization() {
 		if (!stored.ok) {
 			setApproval(null)
 			setRequest(null)
-			setError(stored.message)
+			// Opened from the account menu: nothing is pending, and the page lists the person's connections.
+			if (stored.missing !== true) setError(stored.message)
 			setBusy(false)
 			return
 		}

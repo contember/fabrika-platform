@@ -8,7 +8,7 @@ import { Icon } from '../../../../components/Icon'
 import { ApiError } from '../../../../lib/api'
 
 /**
- * Create a custom policy for one app. Policies are per-app, so the app arrives in `?app=` — reached
+ * Create a custom policy for one app. Policies are per-app, so the app arrives in `?app=`, reached
  * from the policies list, which already has the app selected. Its own page because the action picker
  * is a long scrolling catalog, not a field.
  */

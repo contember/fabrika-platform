@@ -44,7 +44,7 @@ export default createPage()
 							icon="bay"
 							title="No placements yet"
 							body={namespaces.operator === null
-								? 'This provider manages its own boundaries — nothing to place from here.'
+								? 'This provider manages its own boundaries, so there is nothing to place from here.'
 								: 'A namespace has to exist before an app can be onboarded into it.'}
 							action={operable ? <Link to="namespaces/create" className="btn small primary">Provision the first one</Link> : undefined}
 						/>

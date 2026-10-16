@@ -8,9 +8,9 @@ import { resolveScope, ScopePicker, type ScopeValue } from './ScopePicker'
 
 /**
  * The authorization a grant / API-key / mapping confers, composed here:
- *  - `app`        — the app the grant counts for (null = cross-app).
- *  - role XOR inline — exactly one of `roleKey` / `permissions` (enforced by the form).
- *  - scope        — `scopeType` / `scopeValue` (both null = global).
+ *  - `app`: the app the grant counts for (null = cross-app).
+ *  - role XOR inline: exactly one of `roleKey` / `permissions` (enforced by the form).
+ *  - scope: `scopeType` / `scopeValue` (both null = global).
  *
  * This is the subset of `CreateGrantRequest` / `ProvisionApiKeyRequest` the composer owns;
  * callers add `principalId` / `label` / `expiresAt` around it.

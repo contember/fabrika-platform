@@ -72,7 +72,6 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<p className="eyebrow">Delivery checkpoint</p>
 					<h1>Source connection</h1>
 					<p className="hint">Connect one private GitHub App per organization without placing App credentials in this browser.</p>
 				</div>
@@ -109,7 +108,7 @@ export function ConnectedConnections(
 				stored webhook configuration without exposing or replacing the private key.
 			</p>
 			<Table
-				colSpan={4}
+				colSpan={5}
 				isEmpty={connections.length === 0}
 				empty={<EmptyState icon="link" title="No organizations connected" body="Add the first private GitHub source connection below." />}
 				head={
@@ -118,6 +117,7 @@ export function ConnectedConnections(
 						<th>Installation</th>
 						<th>Repository access</th>
 						<th>Status</th>
+						<th />
 					</tr>
 				}
 			>
@@ -126,8 +126,9 @@ export function ConnectedConnections(
 						<td>
 							<strong>{connection.app.owner.login}</strong>
 							<div className="muted small">
-								<a href={connection.app.htmlUrl} target="_blank" rel="noreferrer">
-									{connection.app.slug} <Icon name="external" size={12} />
+								<a href={connection.app.htmlUrl} target="_blank" rel="noreferrer" className="external-url">
+									{connection.app.slug}
+									<Icon name="external" size={12} />
 								</a>
 								{' · '}
 								{connection.app.public ? 'legacy public App' : 'private App'}
@@ -141,8 +142,10 @@ export function ConnectedConnections(
 							{connection.installation.repositorySelection === 'all' ? 'All repositories' : 'Selected repositories'}
 							<div className="muted small">{verifiedRepositoryCopy(connection)}</div>
 						</td>
-						<td>
+						<td className="nowrap">
 							<Status lamp="ok">Connected</Status>
+						</td>
+						<td className="row-actions">
 							<ConnectionMutation
 								label="Reconcile"
 								ariaLabel={`Reconcile GitHub source connection ${connection.app.owner.login}`}

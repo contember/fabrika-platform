@@ -39,8 +39,8 @@ export function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => voi
 			</td>
 			<td>{grant.app ? <AppName app={grant.app} /> : <span className="muted">All apps</span>}</td>
 			<td>{scopeLabel}</td>
-			<td>{fmtExpiry(grant.expiresAt)}</td>
-			<td>{grant.grantedBy ?? <span className="muted">—</span>}</td>
+			<td className="nowrap">{fmtExpiry(grant.expiresAt)}</td>
+			<td>{grant.grantedBy ?? <span className="muted">none</span>}</td>
 			<td className="muted small nowrap" title={fmtDate(grant.createdAt)}>{fmtAgo(grant.createdAt)}</td>
 			<td className="row-actions">
 				<button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>
@@ -69,7 +69,7 @@ function GrantAuthorizationCell({ grant }: { grant: GrantDto }) {
 			<>
 				<code>{grant.roleKey}</code>
 				{grant.dangling && (
-					<Badge tone="bad" title="This role_key no longer resolves to a known role — it grants zero permissions.">
+					<Badge tone="bad" title="This role_key no longer resolves to a known role, so it grants zero permissions.">
 						dangling
 					</Badge>
 				)}

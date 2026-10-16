@@ -4,7 +4,7 @@ import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
 
-// Approvals — deploy runs whose access change waits for a person on a protected environment (ADR-0050). Only runs at
+// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050). Only runs at
 // coordinates where the viewer holds `access.approve` are listed.
 
 export default createPage()

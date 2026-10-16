@@ -5,9 +5,9 @@ import { api } from './api'
 
 /**
  * The per-app authz vocabulary a grant / mapping form needs once an app is chosen:
- *  - `roles`   — built-in (cross-app) + the app's app/custom roles (`GET /roles?app=…`).
- *  - `scopes`  — the app's scope dimensions (`GET /apps/:app/schema`).
- *  - `actions` — the app's action catalog (`GET /apps/:app/schema`).
+ *  - `roles`: built-in (cross-app) + the app's app/custom roles (`GET /roles?app=…`).
+ *  - `scopes`: the app's scope dimensions (`GET /apps/:app/schema`).
+ *  - `actions`: the app's action catalog (`GET /apps/:app/schema`).
  *
  * When `app` is null (cross-app), only built-in roles load and there are no scopes /
  * actions (a cross-app grant can't reference an app's scope dimensions or action catalog).

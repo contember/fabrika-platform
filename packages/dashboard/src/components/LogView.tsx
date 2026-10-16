@@ -1,8 +1,8 @@
 // Live-ish run log viewer. Calls `runs.tail({ runId, after })` on an interval, appending
 // the new lines past the cursor it already holds, until the run is terminal (`done: true`). Mirrors
 // how the worker re-flushes the whole accumulated NDJSON to one R2 object and serves the slice past
-// the cursor (see worker src/api/runs.ts tailRunLog). Each fetch is sequential — a poll never starts
-// before the previous one settles — so a slow flush can't pile up overlapping requests.
+// the cursor (see worker src/api/runs.ts tailRunLog). Each fetch is sequential (a poll never starts
+// before the previous one settles), so a slow flush can't pile up overlapping requests.
 
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, type LogLine, type RunStatus } from '../lib/api'
@@ -44,7 +44,7 @@ export function LogView({ runId, initialStatus }: LogViewProps) {
 				setStatus(res.status)
 				setError(null)
 				if (res.done || isTerminal(res.status)) {
-					return // Terminal — stop polling.
+					return // Terminal: stop polling.
 				}
 			} catch (cause) {
 				if (cancelled) return
@@ -53,7 +53,7 @@ export function LogView({ runId, initialStatus }: LogViewProps) {
 					setError(cause.message)
 					return
 				}
-				setError(cause instanceof ApiError ? cause.message : 'Lost the log stream — retrying…')
+				setError(cause instanceof ApiError ? cause.message : 'Lost the log stream. Retrying…')
 			}
 			timer = setTimeout(poll, TAIL_INTERVAL_MS)
 		}

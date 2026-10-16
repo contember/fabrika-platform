@@ -1,5 +1,5 @@
 // Theme selection. The stylesheet resolves every colour through `light-dark()`, so the OS preference
-// already works with no JS at all — this module exists only to let an operator PIN light or dark for
+// already works with no JS at all; this module exists only to let an operator PIN light or dark for
 // this browser. `<html data-theme>` switches `color-scheme`; `index.html` applies the stored value
 // before first paint so a pinned theme never flashes.
 

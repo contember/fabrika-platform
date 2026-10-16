@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+	<!-- The mark from src/components/Icon.tsx (BrandMark), white on a tile of the brand blue, as in the rail. -->
+	<rect width="128" height="128" rx="24" fill="#2544c2"/>
+	<path fill="#ffffff" transform="translate(23 22) scale(0.86)" d="M0 31 53 0 94 22 94 98 54 98 54 31 25 48 25 98 0 98Z"/>
+</svg>

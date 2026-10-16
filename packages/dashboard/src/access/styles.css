@@ -201,7 +201,7 @@ tr.row-warn td {
 	white-space: pre-wrap;
 }
 
-/* A footnote under a modal's payload — separated, not just spaced. */
+/* A footnote under a modal's payload: separated, not just spaced. */
 .modal-note {
 	margin-top: var(--s-1);
 	padding-top: var(--s-3);

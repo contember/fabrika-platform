@@ -14,7 +14,7 @@ import { fmtDate } from '../../../lib/format'
 // The authorization vocabulary for one app, in the order you read it: what you can grant (roles), what
 // the roles are made of (actions), and what a grant can be narrowed to (scope dimensions).
 //
-// These were three pages — Roles, Policies, Schema — showing overlapping slices of the same thing
+// These were three pages (Roles, Policies, Schema) showing overlapping slices of the same thing
 // behind three separate app pickers: Roles listed all three origins read-only, Policies re-listed the
 // custom ones so they could be edited, Schema re-listed the app ones alongside the catalog. One page,
 // one picker, and a custom role is edited where it is listed.
@@ -132,7 +132,7 @@ export default createPage()
 						<div className="empty-panel">
 							<EmptyState
 								title="Pick an app for its catalog"
-								body="Actions and scope dimensions belong to one app's vocabulary — they are declared in its code and reconciled into IAM."
+								body="Actions and scope dimensions belong to one app's vocabulary. They are declared in its code and reconciled into IAM."
 							/>
 						</div>
 					)
@@ -162,7 +162,7 @@ export default createPage()
 											<td>
 												<code>{action.action}</code>
 											</td>
-											<td>{action.description ?? <span className="muted">—</span>}</td>
+											<td>{action.description ?? <span className="muted">none</span>}</td>
 										</tr>
 									))}
 								</Table>
@@ -173,7 +173,7 @@ export default createPage()
 									<Icon name="bay" size={15} />
 									<h2>Scope dimensions</h2>
 								</div>
-								<p className="section-note">What a grant can be narrowed to. The values are opaque to IAM — the app owns what they mean.</p>
+								<p className="section-note">What a grant can be narrowed to. The values are opaque to IAM: the app owns what they mean.</p>
 								<Table
 									colSpan={2}
 									isEmpty={data.schema.scopes.length === 0}
@@ -190,7 +190,7 @@ export default createPage()
 											<td>
 												<code>{scope.type}</code>
 											</td>
-											<td>{scope.label ?? <span className="muted">—</span>}</td>
+											<td>{scope.label ?? <span className="muted">none</span>}</td>
 										</tr>
 									))}
 								</Table>

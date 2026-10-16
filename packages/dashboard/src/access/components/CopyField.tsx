@@ -9,7 +9,7 @@ interface CopyFieldProps {
 
 /**
  * A read-only field with a copy-to-clipboard button. The value is rendered as plain
- * copyable text only — never as a navigable link — so a token can't leak via Referer.
+ * copyable text only (never as a navigable link), so a token can't leak via Referer.
  */
 export function CopyField({ label, value, multiline }: CopyFieldProps) {
 	const [copied, setCopied] = useState(false)

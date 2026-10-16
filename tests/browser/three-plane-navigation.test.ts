@@ -6,7 +6,6 @@ async function expectConsoleShell(): Promise<void> {
 	await expect(byRole('navigation', 'Console navigation')).toBeVisible()
 	const shell = byRole('complementary')
 	await expect(shell).toContainText('fabrika')
-	await expect(shell).toContainText('console')
 }
 
 browserTest(

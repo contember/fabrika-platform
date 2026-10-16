@@ -2,11 +2,11 @@ import type { AppScopeDef } from '@fabrika/iam-contract'
 
 /**
  * The chosen scope for a grant / mapping. Two explicit states:
- *  - `{ kind: 'global' }` — all scopes → stored `scope_type = scope_value = null`
- *  - `{ kind: 'scoped', type, value }` — one flat dimension + an opaque app-owned value
+ *  - `{ kind: 'global' }`: all scopes → stored `scope_type = scope_value = null`
+ *  - `{ kind: 'scoped', type, value }`: one flat dimension + an opaque app-owned value
  *
  * Scope dimensions come from the chosen app's reconciled schema (`app_scopes`). The
- * value is an OPAQUE app-owned string — never validated, never offered from a known list.
+ * value is an OPAQUE app-owned string, never validated, never offered from a known list.
  */
 export type ScopeValue =
 	| { kind: 'global' }
@@ -32,7 +32,7 @@ interface ScopePickerProps {
 /**
  * Generic scope picker: Global, or one flat dimension (`type`, from the app's
  * `app_scopes`) plus an opaque text value. Defaults to Global. The value box is a free
- * text input — scope values are app-owned and never validated or enumerated here.
+ * text input: scope values are app-owned and never validated or enumerated here.
  */
 export function ScopePicker({ scopes, value, onChange, idPrefix = 'scope' }: ScopePickerProps) {
 	const globalId = `${idPrefix}-global`

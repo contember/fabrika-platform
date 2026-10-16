@@ -1,6 +1,6 @@
 import { browserTest, byLabel, byRole, el, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
-import { applyIssueFilters } from './support/console'
+import { searchIssues } from './support/console'
 import { type BrowserFixtures, readBrowserFixtures, sendErrorFixture } from './support/fixtures'
 
 const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
@@ -84,8 +84,8 @@ browserTest(
 			intent: 'a grouped issue leads to the concrete event context retained by Operations',
 			manual: 'Open "Browser fixture primary failure". Verify that "Occurrences" shows the exception and event context.',
 		}, async () => {
-			await byLabel('Search').fill('Browser fixture primary failure')
-			await applyIssueFilters()
+			// The list's own defaults, kept: a stack reused across runs holds resolved and older copies of the fixture.
+			await searchIssues('status:open window:24h Browser fixture primary failure')
 			await byRole('link', PRIMARY_FAILURE, { exact: true }).click()
 			await expect(byRole('heading', PRIMARY_FAILURE, { exact: true, level: 1 })).toBeVisible()
 			// The occurrence section is now `Occurrences`, and the exception it renders is titled
@@ -120,11 +120,13 @@ browserTest(
 
 		await step('the release detail links back to its correlated new issue', {
 			intent: 'release correlation exposes the seeded failure as a new issue for that release',
-			manual: 'Open "Releases", select the Browser Notes release, and verify that "Browser fixture primary failure" appears under "Correlated issues".',
+			manual:
+				'Open "Releases", search for source:"Browser Notes / test", open the Browser Notes release, and verify that "Browser fixture primary failure" appears under "Correlated issues".',
 		}, async () => {
 			const release = currentFixtures().fixtures.visible.release.name
 			await byRole('link', 'Releases', { exact: true }).click()
-			await byLabel('Source').selectOption({ label: 'Browser Notes / test' })
+			// The release list filters as it is typed in.
+			await byLabel('Search').fill('source:"Browser Notes / test"')
 			const releaseLink = byRole('link', release, { exact: true })
 			await expect(releaseLink).toBeVisible()
 			await releaseLink.click()
@@ -139,8 +141,7 @@ browserTest(
 		}, async () => {
 			const state = currentFixtures()
 			await byRole('link', 'Errors', { exact: true }).click()
-			await byLabel('Search').fill(REGRESSION_TITLE)
-			await applyIssueFilters()
+			await searchIssues(`status:open window:24h ${REGRESSION_TITLE}`)
 			await byRole('link', REGRESSION_TITLE).click()
 			regressionIssueUrl = getPage().url()
 			await expect(byRole('heading', REGRESSION_TITLE, { level: 1 })).toContainText(`[${state.marker}]`)
@@ -148,7 +149,7 @@ browserTest(
 
 			const releaseSelect = byLabel('Resolve in release')
 			await releaseSelect.selectOption({ label: state.fixtures.visible.release.name })
-			// The issue detail's own `Apply`, next to `Resolve in release` — not the error list's filter submit.
+			// The issue detail's own `Apply`, next to `Resolve in release`.
 			await byRole('button', 'Apply', { exact: true }).click()
 			await expectResolveInReleaseUsesGateway()
 			await expect(el('issue-status')).toHaveAttribute('data-status', 'resolved')

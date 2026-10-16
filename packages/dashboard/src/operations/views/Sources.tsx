@@ -38,7 +38,7 @@ export function SourcesView({ sources }: { sources: readonly OperationsSourceSum
 								</td>
 								<td>{source.environment}</td>
 								<td>{source.serviceKey}</td>
-								<td>{source.publicOrigin ?? '—'}</td>
+								<td>{source.publicOrigin ?? 'none'}</td>
 							</tr>
 						))}
 				</tbody>

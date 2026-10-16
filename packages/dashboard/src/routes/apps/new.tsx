@@ -8,7 +8,7 @@ import { formProvider, type ProviderRegistrationPayload, providerRegistrationPay
 // `register-app` call. The provider input follows the installation: Cloudflare takes the app's config
 // path; Zerops takes a built manifest, whose service names control reserves in a ready namespace.
 //
-// This used to be the console's landing page. It is a form, not a report — the overview earns that slot
+// This used to be the console's landing page. It is a form, not a report; the overview earns that slot
 // now, and this is the step you take from it.
 
 export default createPage()
@@ -180,7 +180,7 @@ export default createPage()
 								</select>
 								{ready.length === 0 && (
 									<span className="hint">
-										No ready namespace for <code>{env || 'this env'}</code> yet — <Link to="namespaces/create">provision one</Link> first.
+										No ready namespace for <code>{env || 'this env'}</code> yet. <Link to="namespaces/create">Provision one</Link> first.
 									</span>
 								)}
 							</label>

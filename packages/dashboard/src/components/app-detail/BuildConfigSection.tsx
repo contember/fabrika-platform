@@ -22,7 +22,7 @@ function Field({ label, value, mono }: { label: string; value: string | null; mo
 	return (
 		<div>
 			<h4>{label}</h4>
-			{value === null ? <span className="muted">—</span> : mono ? <code>{value}</code> : value}
+			{value === null ? <span className="muted">none</span> : mono ? <code>{value}</code> : value}
 		</div>
 	)
 }
@@ -77,7 +77,7 @@ function InstallationIdField({ app, onDone }: { app: AppDto; onDone: () => void 
 				)
 				: (
 					<div className="row-actions">
-						{app.githubInstallationId === null ? <span className="muted">—</span> : <code>{String(app.githubInstallationId)}</code>}
+						{app.githubInstallationId === null ? <span className="muted">none</span> : <code>{String(app.githubInstallationId)}</code>}
 						<button type="button" className="small" disabled={busy} onClick={() => patch({ resolveInstallationId: true })}>
 							{busy ? 'Detecting…' : 'Detect'}
 						</button>

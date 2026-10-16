@@ -2,7 +2,7 @@ import { BuzolaProvider } from '@buzola/router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { pageRegistry, routes } from './buzola.gen'
-// IBM Plex — drawn for a machine company, which is why the console uses it. Sans is the variable
+// IBM Plex: drawn for a machine company, which is why the console uses it. Sans is the variable
 // weight axis (100–700); Mono ships static weights and carries every id, ref, sha and log line.
 import '@fontsource-variable/ibm-plex-sans/wght.css'
 import '@fontsource/ibm-plex-mono/400.css'

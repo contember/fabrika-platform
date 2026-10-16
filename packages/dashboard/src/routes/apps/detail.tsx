@@ -11,7 +11,7 @@ import { Icon } from '../../components/Icon'
 import { api } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 
-// App detail — the per-app registry + operations view: its meta, its environments (each with a
+// App detail: the per-app registry + operations view: its meta, its environments (each with a
 // Deploy button + edit/delete), its secret references (names + layer + vault ref, values never shown),
 // and the most recent runs for this app. Add/edit/delete go through the typed registry procedures.
 
@@ -66,7 +66,9 @@ export default createPage()
 				</div>
 
 				<section className="panel">
-					<h2>Work locally with the builder</h2>
+					<div className="section-head">
+						<h2>Work locally with the builder</h2>
+					</div>
 					<p>
 						Open your existing checkout of <code>{app.repoUrl}</code>. Run <code>fabrika builder init --url=&lt;console-origin&gt;</code>{' '}
 						for a new builder project, or <code>fabrika builder connect --url=&lt;console-origin&gt;</code> to connect an existing one. Select application
@@ -83,7 +85,7 @@ export default createPage()
 				<RecentRunsSection runs={runs} />
 
 				{
-					/* Past everything you might have come here to do — not in the page head, where every other
+					/* Past everything you might have come here to do, not in the page head, where every other
 				    screen puts its constructive CTA. */
 				}
 				<div className="danger-zone">

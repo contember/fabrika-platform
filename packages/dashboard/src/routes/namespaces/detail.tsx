@@ -58,7 +58,7 @@ export default createPage()
 		}
 
 		// Synchronous, unlike reconcile: an in-place change is one provider call plus its read-back, so the
-		// answer — or the 409 naming the supported path — comes back in this request.
+		// answer (or the 409 naming the supported path) comes back in this request.
 		async function updateTarget(event: React.FormEvent) {
 			event.preventDefault()
 			if (editedTarget === null) return
@@ -194,7 +194,7 @@ export default createPage()
 										{namespace.unconfirmedTarget === undefined ? 'Change target' : 'Finish the unconfirmed update'}
 									</button>
 									<span className="hint">
-										Only what the provider changes in place is accepted — on Zerops, the PostgreSQL profile. A payload may name only what changes.
+										Only what the provider changes in place is accepted: on Zerops, the PostgreSQL profile. A payload may name only what changes.
 									</span>
 								</div>
 							)

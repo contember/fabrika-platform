@@ -18,7 +18,7 @@ export function StatusLamp({ lamp }: { lamp: Lamp }) {
 	)
 }
 
-/** A lamp plus its label — the default way to report state. */
+/** A lamp plus its label: the default way to report state. */
 export function Status({ lamp, children, title }: { lamp: Lamp; children: ReactNode; title?: string }) {
 	return (
 		<span className={`status status-${lamp}`} title={title}>
@@ -28,7 +28,7 @@ export function Status({ lamp, children, title }: { lamp: Lamp; children: ReactN
 	)
 }
 
-/** A categorical chip: env, provider, trigger, app, scope dimension, role origin — facts that classify rather than report health. */
+/** A categorical chip: env, provider, trigger, app, scope dimension, role origin: facts that classify rather than report health. */
 export function Chip({ children, accent, title }: { children: ReactNode; accent?: boolean; title?: string }) {
 	return <span className={accent === true ? 'chip chip-accent' : 'chip'} title={title}>{children}</span>
 }
@@ -68,7 +68,7 @@ export function NamespaceState({ state }: { state: DeploymentNamespaceState }) {
 	return <Status lamp={namespaceLamp(state)}>{state}</Status>
 }
 
-/** A principal's or credential's lifecycle state. `invited` is in flight — nobody has signed in yet. */
+/** A principal's or credential's lifecycle state. `invited` is in flight: nobody has signed in yet. */
 export function PrincipalStatus({ status }: { status: 'invited' | 'active' | 'disabled' }) {
 	return <Status lamp={principalLamp(status)}>{status}</Status>
 }

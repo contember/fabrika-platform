@@ -72,9 +72,9 @@ function Capability(
 			<div className="card-head">
 				<h2>{title}</h2>
 				<span className="spacer" />
-				<span className={`status status-${lamp}`}>
+				<span className={`status status-${lamp}`} title={state}>
 					<span className="lamp" aria-hidden="true" />
-					{state}
+					<span className="truncate">{state}</span>
 				</span>
 			</div>
 			<div className="card-body">

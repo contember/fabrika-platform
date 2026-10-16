@@ -1,11 +1,14 @@
 // Tiny formatting helpers shared across pages. Mirrors propustka admin-ui's lib/format.ts.
 
+/** What a cell or a fact shows for a value that is not there. */
+export const NONE = 'none'
+
 /**
  * Format an epoch-**seconds** timestamp as a readable local date-time. The control plane stores
  * and returns every timestamp in seconds (SQLite `unixepoch()`), so we scale to millis for `Date`.
  */
-export function fmtDate(seconds: number | null | undefined): string {
-	if (seconds === null || seconds === undefined) return '—'
+export function fmtDate(seconds: number | null | undefined, missing = NONE): string {
+	if (seconds === null || seconds === undefined) return missing
 	return new Date(seconds * 1000).toLocaleString(undefined, {
 		year: 'numeric',
 		month: 'short',
@@ -21,9 +24,9 @@ export function fmtTimeMs(ms: number): string {
 	return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-/** Human duration between two epoch-seconds stamps (e.g. `1m 12s`); `—` when either is missing. */
+/** Human duration between two epoch-seconds stamps (e.g. `1m 12s`); `none` when either is missing. */
 export function fmtDuration(startSeconds: number | null | undefined, endSeconds: number | null | undefined): string {
-	if (startSeconds === null || startSeconds === undefined || endSeconds === null || endSeconds === undefined) return '—'
+	if (startSeconds === null || startSeconds === undefined || endSeconds === null || endSeconds === undefined) return NONE
 	const total = Math.max(0, endSeconds - startSeconds)
 	const minutes = Math.floor(total / 60)
 	const seconds = total % 60
@@ -32,10 +35,10 @@ export function fmtDuration(startSeconds: number | null | undefined, endSeconds:
 
 /**
  * Compact "how long ago" for an epoch-**seconds** stamp, for feeds where the exact clock time is
- * noise (`4m`, `3h`, `6d`). Falls back to a date past a week, and to `—` when absent.
+ * noise (`4m`, `3h`, `6d`). Falls back to a date past a week, and to `none` when absent.
  */
 export function fmtAgo(seconds: number | null | undefined, nowMs: number = Date.now()): string {
-	if (seconds === null || seconds === undefined) return '—'
+	if (seconds === null || seconds === undefined) return NONE
 	const elapsed = Math.max(0, Math.floor(nowMs / 1000) - seconds)
 	if (elapsed < 45) return 'just now'
 	if (elapsed < 3600) return `${Math.max(1, Math.floor(elapsed / 60))}m ago`
@@ -44,9 +47,9 @@ export function fmtAgo(seconds: number | null | undefined, nowMs: number = Date.
 	return new Date(seconds * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-/** Shorten a commit sha to its first 7 chars; `—` when absent. */
+/** Shorten a commit sha to its first 7 chars; `none` when absent. */
 export function shortSha(sha: string | null | undefined): string {
-	if (sha === null || sha === undefined || sha === '') return '—'
+	if (sha === null || sha === undefined || sha === '') return NONE
 	return sha.slice(0, 7)
 }
 

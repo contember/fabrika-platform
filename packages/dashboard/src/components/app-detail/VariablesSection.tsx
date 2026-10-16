@@ -15,7 +15,7 @@ export function VariablesSection(
 			</div>
 			<p className="section-note">
 				Non-secret config <strong>vars</strong> deployed with this app. The <code>*</code>{' '}
-				layer applies to every env; an env-specific entry overrides it. Vars are plaintext — values are shown.
+				layer applies to every env; an env-specific entry overrides it. Vars are plaintext, so their values are shown.
 			</p>
 			<Table
 				colSpan={4}

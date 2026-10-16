@@ -12,7 +12,7 @@ const EMPTY_ROW: GrantRow = { action: '', scopeType: '', scopeValue: '' }
 
 /**
  * Issue an anonymous, revocable share link. Its own page: the grant table grows a row at a time, so
- * the form has no fixed height — exactly the shape that reads badly stacked above a list.
+ * the form has no fixed height, exactly the shape that reads badly stacked above a list.
  *
  * The token exists once, in the response, so the success modal is shown here and dismissing it is
  * what navigates away.
@@ -145,7 +145,7 @@ export default createPage()
 						fields={[{ label: 'Token', value: token.token, multiline: true }]}
 						note={
 							<p className="hint">
-								Hand this token to the holder over a trusted channel. It is the only secret — anyone with it can perform the granted actions.
+								Hand this token to the holder over a trusted channel. It is the only secret: anyone with it can perform the granted actions.
 							</p>
 						}
 						onClose={() => navigate('access/credentials')}

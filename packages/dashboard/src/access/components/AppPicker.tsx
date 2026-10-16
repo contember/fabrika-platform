@@ -4,9 +4,9 @@ import { appOptionLabel } from '../lib/app-names'
 /**
  * Which app a grant / mapping applies to. Three explicit states (mirrors ScopePicker)
  * so a cross-app grant is never made by accident:
- *  - `{ kind: 'unset' }` — nothing chosen yet; the admin MUST pick
- *  - `{ kind: 'all' }`   — every app → stored `app = null` (cross-app, e.g. super-admin)
- *  - `{ kind: 'app', app }` — scoped to one app (opice / poplach / …)
+ *  - `{ kind: 'unset' }`: nothing chosen yet; the admin MUST pick
+ *  - `{ kind: 'all' }`: every app → stored `app = null` (cross-app, e.g. super-admin)
+ *  - `{ kind: 'app', app }`: scoped to one app (opice / poplach / …)
  */
 export type AppValue =
 	| { kind: 'unset' }
@@ -32,7 +32,7 @@ interface AppPickerProps {
 /**
  * Explicit All-apps-vs-one-app picker. Authorization is app-scoped: a grant counts only
  * for its app (or every app when "All apps"). Defaults to "unset" so the admin chooses
- * deliberately — "All apps" is a distinct, conscious option, not a silent default.
+ * deliberately: "All apps" is a distinct, conscious option, not a silent default.
  */
 export function AppPicker({ apps, value, onChange, idPrefix = 'app', crossApp = true }: AppPickerProps) {
 	const allId = `${idPrefix}-all`
@@ -74,7 +74,7 @@ export function AppPicker({ apps, value, onChange, idPrefix = 'app', crossApp = 
 				</select>
 			)}
 			{apps.length === 0 && (
-				<p className="hint">{crossApp ? 'No apps registered yet — grants can only be cross-app.' : 'You administer no application to grant at.'}</p>
+				<p className="hint">{crossApp ? 'No apps registered yet, so a grant can only be cross-app.' : 'You administer no application to grant at.'}</p>
 			)}
 		</fieldset>
 	)

@@ -13,7 +13,7 @@ import { ApiError } from '../../../../lib/api'
  * multi-step decision (app → role or inline actions → scope → expiry) and it deserves the screen.
  *
  * The plaintext key exists exactly once, in the response. So the success modal is shown HERE and the
- * navigation back to the list only happens when the operator dismisses it — leaving early is their
+ * navigation back to the list only happens when the operator dismisses it; leaving early is their
  * explicit choice, not a side effect of routing.
  */
 export default createPage()

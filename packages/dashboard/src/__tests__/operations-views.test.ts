@@ -1,8 +1,17 @@
 import type { ActivityItem, DisplayFrame } from '@fabrika/operations-contract'
 import { describe, expect, test } from 'bun:test'
 import { fmtDate } from '../lib/format'
+import { formatQuery, parseQuery } from '../lib/query-search'
 import { activityPayloadLabel, frameLocation } from '../operations/views/ErrorDetail'
-import { DEFAULT_ISSUE_FILTERS, issueQuery, trendPoints } from '../operations/views/Errors'
+import {
+	DEFAULT_ISSUE_FILTERS,
+	issueFiltersFromQuery,
+	issueFiltersToQuery,
+	issueQuery,
+	issueQueryLanguage,
+	sourceNames,
+	trendPoints,
+} from '../operations/views/Errors'
 import { aggregateHealth } from '../routes/operations/health/index'
 
 describe('issue views', () => {
@@ -17,6 +26,51 @@ describe('issue views', () => {
 			sort: 'recent',
 			cursor: 'cursor-1',
 			limit: 50,
+		})
+	})
+
+	test('the search field shows exactly what is filtered, and reads back to the same filters', () => {
+		const source = (id: string, displayName: string, environment: string) => ({
+			id,
+			appId: 'notes',
+			environment,
+			serviceKey: 'default',
+			displayName,
+			publicOrigin: null,
+			enabled: true,
+		})
+		const sources = [
+			source('s1', 'Browser Notes / test', 'test'),
+			source('s2', 'api', 'prod'),
+			source('s3', 'api', 'stage'),
+			source('s4', 'web', 'prod'),
+			source('s5', 'web', 'prod'),
+		]
+		const language = issueQueryLanguage(sources)
+
+		// The defaults narrow to open issues of the last day, and say so.
+		expect(formatQuery(language, issueFiltersToQuery(DEFAULT_ISSUE_FILTERS, sources))).toBe('status:open window:24h')
+		const filters = { ...DEFAULT_ISSUE_FILTERS, query: 'checkout failed', sourceId: 's1', level: 'error' as const, sort: 'frequency' as const }
+		const text = formatQuery(language, issueFiltersToQuery(filters, sources), filters.query)
+		expect(text).toBe('status:open level:error source:"Browser Notes / test" window:24h sort:frequency checkout failed')
+		const parsed = parseQuery(language, text)
+		expect(issueFiltersFromQuery(parsed.filters, parsed.text, sources)).toEqual(filters)
+
+		// A shared name is told apart by its environment, and by the id where that is shared too.
+		expect(sourceNames(sources).get('s2')).toBe('api/prod')
+		expect(sourceNames(sources).get('s4')).toBe('s4')
+		// A source the list does not carry still narrows, by its id.
+		expect(issueFiltersFromQuery({ source: 's9' }, '', sources).sourceId).toBe('s9')
+
+		// An emptied field narrows nothing.
+		expect(issueFiltersFromQuery({}, '', sources)).toEqual({
+			query: '',
+			sourceId: '',
+			status: 'all',
+			level: 'all',
+			window: 'all',
+			assignee: 'all',
+			sort: 'recent',
 		})
 	})
 

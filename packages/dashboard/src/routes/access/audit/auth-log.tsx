@@ -1,12 +1,13 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import { useState } from 'react'
 import { api } from '../../../access/lib/api'
 import { AppName } from '../../../access/lib/app-names'
 import { trimmedQueryValue } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
+import { QuerySearch } from '../../../components/QuerySearch'
 import { Status } from '../../../components/Status'
 import { EmptyState, Table } from '../../../components/Table'
 import { fmtDate } from '../../../lib/format'
+import type { QueryLanguage } from '../../../lib/query-search'
 
 const LIMIT = 50
 
@@ -33,6 +34,7 @@ export default createPage()
 	.render(({ params, data }) => {
 		const navigate = useNavigate()
 		const rows = data.page.items
+		const current: AuthFilterParams = { principalId: params.principalId, requestId: params.requestId, decision: params.decision }
 
 		function applyFilters(next: { principalId?: string; requestId?: string; decision?: string }) {
 			navigate('access/audit/auth-log', {
@@ -61,12 +63,19 @@ export default createPage()
 					</Link>
 					<h1>Sign-in decisions</h1>
 					<p className="hint">
-						Outcomes of <code>mintToken()</code> / <code>mintFromKey()</code> and the OIDC login. This is where you debug "login looks broken" — e.g.{' '}
+						Outcomes of <code>mintToken()</code> / <code>mintFromKey()</code> and the OIDC login. This is where you debug "login looks broken", e.g.{' '}
 						<code>invalid_token</code>, <code>unknown_principal</code>, or <code>disabled</code>.
 					</p>
 				</div>
 
-				<AuthLogFilters params={params} onApply={applyFilters} />
+				<QuerySearch
+					id="auth-log-search"
+					language={AUTH_LOG_QUERY}
+					label="Search sign-in decisions"
+					filters={current}
+					onApply={(filters) => applyFilters(filters)}
+					placeholder="decision:deny principal:…"
+				/>
 
 				<Table
 					colSpan={6}
@@ -98,13 +107,24 @@ export default createPage()
 										</span>
 									)
 									: row.principalId
-									? <code className="small">{row.principalId}</code>
-									: <span className="muted">—</span>}
+									? (
+										<Link
+											to="access/audit/auth-log"
+											params={{ ...current, principalId: row.principalId }}
+											title="Filter to this principal"
+											className="filter-link"
+										>
+											<code className="small">{row.principalId}</code>
+										</Link>
+									)
+									: <span className="muted">none</span>}
 							</td>
 							<td>
-								<Status lamp={row.decision === 'allow' ? 'ok' : 'stop'}>{row.decision}</Status>
+								<Link to="access/audit/auth-log" params={{ ...current, decision: row.decision }} title={`Filter to ${row.decision}`} className="filter-link">
+									<Status lamp={row.decision === 'allow' ? 'ok' : 'stop'}>{row.decision}</Status>
+								</Link>
 							</td>
-							<td>{row.reason ? <code className="small">{row.reason}</code> : <span className="muted">—</span>}</td>
+							<td>{row.reason ? <code className="small">{row.reason}</code> : <span className="muted">none</span>}</td>
 						</tr>
 					))}
 				</Table>
@@ -126,47 +146,12 @@ interface AuthFilterParams {
 	decision?: string
 }
 
-function AuthLogFilters({ params, onApply }: { params: AuthFilterParams; onApply: (next: AuthFilterParams) => void }) {
-	const [principalId, setPrincipalId] = useState(params.principalId ?? '')
-	const [requestId, setRequestId] = useState(params.requestId ?? '')
-	const [decision, setDecision] = useState(params.decision ?? '')
-
-	function submit(e: React.FormEvent) {
-		e.preventDefault()
-		onApply({ principalId, requestId, decision: decision === '' ? undefined : decision })
-	}
-	function clear() {
-		setPrincipalId('')
-		setRequestId('')
-		setDecision('')
-		onApply({})
-	}
-
-	return (
-		<form className="filters" onSubmit={submit}>
-			<label>
-				Principal id
-				<input value={principalId} onChange={(e) => setPrincipalId(e.target.value)} />
-			</label>
-			<label>
-				Request id
-				<input value={requestId} onChange={(e) => setRequestId(e.target.value)} />
-			</label>
-			<label>
-				Decision
-				<select value={decision} onChange={(e) => setDecision(e.target.value)}>
-					<option value="">Any</option>
-					<option value="allow">allow</option>
-					<option value="deny">deny</option>
-				</select>
-			</label>
-			<div className="filter-actions">
-				<button type="submit">
-					<Icon name="filter" size={14} />
-					Filter
-				</button>
-				<button type="button" className="ghost" onClick={clear}>Clear</button>
-			</div>
-		</form>
-	)
+/** The log's three filters as the search field's qualifiers; it has no text search. */
+const AUTH_LOG_QUERY: QueryLanguage<keyof AuthFilterParams> = {
+	qualifiers: [
+		{ key: 'decision', name: 'decision', values: ['allow', 'deny'] },
+		{ key: 'principalId', name: 'principal', aliases: ['principal-id'] },
+		{ key: 'requestId', name: 'request', aliases: ['request-id'] },
+	],
+	freeText: false,
 }

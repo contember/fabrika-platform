@@ -7,19 +7,21 @@ import { Icon } from '../../components/Icon'
 import { Chip, principalLamp, Status, StatusLamp } from '../../components/Status'
 import { EmptyState } from '../../components/Table'
 import { fmtAgo, fmtDate } from '../../lib/format'
+import { recentAuditChanges } from '../../lib/iam'
 
 // The access plane on one screen: who can get in, what can get in without a person, what is about to
 // lapse, and what changed. The console's landing page reports both planes but only has room for four
 // gauges of this one; this is where the access half is actually read.
 //
 // Composed from the list endpoints that already exist. There is no aggregate endpoint and this page
-// does not justify inventing one — the four reads are small and run in parallel.
+// does not justify inventing one. The four reads are small and run in parallel.
 
 const DAY = 86_400
 const WEEK = 7 * DAY
 /** An invite nobody claimed in two weeks is either forgotten or the address is wrong. */
 const STALE_INVITE = 14 * DAY
-const AUDIT_WINDOW = 100
+/** Enough recent changes to fill the feed and count the last day's. */
+const AUDIT_CHANGES = 100
 
 export default createPage()
 	.loader(async () => {
@@ -27,9 +29,13 @@ export default createPage()
 			api.principals.list({ type: 'user' }),
 			api.apiKeys.list({}),
 			api.shareLinks.list({}),
-			api.audit.list({ limit: AUDIT_WINDOW }),
+			// The same read of the log's changes as the console overview, so the two pages never disagree about them.
+			recentAuditChanges(AUDIT_CHANGES),
 		])
-		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit: audit.items }
+		// That read is quiet, made for the console overview where IAM is optional. Here IAM is the page, so a log it did
+		// not answer is the page's error, never an empty log that reads as "nothing changed".
+		if (audit === null) throw new Error('The audit log could not be read.')
+		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit }
 	})
 	.route('/access')
 	.render(({ data }) => {
@@ -130,7 +136,12 @@ export default createPage()
 							</div>
 							<div className="card-body flush">
 								{audit.length === 0
-									? <EmptyState title="Nothing recorded yet" body="Every write the IAM service makes lands here — invites, grants, revocations." />
+									? (
+										<EmptyState
+											title="No recorded changes yet"
+											body="Invites, grants and revocations show here. Reads of the admin API are in the audit log, not in this list."
+										/>
+									)
 									: (
 										<div className="feed">
 											{audit.slice(0, 7).map((event) => <AuditRow key={event.id} event={event} />)}
@@ -198,7 +209,7 @@ export default createPage()
 													<span className="feed-title">
 														<span className="truncate">{key.label}</span>
 													</span>
-													<span className="feed-meta">grants a role that no longer exists — it resolves to zero permissions</span>
+													<span className="feed-meta">grants a role that no longer exists, so it resolves to zero permissions</span>
 												</span>
 											</Link>
 										))}
@@ -300,7 +311,7 @@ function secondaryIdentity(user: PrincipalListItem): string {
 	return user.id
 }
 
-/** Newest first — an overview reports what just happened, not what has been there longest. */
+/** Newest first: an overview reports what just happened, not what has been there longest. */
 function byRecency(a: PrincipalListItem, b: PrincipalListItem): number {
 	return b.createdAt - a.createdAt
 }
@@ -340,7 +351,7 @@ function inDays(expiresAt: number, now: number): string {
 	return hours < 48 ? `in ${hours}h` : `in ${Math.floor(hours / 24)}d`
 }
 
-/** One line of what a key may do — the detail lives on the credentials page. */
+/** One line of what a key may do; the detail lives on the credentials page. */
 function authorizationLabel(key: ApiKeyDto, names: AppNames): string {
 	if (key.grants.length === 0) return 'no grants'
 	const first = key.grants[0]

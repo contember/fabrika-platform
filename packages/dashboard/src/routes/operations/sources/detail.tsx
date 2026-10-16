@@ -52,7 +52,6 @@ export default createPage()
 			<>
 				<Link to="operations/sources" className="back-link">← All sources</Link>
 				<div className="page-head">
-					<p className="eyebrow">Operations source</p>
 					<div className="page-head-row">
 						<div>
 							<h1>{data.source.displayName}</h1>
@@ -114,8 +113,8 @@ export default createPage()
 													{check.enabled ? (check.current?.state ?? 'pending') : 'disabled'}
 												</span>
 											</td>
-											<td>{fmtDate(check.current === null ? null : check.current.observedAt / 1000)}</td>
-											<td>{check.current?.latencyMs === null || check.current === null ? '—' : `${check.current.latencyMs} ms`}</td>
+											<td>{fmtDate(check.current === null ? null : check.current.observedAt / 1000, 'never')}</td>
+											<td>{check.current?.latencyMs === null || check.current === null ? 'none' : `${check.current.latencyMs} ms`}</td>
 											<td>{check.expectedStatus} · {Math.round(check.intervalMs / 1000)}s</td>
 											{data.manages && (
 												<td>

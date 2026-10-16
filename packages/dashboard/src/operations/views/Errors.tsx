@@ -7,8 +7,11 @@ import type {
 	OperationsSourceSummaryDto,
 } from '@fabrika/operations-contract/operator-api'
 import type { OperationsIssueQuery } from '@fabrika/operations-contract/rpc'
-import { type FormEvent, useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Icon } from '../../components/Icon'
+import { QuerySearch } from '../../components/QuerySearch'
 import { fmtAgo } from '../../lib/format'
+import type { QueryFilters, QueryLanguage } from '../../lib/query-search'
 
 const PAGE_SIZE = 50
 
@@ -65,8 +68,81 @@ export function trendPoints(trend: readonly number[], width = 88, height = 24): 
 	return trend.map((value, index) => `${(index / divisor) * width},${height - (value / peak) * height}`).join(' ')
 }
 
+type IssueQueryKey = 'status' | 'level' | 'source' | 'window' | 'assignee' | 'sort'
+
+/**
+ * How a source is written in the search field: its name, `name/environment` where two sources share a name, and its id
+ * where even that is shared. Built from the sources the caller can see, so `source:` accepts exactly those.
+ */
+export function sourceNames(sources: readonly OperationsSourceSummaryDto[]): Map<string, string> {
+	const counts = new Map<string, number>()
+	const count = (name: string) => counts.set(name, (counts.get(name) ?? 0) + 1)
+	for (const source of sources) {
+		count(source.displayName)
+		count(`${source.displayName}/${source.environment}`)
+	}
+	return new Map(sources.map((source) => {
+		const scoped = `${source.displayName}/${source.environment}`
+		return [source.id, counts.get(source.displayName) === 1 ? source.displayName : counts.get(scoped) === 1 ? scoped : source.id]
+	}))
+}
+
+/**
+ * The source a `source:` value names. A value that is no listed source's name is taken as an id, so a click on a source
+ * the list does not carry (one the caller no longer sees, say) still narrows to it instead of quietly showing everything.
+ */
+export function sourceIdNamed(sources: readonly OperationsSourceSummaryDto[], written: string): string {
+	return [...sourceNames(sources)].find(([, name]) => name === written)?.[0] ?? written
+}
+
+/** The issue list's filters as the search field's qualifiers; words without a qualifier search title and culprit. */
+export function issueQueryLanguage(sources: readonly OperationsSourceSummaryDto[]): QueryLanguage<IssueQueryKey> {
+	return {
+		qualifiers: [
+			{ key: 'status', name: 'status', values: ['open', 'resolved', 'ignored', 'all'] },
+			{ key: 'level', name: 'level', values: ['fatal', 'error', 'warning', 'info'] },
+			{ key: 'source', name: 'source', values: [...sourceNames(sources).values()] },
+			{ key: 'window', name: 'window', values: ['24h', '7d', '30d', 'all'] },
+			{ key: 'assignee', name: 'assignee', values: ['me', 'none', 'all'] },
+			{ key: 'sort', name: 'sort', values: ['recent', 'new', 'frequency'] },
+		],
+		freeText: true,
+	}
+}
+
+/**
+ * The field shows exactly what is filtered: each filter that narrows the list, and the sort when it is not the
+ * default. A filter missing from the field does not narrow, so an emptied field lists every issue.
+ */
+export function issueFiltersToQuery(filters: IssueFilters, sources: readonly OperationsSourceSummaryDto[]): QueryFilters<IssueQueryKey> {
+	return {
+		...(filters.status === 'all' ? {} : { status: filters.status }),
+		...(filters.level === 'all' ? {} : { level: filters.level }),
+		...(filters.sourceId === '' ? {} : { source: sourceNames(sources).get(filters.sourceId) ?? filters.sourceId }),
+		...(filters.window === 'all' ? {} : { window: filters.window }),
+		...(filters.assignee === 'all' ? {} : { assignee: filters.assignee }),
+		...(filters.sort === 'recent' ? {} : { sort: filters.sort }),
+	}
+}
+
+export function issueFiltersFromQuery(
+	query: QueryFilters<IssueQueryKey>,
+	text: string,
+	sources: readonly OperationsSourceSummaryDto[],
+): IssueFilters {
+	return {
+		query: text,
+		sourceId: query.source === undefined ? '' : sourceIdNamed(sources, query.source),
+		status: readStatus(query.status ?? 'all'),
+		level: readLevel(query.level ?? 'all'),
+		window: readWindow(query.window ?? 'all'),
+		assignee: readAssignee(query.assignee ?? 'all'),
+		sort: readSort(query.sort ?? 'recent'),
+	}
+}
+
 export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStatus, onBulkMerge }: ErrorsViewProps) {
-	const [filters, setFilters] = useState<IssueFilters>(DEFAULT_ISSUE_FILTERS)
+	const language = useMemo(() => issueQueryLanguage(sources), [sources])
 	const [appliedFilters, setAppliedFilters] = useState<IssueFilters>(DEFAULT_ISSUE_FILTERS)
 	const [page, setPage] = useState(initialPage)
 	const [pending, setPending] = useState<string | null>(null)
@@ -76,18 +152,24 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 
 	useEffect(() => setPage(initialPage), [initialPage])
 
+	// Loads overlap (the five-second poll, a search, a click on a value), so only the newest one may land: an older
+	// answer arriving last would put the list, and the field, back on the filters it was asked for.
+	const latest = useRef(0)
+
 	async function load(nextFilters: IssueFilters, append: boolean, clearSelection = !append) {
+		const ticket = ++latest.current
 		setPending(append ? 'more' : 'query')
 		setError(null)
 		try {
 			const next = await onQuery(issueQuery(nextFilters, append ? page.nextCursor ?? undefined : undefined))
+			if (ticket !== latest.current) return
 			setPage(append ? { ...next, items: [...page.items, ...next.items] } : next)
 			setAppliedFilters(nextFilters)
 			if (clearSelection) setSelected([])
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : 'Issues could not be loaded.')
+			if (ticket === latest.current) setError(cause instanceof Error ? cause.message : 'Issues could not be loaded.')
 		} finally {
-			setPending(null)
+			if (ticket === latest.current) setPending(null)
 		}
 	}
 
@@ -142,9 +224,9 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 		}
 	}
 
-	function apply(event: FormEvent) {
-		event.preventDefault()
-		void load(filters, false)
+	/** A value in the table narrows the list to it, keeping the filters already applied. */
+	function narrow(change: Partial<IssueFilters>) {
+		void load({ ...appliedFilters, ...change }, false)
 	}
 
 	function toggle(issueId: string) {
@@ -160,68 +242,23 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 
 	return (
 		<>
-			<form className="filters" onSubmit={apply}>
-				<label className="field-wide">
-					Search
-					<input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="Title or culprit" />
-				</label>
-				<label>
-					Source
-					<select value={filters.sourceId} onChange={(event) => setFilters({ ...filters, sourceId: event.target.value })}>
-						<option value="">All sources</option>
-						{sources.map((source) => <option key={source.id} value={source.id}>{source.displayName} · {source.environment}</option>)}
-					</select>
-				</label>
-				<label>
-					Status
-					<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: readStatus(event.target.value) })}>
-						<option value="all">All</option>
-						<option value="open">Open</option>
-						<option value="resolved">Resolved</option>
-						<option value="ignored">Ignored</option>
-					</select>
-				</label>
-				<label>
-					Level
-					<select value={filters.level} onChange={(event) => setFilters({ ...filters, level: readLevel(event.target.value) })}>
-						<option value="all">All</option>
-						<option value="fatal">Fatal</option>
-						<option value="error">Error</option>
-						<option value="warning">Warning</option>
-						<option value="info">Info</option>
-					</select>
-				</label>
-				<label>
-					Window
-					<select value={filters.window} onChange={(event) => setFilters({ ...filters, window: readWindow(event.target.value) })}>
-						<option value="24h">24 hours</option>
-						<option value="7d">7 days</option>
-						<option value="30d">30 days</option>
-						<option value="all">All time</option>
-					</select>
-				</label>
-				<label>
-					Assignee
-					<select value={filters.assignee} onChange={(event) => setFilters({ ...filters, assignee: readAssignee(event.target.value) })}>
-						<option value="all">Anyone</option>
-						<option value="me">Assigned to me</option>
-						<option value="none">Unassigned</option>
-					</select>
-				</label>
-				<label>
-					Sort
-					<select value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: readSort(event.target.value) })}>
-						<option value="recent">Recent</option>
-						<option value="new">New</option>
-						<option value="frequency">Frequency</option>
-					</select>
-				</label>
-				<div className="filter-actions">
-					<button type="submit" disabled={pending !== null}>Apply</button>
-					<button type="button" className="ghost" disabled={pending !== null} onClick={() => void load(appliedFilters, false)}>Refresh</button>
-				</div>
-				<span className="count">{page.summary.total.toLocaleString()} {page.summary.total === 1 ? 'issue' : 'issues'}</span>
-			</form>
+			<QuerySearch
+				id="issue-search"
+				language={language}
+				label="Search"
+				filters={issueFiltersToQuery(appliedFilters, sources)}
+				text={appliedFilters.query}
+				onApply={(query, text) => void load(issueFiltersFromQuery(query, text, sources), false)}
+				placeholder="status:open level:error checkout failed"
+				aside={
+					<>
+						{page.summary.total.toLocaleString()} {page.summary.total === 1 ? 'issue' : 'issues'}
+						<button type="button" className="ghost small" disabled={pending !== null} onClick={() => void load(appliedFilters, false)}>
+							Refresh
+						</button>
+					</>
+				}
+			/>
 
 			{onBulkStatus !== undefined && selected.length > 0 && (
 				<div className="toolbar ops-bulk">
@@ -292,14 +329,34 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 										</td>
 									)}
 									<td>
-										<span className={`ops-level ops-level-${severityClass(issue.level)}`}>{issue.level}</span>
+										{/* A level the search cannot filter on (an SDK's own `debug`) is shown, not offered as a filter. */}
+										{readLevel(issue.level) === 'all'
+											? <span className={`ops-level ops-level-${severityClass(issue.level)}`}>{issue.level}</span>
+											: (
+												<button type="button" className="filter-value" title="Filter to this level" onClick={() => narrow({ level: readLevel(issue.level) })}>
+													<span className={`ops-level ops-level-${severityClass(issue.level)}`}>{issue.level}</span>
+												</button>
+											)}
 									</td>
 									<td>
 										<Link to="operations/errors/detail" params={{ issueId: issue.id }}>{issue.title}</Link>
 										{issue.culprit !== null && <div className="cell-note">{issue.culprit}</div>}
 									</td>
 									<td>
-										<Link to="operations/sources/detail" params={{ sourceId: issue.source.id }}>{issue.source.displayName}</Link>
+										<span className="linked-value">
+											<button type="button" className="filter-value" title="Filter to this source" onClick={() => narrow({ sourceId: issue.source.id })}>
+												<span>{issue.source.displayName}</span>
+											</button>
+											<Link
+												to="operations/sources/detail"
+												params={{ sourceId: issue.source.id }}
+												className="value-page"
+												aria-label={`Open ${issue.source.displayName}`}
+												title="Open this source"
+											>
+												<Icon name="arrow-right" size={12} />
+											</Link>
+										</span>
 										<div className="cell-note">{issue.source.environment} · {issue.source.serviceKey}</div>
 									</td>
 									<td>
@@ -308,7 +365,9 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 									<td className="numeric">{issue.count.toLocaleString()}</td>
 									<td>{fmtAgo(issue.lastSeen / 1000)}</td>
 									<td>
-										<IssueStatusLabel issueId={issue.id} status={issue.status} regressed={issue.regressedAt !== null} />
+										<button type="button" className="filter-value" title="Filter to this status" onClick={() => narrow({ status: issue.status })}>
+											<IssueStatusLabel issueId={issue.id} status={issue.status} regressed={issue.regressedAt !== null} />
+										</button>
 									</td>
 									{onMutate !== undefined && (
 										<td>
@@ -340,7 +399,7 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 
 function Trend({ issue }: { issue: OperationsIssueSummaryDto }) {
 	const points = trendPoints(issue.trend)
-	if (points === '') return <span className="muted">—</span>
+	if (points === '') return <span className="muted">none</span>
 	return (
 		<svg width="88" height="24" viewBox="0 0 88 24" role="img" aria-label={`Event trend for ${issue.title}`}>
 			<polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />

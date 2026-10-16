@@ -7,8 +7,10 @@ import { AppName } from '../../../access/lib/app-names'
 import { actorIdsToResolve, type AuditActor, auditActor, resolveActors } from '../../../access/lib/audit-actors'
 import { trimmedQueryValue } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
+import { QuerySearch } from '../../../components/QuerySearch'
 import { EmptyState, Table } from '../../../components/Table'
 import { fmtDate } from '../../../lib/format'
+import type { QueryLanguage } from '../../../lib/query-search'
 
 const LIMIT = 50
 
@@ -80,7 +82,14 @@ export default createPage()
 					</div>
 				</div>
 
-				<AuditFilters params={current} onApply={applyFilters} />
+				<QuerySearch
+					id="audit-search"
+					language={AUDIT_QUERY}
+					label="Search the audit log"
+					filters={current}
+					onApply={(filters) => applyFilters(filters)}
+					placeholder="action:iam.grant.create resource:…"
+				/>
 
 				<Table
 					colSpan={6}
@@ -97,7 +106,7 @@ export default createPage()
 						</tr>
 					}
 				>
-					{events.map((event) => <AuditRow key={event.id} event={event} actor={auditActor(event, data.actors)} />)}
+					{events.map((event) => <AuditRow key={event.id} event={event} actor={auditActor(event, data.actors)} current={current} />)}
 				</Table>
 
 				<div className="pager">
@@ -111,60 +120,23 @@ export default createPage()
 		)
 	})
 
-function AuditFilters({ params, onApply }: { params: FilterParams; onApply: (next: FilterParams) => void }) {
-	const [resourceType, setResourceType] = useState(params.resourceType ?? '')
-	const [resourceId, setResourceId] = useState(params.resourceId ?? '')
-	const [principalId, setPrincipalId] = useState(params.principalId ?? '')
-	const [action, setAction] = useState(params.action ?? '')
-	const [requestId, setRequestId] = useState(params.requestId ?? '')
-
-	function submit(e: React.FormEvent) {
-		e.preventDefault()
-		onApply({ resourceType, resourceId, principalId, action, requestId })
-	}
-	function clear() {
-		setResourceType('')
-		setResourceId('')
-		setPrincipalId('')
-		setAction('')
-		setRequestId('')
-		onApply({})
-	}
-
-	return (
-		<form className="filters" onSubmit={submit}>
-			<label>
-				Resource type
-				<input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
-			</label>
-			<label>
-				Resource id
-				<input value={resourceId} onChange={(e) => setResourceId(e.target.value)} />
-			</label>
-			<label>
-				Principal id
-				<input value={principalId} onChange={(e) => setPrincipalId(e.target.value)} />
-			</label>
-			<label>
-				Action
-				<input value={action} onChange={(e) => setAction(e.target.value)} />
-			</label>
-			<label>
-				Request id
-				<input value={requestId} onChange={(e) => setRequestId(e.target.value)} />
-			</label>
-			<div className="filter-actions">
-				<button type="submit">
-					<Icon name="filter" size={14} />
-					Filter
-				</button>
-				<button type="button" className="ghost" onClick={clear}>Clear</button>
-			</div>
-		</form>
-	)
+/** IAM's five audit filters as the search field's qualifiers; the log has no text search. */
+const AUDIT_QUERY: QueryLanguage<keyof FilterParams> = {
+	qualifiers: [
+		{ key: 'action', name: 'action' },
+		{ key: 'resourceType', name: 'type', aliases: ['resource-type'] },
+		{ key: 'resourceId', name: 'resource', aliases: ['resource-id'] },
+		{ key: 'principalId', name: 'principal', aliases: ['principal-id', 'actor'] },
+		{ key: 'requestId', name: 'request', aliases: ['request-id'] },
+	],
+	freeText: false,
 }
 
-export function ActorCell({ actor }: { actor: AuditActor }) {
+/**
+ * Who acted. Like every other value in the row, the name narrows the log to it (`principal:`); a person also has a
+ * way to their page, beside the name, so the cell's main click does what the rest of the row does.
+ */
+export function ActorCell({ actor, current = {} }: { actor: AuditActor; current?: FilterParams }) {
 	switch (actor.kind) {
 		case 'credential':
 			return (
@@ -173,15 +145,35 @@ export function ActorCell({ actor }: { actor: AuditActor }) {
 				</span>
 			)
 		case 'principal':
-			return actor.isUser
-				? <Link to="access/users/detail" params={{ id: actor.principalId }} title={actor.principalId}>{actor.label}</Link>
-				: <span title={actor.principalId}>{actor.label}</span>
+			return (
+				<span className="linked-value">
+					<Link
+						to="access/audit"
+						params={{ ...current, principalId: actor.principalId }}
+						title={`Filter to ${actor.label} (${actor.principalId})`}
+						className="filter-link"
+					>
+						<span>{actor.label}</span>
+					</Link>
+					{actor.isUser && (
+						<Link
+							to="access/users/detail"
+							params={{ id: actor.principalId }}
+							className="value-page"
+							aria-label={`Open ${actor.label}`}
+							title="Open this user"
+						>
+							<Icon name="arrow-right" size={12} />
+						</Link>
+					)}
+				</span>
+			)
 		case 'label':
 			return <>{actor.label}</>
 	}
 }
 
-function AuditRow({ event, actor }: { event: AuditEventDto; actor: AuditActor }) {
+function AuditRow({ event, actor, current }: { event: AuditEventDto; actor: AuditActor; current: FilterParams }) {
 	const [open, setOpen] = useState(false)
 	const hasDetail = event.diff !== null && event.diff !== undefined
 		|| event.metadata !== null && event.metadata !== undefined
@@ -191,24 +183,36 @@ function AuditRow({ event, actor }: { event: AuditEventDto; actor: AuditActor })
 			<tr>
 				<td className="nowrap">{fmtDate(event.createdAt)}</td>
 				<td>
-					<ActorCell actor={actor} />
+					<ActorCell actor={actor} current={current} />
 				</td>
 				<td>
 					<AppName app={event.app} />
 				</td>
 				<td>
-					<code>{event.action}</code>
+					<Link to="access/audit" params={{ ...current, action: event.action }} title="Filter to this action" className="filter-link">
+						<code>{event.action}</code>
+					</Link>
 				</td>
 				<td>
-					<code>{event.resourceType}</code>
-					{event.resourceId && <span className="muted">{' '}#{event.resourceId}</span>}
+					<Link to="access/audit" params={{ ...current, resourceType: event.resourceType }} title="Filter to this resource type" className="filter-link">
+						<code>{event.resourceType}</code>
+					</Link>
+					{event.resourceId && (
+						<>
+							{' '}
+							<Link
+								to="access/audit"
+								params={{ ...current, resourceType: event.resourceType, resourceId: event.resourceId }}
+								title="Filter to this resource"
+								className="filter-link"
+							>
+								<span className="muted">#{event.resourceId}</span>
+							</Link>
+						</>
+					)}
 				</td>
 				<td className="nowrap">
-					<Link
-						to="access/audit"
-						params={{ requestId: event.requestId }}
-						title="Filter to this request"
-					>
+					<Link to="access/audit" params={{ ...current, requestId: event.requestId }} title="Filter to this request" className="filter-link">
 						<code className="small">{event.requestId.slice(0, 8)}</code>
 					</Link>
 					{hasDetail && (

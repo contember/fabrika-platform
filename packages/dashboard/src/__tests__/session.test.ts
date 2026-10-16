@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readConsoleSession, signOutUrl } from '../lib/session'
-import { SignedIn } from '../routes/_layout'
+import { SignedIn, SignOut } from '../routes/_layout'
 
 const DISCOVERY = { version: 1, controlOrigin: 'https://console.example.com', iamIssuer: 'https://iam.example.com', provider: 'zerops' }
 
@@ -106,7 +106,7 @@ describe('console session', () => {
 		expect((await readConsoleSession(consoleFetch({ me: meAnswer(), discovery: malformed }))).signOutUrl).toBeNull()
 	})
 
-	test('renders the label with the id in its title, and the sign-out link', () => {
+	test('renders the label with the id in its title', () => {
 		const markup = renderToStaticMarkup(createElement(SignedIn, {
 			session: {
 				principal: { id: 'user-1', label: 'Ada@Example.com' },
@@ -119,12 +119,26 @@ describe('console session', () => {
 
 		expect(markup).toContain('>Ada@Example.com</span>')
 		expect(markup).toContain('title="Signed in as Ada@Example.com (user-1)"')
+	})
+
+	test('the sign-out item links to IAM sign-out', () => {
+		const markup = renderToStaticMarkup(createElement(SignOut, {
+			session: {
+				principal: { id: 'user-1', label: 'Ada@Example.com' },
+				signOutUrl: signOutUrl('https://iam.example.com'),
+				access: null,
+				iam: null,
+				administersPeople: null,
+			},
+		}))
+
 		expect(markup).toContain('href="https://iam.example.com/auth/logout?redirect=https%3A%2F%2Fiam.example.com%2Fauth%2Flogin"')
-		expect(markup).toContain('>Sign out</a>')
+		expect(markup).toContain('Sign out</a>')
 	})
 
 	test('renders only what it knows', () => {
 		const session = { principal: null, signOutUrl: null, access: null, iam: null, administersPeople: null }
 		expect(renderToStaticMarkup(createElement(SignedIn, { session }))).toBe('')
+		expect(renderToStaticMarkup(createElement(SignOut, { session }))).toBe('')
 	})
 })

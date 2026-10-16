@@ -12,7 +12,7 @@ interface ActionPickerProps {
 /**
  * Multi-select over an app's action catalog (`app_actions`), used to compose inline grant
  * permissions or a custom policy's permission set. Each picked entry is a concrete catalog
- * action — always a valid pattern the worker will accept (the worker also allows `prefix.*`
+ * action, always a valid pattern the worker will accept (the worker also allows `prefix.*`
  * / `*`, but this picker keeps composition explicit by listing concrete actions only).
  */
 export function ActionPicker({ actions, value, onChange, idPrefix = 'action' }: ActionPickerProps) {

@@ -1,18 +1,22 @@
 import { createPage, Link } from '@buzola/router'
-import type { PrincipalStatus as Lifecycle } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { api } from '../../../access/lib/api'
 import { Icon } from '../../../components/Icon'
+import { QuerySearch } from '../../../components/QuerySearch'
 import { Chip, PrincipalStatus } from '../../../components/Status'
 import { EmptyState, Table } from '../../../components/Table'
 import { fmtAgo, fmtDate } from '../../../lib/format'
+import type { QueryLanguage } from '../../../lib/query-search'
 
 // People. A service principal is a machine with a key, so it is listed where that key is managed
-// (Credentials) instead of sharing this page behind a type filter — `GET /api-keys` returns every
+// (Credentials) instead of sharing this page behind a type filter: `GET /api-keys` returns every
 // service principal, so narrowing this page to users hides nothing.
 
-/** '' = any lifecycle state. */
-type StatusFilter = '' | Lifecycle
+/** The list filters in the browser: a lifecycle state, and words matched against name, email and external id. */
+const USERS_QUERY: QueryLanguage<'status'> = {
+	qualifiers: [{ key: 'status', name: 'status', values: ['active', 'invited', 'disabled'] }],
+	freeText: true,
+}
 
 export default createPage()
 	.loader(async () => {
@@ -21,13 +25,8 @@ export default createPage()
 	})
 	.route('/access/users')
 	.render(({ data }) => {
-		const [status, setStatus] = useState<StatusFilter>('')
+		const [status, setStatus] = useState('')
 		const [query, setQuery] = useState('')
-
-		function onStatusChange(value: string) {
-			if (value === 'invited' || value === 'active' || value === 'disabled') setStatus(value)
-			else setStatus('')
-		}
 
 		const q = query.trim().toLowerCase()
 		const filtered = data.users.filter((user) => {
@@ -53,22 +52,20 @@ export default createPage()
 					</div>
 				</div>
 
-				<div className="filters">
-					<label>
-						Status
-						<select value={status} onChange={(e) => onStatusChange(e.target.value)}>
-							<option value="">All</option>
-							<option value="active">Active</option>
-							<option value="invited">Invited</option>
-							<option value="disabled">Disabled</option>
-						</select>
-					</label>
-					<label className="field-wide">
-						Search
-						<input type="search" placeholder="Name, email or external id" value={query} onChange={(e) => setQuery(e.target.value)} />
-					</label>
-					<span className="count">{filtered.length} of {data.users.length}</span>
-				</div>
+				<QuerySearch
+					id="users-search"
+					language={USERS_QUERY}
+					label="Search"
+					filters={{ status: status || undefined }}
+					text={query}
+					onApply={(filters, text) => {
+						setStatus(filters.status ?? '')
+						setQuery(text)
+					}}
+					placeholder="status:invited ada"
+					live
+					aside={`${filtered.length} of ${data.users.length}`}
+				/>
 
 				{/* The page head already carries the filled Invite button, so this repeat of it stays outline. */}
 				<Table
@@ -99,9 +96,11 @@ export default createPage()
 								{user.affiliation === 'external' && <Chip title="A person from outside the organization">external</Chip>}
 								{user.email && <div className="muted small">{user.email}</div>}
 							</td>
-							<td>{user.externalId ?? <span className="muted">—</span>}</td>
+							<td className="nowrap">{user.externalId ?? <span className="muted">none</span>}</td>
 							<td>
-								<PrincipalStatus status={user.status} />
+								<button type="button" className="filter-value" title="Filter to this status" onClick={() => setStatus(user.status)}>
+									<PrincipalStatus status={user.status} />
+								</button>
 							</td>
 							<td className="muted small nowrap" title={fmtDate(user.createdAt)}>{fmtAgo(user.createdAt)}</td>
 						</tr>

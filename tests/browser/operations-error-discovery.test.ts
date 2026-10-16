@@ -1,7 +1,7 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { browserTest, byLabel, byRole, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
-import { applyIssueFilters } from './support/console'
+import { searchIssues } from './support/console'
 import { readBrowserFixtures, scenarioMarker, sendErrorFixture } from './support/fixtures'
 import { createBrowserIdentity } from './support/local-stack'
 
@@ -128,14 +128,15 @@ browserTest(
 
 		await step('search narrows the list to the primary failure', {
 			intent: 'operators can find a known failure by title without depending on list order or global counts',
-			manual: 'Enter "primary failure" in "Search" and select "Apply". Verify that the matching error remains visible and the others are gone.',
+			manual:
+				'Enter "status:open window:24h primary failure" in "Search" and press Enter. Verify that the matching error remains visible and the others are gone.',
 		}, async () => {
 			const table = byRole('table', 'Operations issues')
-			await byLabel('Search').fill('primary failure')
-			// A typed query is local state until the form is submitted, so the unnarrowed list must still stand here.
+			await byLabel('Search').fill('status:open window:24h primary failure')
+			// A typed query is local state until Enter applies it, so the unnarrowed list must still stand here.
 			await expect(table).toContainText(MERGE_CANDIDATE)
 
-			await applyIssueFilters()
+			await byLabel('Search').press('Enter')
 			await expect(table).toContainText(PRIMARY_FAILURE)
 			await expect(table).not.toContainText(MERGE_CANDIDATE)
 		})
@@ -143,43 +144,28 @@ browserTest(
 		await step('status filters expose the supported issue states', {
 			intent: 'the error list can be narrowed by open, resolved, ignored, or all status',
 			manual:
-				'Use "Status" to show Open, Resolved, Ignored, and All errors, selecting "Apply" after each. Verify that the matching test error appears in each view and the others do not.',
+				'Search for "status:open", "status:resolved", "status:ignored" and "status:all" in turn, each with the test marker. Verify that the matching test error appears in each view and the others do not.',
 		}, async () => {
-			const status = byRole('combobox', 'Status', { exact: true })
-			const search = byLabel('Search')
 			const table = byRole('table', 'Operations issues')
 
 			// The two fixture issues share the run query and differ only in status, so each view is
-			// asserted positively AND negatively — the status filter, not the query, is what separates them.
-			await status.selectOption('open')
-			await expect(status).toHaveValue('open')
-			await search.fill('primary failure')
-			await applyIssueFilters()
+			// asserted positively AND negatively: the status filter, not the query, is what separates them.
+			await searchIssues('status:open window:24h primary failure')
 			await expect(table).toContainText(PRIMARY_FAILURE)
 
-			await status.selectOption('resolved')
-			await expect(status).toHaveValue('resolved')
-			await search.fill(FILTER_RUN)
-			await applyIssueFilters()
+			await searchIssues(`status:resolved ${FILTER_RUN}`)
 			await expect(table).toContainText(RESOLVED_FILTER_TITLE)
 			await expect(table).not.toContainText(IGNORED_FILTER_TITLE)
 
-			await status.selectOption('ignored')
-			await expect(status).toHaveValue('ignored')
-			await applyIssueFilters()
+			await searchIssues(`status:ignored ${FILTER_RUN}`)
 			await expect(table).toContainText(IGNORED_FILTER_TITLE)
 			await expect(table).not.toContainText(RESOLVED_FILTER_TITLE)
 
-			await status.selectOption('all')
-			await expect(status).toHaveValue('all')
-			await applyIssueFilters()
+			await searchIssues(`status:all ${FILTER_RUN}`)
 			await expect(table).toContainText(RESOLVED_FILTER_TITLE)
 			await expect(table).toContainText(IGNORED_FILTER_TITLE)
 
-			await status.selectOption('open')
-			await expect(status).toHaveValue('open')
-			await search.fill('primary failure')
-			await applyIssueFilters()
+			await searchIssues('status:open window:24h primary failure')
 			await expect(table).toContainText(PRIMARY_FAILURE)
 		})
 

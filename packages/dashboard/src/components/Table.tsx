@@ -4,7 +4,7 @@ import { Icon, type IconName } from './Icon'
 interface TableProps {
 	head: ReactNode
 	children: ReactNode
-	/** Rendered in place of the body when there are no rows — usually an `<EmptyState>`. */
+	/** Rendered in place of the body when there are no rows, usually an `<EmptyState>`. */
 	empty?: ReactNode
 	isEmpty?: boolean
 	colSpan?: number
@@ -34,7 +34,7 @@ interface EmptyStateProps {
 	icon?: IconName
 	title: string
 	body?: ReactNode
-	/** The one thing to do about it — a link or button, not a list of options. */
+	/** The one thing to do about it: a link or button, not a list of options. */
 	action?: ReactNode
 }
 

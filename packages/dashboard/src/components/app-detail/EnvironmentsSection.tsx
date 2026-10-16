@@ -30,7 +30,7 @@ export function EnvironmentsSection(
 				<h2>Environments</h2>
 			</div>
 			<Table
-				colSpan={7}
+				colSpan={6}
 				isEmpty={envs.length === 0}
 				empty={
 					<EmptyState
@@ -42,8 +42,8 @@ export function EnvironmentsSection(
 				head={
 					<tr>
 						<th>Env</th>
-						<th className="grow">Domain</th>
-						<th className="grow">Public origin</th>
+						{/* The domain and the origin it answers on are one address; one cell keeps the row in the window. */}
+						<th className="grow">Domain · public origin</th>
 						<th>Trigger ref</th>
 						<th>Placement</th>
 						<th>Provider config</th>
@@ -134,8 +134,12 @@ function EnvRow(
 			<td>
 				<strong>{env.env}</strong>
 			</td>
-			<td>{env.domain === null ? <span className="muted">—</span> : env.domain}</td>
-			<td>{env.publicOrigin === null ? <span className="muted">—</span> : <code>{env.publicOrigin}</code>}</td>
+			<td>
+				<div className="cell-stack">
+					{env.domain === null ? <span className="muted">no domain</span> : <span>{env.domain}</span>}
+					{env.publicOrigin === null ? <span className="muted small">no public origin</span> : <code className="small">{env.publicOrigin}</code>}
+				</div>
+			</td>
 			<td>{env.triggerRef === null ? <span className="muted">manual-only</span> : <code>{shortRef(env.triggerRef)}</code>}</td>
 			<td>
 				<NamespaceAssignment appId={appId} environment={env} namespaces={namespaces} onDone={onDone} />
@@ -235,7 +239,7 @@ function NamespaceAssignment(
 	)
 }
 
-/** Shared env editor — an inline table row form for both edit and add. */
+/** Shared env editor: an inline table row form for both edit and add. */
 function EnvForm(
 	{ appId, env, initial, provider, namespaces, onDone, onCancel, lockEnv = true }: {
 		appId: string
@@ -310,16 +314,16 @@ function EnvForm(
 					: <input aria-label="Env" value={envName} onChange={(e) => setEnvName(e.target.value)} placeholder="stage" />}
 			</td>
 			<td>
-				<input aria-label="Domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="store.acme.com" />
-			</td>
-			<td>
-				<input
-					type="url"
-					aria-label="Public origin"
-					value={publicOrigin}
-					onChange={(e) => setPublicOrigin(e.target.value)}
-					placeholder="https://store.acme.com"
-				/>
+				<div className="cell-stack">
+					<input aria-label="Domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="store.acme.com" />
+					<input
+						type="url"
+						aria-label="Public origin"
+						value={publicOrigin}
+						onChange={(e) => setPublicOrigin(e.target.value)}
+						placeholder="https://store.acme.com"
+					/>
+				</div>
 			</td>
 			<td>
 				<input aria-label="Trigger ref" value={triggerRef} onChange={(e) => setTriggerRef(e.target.value)} placeholder="refs/heads/main" />

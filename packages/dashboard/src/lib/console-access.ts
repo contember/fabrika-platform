@@ -23,7 +23,7 @@ export type NavPage =
 	| 'people'
 
 /**
- * What the console knows about what its caller may use. A null field is unknown — the service did not answer — and
+ * What the console knows about what its caller may use. A null field is unknown (the service did not answer), and
  * reads as usable, so an outage shows the page that reports it instead of a claim that the caller has no access.
  */
 export interface ConsoleCaller {

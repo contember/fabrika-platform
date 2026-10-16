@@ -18,7 +18,7 @@ interface SecretModalProps {
 
 /**
  * Blocking, once-shown secret/token display. The secret is never persisted, never put in
- * a URL or link — only rendered as copyable text. The user must explicitly acknowledge it
+ * a URL or link, only rendered as copyable text. The user must explicitly acknowledge it
  * before the modal closes.
  */
 export function SecretModal({ title, fields, note, onClose }: SecretModalProps) {

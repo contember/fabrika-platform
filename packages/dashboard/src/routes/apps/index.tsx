@@ -1,12 +1,13 @@
 import { createPage, Link } from '@buzola/router'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { SearchField } from '../../components/SearchField'
 import { Chip } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortRef } from '../../lib/format'
 
-// Apps — every registered app. The detail page (apps/:id) holds its envs, secrets, and per-env Deploy.
+// Apps: every registered app. The detail page (apps/:id) holds its envs, secrets, and per-env Deploy.
 // New apps are onboarded at /apps/new; this is the registry view.
 
 export default createPage()
@@ -36,15 +37,7 @@ export default createPage()
 				</div>
 
 				<div className="filters">
-					<label className="field-wide">
-						Search
-						<input
-							type="search"
-							placeholder="App id or repository"
-							value={query}
-							onChange={(e) => setQuery(e.target.value)}
-						/>
-					</label>
+					<SearchField label="Search" value={query} onChange={setQuery} placeholder="App id or repository" />
 					<span className="count">{filtered.length} of {data.apps.length}</span>
 				</div>
 

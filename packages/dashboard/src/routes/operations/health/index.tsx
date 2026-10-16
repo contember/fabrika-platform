@@ -47,7 +47,7 @@ export default createPage()
 										</td>
 										<td>{source.telemetryState}</td>
 										<td>{source.httpChecks.length}</td>
-										<td>{fmtDate(latest === null ? null : latest.observedAt / 1000)}</td>
+										<td>{fmtDate(latest === null ? null : latest.observedAt / 1000, 'never')}</td>
 										<td>
 											<span className={`status status-${healthLamp(state)}`}>
 												<span className="lamp" aria-hidden="true" />

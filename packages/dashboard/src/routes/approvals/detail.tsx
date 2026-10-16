@@ -67,7 +67,7 @@ export default createPage()
 						</Field>
 						<Field label="Created">{fmtDate(run.createdAt)}</Field>
 						{approval.approval !== null && (
-							<Field label="Approved">
+							<Field label="Approved" wide>
 								{approval.approval.label} · {fmtDate(approval.approval.approvedAt)}
 							</Field>
 						)}
@@ -168,9 +168,9 @@ function Decision({ approval, onDone }: { approval: ApprovalDto; onDone: () => v
 	)
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) {
 	return (
-		<div>
+		<div className={wide ? 'wide' : undefined}>
 			<h4>{label}</h4>
 			{children}
 		</div>

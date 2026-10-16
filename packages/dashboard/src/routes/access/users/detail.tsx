@@ -58,7 +58,7 @@ export default createPage()
 						<Icon name="shield" size={15} />
 						<h2>Effective permissions</h2>
 					</div>
-					<p className="section-note">Why this user has each permission — resolved from grants, group mappings and bootstrap.</p>
+					<p className="section-note">Why this user has each permission, resolved from grants, group mappings and bootstrap.</p>
 					<Table
 						colSpan={3}
 						isEmpty={principal.permissions.length === 0}
@@ -258,7 +258,7 @@ function Authentication({ principal, onDone }: { principal: PrincipalDetail; onD
  * Open sessions, and the two ways to end one.
  *
  * Disabling the user was the only lever an operator had here, and it locks the person out. Revoking
- * an IAM session also ends every app session derived from it — the app rows keep their own
+ * an IAM session also ends every app session derived from it; the app rows keep their own
  * `active` status because the cascade happens at lookup, so the table says which parent each one
  * hangs off rather than pretending the child was rewritten.
  */
@@ -334,7 +334,7 @@ function SessionRow({ session, onDone }: { session: SessionDto; onDone: () => vo
 						</Chip>
 					)}
 			</td>
-			<td>{fmtExpiry(session.expiresAt)}</td>
+			<td className="nowrap">{fmtExpiry(session.expiresAt)}</td>
 			<td>
 				<Status lamp={session.status === 'active' ? 'ok' : 'idle'}>{session.status}</Status>
 			</td>

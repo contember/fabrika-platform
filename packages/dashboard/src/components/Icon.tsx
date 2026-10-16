@@ -1,4 +1,4 @@
-// The console's one icon set — hand-drawn on a 24px grid, stroked at 1.75 so it reads a touch finer
+// The console's one icon set: hand-drawn on a 24px grid, stroked at 1.75 so it reads a touch finer
 // than the usual 2px UI icon and closer to a drafted line. Inline SVG on purpose: no icon dependency,
 // and the optical weight stays ours. Icons clarify; anything purely decorative doesn't belong here.
 
@@ -247,24 +247,22 @@ export function Icon({ name, size = 16, className }: IconProps) {
 }
 
 /**
- * The fabrika mark: the sawtooth (northlight) roof of a factory hall — the product's name drawn
- * literally. Solid rather than stroked, because at 20px a 1.75px outline of this shape closes up into
- * a smudge; the filled silhouette stays legible and is the console's only piece of decoration.
+ * The fabrika mark: a hall under a pitched roof with its gate cut out, drawn by the designer
+ * (`fabrika-symbol.svg`). The path is copied verbatim; `public/favicon.svg` carries the same one.
+ * `size` is the height; the mark is a hair narrower than it is tall.
  */
 export function BrandMark({ size = 26 }: { size?: number }) {
 	return (
 		<svg
 			className="brand-glyph"
-			width={size}
+			width={Math.round((size * 94) / 98)}
 			height={size}
-			viewBox="0 0 24 24"
+			viewBox="0 0 94 98"
 			fill="currentColor"
 			aria-hidden="true"
 			focusable="false"
 		>
-			{/* Three bays under a sawtooth roof, sitting on the shop floor. */}
-			<path d="M1.5 18.5V4.75L8 10.5V4.75L14.5 10.5V4.75L21 10.5v8z" />
-			<rect x="1.5" y="20.25" width="19.5" height="2" rx="1" opacity="0.4" />
+			<path d="M0 31 53 0 94 22 94 98 54 98 54 31 25 48 25 98 0 98Z" />
 		</svg>
 	)
 }

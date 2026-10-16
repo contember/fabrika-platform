@@ -1,16 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
 
-// Pure formatting helpers used across the dashboard. No DOM — just the deterministic transforms.
+// Pure formatting helpers used across the dashboard. No DOM, just the deterministic transforms.
 
 describe('shortSha', () => {
 	test('takes the first 7 chars', () => {
 		expect(shortSha('0123456789abcdef')).toBe('0123456')
 	})
 	test('renders an em dash for null/empty', () => {
-		expect(shortSha(null)).toBe('—')
-		expect(shortSha('')).toBe('—')
-		expect(shortSha(undefined)).toBe('—')
+		expect(shortSha(null)).toBe('none')
+		expect(shortSha('')).toBe('none')
+		expect(shortSha(undefined)).toBe('none')
 	})
 })
 
@@ -39,9 +39,9 @@ describe('fmtDuration', () => {
 		expect(fmtDuration(200, 100)).toBe('0s')
 	})
 	test('em dash when either bound is missing', () => {
-		expect(fmtDuration(null, 100)).toBe('—')
-		expect(fmtDuration(100, null)).toBe('—')
-		expect(fmtDuration(undefined, undefined)).toBe('—')
+		expect(fmtDuration(null, 100)).toBe('none')
+		expect(fmtDuration(100, null)).toBe('none')
+		expect(fmtDuration(undefined, undefined)).toBe('none')
 	})
 })
 
@@ -60,6 +60,6 @@ describe('fmtAgo', () => {
 		expect(fmtAgo((nowMs - 12 * 60_000) / 1000, nowMs)).toBe('12m ago')
 	})
 	test('em dash when absent', () => {
-		expect(fmtAgo(null, nowMs)).toBe('—')
+		expect(fmtAgo(null, nowMs)).toBe('none')
 	})
 })

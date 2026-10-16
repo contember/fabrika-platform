@@ -9,7 +9,7 @@ import { mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 
-// Run detail — the run's metadata + the live log view. The LogView calls `runs.tail` while the run
+// Run detail: the run's metadata + the live log view. The LogView calls `runs.tail` while the run
 // is non-terminal, then shows the complete log; the final status + exit code come from the run row.
 
 export default createPage()
@@ -64,18 +64,19 @@ export default createPage()
 						<Field label="Commit">
 							<code>{shortSha(run.commitSha)}</code>
 						</Field>
-						<Field label="Exit code">
-							{run.exitCode === null ? <span className="muted">—</span> : <code>{run.exitCode}</code>}
-						</Field>
-						<Field label="Duration">{fmtDuration(run.startedAt, run.finishedAt)}</Field>
-						<Field label="Created">{fmtDate(run.createdAt)}</Field>
-						<Field label="Started">{fmtDate(run.startedAt)}</Field>
-						<Field label="Finished">{fmtDate(run.finishedAt)}</Field>
 						{appEnv !== null && appEnv.domain !== null && (
 							<Field label="Target">
 								<code>{appEnv.domain}</code>
 							</Field>
 						)}
+						<Field label="Exit code">
+							{run.exitCode === null ? <span className="muted">none</span> : <code>{run.exitCode}</code>}
+						</Field>
+						{/* The timings last, so with four columns they share the second row. */}
+						<Field label="Duration">{fmtDuration(run.startedAt, run.finishedAt)}</Field>
+						<Field label="Created">{fmtDate(run.createdAt)}</Field>
+						<Field label="Started">{fmtDate(run.startedAt, 'not yet')}</Field>
+						<Field label="Finished">{fmtDate(run.finishedAt, 'not yet')}</Field>
 					</div>
 				</section>
 
@@ -100,7 +101,7 @@ export default createPage()
 	})
 
 /**
- * Cancel button for a pending/running run — destroys its deploy container and marks the run failed. Shown
+ * Cancel button for a pending/running run: destroys its deploy container and marks the run failed. Shown
  * only while in-flight; on success re-loads the run so the badge + log settle. A cancelled run reads as
  * `failed` (fabrika has no distinct cancelled state).
  */

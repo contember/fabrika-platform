@@ -18,8 +18,8 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
 
 ## Invariants
 
-- **`src/buzola.gen.ts` is GENERATED — never edit it.** Run `bun run gen` after adding/moving a route
-  under `src/routes/`. `typecheck` and `build` run `gen` first. It is the only route map — a page lives
+- **`src/buzola.gen.ts` is GENERATED: never edit it.** Run `bun run gen` after adding/moving a route
+  under `src/routes/`. `typecheck` and `build` run `gen` first. It is the only route map: a page lives
   in its route file, never behind a re-export shim.
 - **API DTO types come from runtime-neutral contract packages.** `src/lib/api.ts` re-exports
   `@fabrika/control-contract`; Access uses `@fabrika/iam-contract` and Operations
@@ -32,8 +32,8 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   snapshot uses `IamAdminRpcContract` directly with auth bounce disabled because that panel is
   best-effort; the Access routes use the same contract (`src/access/lib/api.ts`) with normal auth bounce.
   Operations uses `OperationsRpcContract` through control's `/operations/api/rpc` gateway
-  (`src/operations/client.ts`). Every client is a plain `createRpcClient` — no positional adapters.
-- **Sign-out is IAM's, not the console's** (`src/lib/session.ts`). The bar links to IAM's `GET /auth/logout`
+  (`src/operations/client.ts`). Every client is a plain `createRpcClient`, with no positional adapters.
+- **Sign-out is IAM's, not the console's** (`src/lib/session.ts`). The account menu at the foot of the rail links to IAM's `GET /auth/logout`
   confirmation, whose same-origin POST revokes the IAM login and so every app session derived from it; IAM refuses a
   cross-site POST, so never post it from the console. IAM's origin comes from `/.well-known/fabrika-builder`. The
   signed-in name is Control's `consoleAccess` principal, or IAM's `me` when Control does not answer.
@@ -46,7 +46,7 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   installation's. The root layout drops the rest,
   answers a hidden page reached by URL with "not available", and shows the no-access page when nothing is left. A
   part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
-  `mayDo` at the object's app and environment (`ConsoleAccessContext`). The action names come from the contracts —
+  `mayDo` at the object's app and environment (`ConsoleAccessContext`). The action names come from the contracts:
   `CONTROL_ACTIONS` (`@fabrika/control-contract`) and `OPERATIONS_ACTIONS` (`@fabrika/operations-contract/access`).
 - **An IAM application reads as its display name** (`src/access/lib/app-names.tsx`). The Access layout reads
   `apps.list` once and provides the names; `AppName` renders the name with the id as its tooltip, and a picker
@@ -62,14 +62,14 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   connection"), not `RouteError`: an Operations outage must read as bounded to its plane
   (`tests/browser/operations-outage-isolation.test.ts`).
 - **The Access rail is five items and stays five: Overview · Users · Credentials · Permissions · Audit.**
-  Each answers a different question — what is the state of access, who are the people, what gets in
+  Each answers a different question: what is the state of access, who are the people, what gets in
   without a person, what does a grant mean, what happened. It was seven pages that cut the same
   material three ways; don't add a sixth without retiring one.
   - **Users are people.** A service principal's page is its API key's, under Credentials
     (`credentials/keys/:id`, `apiKeys.get`), which edits its grants through `grants.*`; `apiKeys.list` returns every
     one of them, so Credentials is the complete machine list and the Users list filters to `?type=user`. The key's grant
     form offers only the app its key is bound to (`keyGrantTargets`).
-  - **Credentials holds both API keys and share links** — both are `px_…` tokens shown once at issue.
+  - **Credentials holds both API keys and share links**, both are `px_…` tokens shown once at issue.
     Neither section's button is filled: a page with two constructive steps has no single primary.
   - **Permissions is one page for roles, actions and scope dimensions**, with a policy edited inline in
     the roles table it belongs to. `roles.list({ app })` already returns custom roles; the page drops them and
@@ -95,6 +95,12 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   repairing are outline or ghost; irreversible acts live in a `.danger-zone` at the foot of the page.
 - **A page head is: back link, title, one line of purpose.** Every list filters through one `.filters`
   bar; every table marks the column(s) that should absorb slack with `className="grow"` on the `<th>`.
-- **Two `grow` columns fight.** With `table-layout: auto` the surplus does not split evenly — whichever
+- **A list its service filters by fixed fields searches through `QuerySearch`** (`components/QuerySearch.tsx`,
+  `lib/query-search.ts`): one GitHub-style field (`app:notes env:prod`), its qualifiers declared by the page, a closed
+  set's values listed so the field refuses others, and bare words a text search only where the service has one. The
+  field shows exactly what is applied, so a filter set by the address or by a click on a value in the table appears in
+  it. A value in a table that is also a filter narrows the list to it (`filter-link`, `filter-value`); where it has a
+  page of its own, a `value-page` arrow beside it opens that. A list with only a text search keeps `SearchField`.
+- **Two `grow` columns fight.** With `table-layout: auto` the surplus does not split evenly: whichever
   column has the larger max-content wins and the other collapses. If a row has a name AND a sentence
   about it, put them in one cell (name, then a `.muted.small` line) rather than two columns.

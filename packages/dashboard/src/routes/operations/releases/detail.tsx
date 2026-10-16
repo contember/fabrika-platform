@@ -27,7 +27,7 @@ export default createPage()
 			<div className="detail-grid">
 				<Fact label="Artifact" value={data.detail.release.artifactState} />
 				<Fact label="Created" value={fmtDate(data.detail.release.createdAt / 1000)} />
-				<Fact label="Finished" value={fmtDate(data.detail.release.finishedAt === null ? null : data.detail.release.finishedAt / 1000)} />
+				<Fact label="Finished" value={fmtDate(data.detail.release.finishedAt === null ? null : data.detail.release.finishedAt / 1000, 'not finished')} />
 				<Fact label="New issues" value={String(data.detail.release.newIssueCount)} />
 				<Fact label="Regressions" value={String(data.detail.release.regressionCount)} />
 			</div>

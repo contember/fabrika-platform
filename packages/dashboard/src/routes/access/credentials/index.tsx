@@ -12,11 +12,11 @@ import { EmptyState, Table } from '../../../components/Table'
 
 // Every non-human way in, on one page. Both kinds are `px_…` credentials resolved by propustka and both
 // are shown exactly once at issue; they differ in what they are bound to. An API key belongs to a
-// service principal — a machine with a name in the audit trail. A share link belongs to nobody: it
+// service principal: a machine with a name in the audit trail. A share link belongs to nobody: it
 // carries a frozen set of (action, scope) pairs and is normally issued by an app on a user's behalf, so
 // this page is where you audit and revoke them rather than where they are minted day to day.
 //
-// Two sections, two constructive steps — so neither button is filled. This page has no single primary.
+// Two sections, two constructive steps, so neither button is filled. This page has no single primary.
 
 export default createPage()
 	.loader(async () => {
@@ -51,14 +51,14 @@ export default createPage()
 					Bound to a service principal, so everything the key does is attributed to a name in the audit trail. Open a key to change its grants without
 					issuing a new one.
 				</p>
-				{/* A key's name and what it may do are one fact, so they share a cell — as two columns they fought over the same slack. */}
+				{/* A key's name and what it may do are one fact, so they share a cell; as two columns they fought over the same slack. */}
 				<Table
 					colSpan={3}
 					isEmpty={data.apiKeys.length === 0}
 					empty={
 						<EmptyState
 							title="No API keys provisioned yet"
-							body="Provisioning a key creates the service principal that owns it — CI, a cron job, another service."
+							body="Provisioning a key creates the service principal that owns it: CI, a cron job, another service."
 							action={<Link to="access/credentials/keys/new" className="btn small">Provision the first one</Link>}
 						/>
 					}
@@ -93,7 +93,7 @@ export default createPage()
 					empty={
 						<EmptyState
 							title="No share links issued"
-							body="Nothing here yet — including anything an app would have issued through the API."
+							body="Nothing here yet, including anything an app would have issued through the API."
 							action={<Link to="access/credentials/links/new" className="btn small">Issue one by hand</Link>}
 						/>
 					}
@@ -202,7 +202,7 @@ function RevokeKeyButton({ apiKey, onDone }: { apiKey: ApiKeyDto; onDone: () => 
 					confirmLabel="Revoke"
 					body={
 						<p>
-							Revoke <strong>{apiKey.label}</strong>? This deletes its grants and credential immediately — any caller using it stops working.
+							Revoke <strong>{apiKey.label}</strong>? This deletes its grants and credential immediately, and any caller using it stops working.
 						</p>
 					}
 					onConfirm={revoke}

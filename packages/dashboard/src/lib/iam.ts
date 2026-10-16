@@ -17,45 +17,54 @@ export type IamShareLinkDto = ShareLinkListItem
 export type IamAuditEventDto = AuditEventDto
 
 /** Everything the overview reads from IAM, in one shot. */
-export interface IamSnapshot {
-	principals: IamPrincipalDto[]
-	apiKeys: IamApiKeyDto[]
-	shareLinks: IamShareLinkDto[]
-	audit: IamAuditEventDto[]
-}
-
 export interface SignedInPrincipal {
 	id: string
 	label: string
 }
-
-/** Recent audit rows to read for the activity feed and the 24h decision count. */
-const AUDIT_WINDOW = 100
 
 /** For best-effort reads: an IAM refusal never triggers the Delivery login bounce. */
 function quietIamClient(fetcher: RpcFetch) {
 	return createRpcClient<IamAdminRpcContract>({ baseUrl: RPC_BASE, fetch: fetcher, bounceOnAuth: false })
 }
 
+/** Reads of the admin API are audited too (`iam.admin.access`); on a feed of what changed they are noise. */
+export const AUDIT_READ_ACTIONS: ReadonlySet<string> = new Set(['iam.admin.access'])
+
+/** The most audit rows one call returns, and how many such pages the feed reads looking for changes. */
+const AUDIT_PAGE = 200
+const AUDIT_PAGES = 3
+
 /**
- * Read the access plane, or null when this operator can't or IAM is unreachable. IAM failures never
- * trigger the Delivery login bounce because the overview is deliberately best-effort.
+ * The newest changes in the audit log, reads left out. IAM audits every admin read, the console's own
+ * included, so the changes can sit a few hundred rows back; the read stops after `AUDIT_PAGES` pages. IAM cannot
+ * leave the reads out itself yet (docs/backlog/191); once it can, this is one call.
+ * Null when this operator can't read the log or IAM is unreachable.
  */
-export async function iamSnapshot(fetcher: RpcFetch = fetch): Promise<IamSnapshot | null> {
+export async function recentAuditChanges(wanted: number, fetcher: RpcFetch = fetch): Promise<IamAuditEventDto[] | null> {
 	const api = quietIamClient(fetcher)
+	const changes: IamAuditEventDto[] = []
+	let before: string | undefined
 	try {
-		const [principals, apiKeys, shareLinks, audit] = await Promise.all([
-			api.principals.list({}),
-			api.apiKeys.list({}),
-			api.shareLinks.list({}),
-			api.audit.list({ limit: AUDIT_WINDOW }),
-		])
-		return {
-			principals: principals.items,
-			apiKeys: apiKeys.items,
-			shareLinks: shareLinks.items,
-			audit: audit.items,
+		for (let page = 0; page < AUDIT_PAGES && changes.length < wanted; page++) {
+			const list = await api.audit.list(before === undefined ? { limit: AUDIT_PAGE } : { limit: AUDIT_PAGE, before })
+			changes.push(...list.items.filter((event) => !AUDIT_READ_ACTIONS.has(event.action)))
+			if (list.nextCursor === null) break
+			before = list.nextCursor
 		}
+		return changes.slice(0, wanted)
+	} catch {
+		return null
+	}
+}
+
+/**
+ * The installation's people, for the overview's count; `null` when IAM refuses or cannot be reached. Only
+ * what the page shows is read: IAM audits every admin read (`iam.admin.access`), so a read the page throws away is
+ * also a row that pushes the real changes further down the log.
+ */
+export async function iamPrincipals(fetcher: RpcFetch = fetch): Promise<IamPrincipalDto[] | null> {
+	try {
+		return (await quietIamClient(fetcher).principals.list({ type: 'user' })).items
 	} catch {
 		return null
 	}

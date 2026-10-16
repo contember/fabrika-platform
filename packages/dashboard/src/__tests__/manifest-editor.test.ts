@@ -25,7 +25,7 @@ describe('manifest editor', () => {
 			]
 		) {
 			expect(() => parseManifestEditor(text)).toThrow(
-				'That file declares no manifestVersion — paste the fabrika.manifest.json that `fabrika app build` wrote.',
+				'That file declares no manifestVersion. Paste the fabrika.manifest.json that `fabrika app build` wrote.',
 			)
 		}
 	})

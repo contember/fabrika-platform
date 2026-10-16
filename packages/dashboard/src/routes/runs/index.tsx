@@ -1,22 +1,40 @@
-import { createPage, Link } from '@buzola/router'
+import { createPage, Link, useNavigate } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { QuerySearch } from '../../components/QuerySearch'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError, type RunDto } from '../../lib/api'
 import { holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
 import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
+import type { QueryLanguage } from '../../lib/query-search'
 import { consoleSession } from '../../lib/session'
 
-// Runs — the global deploy history. Filter by app and/or env; keyset-paged with `?before=`. Each row
-// links to the run detail (which tails the live log). A per-app view is the same table prefiltered.
-// A caller who reads runs only in some apps or environments starts filtered to the first of them.
+// Runs: the global deploy history. Filter by app and/or env through the search field or a click on a value in the
+// table; the filter lives in the page's address (`?app=&env=`), and "Load more" pages on with the cursor. Each row
+// links to the run detail (which tails the live log). A caller who reads runs only in some apps or environments
+// starts filtered to the first of them, and an emptied search returns there.
 
 const PAGE_SIZE = 50
 
+interface RunFilter {
+	app?: string
+	env?: string
+}
+
+/** The two filters Control can apply to the run list, as the search field's qualifiers; there is no text search. */
+const RUNS_QUERY: QueryLanguage<keyof RunFilter> = {
+	qualifiers: [
+		{ key: 'app', name: 'app' },
+		{ key: 'env', name: 'env', aliases: ['environment'] },
+	],
+	freeText: false,
+}
+
 export default createPage()
-	.loader(async () => {
+	.params({ app: '?string', env: '?string' })
+	.loader(async ({ params }) => {
 		const { access } = await consoleSession()
 		const readsAll = access === null || holdsGlobally(access, CONTROL_ACTIONS.DEPLOY_READ)
 		const scoped = access === null ? { apps: [], environments: [] } : scopedRunReads(access)
@@ -24,43 +42,59 @@ export default createPage()
 			? { app: readsAll ? '' : (scoped.apps[0] ?? ''), env: '' }
 			: { app: '', env: scoped.environments[0] ?? '' }
 		const listsApps = opensApplications(access)
-		const [runs, apps] = await Promise.all([
-			api.runs.list({ ...runFilter(initialFilter.app, initialFilter.env), limit: PAGE_SIZE }),
-			listsApps ? api.apps.list().then((list) => list.items.map((app) => app.id)) : scoped.apps,
-		])
-		return { initialRuns: runs, apps, initialFilter, readsAll, listsApps }
+		const chosen = params.app !== undefined || params.env !== undefined
+		const filter = chosen ? { app: params.app ?? '', env: params.env ?? '' } : initialFilter
+		// The field accepts any app or environment, and Control refuses a filter outside what the caller reads: that
+		// refusal is the list's answer, said above an empty table, not an error that replaces the page.
+		const listed = await api.runs.list({ ...runFilter(filter.app, filter.env), limit: PAGE_SIZE }).then(
+			(page) => ({ page, refused: null }),
+			(cause: unknown) => {
+				if (!chosen || !(cause instanceof ApiError)) throw cause
+				return { page: { items: [], nextCursor: null }, refused: cause.message }
+			},
+		)
+		// Every load is new, even one that lands on the filter already shown, so the search field is rebuilt from it.
+		return { initialRuns: listed.page, refused: listed.refused, filter, listsApps, loadedAt: Date.now() }
 	})
 	.route('/runs')
 	.render(({ data }) => {
-		const [app, setApp] = useState(data.initialFilter.app)
-		const [env, setEnv] = useState(data.initialFilter.env)
+		const navigate = useNavigate()
 		const [runs, setRuns] = useState<RunDto[]>(data.initialRuns.items)
 		const [cursor, setCursor] = useState<string | null>(data.initialRuns.nextCursor)
 		const [loading, setLoading] = useState(false)
 		const [error, setError] = useState<string | null>(null)
+		const current: RunFilter = { app: data.filter.app || undefined, env: data.filter.env || undefined }
 
-		async function load(reset: boolean) {
+		// A page "Load more" asked for under one filter must not land under the next one.
+		const generation = useRef(0)
+
+		// A new filter loads a new first page; the pages "Load more" added belong to the old one.
+		useEffect(() => {
+			generation.current++
+			setRuns(data.initialRuns.items)
+			setCursor(data.initialRuns.nextCursor)
+			setError(null)
+		}, [data.initialRuns])
+
+		async function loadMore() {
+			if (cursor === null) return
+			const asked = generation.current
 			setLoading(true)
 			setError(null)
 			try {
-				const before = reset ? undefined : (cursor ?? undefined)
-				const page = await api.runs.list({
-					...runFilter(app, env),
-					...(before === undefined ? {} : { before }),
-					limit: PAGE_SIZE,
-				})
-				setRuns((prev) => (reset ? page.items : [...prev, ...page.items]))
+				const page = await api.runs.list({ ...runFilter(data.filter.app, data.filter.env), before: cursor, limit: PAGE_SIZE })
+				if (asked !== generation.current) return
+				setRuns((prev) => [...prev, ...page.items])
 				setCursor(page.nextCursor)
 			} catch (cause) {
-				setError(cause instanceof ApiError ? cause.message : 'Failed to load runs.')
+				if (asked === generation.current) setError(cause instanceof ApiError ? cause.message : 'Failed to load runs.')
 			} finally {
 				setLoading(false)
 			}
 		}
 
-		function applyFilters(e: React.FormEvent) {
-			e.preventDefault()
-			void load(true)
+		function applyFilters(next: RunFilter) {
+			navigate('runs', { params: { app: next.app, env: next.env }, replace: true })
 		}
 
 		return (
@@ -70,39 +104,17 @@ export default createPage()
 					<p className="hint">Release history, newest first. Every run records its env, ref and commit, its timings, and its exit code.</p>
 				</div>
 
-				<form className="filters" onSubmit={applyFilters}>
-					<label>
-						App
-						<select value={app} onChange={(e) => setApp(e.target.value)}>
-							{(data.readsAll || data.initialFilter.app === '') && <option value="">{data.readsAll ? 'All apps' : 'Any app'}</option>}
-							{data.apps.map((id) => <option key={id} value={id}>{id}</option>)}
-						</select>
-					</label>
-					<label>
-						Environment
-						<input value={env} onChange={(e) => setEnv(e.target.value)} placeholder="any" />
-					</label>
-					<div className="filter-actions">
-						<button type="submit" disabled={loading}>
-							<Icon name="filter" size={14} />
-							Filter
-						</button>
-						<button
-							type="button"
-							className="ghost"
-							onClick={() => {
-								setApp(data.initialFilter.app)
-								setEnv(data.initialFilter.env)
-								setRuns(data.initialRuns.items)
-								setCursor(data.initialRuns.nextCursor)
-							}}
-							disabled={loading}
-						>
-							Clear
-						</button>
-					</div>
-				</form>
+				<QuerySearch
+					key={data.loadedAt}
+					id="runs-search"
+					language={RUNS_QUERY}
+					label="Search deploy runs"
+					filters={current}
+					onApply={(filters) => applyFilters(filters)}
+					placeholder="app:storefront env:prod"
+				/>
 
+				{data.refused !== null && <p className="error-text" role="alert">{data.refused}</p>}
 				{error && <p className="error-text" role="alert">{error}</p>}
 
 				<Table
@@ -136,10 +148,21 @@ export default createPage()
 								</Link>
 							</td>
 							<td>
-								{data.listsApps ? <Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link> : run.appId}
+								<span className="linked-value">
+									<Link to="runs" params={{ ...current, app: run.appId }} title="Filter to this app" className="filter-link">
+										<span>{run.appId}</span>
+									</Link>
+									{data.listsApps && (
+										<Link to="apps/detail" params={{ id: run.appId }} className="value-page" aria-label={`Open ${run.appId}`} title="Open this app">
+											<Icon name="arrow-right" size={12} />
+										</Link>
+									)}
+								</span>
 							</td>
 							<td>
-								<Chip>{run.env}</Chip>
+								<Link to="runs" params={{ ...current, env: run.env }} title="Filter to this environment" className="filter-link">
+									<Chip>{run.env}</Chip>
+								</Link>
 							</td>
 							<td>
 								<code>{shortRef(run.ref)}</code>
@@ -156,7 +179,7 @@ export default createPage()
 
 				{cursor !== null && (
 					<div className="pager">
-						<button type="button" onClick={() => load(false)} disabled={loading}>{loading ? 'Loading…' : 'Load more'}</button>
+						<button type="button" onClick={() => void loadMore()} disabled={loading}>{loading ? 'Loading…' : 'Load more'}</button>
 					</div>
 				)}
 			</>

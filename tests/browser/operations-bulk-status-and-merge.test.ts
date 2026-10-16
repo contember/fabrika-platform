@@ -1,6 +1,6 @@
 import { browserTest, byLabel, byRole, expect, getPage, invariant, reload, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
-import { applyIssueFilters } from './support/console'
+import { searchIssues } from './support/console'
 import { scenarioMarker, sendErrorFixture } from './support/fixtures'
 
 const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
@@ -165,15 +165,14 @@ browserTest(
 		await step('three scenario-specific issues are available in the open list', {
 			intent: 'bulk and merge mutations operate on unique issues owned by this independent scenario',
 			manual:
-				'Open "Errors" under Operations, search for this run\'s marker and select "Apply". Verify that the three errors created for this test appear.',
+				'Open "Errors" under Operations, search for "status:open" and this run\'s marker, and press Enter. Verify that the three errors created for this test appear.',
 		}, async () => {
 			await expect.poll(async () => {
 				const items = issueItems(await browserRpc('issues', { query: RUN_MARKER, limit: 100 }))
 				return [CANONICAL_TITLE, COMPANION_TITLE, DUPLICATE_TITLE].every((title) => items.some((issue) => isRecord(issue) && issue['title'] === title))
 			}, { timeout: 15_000 }).toBe(true)
 			await reload()
-			await byLabel('Search').fill(RUN_MARKER)
-			await applyIssueFilters()
+			await searchIssues(`status:open ${RUN_MARKER}`)
 			const table = byRole('table', 'Operations issues')
 			await expect(table).toContainText(CANONICAL_TITLE)
 			await expect(table).toContainText(COMPANION_TITLE)
@@ -191,7 +190,7 @@ browserTest(
 		await step('the operator resolves two selected issues together', {
 			intent: 'bulk status changes apply to exactly the selected permitted issues',
 			manual:
-				'Select two of the test errors and select "Resolve" in the bulk toolbar. Show "All" status, select "Apply", and verify that both errors became resolved while the third did not.',
+				'Select two of the test errors and select "Resolve" in the bulk toolbar. Search for "status:all" and the marker, and verify that both errors became resolved while the third did not.',
 		}, async () => {
 			await byRole('checkbox', `Select ${CANONICAL_TITLE}`, { exact: true }).check()
 			await byRole('checkbox', `Select ${COMPANION_TITLE}`, { exact: true }).check()
@@ -199,8 +198,7 @@ browserTest(
 			await expectMutation(observedMutations, 'bulkIssueStatus', null)
 			// The list reloads under the APPLIED filters, so the two now-resolved issues leave the open
 			// view; widening to every status is what brings them back to be compared with the untouched one.
-			await byRole('combobox', 'Status', { exact: true }).selectOption('all')
-			await applyIssueFilters()
+			await searchIssues(`status:all ${RUN_MARKER}`)
 
 			for (const title of [CANONICAL_TITLE, COMPANION_TITLE]) {
 				const row = byRole('row').filter({ hasText: title })
@@ -243,18 +241,14 @@ browserTest(
 		await step('the merged result and bulk statuses persist after navigation', {
 			intent: 'bulk and merge outcomes are repository state rather than transient component state',
 			manual:
-				'Return to "Errors", select "All" status and "Apply", then reload and apply the same filters again. Verify the resolved target remains while the merged duplicate is no longer separate.',
+				'Return to "Errors" and search for "status:all" and the marker, then reload and search again. Verify the resolved target remains while the merged duplicate is no longer separate.',
 		}, async () => {
 			await byRole('link', '← All errors', { exact: true }).click()
-			await byRole('combobox', 'Status', { exact: true }).selectOption('all')
-			await byLabel('Search').fill(RUN_MARKER)
-			await applyIssueFilters()
+			await searchIssues(`status:all ${RUN_MARKER}`)
 			// Applied filters are component state, not a query string, so the reload drops back to the
 			// defaults and the same view has to be asked for again — which is the persistence claim.
 			await reload()
-			await byRole('combobox', 'Status', { exact: true }).selectOption('all')
-			await byLabel('Search').fill(RUN_MARKER)
-			await applyIssueFilters()
+			await searchIssues(`status:all ${RUN_MARKER}`)
 
 			const table = byRole('table', 'Operations issues')
 			await expect(table).toContainText(CANONICAL_TITLE)

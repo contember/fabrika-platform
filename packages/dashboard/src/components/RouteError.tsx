@@ -5,7 +5,7 @@ interface RouteErrorProps {
 	error: Error
 }
 
-/** Title + body for a route error, mapped by type — never echoing a raw server message. */
+/** Title + body for a route error, mapped by type, never echoing a raw server message. */
 function describe(error: Error): { title: string; body: string; icon: IconName } {
 	if (error instanceof ApiError) {
 		if (error.httpStatus === 403) {
@@ -39,7 +39,7 @@ function describe(error: Error): { title: string; body: string; icon: IconName }
 
 /**
  * Styled fallback for loader/render failures, wired as the layout `<Outlet errorFallback>`. Maps the
- * error by type/status — it never renders the raw `error.message`, which can carry an internal server
+ * error by type/status. It never renders the raw `error.message`, which can carry an internal server
  * string. A short status hint is shown for `ApiError`s for support. (401 / Access bounces are handled
  * inside the RPC client via a guarded SSO navigation, so they normally never reach here.)
  */

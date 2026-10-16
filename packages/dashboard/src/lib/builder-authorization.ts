@@ -10,7 +10,8 @@ import type { createControlClient } from './api'
 
 export type BuilderClient = ReturnType<typeof createControlClient>
 type ApprovalStorage = Pick<Storage, 'getItem' | 'removeItem'>
-export type StoredApproval = { ok: true; state: BuilderApprovalState } | { ok: false; message: string }
+/** `missing` is the ordinary state of a tab opened from the console, not a failure: no local builder sent it here. */
+export type StoredApproval = { ok: true; state: BuilderApprovalState } | { ok: false; missing?: true; message: string }
 
 export const START_AGAIN = 'Start again from your local checkout with fabrika builder connect --url=<console-origin>.'
 
@@ -26,7 +27,7 @@ export function clearBuilderApproval(storage: () => ApprovalStorage): boolean {
 export function readBuilderApproval(storage: () => ApprovalStorage, nowSeconds?: number): StoredApproval {
 	try {
 		const raw = storage().getItem(BUILDER_APPROVAL_STORAGE_KEY)
-		if (raw === null) return { ok: false, message: `No pending connection in this tab. ${START_AGAIN}` }
+		if (raw === null) return { ok: false, missing: true, message: `No pending connection in this tab. ${START_AGAIN}` }
 		let value: unknown
 		try {
 			value = JSON.parse(raw)

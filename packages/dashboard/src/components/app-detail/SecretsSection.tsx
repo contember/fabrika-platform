@@ -15,7 +15,7 @@ export function SecretsSection(
 			</div>
 			<p className="section-note">
 				Secrets deployed with this app. The <code>*</code>{' '}
-				layer applies to every env; an env-specific entry overrides it. Values are write-only — only names and where each value is kept are shown.
+				layer applies to every env; an env-specific entry overrides it. Values are write-only: only names and where each value is kept are shown.
 			</p>
 			<Table
 				colSpan={4}
@@ -96,13 +96,13 @@ function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecret
 function SecretStorage({ secret }: { secret: AppSecretDto }) {
 	if (secret.storage === 'vault') return <code>{secret.valueRef}</code>
 	if (secret.storage === 'provider') return <span className="muted">Provider-managed</span>
-	return <span className="error-text small">Stored outside the vault — set it again</span>
+	return <span className="error-text small">Stored outside the vault. Set it again</span>
 }
 
 /**
  * Inline write-only setter for an app secret's VALUE. PUT (set) stores a fresh vault entry and upserts
  * the `vault:<id>` ref onto the (app, env, name) row; PATCH (rotate) re-encrypts the existing entry.
- * The value is sent once and never read back — the field clears on success. `env` rides the body.
+ * The value is sent once and never read back; the field clears on success. `env` rides the body.
  */
 function SetSecretValueRow(
 	{ appId, secret, rotate, onDone, onCancel }: { appId: string; secret: AppSecretDto; rotate: boolean; onDone: () => void; onCancel: () => void },

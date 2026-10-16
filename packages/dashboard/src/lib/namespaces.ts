@@ -11,7 +11,7 @@ import { isJsonValue } from './json'
 
 /** The operator-visible failure: the class control recorded, its redacted message, and what to do next. */
 export interface NamespaceFailureView {
-	/** The provider's own identifier, shown verbatim — it is what a release note or an issue names. */
+	/** The provider's own identifier, shown verbatim: it is what a release note or an issue names. */
 	readonly code: string | null
 	readonly message: string
 	readonly hint: string | null
@@ -27,7 +27,7 @@ export function canUpdateNamespace(namespace: DeploymentNamespaceDto): boolean {
 
 /**
  * What the target editor starts from: the target an unconfirmed update was moving to, so applying it
- * unchanged finishes that update — even in a session that never saw the request — else the stored target.
+ * unchanged finishes that update (even in a session that never saw the request), else the stored target.
  */
 export function namespaceUpdateSeed(namespace: DeploymentNamespaceDto): ProviderEnvelopeDto {
 	return namespace.unconfirmedTarget ?? namespace.target
@@ -42,7 +42,7 @@ const NAMESPACE_FAILURE_HINTS: Readonly<Record<string, string>> = {
 	serviceStackIsNotHttp: 'The proxy has no deployed HTTP port yet. Reconcile once its first deploy has finished.',
 	internal: 'The provider reported no class for this failure. The control plane log holds the full, redacted cause.',
 	[NAMESPACE_UPDATE_UNCONFIRMED]:
-		'The live change may or may not have applied. Apply the planned target again — the editor starts from it — and the retry converges either way.',
+		'The live change may or may not have applied. Apply the planned target again (the editor starts from it), and the retry converges either way.',
 }
 
 /**
@@ -59,7 +59,7 @@ export function namespaceFailure(namespace: DeploymentNamespaceDto): NamespaceFa
 /**
  * The provider resources a removal leaves behind: the facts the provider MARKED as naming a live
  * resource, and only those. Fabrika deletes none of them (ADR-0034), so this is what an operator is
- * told to clean up by hand — a policy fact such as the core package is not one, and an unmarked
+ * told to clean up by hand. A policy fact such as the core package is not one, and an unmarked
  * presentation means there is nothing to say rather than a list to guess at.
  */
 export function retainedNamespaceResources(namespace: DeploymentNamespaceDetailDto): readonly DeploymentNamespaceFactDto[] {
@@ -77,7 +77,7 @@ export function isNamespaceSettling(state: DeploymentNamespaceState): boolean {
 }
 
 /**
- * Keep a settling placement's view fresh without a caller staying connected to the mutation — the whole
+ * Keep a settling placement's view fresh without a caller staying connected to the mutation: the whole
  * point of provisioning behind the queue. Returns the cancel function the effect cleans up with.
  */
 export function scheduleNamespacePoll(

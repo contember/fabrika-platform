@@ -9,7 +9,7 @@ interface BadgeProps {
 }
 
 /**
- * A small tinted label for a CATEGORY worth calling out — where a grant came from, what origin a role
+ * A small tinted label for a CATEGORY worth calling out: where a grant came from, what origin a role
  * has, whether a role key still resolves. Never a lifecycle status: that is a lamp (see `Status`),
  * because a reader must be able to tell "what kind of thing is this" from "how is it doing".
  */

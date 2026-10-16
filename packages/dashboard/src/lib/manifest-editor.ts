@@ -15,7 +15,7 @@ export function parseManifestEditor(text: string): { payload: JsonValue; version
 	}
 	const header = manifestHeader.safeParse(payload)
 	if (!header.success) {
-		throw new Error('That file declares no manifestVersion — paste the fabrika.manifest.json that `fabrika app build` wrote.')
+		throw new Error('That file declares no manifestVersion. Paste the fabrika.manifest.json that `fabrika app build` wrote.')
 	}
 	return { payload, version: header.data.manifestVersion }
 }
