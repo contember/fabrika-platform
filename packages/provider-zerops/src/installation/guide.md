@@ -357,15 +357,21 @@ The installation's mail transport lives on the `iam` and `control` services. Zer
 and Control hands a copy to every application whose job declares `mailer: 'installation'`. To add one to an
 existing installation, change the provider, or rotate a key:
 
+No `fabrika` command does this: `platform upgrade` and `platform deploy` write no `FABRIKA_EMAIL_*` and remove
+none, and `install` cannot be re-run.
+
 1. Set the same `FABRIKA_EMAIL_*` variables on BOTH `iam` and `control`, in the Zerops GUI or with `zcli`:
    `FABRIKA_EMAIL_PROVIDER`, `FABRIKA_EMAIL_FROM`, optionally `FABRIKA_EMAIL_FROM_NAME`, and the provider's
    variables. Mark the credentials sensitive. Delete the variables of a provider you leave.
-2. Restart `iam` and `control`. Each reads the transport at boot, and refuses to start on an invalid one.
+2. Restart `iam` and `control`. Each reads the transport at boot. IAM refuses to start on an invalid one.
+   Control starts, logs a line that names the invalid variables, and refuses every deploy that needs the transport
+   until you fix them and restart it.
 3. Redeploy every environment whose contract uses `installation` mail. An application gets the new transport
    only at its next deploy. Until then it sends with the old one, and a revoked key fails its mail with
    `provider_unauthorized`.
 
-A contract whose job declares `mailer: 'installation'` does not deploy while `control` has no transport.
+Without a transport, a contract whose job declares `mailer: 'installation'` still deploys. Its jobs see that mail is
+not available and leave their messages queued. After step 3 the next run sends them.
 
 ## When something fails
 

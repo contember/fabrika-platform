@@ -612,6 +612,8 @@ export const intake = app.cron('* * * * *', {
 					returning id`
 			}
 		})
+		// An installation without a transport: the deliveries wait as they are and spend no attempt.
+		if (!ctx.mail.available) return
 		// Only a row whose budget has an e-mail left and whose backoff has passed: the others would
 		// fill the batch and starve the rest.
 		const due = await ctx.transaction((tx) =>
@@ -804,8 +806,10 @@ More on the job:
 - **A revoked link** still works until the token the proxy holds for it expires, at most 5 minutes. Revocation is the
   stop at IAM; it is not instant.
 - **`mailer: 'installation'`** gives the job `ctx.mail`, over the installation's mail transport: the application holds
-  no provider key and no transport code, and the approver sees the declaration marked "needs closer review". A contract
-  with such a job does not deploy to an installation that has no transport. An endpoint has no `ctx.mail`.
+  no provider key and no transport code, and the approver sees the declaration marked "needs closer review". An
+  installation without a transport still deploys it: `ctx.mail.available` is false, and the job delivers nothing and
+  leaves every delivery as it is, so no attempt is spent. They leave on the first run after the operator adds a
+  transport and the application is deployed again. An endpoint has no `ctx.mail`.
 - The link's address and its seal come from `deps` (`src/links.ts`), built from application variables the human sets
   (`INTAKE_ORIGIN`, and `LINK_SEAL_KEY`: `openssl rand -base64 32`). A new `LINK_SEAL_KEY` makes the rows waiting with
   a sealed link fail their `open` until they are dead; a resend gives each a new link. `link.url` is `/p/#<key>`: the
@@ -1411,6 +1415,8 @@ export const testMails = app.cron('* * * * *', {
 	mailer: 'installation',
 })
 	.handle(async ({ ctx }) => {
+		// An installation without a transport: the rows wait as they are and spend no attempt.
+		if (!ctx.mail.available) return
 		const due = await ctx.transaction((tx) =>
 			tx.sql(Id)`
 				select id from test_mails
@@ -1531,23 +1537,30 @@ export const testMails = app.cron('* * * * *', {
   and `during(hook)` inject a failure until `heal()`. A message carries the key the transport got,
   `transportMailKey(kit.mailKeyScope, key)`. A transport that does not deduplicate is
   `testKit(app, { mail: new MemoryEmailSender({ capabilities: { idempotent: false, confirmation: 'queued' } }) })`:
-  test there that a lost answer leaves a delivery dead, never sent twice.
+  test there that a lost answer leaves a delivery dead, never sent twice. `mail: 'none'` is an installation without a
+  transport: test that its run leaves the rows queued, and that a kit with a transport over the same database sends
+  them. One served application boots one kit, so the second kit serves the contract again (`serve(contract, { … })`,
+  as `src/app.ts` does).
 - `LINK_SEAL_KEY` and `INTAKE_ORIGIN` are application variables: a test of the job passes them in `testKit`'s `env`,
   `LINK_SEAL_KEY` as `Buffer.alloc(32, 1).toString('base64')`.
 - The test e-mail goes to the caller's own address: the test sends no address and reads the recipient from `kit.mail`.
 
 ```ts src/__tests__/settings.test.ts
 import { createClient } from '@fabrika/app/client'
+import { serve } from '@fabrika/app/implement'
 import {
 	type IamMembershipRpc,
 	testKit,
 	transportMailKey,
 } from '@fabrika/app/testing'
+import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { contract } from '../../fabrika.contract'
 import app from '../app'
+import { tables } from '../db/tables'
+import { links } from '../links'
 
 const postgres = await testDatabase({
 	migrations: new URL('../../db/migrations/', import.meta.url),
@@ -1596,6 +1609,37 @@ if (postgres !== null) {
 			expect(sent?.answer).toBe('accepted')
 			expect(sent?.message.idempotencyKey)
 				.toStartWith(transportMailKey(kit.mailKeyScope, 'test-mail-'))
+		})
+
+		test('waits while the installation has no mail, and leaves once it has a transport', async () => {
+			// One served application boots one kit: this one serves the contract again.
+			const noMail = testKit(
+				serve(contract, { database: scoped(tables), deps: links }),
+				{
+					database: postgres.database,
+					files: new MemoryFileObjects(),
+					membership,
+					env: { TURNSTILE_SECRET: 'test', TURNSTILE_SITE_KEY: 'test-site-key' },
+					mail: 'none',
+				},
+			)
+			const admin = noMail.testCaller([{ role: 'hr_admin' }], {
+				email: 'waiting@intake.test',
+			})
+			const api = createClient(contract, 'api', { fetch: noMail.browser(admin) })
+			await api.settings.testMail()
+			await noMail.drain()
+			expect(await noMail.runJob('testMails')).toEqual({
+				status: 'succeeded',
+				attempts: 1,
+			})
+			// The same database under a transport: the row that waited leaves.
+			expect(await kit.runJob('testMails')).toEqual({
+				status: 'succeeded',
+				attempts: 1,
+			})
+			expect(sentTo('waiting@intake.test').map((handoff) => handoff.answer))
+				.toEqual(['accepted'])
 		})
 
 		test('one the transport refuses is dead: no later run sends it', async () => {

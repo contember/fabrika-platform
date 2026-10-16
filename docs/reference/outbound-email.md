@@ -39,6 +39,7 @@ the message and `unknown` when it may have.
 | ----------------------- | --------- | -------- | ------------------------------------------------------------------- |
 | `invalid_configuration` | no        | not_sent | the adapter or the parser refuses its configuration, before any I/O |
 | `invalid_message`       | no        | not_sent | the message fails validation; no I/O                                |
+| `mail_not_configured`   | no        | not_sent | the installation has no transport (`ctx.mail.available` is false)   |
 | `aborted`               | yes       | unknown  | the caller's signal aborted, before or during I/O                   |
 | `network_error`         | yes       | unknown  | fetch threw and no signal aborted                                   |
 | `request_timeout`       | yes       | unknown  | the adapter's own timeout fired                                     |
@@ -208,9 +209,14 @@ whose jobs declare `mailer: 'installation'`.
   (`readInstallationEmail`, `@fabrika/installation-init`). It validates the set and
   writes it on the `iam` and `control` services, service-level, the credentials
   sensitive; it does not copy them into the secrets file. IAM and Control each read
-  it at boot and refuse to start on an invalid one. To set or rotate it later, the
-  operator writes both services, restarts them and redeploys the environments that
-  use it (`platform guide --provider=zerops`, "Set or rotate the mail transport").
+  it at boot. IAM refuses to start on an invalid one; Control starts, logs one line
+  naming the variables, and refuses only the deploys that hand the transport.
+- **Adding or rotating a transport later.** No command writes it after `install`:
+  `platform upgrade` and `platform deploy` write no `FABRIKA_EMAIL_*` and remove
+  none, and `install` cannot be re-run. The operator sets the same variables on
+  `iam` and `control`, restarts both and redeploys the environments that use it
+  (`platform guide --provider=zerops`, "Set or rotate the mail transport"). One
+  command for it is [backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md).
 - **Cloudflare.** `fabrika platform init` requires `--email-provider` (`none` or a
   built-in provider). It writes the provider's secret variables as GitHub Environment
   secrets and the rest as variables, and the workflow passes every built-in
@@ -227,16 +233,23 @@ never sends. `mailer: 'own'` takes the application's own `EmailSender` from
 `serve(contract, { mail })`. `mailer: 'installation'` takes the installation's:
 
 - Control reads its transport from its own `FABRIKA_EMAIL_*` at boot
-  (`readInstallationMailTransport`, `packages/control/src/mail-transport.ts`).
+  (`readInstallationMail`, `packages/control/src/mail-transport.ts`): none, a
+  transport, or invalid.
 - A deploy whose approved contract has such a job hands the application the whole
   set (`installationMailEnvironment`), its credentials among the values the run's
   logs redact. Zerops writes every name service-level and sensitive, and removes them
   once a deploy hands none. A Cloudflare deploy refuses any `FABRIKA_EMAIL_*`, so a
   credential never lands in a plain Worker variable.
-- Without a transport, Control refuses that deploy before any effect, naming the
-  jobs. It does not refuse the approval: the transport can change after it.
+- Without a transport, the deploy hands `FABRIKA_EMAIL_PROVIDER=none` and nothing
+  else. The application boots, its mailer jobs see `ctx.mail.available` false, and
+  every send fails `mail_not_configured`. An installation from before the transport
+  has no `FABRIKA_EMAIL_*` on `control`, so it lands here with no operator step.
+- With an invalid transport, Control refuses that deploy before any effect, naming
+  the jobs and the operator step. It does not refuse the approval: the transport
+  can change after it.
 - `FABRIKA_EMAIL_` is a framework-only family (`isEmailTransportVariable`,
-  `@fabrika/auth-core`): an application's own variable or secret under it is refused.
+  `@fabrika/auth-core`): an application's own variable or secret under it is refused
+  at deploy, and the refusal says how to delete it.
 - A changed transport reaches IAM and Control when they restart, and an application
   at its next deploy.
 

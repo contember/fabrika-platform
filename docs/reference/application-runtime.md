@@ -966,6 +966,10 @@ artifact; the approval diff shows a new `installation` for closer review and a n
   characters of `sha256('<FABRIKA_IAM_ISSUER>\n<FABRIKA_IAM_APP_ID>')` and `:`, so two installations, applications or
   environments on one provider account never share a key. Renaming IAM's origin changes every prefix once.
   `transportMailKey(scope, key)` of `@fabrika/app/testing` computes the transport's key.
+- `ctx.mail.available` is false where the installation has no transport: Control handed `FABRIKA_EMAIL_PROVIDER=none`,
+  a local installation configures none, or the kit runs with `mail: 'none'`. Every send then fails
+  `mail_not_configured`, outcome `not_sent`, with no I/O. An outbox checks it first and leaves its rows queued without
+  spending an attempt; they leave on the first run after a transport is added and the application is deployed again.
 - `ctx.mail.capabilities` are the transport's (`idempotent`, `confirmation`, `maxBatch`), and `ctx.mail.mayRetry(error)`
   is `mayRetryDelivery` over them ([outbound email](outbound-email.md)). A send rejects with `EmailDeliveryError`; any
   other rejection of an application's own transport becomes `provider_unavailable`, its message dropped unread.
@@ -977,15 +981,18 @@ artifact; the approval diff shows a new `installation` for closer review and a n
 - `boot` resolves each transport once (`resolveMailTransports`). `installation` reads the framework's `FABRIKA_EMAIL_*`,
   which Control hands a deploy ([outbound email](outbound-email.md#applications)), against `BootOptions.emailProviders`
   (the built-in providers by default). `own` calls `serve(contract, { mail: (env) => EmailSender | null })` once with
-  the application's variables. Boot refuses an `own` job without `mail`, a `mail` that no `own` job uses, an invalid
-  installation configuration (its message names variables, never values), a `mail` that throws `EmailDeliveryError` or
-  answers no `EmailSender`, and a declared transport that is missing.
-- A local installation, one whose `FABRIKA_IAM_ISSUER` is a loopback origin, boots without a transport: each send then
-  fails `invalid_configuration`, and boot logs it once per job. Only there does boot add `BootOptions.localEmailProviders`,
+  the application's variables. `FABRIKA_EMAIL_PROVIDER=none` resolves to no mail, and boot logs it once per job. Boot
+  refuses an `own` job without `mail`, a `mail` that no `own` job uses, an invalid installation configuration (its
+  message names variables, never values), an absent `FABRIKA_EMAIL_PROVIDER` for an `installation` job (Control writes
+  it on every such deploy), a `mail` that throws `EmailDeliveryError` or answers no `EmailSender`, and an `own` `mail`
+  that answers `null`.
+- A local installation, one whose `FABRIKA_IAM_ISSUER` is a loopback origin, treats a missing transport as no mail,
+  and boot logs it once per job. Only there does boot add `BootOptions.localEmailProviders`,
   which `@fabrika/app/bun` sets to the `directory` provider (`FABRIKA_EMAIL_DIRECTORY`), the local stack's capture.
   Anywhere else that name is an unknown provider.
 - `testKit` and `devKit` pass a `MemoryEmailSender` as `BootOptions.mailStandIn` (`TestKitOptions.mail`, a new one by
-  default) for every mailer job; boot then reads neither `FABRIKA_EMAIL_*` nor `mail` (below).
+  default) for every mailer job; boot then reads neither `FABRIKA_EMAIL_*` nor `mail` (below). `mail: 'none'` passes
+  `'none'` instead, an installation without a transport.
 
 ## Connectors
 

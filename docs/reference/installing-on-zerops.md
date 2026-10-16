@@ -74,7 +74,8 @@ No value is printed. Before the first one is placed, all of them and the integra
 Fresh install always leaves GitHub source anonymous: it writes no App private key or webhook secret.
 Public repositories therefore deploy without another setup step.
 
-Mail is optional. Without `--email-provider` (or `FABRIKA_EMAIL_PROVIDER`) the installation has no mail transport. With one
+Mail is optional. Without `--email-provider` (or `FABRIKA_EMAIL_PROVIDER`) the installation has no mail transport: an
+application whose job declares `mailer: 'installation'` still deploys, and its mail waits until a transport is added. With one
 (`--email-provider`, `--email-from`, optionally `--email-from-name`, and the provider's own variables from
 the environment only), the command validates the set and writes it on `iam` and `control` alone, the
 credentials sensitive and not in the secrets file: the operator already holds them. IAM sends its own mail

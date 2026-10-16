@@ -101,14 +101,19 @@ that declares a mailer has no such flow, so it does not start without a sender (
   installations, on one provider account never share a key. An application key is 1 to 200 visible ASCII characters;
   with the 41-character prefix it stays within the contract's 256.
 - An application sets `replyTo` and `fromName` per message. The sending address is the transport's.
-- **Fail closed.** A contract with a job that declares `installation` refuses to boot without an installation
-  transport, and one that declares `own` refuses without its own. An invalid configuration refuses the boot
-  everywhere. The one exception is a local installation, one whose `FABRIKA_IAM_ISSUER` is a loopback origin: there a
-  missing transport makes each send fail with `invalid_configuration`, and the boot logs it once per job. A deployed
-  IAM never signs under a loopback issuer, so an application that took the exception would verify no token of a
-  deployed installation. `FABRIKA_ENVIRONMENT` is a free label, so its value never relaxes the check.
+- **No mail is a state, a misconfiguration fails closed.** An installation may have no transport. Control then hands
+  a job that declares `installation` the explicit `FABRIKA_EMAIL_PROVIDER=none` (§4), and the application boots. Its
+  `ctx.mail.available` is false, and every send fails `mail_not_configured`, outcome `not_sent`, without I/O. An
+  outbox leaves its rows queued while mail is not available, and spends no attempt on them; they leave on the first
+  run after the operator adds a transport and the application is deployed again. Everything else fails closed: an
+  invalid configuration refuses the boot everywhere, an absent `FABRIKA_EMAIL_PROVIDER` refuses it (no deploy wrote
+  the variable), and a job that declares `own` refuses it without its own transport. A local installation, one whose
+  `FABRIKA_IAM_ISSUER` is a loopback origin, treats an absent transport as `none`, and the boot logs it once per job. A
+  deployed IAM never signs under a loopback issuer, so an application that took the exception would verify no token of
+  a deployed installation. `FABRIKA_ENVIRONMENT` is a free label, so its value never relaxes the check.
 - The test kit and `fabrika app dev` pass a Memory sender as a boot option for every mailer job; the boot then reads
-  neither the installation's variables nor the application's own transport.
+  neither the installation's variables nor the application's own transport. The kit's `mail: 'none'` models an
+  installation without a transport.
 
 ### 4. The installation's transport
 
@@ -128,8 +133,13 @@ that declares a mailer has no such flow, so it does not start without a sender (
 - As framework variables, the `FABRIKA_EMAIL_*` values are secrets to the error-report scrubber of
   [ADR-0059](0059-application-server-errors-carry-their-stack-and-message.md): it removes each value of eight or more
   characters from an application's reports.
-- Control refuses such a deploy, before any effect, when the installation has no transport. It refuses at deploy, not
-  at approval: the transport is installation state that can be added or removed after a contract was approved.
+- An installation without a transport deploys such a contract: Control hands `FABRIKA_EMAIL_PROVIDER=none` and no
+  other mail variable, so the application tells "this installation has no mail" from "no deploy wrote the variable".
+- Control starts with an invalid transport. It logs one line that names the variables, never a value, and refuses
+  only the deploys that hand the transport, before any effect, naming the jobs and the operator step. One mistyped
+  variable must not stop the whole Delivery plane. It refuses at deploy, not at approval: the transport is installation
+  state that can change after a contract was approved. IAM still refuses to start on an invalid transport: it has no
+  deploy to refuse instead.
 - IAM and Control read the transport when they start. An application gets a changed transport at its next deploy;
   nothing fans a change out yet ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)).
 
@@ -178,7 +188,14 @@ origin is registered is sent in IAM's own wording.
   distribution that bundles it ([backlog 179](../backlog/179-build-a-platform-distribution-that-bundles-extra-email-adapters.md)).
 - A changed installation transport reaches an application only at its next deploy. Until then the application sends
   with the old one, and a provider key that was revoked fails its mail with `provider_unauthorized`
-  ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)).
+  ([backlog 187](../backlog/187-set-or-rotate-the-installation-mail-transport.md)). The same holds for a transport
+  added to an installation that had none: its queued mail leaves after the redeploy.
+- **Rollout.** An installation from before the transport has no `FABRIKA_EMAIL_*` on `control`, which reads as no
+  transport: its next deploy of a mailer contract writes `FABRIKA_EMAIL_PROVIDER=none`, with no operator step.
+  `platform upgrade` and `platform deploy` write no mail variable and remove none, so a transport an operator set by
+  hand survives an upgrade. Adding a transport later is a manual operator step (the Zerops guide, "Set or rotate the
+  mail transport"). An application variable or secret an older release accepted under `FABRIKA_EMAIL_` is refused at
+  its next deploy, and the refusal says how to delete it.
 - On Zerops, every `FABRIKA_EMAIL_*` an application gets is sensitive, its provider name and address too, so the
   console cannot show them; the provider contract has no way to mark only some of a family secret.
 - Renaming the installation's IAM origin changes the key prefix of every application. A message whose send was in
@@ -218,6 +235,13 @@ instead.
 Every application would implement the provider call, the error classification, the
 idempotency handling and a test stand-in, and hold its own key. Each copy would drift, and none would fail closed. An
 application that wants its own provider still has one, through `serve(app, { mail })`.
+
+### Refuse a mailer contract on an installation without a transport
+
+Control would refuse the deploy, and the application would refuse to boot. An installation without a mail provider
+could then not run an application that sends any mail, even one whose mail is optional or can wait, and every
+upgraded installation would need a provider before such an application deploys. The explicit `none` keeps that state
+valid and visible to the job, while a misconfigured transport still fails closed.
 
 ### `ctx.mail` on endpoints
 
