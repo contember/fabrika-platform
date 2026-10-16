@@ -1325,6 +1325,22 @@ the invocation's transaction. `'write'` (a mutation, a job, a webhook) also inse
 then names the chain columns itself. Use it for an operator's cross-scope view, never to dodge a capability the caller
 should hold. The generated tests skip the other-scope leak case for such an endpoint.
 
+## Another origin: `crossOrigin`
+
+A page on another site (a partner's page, a separate marketing site, another application in the browser) calls an RPC
+endpoint only when the endpoint says `crossOrigin: true` beside its `access`, and an operator lists that page's origin
+for the environment in Control (`fabrika control env update --cross-origin=https://partner.example`). Both halves are
+needed: the contract says which endpoints, the environment says from where, so staging and production can list
+different pages. The approver sees the flag like any other access change.
+
+- **A key, never a session.** The page sends `Authorization: Bearer px_…` (a machine key, or a person's own key). A
+  person's session is never read for a request from a listed origin: the answer is 401 without a login bounce.
+- **The proxy answers CORS, the handler never does.** The proxy answers the preflight and sets
+  `Access-Control-Allow-Origin` on the answer; it deletes every `Access-Control-*` header a handler sets.
+- **Only RPC procedures.** A link procedure, an export, an SPA, a download and an upload refuse `crossOrigin`. A form
+  takes it too (`references/public-intake.md`).
+- **Test it** with `testKit(app, { crossOrigins: ['https://partner.example'] })` and a request carrying that `Origin`.
+
 ## Members
 
 `ctx.members` of an endpoint `on` or `in` a dimension reads the members of the nearest dimension, its own or one
@@ -2551,6 +2567,10 @@ export const contract = app.contract((c) => ({
   `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each name. Never name
   a secret there: the contract refuses a variable that is both.
   `rate: { perClient, perForm }` (per minute, 10 and 100 by default) answers 429 past either limit.
+- **A form on someone else's page.** A form served from this application's own SPA needs nothing. A form a partner's
+  page or a separate marketing site submits needs `crossOrigin`: `true` for the origins an operator lists for the
+  environment in Control, `'*'` for any site (an embeddable widget). The proxy answers the browser's preflight and
+  the page can read the constant answer. Keep the honeypot, the challenge and the rate limit: `'*'` invites every site.
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
   expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.
