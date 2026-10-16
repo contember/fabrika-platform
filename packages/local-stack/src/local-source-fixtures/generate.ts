@@ -152,6 +152,9 @@ export async function generateFixture(directory: string, kind: LocalSourceFixtur
 	const descriptor = await createZeropsArtifactSourceDescriptor(descriptorContents)
 	const tar = await git(directory, ['archive', '--format=tar', `--prefix=fabrika-local-${archivePrefix(kind)}-${commitSha}/`, commitSha])
 	const archive = Bun.gzipSync(tar)
+	// The gzip header's OS byte is the compressing zlib's platform (3 on Linux, 19 on macOS), so the pinned archive hash
+	// would hold on one platform only. Stamp it Unix, as the pins were made, so every machine builds the same bytes.
+	archive[9] = 3
 	return {
 		archive,
 		files: committed,
