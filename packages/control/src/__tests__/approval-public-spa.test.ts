@@ -1,7 +1,7 @@
 // A public SPA in the conservative access diff (ADR-0050 §3): a new one, and a member SPA that becomes one, widen. A
 // removed SPA mount is one line that says who answers its paths now, and it widens only when that admits more callers.
 
-import type { EndpointRow } from '@fabrika/auth-core'
+import type { CredentialedEndpoint, EndpointRow } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess } from '../approval/diff'
@@ -35,7 +35,7 @@ describe('a public SPA in the approval diff', () => {
 
 	test('a public SPA mount removed, its paths falling to a public SPA, changes nothing: one neutral line for the mount', () => {
 		expect(classifyAccess(withMount(PUBLIC_SPA, INTEREST), snapshot(edited(MEMBER_SPA, PUBLIC_SPA)))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{
 				effect: 'neutral',
 				line: 'Mount `interest` is removed: GET /interest/* and GET /interest now reach `app` for anyone, without signing in, as before',
@@ -155,12 +155,72 @@ describe('a removed mount takes more than its routes', () => {
 		)
 		expect(classifyAccess(snapshot(withSignup), snapshot(edited(MEMBER_SPA, "app: c.spa('/', { dir: 'dist/app', access: { public: true } }),"))))
 			.toEqual({
-				outcome: 'removal',
+				outcome: 'no-widening',
 				changes: [{
 					effect: 'narrows',
 					line:
 						'Mount `interest` is removed: GET /interest/* and GET /interest now reach `app` for anyone, without signing in, as before; its pages no longer get the public variable `SIGNUP_URL`',
 				}],
 			})
+	})
+})
+
+describe("who answers a removed endpoint's paths, one rule at a time", () => {
+	const withRows = (rows: (endpoints: readonly EndpointRow[]) => readonly EndpointRow[]): AccessSnapshot => {
+		const base = snapshot(edited(MEMBER_SPA, "app: c.spa('/', { dir: 'dist/app', access: { public: true } }),"))
+		if (base.contract === null) throw new Error('the base has no contract')
+		return { ...base, contract: { ...base.contract, endpoints: rows(base.contract.endpoints) } }
+	}
+	const template = (rows: readonly EndpointRow[]): CredentialedEndpoint => {
+		const get = rows.find((row) => row.id === 'api.get')
+		if (get === undefined || get.requirement === null) throw new Error('the base has no signed-in api.get')
+		return get
+	}
+	const effectOf = (baseline: AccessSnapshot, candidate: AccessSnapshot, id: string) =>
+		classifyAccess(baseline, candidate).changes.find((change) => change.line.startsWith(`Endpoint \`${id}\``))?.effect
+
+	test('a webhook whose path falls to another anonymous endpoint widens: a webhook turns callers away itself', () => {
+		const anonymous = (rows: readonly EndpointRow[], id: string, kind: 'webhook' | 'form', path: string): EndpointRow => ({
+			...template(rows),
+			id,
+			kind,
+			path,
+			source: { kind: 'mount', name: id },
+			callers: [],
+			requirement: null,
+			admission: null,
+		})
+		const baseline = withRows((
+			rows,
+		) => [...rows, anonymous(rows, 'stripe', 'webhook', '/hooks/stripe'), anonymous(rows, 'any', 'webhook', '/hooks/:binding')])
+		const candidate = withRows((rows) => [...rows, anonymous(rows, 'any', 'webhook', '/hooks/:binding')])
+		expect(effectOf(baseline, candidate, 'stripe')).toBe('widens')
+	})
+
+	test('an answering endpoint open to more origins widens, with the same callers and requirement', () => {
+		const at = (rows: readonly EndpointRow[], id: string, path: string, crossOrigin?: 'environment'): EndpointRow => ({
+			...template(rows),
+			id,
+			path,
+			source: { kind: 'mount', name: 'x' },
+			...(crossOrigin === undefined ? {} : { crossOrigin }),
+		})
+		const baseline = withRows((rows) => [...rows, at(rows, 'x.one', '/x/one'), at(rows, 'x.all', '/x/*', 'environment')])
+		const candidate = withRows((rows) => [...rows, at(rows, 'x.all', '/x/*', 'environment')])
+		expect(effectOf(baseline, candidate, 'x.one')).toBe('widens')
+	})
+
+	test('an answering endpoint that admits a caller kind more widens; one that admits a caller kind fewer narrows', () => {
+		const at = (rows: readonly EndpointRow[], id: string, path: string, callers: readonly ['human', ...('human' | 'machine')[]]): EndpointRow => ({
+			...template(rows),
+			id,
+			path,
+			source: { kind: 'mount', name: 'x' },
+			callers,
+		})
+		const human = withRows((rows) => [...rows, at(rows, 'x.one', '/x/one', ['human']), at(rows, 'x.all', '/x/*', ['human', 'machine'])])
+		const both = withRows((rows) => [...rows, at(rows, 'x.one', '/x/one', ['human', 'machine']), at(rows, 'x.all', '/x/*', ['human'])])
+		expect(effectOf(human, withRows((rows) => [...rows, at(rows, 'x.all', '/x/*', ['human', 'machine'])]), 'x.one')).toBe('widens')
+		expect(effectOf(both, withRows((rows) => [...rows, at(rows, 'x.all', '/x/*', ['human'])]), 'x.one')).toBe('narrows')
 	})
 })

@@ -32,7 +32,7 @@ describe("a job's issues in the approval diff", () => {
 
 	test('a job that stops issuing narrows', () => {
 		expect(classifyAccess(snapshot(true), snapshot(false))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Job `invite` no longer issues share links of mount `shared`' }],
 		})
 	})

@@ -56,6 +56,6 @@ describe('a link-holder file collection in the approval diff', () => {
 		expect(classifyAccess(snapshot(['shared']), snapshot(true)).changes).toEqual([
 			{ effect: 'widens', line: 'File collection `attachments` becomes reachable through the share links of every link mount bound to its owner' },
 		])
-		expect(classifyAccess(snapshot(['shared']), snapshot(['shared'])).outcome).toBe('unchanged')
+		expect(classifyAccess(snapshot(['shared']), snapshot(['shared'])).outcome).toBe('none')
 	})
 })

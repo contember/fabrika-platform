@@ -34,7 +34,7 @@ const lines = (baseline: AccessSnapshot, candidate: AccessSnapshot) => classifyA
 
 describe('classifyAccess', () => {
 	test('the same access is unchanged, whatever the checker version', () => {
-		expect(classifyAccess(snapshot(), { ...snapshot(), checker: '9.9.9' })).toEqual({ outcome: 'unchanged', changes: [] })
+		expect(classifyAccess(snapshot(), { ...snapshot(), checker: '9.9.9' })).toEqual({ outcome: 'none', changes: [] })
 	})
 
 	test('a role that gains an action widens; one that loses it only removes', () => {
@@ -43,7 +43,7 @@ describe('classifyAccess', () => {
 			outcome: 'widening',
 			changes: [{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' }],
 		})
-		expect(classifyAccess(wider, snapshot()).outcome).toBe('removal')
+		expect(classifyAccess(wider, snapshot()).outcome).toBe('no-widening')
 	})
 
 	test('a new endpoint widens and names its callers and requirement', () => {
@@ -60,7 +60,7 @@ describe('classifyAccess', () => {
 			'',
 		))
 		expect(classifyAccess(snapshot(), candidate)).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Endpoint `api.remove` (POST /api/remove) is removed; its paths are denied' }],
 		})
 	})
@@ -68,7 +68,7 @@ describe('classifyAccess', () => {
 	test('a removed endpoint that shadowed a broader one names who answers its path now: an anonymous check falling to the member SPA narrows', () => {
 		const candidate = snapshot(edited("\thealth: c.health('/healthz'),\n", ''))
 		expect(classifyAccess(snapshot(), candidate)).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{
 				effect: 'narrows',
 				line: 'Mount `health` is removed: GET /healthz now reaches `app` for human callers who are members, where it was for anonymous health requests',
@@ -80,7 +80,7 @@ describe('classifyAccess', () => {
 		const publicBase = edited('access: { member: true } }),', 'access: { public: true } }),')
 		const candidate = snapshot(edited("\thealth: c.health('/healthz'),\n", '', publicBase))
 		expect(classifyAccess(snapshot(publicBase), candidate)).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{
 				effect: 'narrows',
 				line: 'Mount `health` is removed: GET /healthz now reaches `app` for anyone, without signing in, where it was for anonymous health requests',
@@ -97,7 +97,7 @@ describe('classifyAccess', () => {
 	test('an output field added widens; one removed only removes', () => {
 		const wider = snapshot(edited('title: z.string() })', 'title: z.string(), body: z.string() })'))
 		expect(lines(snapshot(), wider)).toEqual(['Endpoint `api.get` output gains field `body`'])
-		expect(classifyAccess(wider, snapshot()).outcome).toBe('removal')
+		expect(classifyAccess(wider, snapshot()).outcome).toBe('no-widening')
 	})
 
 	test('a column that loses its read policy widens; a removed table only removes', () => {
@@ -108,7 +108,7 @@ describe('classifyAccess', () => {
 			changes: [{ effect: 'widens', line: 'Column `notes.secret` loses its read policy `notes.delete` and is read with `notes.read`' }],
 		})
 		expect(classifyAccess(snapshot(), snapshot(BASE, {}))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Table policy `notes` is removed' }],
 		})
 	})
@@ -120,7 +120,7 @@ describe('classifyAccess', () => {
 			changes: [{ effect: 'widens', line: 'Column `notes.owner` is updated with its own write action `notes.delete`' }],
 		})
 		expect(classifyAccess(assigned, snapshot())).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Column `notes.owner` is no longer updated with its own write action `notes.delete`' }],
 		})
 
@@ -146,7 +146,7 @@ describe('classifyAccess', () => {
 		expect(lines(snapshot(BASE, undefined, [one]), snapshot(BASE, undefined, [{ ...one, checksum: 'c'.repeat(64) }]))).toEqual([
 			'Migration `20260101000000_init.sql` changes',
 		])
-		expect(classifyAccess(snapshot(BASE, undefined, [one, two]), snapshot(BASE, undefined, [one])).outcome).toBe('removal')
+		expect(classifyAccess(snapshot(BASE, undefined, [one, two]), snapshot(BASE, undefined, [one])).outcome).toBe('no-widening')
 	})
 
 	test('the first contract is all additions against the empty snapshot', () => {
@@ -165,7 +165,7 @@ describe('classifyAccess', () => {
 			outcome: 'widening',
 			changes: [{ effect: 'widens', line: 'The contract is removed: the proxy no longer applies an endpoint table to this application' }],
 		})
-		expect(classifyAccess(EMPTY_SNAPSHOT, EMPTY_SNAPSHOT).outcome).toBe('unchanged')
+		expect(classifyAccess(EMPTY_SNAPSHOT, EMPTY_SNAPSHOT).outcome).toBe('none')
 	})
 
 	test('a display name or a locale, declared, changed or dropped, is a line the approver reads', () => {
@@ -195,7 +195,7 @@ describe('classifyAccess', () => {
 			"Holders of the members.list action of `workspace` see each member's label, and every endpoint on, in or below `workspace` reads the label of a member it looks up; a label spells a user's email address"
 		expect(classifyAccess(listed, labelled)).toEqual({ outcome: 'widening', changes: [{ effect: 'widens', line, review: 'closer' }] })
 		expect(classifyAccess(labelled, listed)).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{
 				effect: 'narrows',
 				line: 'Holders of the members.list action of `workspace` and the endpoints below `workspace` no longer see member labels',
@@ -220,7 +220,7 @@ describe('classifyAccess', () => {
 				review: 'closer',
 			}],
 		})
-		expect(classifyAccess(people, snapshot()).outcome).toBe('removal')
+		expect(classifyAccess(people, snapshot()).outcome).toBe('no-widening')
 	})
 
 	test('the member directory an endpoint reads is recorded: an approval before it was recorded widens, labels for closer review', () => {
@@ -253,7 +253,7 @@ describe('classifyAccess', () => {
 				review: 'closer',
 			},
 		])
-		expect(classifyAccess(listed, listed).outcome).toBe('unchanged')
+		expect(classifyAccess(listed, listed).outcome).toBe('none')
 		expect(lines(listed, snapshot())).toContain('Endpoint `api.remove` no longer reads the members of `workspace`')
 	})
 
@@ -263,7 +263,7 @@ describe('classifyAccess', () => {
 		const line = 'Role `editor` may be held by external principals, people from outside the organization'
 		expect(classifyAccess(snapshot(), external)).toEqual({ outcome: 'widening', changes: [{ effect: 'widens', line }] })
 		expect(classifyAccess(external, snapshot())).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Role `editor` may no longer be held by external principals' }],
 		})
 		expect(classifyAccess(EMPTY_SNAPSHOT, external).changes).toContainEqual({ effect: 'widens', line })
@@ -296,7 +296,7 @@ describe('classifyAccess compares input domains', () => {
 		const { forward, backward } = inputChange(`stage: z.literal('lead')`, `stage: z.enum(['lead', 'won'])`)
 		expect(forward).toEqual({ outcome: 'widening', changes: [{ effect: 'widens', line: 'Endpoint `api.remove` input `stage` admits `won`' }] })
 		expect(backward).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Endpoint `api.remove` input `stage` no longer admits `won`' }],
 		})
 	})
@@ -304,7 +304,7 @@ describe('classifyAccess compares input domains', () => {
 	test('an enum that gains a value widens', () => {
 		const { forward, backward } = inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['lead', 'won', 'lost'])`)
 		expect(forward.changes).toEqual([{ effect: 'widens', line: 'Endpoint `api.remove` input `stage` admits `lost`' }])
-		expect(backward.outcome).toBe('removal')
+		expect(backward.outcome).toBe('no-widening')
 	})
 
 	test('an enum that trades one value for another widens', () => {
@@ -325,7 +325,7 @@ describe('classifyAccess compares input domains', () => {
 		const { forward, backward } = inputChange('title: z.string().max(200)', 'title: z.string().max(300)')
 		expect(forward.outcome).toBe('widening')
 		expect(backward).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: 'Endpoint `api.remove` input `title` maximum length changes from 300 to 200' }],
 		})
 	})
@@ -336,15 +336,15 @@ describe('classifyAccess compares input domains', () => {
 		])
 		const { forward, backward } = inputChange('count: z.number().min(0).max(10)', 'count: z.number().max(10)')
 		expect(forward.changes).toEqual([{ effect: 'widens', line: 'Endpoint `api.remove` input `count` minimum changes from 0 to none' }])
-		expect(backward.outcome).toBe('removal')
-		expect(inputChange('count: z.number().min(0)', 'count: z.number().gt(0)').forward.outcome).toBe('removal')
+		expect(backward.outcome).toBe('no-widening')
+		expect(inputChange('count: z.number().min(0)', 'count: z.number().gt(0)').forward.outcome).toBe('no-widening')
 		expect(inputChange('count: z.number().int()', 'count: z.number()').forward.outcome).toBe('widening')
 	})
 
 	test('a removed pattern widens; an added one only removes', () => {
 		const { forward, backward } = inputChange('code: z.string().regex(/^[a-z]+$/)', 'code: z.string()')
 		expect(forward.outcome).toBe('widening')
-		expect(backward.outcome).toBe('removal')
+		expect(backward.outcome).toBe('no-widening')
 	})
 
 	test('a field that becomes optional or nullable widens; the reverse only removes', () => {
@@ -353,13 +353,13 @@ describe('classifyAccess compares input domains', () => {
 		expect(optional.backward.changes).toEqual([{ effect: 'narrows', line: 'Endpoint `api.remove` input `title` becomes required' }])
 		const nullable = inputChange('title: z.string()', 'title: z.string().nullable()')
 		expect(nullable.forward.changes).toEqual([{ effect: 'widens', line: 'Endpoint `api.remove` input `title` admits null' }])
-		expect(nullable.backward.outcome).toBe('removal')
+		expect(nullable.backward.outcome).toBe('no-widening')
 	})
 
 	test('a new accepted field widens, optional or not; a removed optional field only removes', () => {
 		const { forward, backward } = inputChange('title: z.string()', 'title: z.string(), body: z.string().optional()')
 		expect(forward).toEqual({ outcome: 'widening', changes: [{ effect: 'widens', line: 'Endpoint `api.remove` input gains field `body`' }] })
-		expect(backward).toEqual({ outcome: 'removal', changes: [{ effect: 'narrows', line: 'Endpoint `api.remove` input loses field `body`' }] })
+		expect(backward).toEqual({ outcome: 'no-widening', changes: [{ effect: 'narrows', line: 'Endpoint `api.remove` input loses field `body`' }] })
 		expect(inputChange('title: z.string()', 'title: z.string(), body: z.string()').forward.outcome).toBe('widening')
 	})
 
@@ -398,7 +398,7 @@ describe('classifyAccess compares input domains', () => {
 	})
 
 	test('an unchanged input is unchanged', () => {
-		expect(inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['won', 'lead'])`).forward).toEqual({ outcome: 'unchanged', changes: [] })
+		expect(inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['won', 'lead'])`).forward).toEqual({ outcome: 'none', changes: [] })
 	})
 })
 
@@ -419,7 +419,7 @@ describe('classifyAccess compares output shapes', () => {
 			'Endpoint `api.get` output `notes[]` gains field `body`',
 			'Endpoint `api.get` output `pinned` gains field `body`',
 		])
-		expect(classifyAccess(wider, before).outcome).toBe('removal')
+		expect(classifyAccess(wider, before).outcome).toBe('no-widening')
 	})
 
 	test('any change of an output union widens: projection takes the first branch that accepts the result', () => {
@@ -442,7 +442,7 @@ describe('classifyAccess compares output shapes', () => {
 	test('an output field removed only removes, required or not', () => {
 		const before = notes('z.strictObject({ id: z.uuid(), title: z.string() })')
 		const fewer = notes('z.strictObject({ id: z.uuid() })')
-		expect(classifyAccess(before, fewer).outcome).toBe('removal')
+		expect(classifyAccess(before, fewer).outcome).toBe('no-widening')
 	})
 })
 

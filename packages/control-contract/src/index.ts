@@ -467,12 +467,15 @@ export interface AccessChangeDto {
 	effect: 'widens' | 'narrows' | 'neutral'
 	line: string
 	review?: 'closer'
+	/** The line opens an endpoint to the pages on the origins the environment lists; `ApprovalDto.crossOrigins` names them. */
+	environmentOrigins?: true
 }
 
 /** A run's access change against its environment's active snapshot (ADR-0050 §3). */
 export interface ApprovalDto {
 	run: RunDto
-	outcome: 'unchanged' | 'removal' | 'widening'
+	/** `none`: no line. `no-widening`: lines that narrow or leave access unchanged; it publishes at once. */
+	outcome: 'none' | 'no-widening' | 'widening'
 	changes: AccessChangeDto[]
 	/** The digest of the run's snapshot and of the active one it was compared with: an approval is bound to both. */
 	candidateDigest: string
@@ -481,9 +484,10 @@ export interface ApprovalDto {
 	baselineRunId: string | null
 	protected: boolean
 	/**
-	 * The environment's cross-origin list as it stands now: the pages an endpoint the contract opens to another origin
-	 * answers. An operator sets it on the environment, it takes effect at once, and no approval covers it (ADR-0050).
-	 * Only on one approval read while the run waits for a decision and its environment exists; empty when it lists none.
+	 * The environment's cross-origin list as it stands now: the pages an endpoint the contract opens to the environment's
+	 * list answers. It is set on the environment, takes effect at once, and no approval covers it (ADR-0050). Only on one
+	 * approval read while the run waits for a decision, its environment exists and a line has `environmentOrigins`;
+	 * empty when the environment lists none.
 	 */
 	crossOrigins?: string[]
 	/** The human who approved it, once one did. */

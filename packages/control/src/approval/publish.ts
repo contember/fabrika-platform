@@ -40,7 +40,7 @@ const review = z.literal('closer').optional()
  * `widens` or `narrows`, except a job a form or a mutation starts, which already widened nothing and is `neutral`.
  */
 const changeSchema: z.ZodType<AccessChange, z.ZodTypeDef, unknown> = z.union([
-	z.object({ effect: z.enum(['widens', 'narrows', 'neutral']), line: z.string(), review }).strict(),
+	z.object({ effect: z.enum(['widens', 'narrows', 'neutral']), line: z.string(), review, environmentOrigins: z.literal(true).optional() }).strict(),
 	z.object({ widens: z.boolean(), line: z.string(), review }).strict().transform(({ widens, line, review }): AccessChange => ({
 		effect: widens ? 'widens' : isJobStartLine(line) ? 'neutral' : 'narrows',
 		line,
@@ -48,8 +48,13 @@ const changeSchema: z.ZodType<AccessChange, z.ZodTypeDef, unknown> = z.union([
 	})),
 ])
 
+/** A run classified before the outcome was renamed stored `unchanged` for `none` and `removal` for `no-widening`. */
+function storedOutcome(outcome: AccessOutcome | 'unchanged' | 'removal'): AccessOutcome {
+	return outcome === 'unchanged' ? 'none' : outcome === 'removal' ? 'no-widening' : outcome
+}
+
 const classificationSchema = z.object({
-	outcome: z.enum(['unchanged', 'removal', 'widening']),
+	outcome: z.enum(['none', 'no-widening', 'widening', 'unchanged', 'removal']).transform(storedOutcome),
 	changes: z.array(changeSchema),
 	candidateDigest: digest,
 	baselineDigest: digest,
@@ -223,13 +228,13 @@ async function requireAppEnv(repositories: ControlRepositories, run: RunRow): Pr
 
 function logClassification(log: (line: string) => void, classification: StoredClassification, env: string): void {
 	const count = (effect: AccessEffect) => classification.changes.filter((change) => change.effect === effect).length
-	const summary = classification.outcome === 'unchanged'
+	const summary = classification.outcome === 'none'
 		? 'no access change'
 		: classification.outcome === 'widening'
 		? `access widens${classification.protected ? ` on protected \`${env}\`` : ''}`
 		: count('narrows') > 0
 		? 'access only narrows'
-		: 'access is unchanged'
+		: 'access neither widens nor narrows'
 	const closer = classification.changes.filter((change) => change.review === 'closer').length
 	// Counts only: the change lines quote the checkout, and the approval page shows them.
 	log(

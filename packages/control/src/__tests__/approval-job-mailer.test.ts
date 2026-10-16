@@ -46,12 +46,12 @@ describe("a job's mailer in the approval diff", () => {
 
 	test("moving from the installation's transport to its own, or dropping mail, narrows", () => {
 		expect(classifyAccess(snapshot('installation'), snapshot('own'))).toEqual({
-			outcome: 'removal',
+			outcome: 'no-widening',
 			changes: [{ effect: 'narrows', line: "Job `digest` sends e-mail through its own transport, no longer the installation's" }],
 		})
 		for (const before of ['installation', 'own'] as const) {
 			expect(classifyAccess(snapshot(before), snapshot(undefined))).toEqual({
-				outcome: 'removal',
+				outcome: 'no-widening',
 				changes: [{ effect: 'narrows', line: 'Job `digest` no longer sends e-mail' }],
 			})
 		}
