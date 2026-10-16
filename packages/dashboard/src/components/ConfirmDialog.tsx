@@ -10,10 +10,12 @@ interface ConfirmDialogProps {
 	confirmLabel?: string
 	onConfirm: () => Promise<void>
 	onClose: () => void
+	/** The message a failed confirm shows; by default an RPC error's own. */
+	describeError?: (cause: unknown) => string
 }
 
 /** A small confirm dialog for revoke / disable / destructive actions. */
-export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm, onClose }: ConfirmDialogProps) {
+export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm, onClose, describeError = rpcErrorMessage }: ConfirmDialogProps) {
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
@@ -24,7 +26,7 @@ export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm
 			await onConfirm()
 			onClose()
 		} catch (cause) {
-			setError(cause instanceof RpcError ? cause.message : 'Action failed.')
+			setError(describeError(cause))
 			setBusy(false)
 		}
 	}
@@ -41,4 +43,8 @@ export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm
 			</div>
 		</Modal>
 	)
+}
+
+function rpcErrorMessage(cause: unknown): string {
+	return cause instanceof RpcError ? cause.message : 'Action failed.'
 }
