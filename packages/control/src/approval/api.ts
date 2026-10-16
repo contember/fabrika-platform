@@ -26,12 +26,13 @@ const LIST_LIMIT = 100
 
 export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
 	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
-	return { items: rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(row)) }
+	return { items: rows.filter((row) => mayApprove(c.auth, row)).map(toApprovalDto) }
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
-	const run = await requireClassifiedRun(c, runId)
-	return toApprovalDto(run, await pendingCrossOrigins(c, run))
+	const approval = toApprovalDto(await requireClassifiedRun(c, runId))
+	const crossOrigins = await pendingCrossOrigins(c, approval)
+	return crossOrigins === undefined ? approval : { ...approval, crossOrigins }
 }
 
 /**
@@ -125,14 +126,13 @@ async function requireClassifiedRun(c: ApprovalUseCaseContext, runId: string): P
  * list may have changed since and no approval covers it; nor does a run whose environment is gone, since its list is
  * unknown rather than empty.
  */
-async function pendingCrossOrigins(c: ApprovalUseCaseContext, run: RunRow): Promise<string[] | undefined> {
-	if (run.status !== 'awaiting_approval' || run.classification_json === null) return undefined
-	if (!parseClassification(run.classification_json).changes.some((change) => change.environmentOrigins === true)) return undefined
-	const appEnv = await c.repositories.registry.getAppEnv(run.app_id, run.env)
+async function pendingCrossOrigins(c: ApprovalUseCaseContext, approval: ApprovalDto): Promise<string[] | undefined> {
+	if (approval.run.status !== 'awaiting_approval' || !approval.changes.some((change) => change.environmentOrigins === true)) return undefined
+	const appEnv = await c.repositories.registry.getAppEnv(approval.run.appId, approval.run.env)
 	return appEnv === null ? undefined : appEnvCrossOrigins(appEnv)
 }
 
-function toApprovalDto(run: RunRow, crossOrigins?: string[]): ApprovalDto {
+function toApprovalDto(run: RunRow): ApprovalDto {
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
 	const classification = parseClassification(run.classification_json)
 	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
@@ -149,7 +149,6 @@ function toApprovalDto(run: RunRow, crossOrigins?: string[]): ApprovalDto {
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
-		...(crossOrigins === undefined ? {} : { crossOrigins }),
 		approval: approval === null ? null : { principalId: approval.principalId, label: approval.label, approvedAt: approval.approvedAt },
 	}
 }

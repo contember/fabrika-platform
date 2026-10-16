@@ -405,8 +405,8 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
 			removedMounts.set(row.source.name, [...(removedMounts.get(row.source.name) ?? []), row])
 			continue
 		}
-		const { effect, words } = fallThrough(row, baseline, candidate)
-		changes.add({ effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${words(true)}` })
+		const fate = fallThrough(row, baseline, candidate)
+		changes.add(withOrigins({ effect: fate.effect, line: `Endpoint \`${row.id}\` (${route(row)}) is removed; its paths ${fate.words(true)}` }, fate))
 	}
 	for (const [mount, rows] of removedMounts) changes.add(removedMountChange(mount, rows, baseline, candidate))
 	return new Set(removedMounts.keys())
@@ -439,13 +439,23 @@ function removedMountChange(mount: string, rows: readonly EndpointRow[], baselin
 		: !keepsAccess || parts.some((part) => part.effect === 'narrows')
 		? 'narrows'
 		: 'neutral'
-	return { effect, line: `Mount \`${mount}\` is removed: ${parts.map((part) => part.text).join('; ')}` }
+	const line = `Mount \`${mount}\` is removed: ${parts.map((part) => part.text).join('; ')}`
+	return withOrigins({ effect, line }, { environmentOrigins: [...groups.values()].some(({ fate }) => fate.environmentOrigins) })
 }
 
-/** Where a removed endpoint's paths go: the effect, and the words that follow the routes, for one route or several. */
+/** A change, marked when its paths now reach an endpoint open to the environment's cross-origin list. */
+function withOrigins(change: AccessChange, fate: Pick<Fate, 'environmentOrigins'>): AccessChange {
+	return fate.environmentOrigins ? { ...change, environmentOrigins: true } : change
+}
+
+/**
+ * Where a removed endpoint's paths go: the effect, the words that follow the routes (for one route or several), and
+ * whether the paths now reach an endpoint open to the environment's cross-origin list that the removed one was not.
+ */
 interface Fate {
 	readonly effect: AccessEffect
 	words(plural: boolean): string
+	readonly environmentOrigins: boolean
 }
 
 /**
@@ -459,21 +469,23 @@ function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: Co
 	const reached = candidate.endpoints.filter((other) =>
 		other.method === row.method && pathsOverlap(row.path, other.path) && (reserved === null || other.path.startsWith(`${reserved}/`))
 	)
-	if (reached.length === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied') }
+	if (reached.length === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false }
 	const reach = (plural: boolean) => (plural ? 'now reach' : 'now reaches')
 	const was = audience(row)
+	const environmentOrigins = row.crossOrigin === undefined && reached.some((other) => other.crossOrigin === 'environment')
 	const removed = { row, artifact: baseline }
 	const answering = reached.map((other) => ({ row: other, artifact: candidate }))
 	const fewer = answering.every((other) => admitsNoMoreThan(other, removed))
 	const same = fewer && answering.every((other) => admitsNoMoreThan(removed, other))
 	if (same && reached.every((other) => audience(other) === was)) {
 		const ids = listOf(reached.map((other) => other.id), 'none')
-		return { effect: 'neutral', words: (plural) => `${reach(plural)} ${ids} ${was}, as before` }
+		return { effect: 'neutral', words: (plural) => `${reach(plural)} ${ids} ${was}, as before`, environmentOrigins }
 	}
 	const answers = reached.map((other) => `\`${other.id}\` ${audience(other)}`).join(', ')
 	return {
 		effect: same ? 'neutral' : fewer ? 'narrows' : 'widens',
 		words: (plural) => `${reach(plural)} ${answers}, where ${plural ? 'they were' : 'it was'} ${was}`,
+		environmentOrigins,
 	}
 }
 
@@ -486,11 +498,13 @@ interface SidedRow {
 /**
  * Whether `after` admits only callers `before` admitted on the same paths. Conservative: any difference it cannot show
  * to admit no one more admits more. Every field of the row has its say (`ADMITS_NO_MORE`), and so does the one input of
- * the proxy's decision a row does not carry: its delegation, derived from the artifact (`endpointDelegation`).
+ * the proxy's decision a row does not carry: its delegation, derived from the artifact (`endpointDelegation`). The
+ * delegation is compared only after a signed-in endpoint: after one anyone opens, no delegation admits more.
  */
 function admitsNoMoreThan(after: SidedRow, before: SidedRow): boolean {
-	const fields = Object.values(ADMITS_NO_MORE).every((admits) => admits(after.row, before.row))
-	return fields && canonicalJson(endpointDelegation(after.artifact, after.row)) === canonicalJson(endpointDelegation(before.artifact, before.row))
+	if (!Object.values(ADMITS_NO_MORE).every((admits) => admits(after.row, before.row))) return false
+	if (before.row.requirement === null) return true
+	return canonicalJson(endpointDelegation(after.artifact, after.row)) === canonicalJson(endpointDelegation(before.artifact, before.row))
 }
 
 /**

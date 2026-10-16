@@ -188,7 +188,7 @@ that now matches those paths admits with the callers the removed one admitted:
   the typical case.
 
 "The same callers" is read narrowly. Two signed-in endpoints admit the same callers when they have the same kind, the
-same requirement and the same caller kinds. A requirement whose scope is read from a path parameter is never the same,
+same requirement, the same caller kinds and the same delegation (`endpointDelegation`, which the proxy applies too). A requirement whose scope is read from a path parameter is never the same,
 because a broader route reads it from another segment. A `link` caller is the same only on an endpoint of the same link
 mount, because a link key reaches only its own mount. An anonymous health check or public SPA admits anyone, so a
 signed-in endpoint after it admits fewer and another of those two kinds the same. A form and a webhook turn callers
@@ -261,9 +261,9 @@ republishes the namespace proxy at once, and no approval covers it, on a protect
 outside approval because it grants no authority: a request from a listed origin is bearer-only (ADR-0022 rule 3,
 no `Allow-Credentials`, the session cookie never read), so it reaches only what the `px_` key it carries already
 reaches from any server. Listing an origin lets a page in a browser use a key it already has; it does not let the page
-act as the person who visits it. What does widen is the contract opening an endpoint to the list at all, and that line
-waits like any other widening. While a run waits for a decision, the approval page names the list as it stands beside
-each such line. A decided approval names none: the list may have changed since, and nothing records it with the
+act as the person who visits it. What does widen is the contract opening an endpoint to the list at all, or a removed
+endpoint's paths falling to one that is open to it, and that line waits like any other widening. While a run waits for
+a decision, the approval page names the list as it stands beside each such line. A decided approval names none: the list may have changed since, and nothing records it with the
 decision. The environment page shows the list too.
 
 ### 4. Only production is protected by default

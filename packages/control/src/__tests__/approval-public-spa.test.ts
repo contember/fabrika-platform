@@ -208,6 +208,8 @@ describe("who answers a removed endpoint's paths, one rule at a time", () => {
 		const baseline = withRows((rows) => [...rows, at(rows, 'x.one', '/x/one'), at(rows, 'x.all', '/x/*', 'environment')])
 		const candidate = withRows((rows) => [...rows, at(rows, 'x.all', '/x/*', 'environment')])
 		expect(effectOf(baseline, candidate, 'x.one')).toBe('widens')
+		// The paths now open to the environment's list, so the approval names the list beside this line.
+		expect(classifyAccess(baseline, candidate).changes.find((change) => change.line.startsWith('Endpoint `x.one`'))?.environmentOrigins).toBe(true)
 	})
 
 	test('an answering endpoint that admits a caller kind more widens; one that admits a caller kind fewer narrows', () => {
@@ -222,5 +224,60 @@ describe("who answers a removed endpoint's paths, one rule at a time", () => {
 		const both = withRows((rows) => [...rows, at(rows, 'x.one', '/x/one', ['human', 'machine']), at(rows, 'x.all', '/x/*', ['human'])])
 		expect(effectOf(human, withRows((rows) => [...rows, at(rows, 'x.all', '/x/*', ['human', 'machine'])]), 'x.one')).toBe('widens')
 		expect(effectOf(both, withRows((rows) => [...rows, at(rows, 'x.all', '/x/*', ['human'])]), 'x.one')).toBe('narrows')
+	})
+
+	test('a delegation is compared only after a signed-in endpoint: after one anyone opens, none admits more', () => {
+		const creates = (rows: readonly EndpointRow[], id: string, path: string): EndpointRow => ({
+			...template(rows),
+			id,
+			path,
+			method: 'GET',
+			source: { kind: 'mount', name: 'x' },
+			requirement: { kind: 'action', action: 'notes.write', access: { form: 'creates', dimension: 'note' } },
+			admission: null,
+		})
+		const open = (rows: readonly EndpointRow[]): EndpointRow => ({
+			...template(rows),
+			id: 'probe',
+			kind: 'health',
+			method: 'GET',
+			path: '/files/x',
+			source: { kind: 'mount', name: 'probe' },
+			callers: [],
+			requirement: null,
+			admission: null,
+		})
+		const baseline = withRows((rows) => [...rows, open(rows), creates(rows, 'x.all', '/files/*')])
+		const candidate = withRows((rows) => [...rows, creates(rows, 'x.all', '/files/*')])
+		expect(effectOf(baseline, candidate, 'probe')).toBe('narrows')
+	})
+
+	test('two signed-in endpoints with the same requirement but another delegation are not the same callers', () => {
+		const on = (rows: readonly EndpointRow[], id: string, path: string): EndpointRow => ({
+			...template(rows),
+			id,
+			path,
+			source: { kind: 'mount', name: 'x' },
+			requirement: { kind: 'action', action: 'notes.write', access: { form: 'on', dimension: 'note', from: 'id' } },
+		})
+		const rows = (endpoints: readonly EndpointRow[]) => [...endpoints, on(endpoints, 'x.one', '/x/one'), on(endpoints, 'x.all', '/x/*')]
+		const baseline = withRows(rows)
+		const without = withRows(rows)
+		if (without.contract === null) throw new Error('the base has no contract')
+		const note = without.contract.dimensions['note']
+		if (note === undefined) throw new Error('the base has no note dimension')
+		// `notes.write` becomes the action that manages the members of `note`: the answering endpoint now delegates.
+		const candidate: AccessSnapshot = {
+			...without,
+			contract: {
+				...without.contract,
+				endpoints: without.contract.endpoints.filter((row) => row.id !== 'x.one'),
+				dimensions: { ...without.contract.dimensions, note: { ...note, members: { manage: 'notes.write', list: 'notes.read' } } },
+			},
+		}
+		expect(effectOf(baseline, candidate, 'x.one')).toBe('widens')
+		// The same change without the delegation leaves the callers as they were.
+		const unchanged = withRows((endpoints) => rows(endpoints).filter((row) => row.id !== 'x.one'))
+		expect(effectOf(baseline, unchanged, 'x.one')).toBe('neutral')
 	})
 })
