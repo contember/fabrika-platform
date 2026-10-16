@@ -237,6 +237,15 @@ Each environment has a `protected` flag, a column of Control's `app_envs`. `prod
 default; every other environment is not. Changing the flag requires `access.approve` from a human user
 principal, the same rule as approving (section 5). Control's audit log records every change.
 
+The flag changes through `apps.environments.protect`, and its only caller is the console: the application's
+page lists each environment under "Access approvals", with the switch for a caller holding `access.approve`
+there. No CLI verb or MCP tool changes it, because a key or an agent must not unprotect an environment. Turning
+approvals off asks for a confirmation first. A typical case for it: a team whose every merge to the trigger
+branch is already reviewed on GitHub. The change waits while a run of the environment is `running` (409) and
+applies from the next classification. It decides no parked run: a run in `awaiting_approval` keeps waiting
+until a person approves, rejects or cancels it, and once approved it classifies again under the new flag. A
+newer deploy does not wait for it.
+
 The flag outlives its environment. Deleting the environment or the application writes the flag and
 both counters, `generation` advanced, to `app_env_protection`. Nothing deletes that row. A recreated
 environment starts from it, else from the default. Deleting a protected environment, or an application

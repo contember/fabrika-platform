@@ -301,6 +301,9 @@ console. Otherwise the run publishes its snapshot with a compare-and-swap on `ap
 its IAM schema from it, never from the artifact. A commit without `fabrika.contract.ts` fails its run before the
 provider is called: Fabrika deploys an application only with a contract. Approving needs `access.approve` (authorization) from a human user principal on a
 console request from Control's own origin (admission).
+The same person turns an environment's approvals off or on in the console, under "Access approvals" on the
+application's page (`apps.environments.protect`; no CLI verb). A team whose merges to the trigger branch are
+already reviewed on GitHub may turn them off. Turning them off approves no parked run.
 
 For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete
 ref, then persists the selected commit before freezing its release context.
