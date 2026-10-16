@@ -796,12 +796,13 @@ export const parseRegistryDistTag = (text: string, name: string, tag: string): s
  *
  * npm's replication, not the publish, is what is being waited on: `@fabrika/control-contract` reached the
  * `latest` dist-tag about five minutes after publish on both v0.0.24 and v0.0.25, where the old fixed
- * 6 x 2 s gave up after twelve seconds and every release needed a manual re-run.
+ * 6 x 2 s gave up after twelve seconds and every release needed a manual re-run. On v0.5.1 one package's
+ * `latest` lagged its publish by more than ten minutes.
  */
 export const REGISTRY_BACKOFF_MS: readonly number[] = [5_000, 10_000, 20_000, 30_000]
 
 /** Total budget for the wait; past it the release job fails rather than holding a runner open. */
-export const REGISTRY_DEADLINE_MS = 600_000
+export const REGISTRY_DEADLINE_MS = 1_800_000
 
 /** Everything the wait does to the outside world, so a test can assert its schedule without spending it. */
 export interface RegistryWaitDeps {
