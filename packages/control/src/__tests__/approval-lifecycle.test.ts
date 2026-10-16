@@ -493,6 +493,26 @@ describe('approved access through the run lifecycle', () => {
 		expect((await deploy(w, 'stage')).status).toBe('awaiting_approval')
 	})
 
+	test('turning protection off approves no parked run: it waits for a decision, while a new deploy publishes at once', async () => {
+		const w = world()
+		await seed(w)
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+
+		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
+		expect((await run(w, parked.runId)).status).toBe('awaiting_approval')
+		expect(w.queued).toEqual([])
+
+		const next = await deploy(w, 'prod')
+		expect(next.status).toBe('succeeded')
+		expect((await published(w, 'prod')).runId).toBe(next.runId)
+		expect((await run(w, parked.runId)).status).toBe('awaiting_approval')
+
+		await approve(w, parked.runId)
+		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('succeeded')
+		expect(parseClassification((await run(w, parked.runId)).classification_json ?? '').protected).toBe(false)
+	})
+
 	test('a protection change while a run deploys answers 409 and changes nothing; once it is done, the change applies', async () => {
 		const w = world()
 		await seed(w)
