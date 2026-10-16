@@ -389,6 +389,7 @@ describe('the packages a Zerops application installs', () => {
 			'@fabrika/cli',
 			'@fabrika/control-contract',
 			'@fabrika/db',
+			'@fabrika/email',
 			'@fabrika/iam-contract',
 			'@fabrika/installation-init',
 			'@fabrika/jwks',
