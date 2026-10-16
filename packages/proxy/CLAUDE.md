@@ -108,6 +108,16 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   application's own; an `http` entry deletes `TRANSPORT_HEADERS` instead (`removedHeaders`): a named delete runs
   after the set, so `https` cannot list it. An installation service's answers are
   untouched: IAM and Control set their own per-response CSPs.
+- **A cross-origin preflight and its decoration are the decision's, written by Caddy** (ADR-0022 "Cross-origin
+  endpoints"). Only an entry with a `crossOrigin` row gets them, so every other entry's config is byte for byte what
+  it was. `forward_auth`'s first `handle_response` entry matches a 2xx carrying `PREFLIGHT_HEADER` and answers it with
+  `copy_response`, which copies the auth answer's headers itself (a `copy_response_headers` before it doubles them,
+  measured on 2.10.2); a deferred delete drops only the marker. The 2xx branch keeps the admitted origin in the
+  request var `fabrika_cross_origin` (a `vars` value is expanded as a placeholder), and a subroute in front of the
+  answer route sets `Access-Control-Allow-Origin` from it and adds `Vary: Origin` unless it is `*`, deferred and never
+  on a 1xx; the upstream's response operations already deleted the app's own `Access-Control-*`. A download is never
+  cross-origin, so its route has no decoration. `caddy-cross-origin.live.test.ts` proves the chain in front of the
+  real decision.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
   different denials. Both deny; only the second is an incident — including on the human path, where a
   503 must NOT degrade into a bounce to login (that is a login loop hiding an outage). A cache entry

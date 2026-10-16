@@ -43,9 +43,12 @@ architecture change, not a configuration one, and it needs a decision of its own
 
 - the console's Operations client stops going through `/operations/api/*` and addresses the
   Operations origin — which is cross-origin, so the proxy needs CORS **and** a preflight
-  answered before gate matching (an `OPTIONS` carries no credential and cannot pass a
-  `human` rule); or the Operations console views are served from the Operations host
-  instead, which makes every call same-origin and needs no new proxy surface;
+  answered before the caller step; or the Operations console views are served from the
+  Operations host instead, which makes every call same-origin and needs no new proxy surface.
+  ADR-0022 "Cross-origin endpoints" now answers such a preflight, but for a contract
+  application only, and bearer-only: a session never crosses origins. The console's client
+  holds a session, not a key, so the first option would need a cross-origin form for
+  installation entries AND a credential the console page can present; the second needs neither;
 - Operations gets a real IAM registration: its own `AppSchema` declaring the three actions
   it checks (`operations.read` / `operations.triage` / `operations.manage`) over the `app`
   and `environment` scope dimensions, plus return origins — today `?app=operations` is a

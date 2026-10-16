@@ -12,10 +12,12 @@ import {
 	FORWARDED_PROTO_HEADER,
 	FORWARDED_URI_HEADER,
 	type IamGateway,
+	PREFLIGHT_HEADER,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	type TokenCache,
 } from '@fabrika/proxy-core'
+import { applyCrossOriginHeaders, crossOriginHeaders } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 
 /** What the proxy did with a request: answered it itself, or forwarded it with what only the proxy may set. */
@@ -26,6 +28,8 @@ export type ProxyOutcome =
 		readonly asserted: ReadonlyMap<string, string>
 		/** Whether the request's own `Authorization` reaches the application: not on an anonymous endpoint. */
 		readonly keepsAuthorization: boolean
+		/** What the application's answer is given for an admitted cross-origin request, over its own headers. */
+		readonly decorate: (headers: Headers) => void
 	}
 	| { readonly outcome: 'answer'; readonly response: Response }
 
@@ -48,6 +52,8 @@ export interface EndpointProxyOptions {
 	readonly delegations: DelegationIssuer | null
 	/** The proxy's token cache, as production keeps one; omitted, every request mints. */
 	readonly cache?: TokenCache
+	/** The origins the environment lists for the contract's cross-origin endpoints; none when omitted. */
+	readonly crossOrigins?: readonly string[]
 }
 
 const ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]
@@ -56,7 +62,14 @@ const ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER
 export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 	const verify = createVerifyService({
 		manifest: {
-			apps: [{ id: options.appId, hosts: [options.host], upstream: 'app', scheme: 'https', ...contractProxyTable(options.artifact) }],
+			apps: [{
+				id: options.appId,
+				hosts: [options.host],
+				upstream: 'app',
+				scheme: 'https',
+				...contractProxyTable(options.artifact),
+				...(options.crossOrigins === undefined || options.crossOrigins.length === 0 ? {} : { crossOrigins: [...options.crossOrigins] }),
+			}],
 		},
 		iam: options.iam,
 		issuer: options.issuer,
@@ -75,6 +88,12 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 		if (!verification.ok) {
 			return { outcome: 'answer', response: verification }
 		}
+		// An admitted preflight: the decision's 2xx is the whole answer, as both enforcement points return it.
+		if (verification.headers.get(PREFLIGHT_HEADER) === '1') {
+			verification.headers.delete(PREFLIGHT_HEADER)
+			return { outcome: 'answer', response: verification }
+		}
+		const allowOrigin = verification.headers.get('Access-Control-Allow-Origin')
 		const asserted = new Map<string, string>()
 		for (const header of ASSERTED_HEADERS) {
 			const value = verification.headers.get(header)
@@ -82,6 +101,13 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 				asserted.set(header, value)
 			}
 		}
-		return { outcome: 'forward', asserted, keepsAuthorization: asserted.has(PROXY_TOKEN_HEADER) }
+		return {
+			outcome: 'forward',
+			asserted,
+			keepsAuthorization: asserted.has(PROXY_TOKEN_HEADER),
+			decorate: (answer) => {
+				if (allowOrigin !== null) applyCrossOriginHeaders(answer, crossOriginHeaders(allowOrigin))
+			},
+		}
 	}
 }

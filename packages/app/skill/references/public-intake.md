@@ -405,6 +405,10 @@ export const contract = app.contract((c) => ({
   `<prefix>/__fabrika-config.json` as `public: { <VARIABLE>: <value> }`, and the approver sees each name. Never name
   a secret there: the contract refuses a variable that is both.
   `rate: { perClient, perForm }` (per minute, 10 and 100 by default) answers 429 past either limit.
+- **A form on someone else's page.** A form served from this application's own SPA needs nothing. A form a partner's
+  page or a separate marketing site submits needs `crossOrigin`: `true` for the origins an operator lists for the
+  environment in Control, `'*'` for any site (an embeddable widget). The proxy answers the browser's preflight and
+  the page can read the constant answer. Keep the honeypot, the challenge and the rate limit: `'*'` invites every site.
 - **Zerops shares one client address.** Until the platform reads the visitor's address behind the Zerops balancer,
   every visitor counts as one client there, so `perClient` acts as a second per-form limit: set it to the form's
   expected peak, never lower it to stop a flood. The challenge is the defense that does not depend on the address.

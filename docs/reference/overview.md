@@ -412,7 +412,10 @@ enforcement:
   `Content-Type` check, on every endpoint table — the console's three JSON mounts and
   a contract application's endpoints alike. They decide whether a cookie-bearing
   request is considered at all; a bearer is explicit authority and passes without
-  them. Control reads no `Origin`, and IAM's own admin surface reads no cookie — it
+  them. The proxy's answer to a cross-origin request is admission too: it answers the
+  preflight of an endpoint the contract marks `crossOrigin` for an origin the
+  environment lists, decorates the answer, and never reads a session for such a
+  request (ADR-0022 "Cross-origin endpoints"). Control reads no `Origin`, and IAM's own admin surface reads no cookie — it
   accepts only a bearer. They resolve no principal and read no policy, so none of
   them is a second enforcement decision.
 

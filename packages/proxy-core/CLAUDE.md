@@ -45,7 +45,7 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   knows the public scheme. A producer of the proxy's answers uses the `app…` forms. A refusal before the request is
   read gets the base policy plus the transport of the application host it names (`earlyPolicy`). `applyHeaderPolicy`
   also deletes `REMOVED_RESPONSE_HEADERS` and `TRANSPORT_HEADERS` before it sets the policy, so an application's own
-  HSTS never passes on `http`; the Caddy config uses the same lists. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
+  HSTS never passes on `http`, nor any `Access-Control-*` header of its own; the Caddy config uses the same lists. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
   accepts `*` in a host, so `isPolicyOrigin` checks the host itself), at most `MAX_CSP_ORIGINS` (16) per
   directive — the same bound the contract build applies.
 - **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname
@@ -94,6 +94,18 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   401/403, never a bounce; a refused `px_` key there keeps its status and reason and gets the challenge too
   (`withBearerChallenge`). A `protocol` row reads no credential like any anonymous kind; only its hop
   differs.
+- **A cross-origin request is decided from the row and the entry, never by the application** (ADR-0022 "Cross-origin
+  endpoints"). A contract application's row may carry `crossOrigin` (`environment` on a `query`, `mutation` or `form`;
+  `any` on a `form` only), and its entry `crossOrigins`, the environment's exact origins (`isCrossOrigin`, at most
+  `MAX_CROSS_ORIGINS`, each once, never one of its own hosts); the parser refuses either anywhere else. An `OPTIONS`
+  with `Origin` and `Access-Control-Request-Method` is a preflight, planned for the REQUESTED method before any
+  credential is read (`decidePreflight`): an admitted one is the `preflight` outcome, a 204 carrying the policy,
+  `preflightHeaders` and `PREFLIGHT_HEADER`, which both compositions return as the whole answer without dialling the
+  app; anything else is 403 (`cross_origin`, or `no_endpoint`). An installation entry's `OPTIONS` is an ordinary
+  request. On any other request `admittedOrigin` gives the allow's `crossOrigin` (copied by the composition onto the
+  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A listed origin's request is never
+  session-authenticated: without `Authorization` it is 401 `no_credential`, never a bounce. No answer carries
+  `Access-Control-Allow-Credentials`.
 - **A workload key opens no `machine` row.** The caller `machine` admits only a `service` key: a key whose token has
   a workload kind (`job`, `webhook`, `app`) is 403 `caller_kind` there, also from the cache (ADR-0022 "Principal
   kinds").

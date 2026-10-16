@@ -115,6 +115,11 @@ export interface TestKitOptions {
 	 * `mail_not_configured`.
 	 */
 	readonly mail?: MemoryEmailSender | 'none'
+	/**
+	 * The origins the environment lists for the contract's `crossOrigin` endpoints, as an operator sets them in
+	 * Control; a page on one of them may call such an endpoint with a key. None when omitted.
+	 */
+	readonly crossOrigins?: readonly string[]
 }
 
 export interface TestConnection {
@@ -515,7 +520,15 @@ export function bootTestKit<C extends AnyContract>(
 		getJwks: () => jwks,
 	}
 
-	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: membership ?? null })
+	const proxy = endpointProxy({
+		artifact,
+		appId,
+		host,
+		iam,
+		issuer: TEST_ISSUER,
+		delegations: membership ?? null,
+		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
+	})
 
 	// What requests leave running: a job a form's or a mutation's `then` kicked, or a failure's report.
 	const background = new Set<Promise<void>>()
@@ -546,7 +559,10 @@ export function bootTestKit<C extends AnyContract>(
 		for (const [header, value] of outcome.asserted) {
 			headers.set(header, value)
 		}
-		return application.fetch(new Request(request, { headers }), exec)
+		const answer = await application.fetch(new Request(request, { headers }), exec)
+		const decorated = new Headers(answer.headers)
+		outcome.decorate(decorated)
+		return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers: decorated })
 	}
 
 	function browser(caller?: TestCaller): RpcFetch {
