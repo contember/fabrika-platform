@@ -40,6 +40,8 @@ export type EmailDeliveryOutcome = 'not_sent' | 'unknown'
 export const EMAIL_DELIVERY_ERRORS = {
 	invalid_configuration: { retryable: false, outcome: 'not_sent' },
 	invalid_message: { retryable: false, outcome: 'not_sent' },
+	// The installation has no transport (`FABRIKA_EMAIL_PROVIDER=none`): the message waits for one, it is not refused.
+	mail_not_configured: { retryable: false, outcome: 'not_sent' },
 	aborted: { retryable: true, outcome: 'unknown' },
 	network_error: { retryable: true, outcome: 'unknown' },
 	request_timeout: { retryable: true, outcome: 'unknown' },

@@ -47,6 +47,12 @@ export interface AppMailMessage {
 
 /** `ctx.mail` of a job that declares `mailer`. */
 export interface AppMail {
+	/**
+	 * false where the installation has no mail transport (`FABRIKA_EMAIL_PROVIDER=none`, or a local one without any):
+	 * every `send` fails `mail_not_configured`, outcome `not_sent`. An outbox then leaves its rows queued and spends no
+	 * attempt; they leave on the first run after the operator adds a transport and the application is deployed again.
+	 */
+	readonly available: boolean
 	/** What the transport promises: whether a repeat under one key is deduplicated, sync or queued acceptance. */
 	readonly capabilities: EmailSenderCapabilities
 	/**

@@ -678,7 +678,7 @@ async function attemptOnce(
 		const ran = runInRequest(frame, async () => {
 			await job.handler({ ctx })
 		}).then(() => null, (error: unknown) => {
-			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.capabilities ?? null))
+			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))
 			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)
 			return failed
 		})
@@ -806,12 +806,12 @@ function jobLinksOf(job: BoundJob, mount: JobLinkMount, iam: IamMembership, fram
 
 /** `ctx.mail` of a job that declares `mailer`: the transport `boot` resolved for it, until the attempt ends. */
 function jobMailOf(job: BoundJob, mailer: JobMailer, frame: RequestFrame, signal: AbortSignal, context: RunnerContext): AppMail {
-	const sender = context.mail[mailer]
-	if (sender === null) {
+	const transport = context.mail[mailer]
+	if (transport === null) {
 		throw new ServerFault('facility_unbound', `job '${job.name}' declares mailer: '${mailer}', and boot resolved no transport for it`)
 	}
 	return jobMail({
-		sender,
+		transport,
 		keyPrefix: context.mail.keyPrefix,
 		signal,
 		assertLive: () => {

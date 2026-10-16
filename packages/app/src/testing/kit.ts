@@ -111,8 +111,10 @@ export interface TestKitOptions {
 	/**
 	 * The stand-in for every job's mail transport; a new `MemoryEmailSender` by default. Pass one with other capabilities
 	 * to model another provider: `new MemoryEmailSender({ capabilities: { idempotent: false, confirmation: 'queued' } })`.
+	 * `'none'` models an installation without a transport: `ctx.mail.available` is false, and every send fails
+	 * `mail_not_configured`.
 	 */
-	readonly mail?: MemoryEmailSender
+	readonly mail?: MemoryEmailSender | 'none'
 }
 
 export interface TestConnection {
@@ -164,7 +166,7 @@ export interface TestKit<C extends AnyContract> {
 	/**
 	 * The stand-in for every job's transport: what reached it (`accepted`, `handoffs`) and its faults (`refuse`,
 	 * `unavailable`, `unreachable`, `loseAnswers`, `during`, `heal`). Each message carries the transport key,
-	 * `transportMailKey(kit.mailKeyScope, key)`.
+	 * `transportMailKey(kit.mailKeyScope, key)`. Under `mail: 'none'` nothing reaches it.
 	 */
 	readonly mail: MemoryEmailSender
 	/** Whose keys this kit's prefix separates: `mailKeyPrefix(kit.mailKeyScope)` is what a job's key gets in front. */
@@ -325,7 +327,7 @@ export function bootTestKit<C extends AnyContract>(
 	// issues the proxy's delegation grants.
 	const standIn = options.membership === undefined ? kitMembership(artifact, directoryCallers) : null
 	const membership = options.membership ?? standIn?.rpc
-	const mail = options.mail ?? new MemoryEmailSender()
+	const mail = options.mail === undefined || options.mail === 'none' ? new MemoryEmailSender() : options.mail
 	const mailKeyScope: MailKeyScope = Object.freeze({ issuer: TEST_ISSUER, appId })
 	const application: ContractApp = boot(app, {
 		environment: {
@@ -350,7 +352,7 @@ export function bootTestKit<C extends AnyContract>(
 		membership,
 		connectBindings,
 		workloadTokens,
-		mailStandIn: mail,
+		mailStandIn: options.mail === 'none' ? 'none' : mail,
 	})
 
 	let issued = 0

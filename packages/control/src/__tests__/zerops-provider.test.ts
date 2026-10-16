@@ -1,5 +1,5 @@
 import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
 import type { Env } from '../env'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
@@ -19,6 +19,19 @@ const namespaceEnvironment = (): Record<string, string | undefined> => ({
 	FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
 	FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
 	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+})
+
+/** What Control's process needs to boot, without the mail transport. */
+const controlEnvironment = (): Record<string, string | undefined> => ({
+	...namespaceEnvironment(),
+	FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
+	FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
+	FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',
+	FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: 'secret-key',
+	FABRIKA_IAM_RPC_URL: 'http://iam:3000',
+	FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
+	FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+	ENVIRONMENT: 'stage',
 })
 
 const EXPECTED = {
@@ -70,15 +83,43 @@ describe('the Zerops namespace process configuration', () => {
 		})
 		try {
 			const deps = await buildRunDeps(runtime.env, runtime.provider)
-			expect(deps.mailTransport?.variables).toEqual({
-				FABRIKA_EMAIL_PROVIDER: 'resend',
-				FABRIKA_EMAIL_FROM: 'mail@example.test',
-				FABRIKA_EMAIL_RESEND_API_KEY: 're_key',
+			expect(deps.mailTransport).toEqual({
+				kind: 'transport',
+				transport: {
+					variables: { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'mail@example.test', FABRIKA_EMAIL_RESEND_API_KEY: 're_key' },
+					secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
+				},
 			})
-			expect([...(deps.mailTransport?.secretNames ?? [])]).toEqual(['FABRIKA_EMAIL_RESEND_API_KEY'])
 		} finally {
 			await runtime.shutdown()
 		}
+	})
+
+	test('an invalid FABRIKA_EMAIL_* keeps Control up, and the warning names the variable, never its value', async () => {
+		const warnings: string[] = []
+		const warn = spyOn(console, 'warn').mockImplementation((line: unknown) => {
+			warnings.push(String(line))
+		})
+		try {
+			const runtime = createRuntime({
+				...controlEnvironment(),
+				FABRIKA_EMAIL_PROVIDER: 'smartemailing',
+				FABRIKA_EMAIL_FROM: 'mail@example.test',
+				FABRIKA_EMAIL_SMARTEMAILING_API_KEY: 'se-private-key',
+			})
+			expect(runtime.env.MAIL_TRANSPORT).toEqual({ kind: 'invalid', reason: expect.stringContaining('FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing') })
+			await runtime.shutdown()
+		} finally {
+			warn.mockRestore()
+		}
+		expect(warnings.join('\n')).toContain('FABRIKA_EMAIL_SMARTEMAILING_USERNAME is missing')
+		expect(warnings.join('\n')).not.toContain('se-private-key')
+	})
+
+	test('no FABRIKA_EMAIL_* at all, as on an installation from before the transport, reads as none', async () => {
+		const runtime = createRuntime(controlEnvironment())
+		expect(runtime.env.MAIL_TRANSPORT).toEqual({ kind: 'none' })
+		await runtime.shutdown()
 	})
 
 	test('the process provider republishes namespaces, so the registry hook is wired from its capability', async () => {

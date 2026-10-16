@@ -43,7 +43,7 @@ import {
 } from './db'
 import type { CommitSource } from './github/source/commit-files'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
-import { installationMailEnvironment, type InstallationMailTransport } from './mail-transport'
+import { type InstallationMail, installationMailEnvironment, installationMailSecrets, NO_INSTALLATION_MAIL } from './mail-transport'
 import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { ProxySecrets } from './proxy-secret'
@@ -90,10 +90,10 @@ export interface RunDeps {
 	 */
 	membershipTransport?: MembershipTransportPort
 	/**
-	 * The installation's mail transport; absent when the installation configured none, and then a contract whose job
-	 * declares `mailer: 'installation'` does not deploy.
+	 * The installation's mail transport; absent means none, and then a job that declares `mailer: 'installation'` gets
+	 * `FABRIKA_EMAIL_PROVIDER=none`. An invalid one refuses only the deploys that need it.
 	 */
-	mailTransport?: InstallationMailTransport
+	mailTransport?: InstallationMail
 }
 
 export interface DeployJobMessage {
@@ -359,11 +359,16 @@ const resolveSecrets = async (
 }
 
 /** Refuse a platform-owned name before any provider effect, whichever surface let it in. */
-const assertUnmanagedNames = (kind: 'variable' | 'secret', names: readonly string[]): void => {
+const assertUnmanagedNames = (kind: 'variable' | 'secret', appId: string, names: readonly string[]): void => {
 	const reserved = names.find(isFrameworkVariableName)
-	if (reserved !== undefined) {
-		throw new Error(`application ${kind} "${reserved}" is managed by Fabrika`)
-	}
+	if (reserved === undefined) return
+	// A name a release before this one accepted (a new reserved family) lands here: say how to get past it.
+	const removal = kind === 'variable'
+		? `\`fabrika control apps variables delete --app=${appId} --name=${reserved}\` (add --env=<env> for one environment's)`
+		: `the application's secrets in the console`
+	throw new Error(
+		`application ${kind} "${reserved}" is managed by Fabrika: delete it with ${removal}, rename it if the code reads it, and deploy again`,
+	)
 }
 
 /** The row reached a terminal state before this invocation's write: nothing is left for it to do. */
@@ -562,10 +567,10 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			})
 
 		const vars = await resolveVars(deps.repositories.registry, app.id, appEnv.env)
-		assertUnmanagedNames('variable', Object.keys(vars))
+		assertUnmanagedNames('variable', app.id, Object.keys(vars))
 		// Resolved here rather than at the provider call, so a reserved secret name fails before any effect.
 		const secrets = await resolveSecrets(deps, app.id, appEnv.env)
-		assertUnmanagedNames('secret', Object.keys(secrets))
+		assertUnmanagedNames('secret', app.id, Object.keys(secrets))
 		const managedEnvironment: Record<string, string | null> = {
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
@@ -606,7 +611,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		}
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
-		const mailEnvironment = installationMailEnvironment(deps.mailTransport, approvedContract)
+		const mailEnvironment = installationMailEnvironment(deps.mailTransport ?? NO_INSTALLATION_MAIL, approvedContract)
 		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
 		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
@@ -621,7 +626,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			managedEnvironment[FABRIKA_PROXY_SECRET] ?? '',
 			...Object.values(workloadKeys),
 			membershipKey ?? '',
-			...[...(deps.mailTransport?.secretNames ?? [])].map((name) => mailEnvironment[name] ?? ''),
+			...installationMailSecrets(deps.mailTransport ?? NO_INSTALLATION_MAIL, mailEnvironment),
 			// A Zerops build holds the source-map bearer, and the provider relays the build's log.
 			releaseContext?.artifactUpload?.bearer ?? '',
 		])

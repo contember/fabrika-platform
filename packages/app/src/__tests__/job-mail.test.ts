@@ -1,6 +1,7 @@
 // A job that declares `mailer` sends through `ctx.mail`: the test kit's stand-in, the installation's transport
 // (`FABRIKA_EMAIL_*`) or the application's own (`serve(contract, { mail })`), each key behind the application
-// environment's prefix. A contract whose mailer has no usable transport does not boot, except in a local composition.
+// environment's prefix. An installation without a transport (`FABRIKA_EMAIL_PROVIDER=none`) boots, and its jobs see mail
+// that is not available; a misconfigured transport does not boot.
 // The job runs need FABRIKA_TEST_POSTGRES_URL, since a job's lease lives in @fabrika/db.
 
 import { compileContract, ContractError, defineApp } from '@fabrika/app/contract'
@@ -24,7 +25,7 @@ import type { EmailProvider } from '@fabrika/email'
 import { resendEmailProvider } from '@fabrika/email/resend'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { resolveMailTransports, unconfiguredSender } from '../jobs/mail'
+import { NO_MAIL, resolveMailTransports } from '../jobs/mail'
 import { bootApp, environment, frameworkEnvFor, ISSUER, workloadTokensFor } from './fixtures/implement/harness'
 import { tables } from './kit-fixture/src/db/tables'
 import { vocabulary } from './kit-fixture/src/vocabulary'
@@ -40,7 +41,12 @@ const DEPLOYED = { issuer: ISSUER, appId: APP_ID }
 /** What `notify` sends next. */
 const plan: { key: string; signal: AbortSignal | undefined } = { key: 'n-1', signal: undefined }
 /** What the jobs saw, for the test to read. */
-const seen: { kept: AppMail | null; mayRetry: boolean | null; quietHasMail: boolean | null } = { kept: null, mayRetry: null, quietHasMail: null }
+const seen: { kept: AppMail | null; mayRetry: boolean | null; failure: unknown; quietHasMail: boolean | null } = {
+	kept: null,
+	mayRetry: null,
+	failure: null,
+	quietHasMail: null,
+}
 
 const notify = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation' }).handle(async ({ ctx }) => {
 	seen.kept = ctx.mail
@@ -48,6 +54,7 @@ const notify = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mail
 		await ctx.mail.send({ to: 'ada@example.com', subject: 'Welcome aboard', text: 'Hello Ada', idempotencyKey: plan.key }, plan.signal)
 	} catch (error) {
 		seen.mayRetry = ctx.mail.mayRetry(error)
+		seen.failure = error
 		throw error
 	}
 })
@@ -64,16 +71,28 @@ const quiet = app.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app' }).han
 	seen.quietHasMail = 'mail' in ctx
 })
 
+/** The keys of the messages an outbox holds, in its order: the recipe leaves them while mail is not available. */
+const outbox: string[] = []
+
+const sendOutbox = app.cron('* * * * *', { actions: ['crm.read'], scope: 'app', mailer: 'installation' }).handle(async ({ ctx }) => {
+	if (!ctx.mail.available) return
+	for (const key of [...outbox]) {
+		await ctx.mail.send({ to: 'ada@example.com', subject: 'Queued', text: 'Hello Ada', idempotencyKey: key })
+		outbox.shift()
+	}
+})
+
 const contract = app.contract(() => ({ jobs: { notify, ownNotify, quiet } }))
 const installationOnly = app.contract(() => ({ jobs: { notify } }))
 const noMailer = app.contract(() => ({ jobs: { quiet } }))
 const retrying = app.contract(() => ({ jobs: { retried } }))
+const outboxContract = app.contract(() => ({ jobs: { sendOutbox } }))
 
 type Own = (env: ApplicationEnvironment) => EmailSender | null
 
 const noOwnTransport: Own = () => null
 
-function served<C extends typeof contract | typeof installationOnly | typeof noMailer | typeof retrying>(
+function served<C extends typeof contract | typeof installationOnly | typeof noMailer | typeof retrying | typeof outboxContract>(
 	chosen: C,
 	mail?: Own,
 ): ContractImplementation<C> {
@@ -177,8 +196,8 @@ describe('the key prefix', () => {
 	})
 })
 
-describe('a local composition without a transport', () => {
-	test('gives each mailer job a sender that refuses every message with invalid_configuration, and says so once per job', async () => {
+describe('an installation without a transport', () => {
+	test('a local composition gives each mailer job mail that is not available, and says so once per job', async () => {
 		const problems: string[] = []
 		const { result: transports, lines: warned } = await logged('warn', () =>
 			resolveMailTransports({
@@ -192,12 +211,32 @@ describe('a local composition without a transport', () => {
 				local: true,
 			}, problems))
 		expect(problems).toEqual([])
-		expect(transports).toMatchObject({ installation: unconfiguredSender, own: unconfiguredSender })
+		expect(transports).toMatchObject({ installation: NO_MAIL, own: NO_MAIL })
 		expect(warned).toBe([
-			"fabrika: job 'notify' sends mail, and this local installation has no installation mail transport: every send fails with invalid_configuration",
-			"fabrika: job 'ownNotify' sends mail, and this local installation has no own mail transport: every send fails with invalid_configuration",
+			"fabrika: job 'notify' sends mail, and this installation has no installation mail transport: ctx.mail.available is false, and every send fails with mail_not_configured",
+			"fabrika: job 'ownNotify' sends mail, and this installation has no own mail transport: ctx.mail.available is false, and every send fails with mail_not_configured",
 		].join('\n'))
-		await expect(unconfiguredSender.send(message, new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_configuration' })
+		await expect(NO_MAIL.sender.send(message, new AbortController().signal)).rejects.toMatchObject({
+			code: 'mail_not_configured',
+			outcome: 'not_sent',
+		})
+	})
+
+	test("a deployed one states it with FABRIKA_EMAIL_PROVIDER=none, and a mailer job's transport is no mail", async () => {
+		const problems: string[] = []
+		const { result: transports } = await logged('warn', () =>
+			resolveMailTransports({
+				artifact: compileContract(installationOnly, tables),
+				framework: { FABRIKA_EMAIL_PROVIDER: 'none' },
+				application: {},
+				own: undefined,
+				standIn: undefined,
+				registry: {},
+				keyScope: DEPLOYED,
+				local: false,
+			}, problems))
+		expect(problems).toEqual([])
+		expect(transports.installation).toBe(NO_MAIL)
 	})
 })
 
@@ -236,7 +275,9 @@ beforeEach(() => {
 	plan.signal = undefined
 	seen.kept = null
 	seen.mayRetry = null
+	seen.failure = null
 	seen.quietHasMail = null
+	outbox.length = 0
 })
 
 function connection(): Database {
@@ -261,6 +302,22 @@ function deployed(
 }
 
 describe.skipIf(!hasPostgres)("the test kit's mail stand-in", () => {
+	test("mail: 'none' models an installation without a transport, and a queued message leaves once one is added", async () => {
+		outbox.push('q-1', 'q-2')
+		const none = testKit(served(outboxContract), { database: connection(), mail: 'none' })
+		const { result } = await logged('warn', () => none.runJob('sendOutbox'))
+		expect(result).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(outbox).toEqual(['q-1', 'q-2'])
+		expect(none.mail.handoffs).toEqual([])
+
+		const added = testKit(served(outboxContract), { database: connection() })
+		expect(await added.runJob('sendOutbox')).toEqual({ status: 'succeeded', attempts: 1 })
+		expect(outbox).toEqual([])
+		expect(added.mail.accepted.map((accepted) => accepted.message.idempotencyKey)).toEqual(
+			['q-1', 'q-2'].map((key) => transportMailKey(added.mailKeyScope, key)),
+		)
+	})
+
 	test('takes the message under the prefixed key; a job without mailer has no ctx.mail', async () => {
 		const kit = testKit(served(contract, noOwnTransport), { database: connection() })
 		expect(await kit.runJob('notify')).toEqual({ status: 'succeeded', attempts: 1 })
@@ -475,7 +532,7 @@ describe.skipIf(!hasPostgres)('the transports of a deployed application', () => 
 			"serve(contract, { mail }) builds a transport no job uses: declare mailer: 'own' on the job that sends, or remove mail",
 		])
 		expect(refusals(() => deployed(served(contract, ownBuilt(new MemoryEmailSender())), {}))).toEqual([
-			"job 'notify' declares mailer: 'installation', and this installation has no mail transport (FABRIKA_EMAIL_PROVIDER is not set): configure the installation's e-mail, or declare mailer: 'own'",
+			"job 'notify' declares mailer: 'installation', and FABRIKA_EMAIL_PROVIDER is not set: Control writes it when it deploys the application (none for an installation without a transport)",
 		])
 		expect(refusals(() => deployed(served(contract, ownBuilt(null)), installation, stub))).toEqual([
 			"job 'ownNotify' declares mailer: 'own', and serve's mail built no transport from the application's variables",
@@ -500,13 +557,29 @@ describe.skipIf(!hasPostgres)('the transports of a deployed application', () => 
 		expect(problems.join('\n')).not.toContain('re key with spaces')
 	})
 
-	test('a local composition boots without a transport, and every send fails with invalid_configuration', async () => {
+	test('a local composition boots without a transport, and every send fails with mail_not_configured', async () => {
 		const { result: deployment, lines: warned } = await logged('warn', () => deployed(served(contract, noOwnTransport), {}, {}, LOCAL_ISSUER))
 		expect(warned).toContain(
-			"fabrika: job 'notify' sends mail, and this local installation has no installation mail transport: every send fails with invalid_configuration",
+			"fabrika: job 'notify' sends mail, and this installation has no installation mail transport: ctx.mail.available is false",
 		)
 		const { result } = await logged('error', () => deployment.jobs.run('notify'))
-		expect(result).toEqual({ status: 'failed', attempts: 1, code: 'mail_failed', reason: 'invalid_configuration' })
+		expect(result).toEqual({ status: 'failed', attempts: 1, code: 'mail_failed', reason: 'mail_not_configured' })
+	})
+
+	test('an installation without a transport boots; its mail is not available, and a send fails not_sent with mail_not_configured', async () => {
+		const { result: deployment } = await logged('warn', () => deployed(served(installationOnly), { FABRIKA_EMAIL_PROVIDER: 'none' }))
+		const { result } = await logged('error', () => deployment.jobs.run('notify'))
+		expect(result).toEqual({ status: 'failed', attempts: 1, code: 'mail_failed', reason: 'mail_not_configured' })
+		expect(seen.kept?.available).toBe(false)
+		expect(seen.failure).toBeInstanceOf(EmailDeliveryError)
+		expect(seen.failure).toMatchObject({ code: 'mail_not_configured', outcome: 'not_sent', retryable: false })
+		expect(seen.mayRetry).toBe(false)
+	})
+
+	test('a provider named with a missing credential still does not boot beside the explicit none', () => {
+		expect(refusals(() => deployed(served(installationOnly), { FABRIKA_EMAIL_PROVIDER: 'resend' }))).toEqual([
+			"the installation's mail transport: Email configuration is invalid: FABRIKA_EMAIL_FROM is missing; FABRIKA_EMAIL_RESEND_API_KEY is missing",
+		])
 	})
 
 	test("a local composition's own providers are named only there", async () => {

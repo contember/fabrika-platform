@@ -1,10 +1,12 @@
 // `ctx.mail` of a job that declares `mailer`, over the transport `boot` resolved: the installation's (`FABRIKA_EMAIL_*`),
-// the application's own (`serve(contract, { mail })`) or the test kit's stand-in. Each key carries the prefix of the
-// installation and the application environment, so senders on one provider account never share a key. Nothing here
-// logs a message or a key.
+// the application's own (`serve(contract, { mail })`) or the test kit's stand-in. An installation without a transport
+// says so (`FABRIKA_EMAIL_PROVIDER=none`): its jobs get `ctx.mail` that is not available, and each send waits for one.
+// Each key carries the prefix of the installation and the application environment, so senders on one provider account
+// never share a key. Nothing here logs a message or a key.
 
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobMailer, sha256Hex } from '@fabrika/auth-core'
 import {
+	EMAIL_PROVIDER_VARIABLE,
 	EmailDeliveryError,
 	type EmailDeliveryResult,
 	type EmailMessage,
@@ -12,6 +14,7 @@ import {
 	type EmailSender,
 	emailSenderFromEnv,
 	mayRetryDelivery,
+	NO_EMAIL_PROVIDER,
 	pickEmailEnvironment,
 } from '@fabrika/email'
 import { z } from 'zod/v4'
@@ -43,18 +46,27 @@ export function transportMailKey(scope: MailKeyScope, key: string): string {
 	return `${mailKeyPrefix(scope)}${key}`
 }
 
-/** The transports of a contract's mailer jobs, resolved once by `boot`. */
+/** A mailer job's transport: one that sends, or the stated absence of one, whose every send fails `mail_not_configured`. */
+export interface JobMailTransport {
+	readonly sender: EmailSender
+	readonly available: boolean
+}
+
+/** The transports of a contract's mailer jobs, resolved once by `boot`; `null` where no job declares that mailer. */
 export interface MailTransports {
-	readonly installation: EmailSender | null
-	readonly own: EmailSender | null
+	readonly installation: JobMailTransport | null
+	readonly own: JobMailTransport | null
 	readonly keyPrefix: string
 }
+
+/** The test kit's transport for every mailer job: a stand-in sender, or `'none'` for an installation without mail. */
+export type MailStandIn = EmailSender | 'none'
 
 /** The application's own transport, built once at boot from its own variables; `null` when they configure none. */
 export type OwnMailTransport = (env: ApplicationEnvironment) => EmailSender | null
 
 export interface JobMailInput {
-	readonly sender: EmailSender
+	readonly transport: JobMailTransport
 	readonly keyPrefix: string
 	/** The attempt's `ctx.signal`: it aborts every send of the attempt. */
 	readonly signal: AbortSignal
@@ -63,8 +75,9 @@ export interface JobMailInput {
 }
 
 export function jobMail(input: JobMailInput): AppMail {
-	const { sender, keyPrefix, signal: attempt, assertLive } = input
+	const { transport: { sender, available }, keyPrefix, signal: attempt, assertLive } = input
 	return Object.freeze({
+		available,
 		capabilities: sender.capabilities,
 		async send(message: AppMailMessage, signal?: AbortSignal): Promise<EmailDeliveryResult> {
 			assertLive()
@@ -103,11 +116,11 @@ export interface MailTransportInput {
 	/** `serve(contract, { mail })`. */
 	readonly own: OwnMailTransport | undefined
 	/** The test kit's transport for every mailer job; the variables and `own` are then not read. */
-	readonly standIn: EmailSender | undefined
+	readonly standIn: MailStandIn | undefined
 	readonly registry: EmailProviderRegistry
 	/** Whose keys the prefix separates. */
 	readonly keyScope: MailKeyScope
-	/** A local composition: a missing transport fails each send instead of the boot. */
+	/** A local composition: a missing transport is no mail, as `FABRIKA_EMAIL_PROVIDER=none` is, instead of a refused boot. */
 	readonly local: boolean
 }
 
@@ -123,9 +136,10 @@ export function resolveMailTransports(input: MailTransportInput, problems: strin
 		problems.push(`serve(contract, { mail }) builds a transport no job uses: declare mailer: 'own' on the job that sends, or remove mail`)
 	}
 	if (input.standIn !== undefined) {
+		const standIn = input.standIn === 'none' ? NO_MAIL : { sender: input.standIn, available: true }
 		return {
-			installation: jobs.installation.length === 0 ? null : input.standIn,
-			own: jobs.own.length === 0 ? null : input.standIn,
+			installation: jobs.installation.length === 0 ? null : standIn,
+			own: jobs.own.length === 0 ? null : standIn,
 			keyPrefix,
 		}
 	}
@@ -148,10 +162,11 @@ function mailerJobs(artifact: ContractArtifact): Readonly<Record<JobMailer, read
 	return jobs
 }
 
-function installationTransport(names: readonly string[], input: MailTransportInput, problems: string[]): EmailSender | null {
+function installationTransport(names: readonly string[], input: MailTransportInput, problems: string[]): JobMailTransport | null {
+	const env = pickEmailEnvironment(input.framework)
 	let sender: EmailSender | null
 	try {
-		sender = emailSenderFromEnv(pickEmailEnvironment(input.framework), input.registry)
+		sender = emailSenderFromEnv(env, input.registry)
 	} catch (error) {
 		if (!(error instanceof EmailDeliveryError)) {
 			throw error
@@ -161,20 +176,21 @@ function installationTransport(names: readonly string[], input: MailTransportInp
 		return null
 	}
 	if (sender !== null) {
-		return sender
+		return { sender, available: true }
 	}
-	if (input.local) {
-		return unconfigured(names, 'installation')
+	if (env[EMAIL_PROVIDER_VARIABLE] === NO_EMAIL_PROVIDER || input.local) {
+		return noMail(names, 'installation')
 	}
+	// Control writes the variable on every deploy that needs it, `none` included: its absence means no deploy wrote it.
 	for (const name of names) {
 		problems.push(
-			`job '${name}' declares mailer: 'installation', and this installation has no mail transport (FABRIKA_EMAIL_PROVIDER is not set): configure the installation's e-mail, or declare mailer: 'own'`,
+			`job '${name}' declares mailer: 'installation', and FABRIKA_EMAIL_PROVIDER is not set: Control writes it when it deploys the application (none for an installation without a transport)`,
 		)
 	}
 	return null
 }
 
-function ownTransport(names: readonly string[], input: MailTransportInput, problems: string[]): EmailSender | null {
+function ownTransport(names: readonly string[], input: MailTransportInput, problems: string[]): JobMailTransport | null {
 	if (input.own === undefined) {
 		return null
 	}
@@ -194,10 +210,10 @@ function ownTransport(names: readonly string[], input: MailTransportInput, probl
 		return null
 	}
 	if (sender !== null) {
-		return sender
+		return { sender, available: true }
 	}
 	if (input.local) {
-		return unconfigured(names, 'own')
+		return noMail(names, 'own')
 	}
 	for (const name of names) {
 		problems.push(`job '${name}' declares mailer: 'own', and serve's mail built no transport from the application's variables`)
@@ -226,17 +242,20 @@ function parseSender(value: unknown): EmailSender | null | undefined {
 	})
 }
 
-/** A local composition's transport where none is configured: every send fails, and the boot does not. */
-export const unconfiguredSender: EmailSender = Object.freeze({
-	capabilities: Object.freeze({ idempotent: true, confirmation: 'sync', maxBatch: 1 }),
-	send: () => Promise.reject(new EmailDeliveryError('This local installation has no mail transport', { code: 'invalid_configuration' })),
+/** Where the installation has no transport: every send fails `not_sent`, and the boot does not. */
+export const NO_MAIL: JobMailTransport = Object.freeze({
+	sender: Object.freeze({
+		capabilities: Object.freeze({ idempotent: true, confirmation: 'sync', maxBatch: 1 }),
+		send: () => Promise.reject(new EmailDeliveryError('This installation has no mail transport', { code: 'mail_not_configured' })),
+	}),
+	available: false,
 })
 
-function unconfigured(names: readonly string[], kind: JobMailer): EmailSender {
+function noMail(names: readonly string[], kind: JobMailer): JobMailTransport {
 	for (const name of names) {
 		console.warn(
-			`fabrika: job '${name}' sends mail, and this local installation has no ${kind} mail transport: every send fails with invalid_configuration`,
+			`fabrika: job '${name}' sends mail, and this installation has no ${kind} mail transport: ctx.mail.available is false, and every send fails with mail_not_configured`,
 		)
 	}
-	return unconfiguredSender
+	return NO_MAIL
 }

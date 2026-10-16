@@ -19,7 +19,7 @@ import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentPro
 import { parseClassification } from '../approval/publish'
 import { type AccessSnapshot, approvedSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
-import type { InstallationMailTransport } from '../mail-transport'
+import type { InstallationMail } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
@@ -675,10 +675,16 @@ export const contract = app.contract((c) => ({
 }))
 `
 	const RESEND_KEY = 're_private-installation-mail-key'
-	const mailTransport: InstallationMailTransport = {
-		variables: { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'mail@example.test', FABRIKA_EMAIL_RESEND_API_KEY: RESEND_KEY },
-		secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
+	const mailTransport: InstallationMail = {
+		kind: 'transport',
+		transport: {
+			variables: { FABRIKA_EMAIL_PROVIDER: 'resend', FABRIKA_EMAIL_FROM: 'mail@example.test', FABRIKA_EMAIL_RESEND_API_KEY: RESEND_KEY },
+			secretNames: new Set(['FABRIKA_EMAIL_RESEND_API_KEY']),
+		},
 	}
+	const invalidTransport: InstallationMail = { kind: 'invalid', reason: 'Email configuration is invalid: FABRIKA_EMAIL_FROM is invalid' }
+	const INVALID_REFUSAL =
+		"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and Control's mail transport is invalid"
 
 	function mailingWorld(): World {
 		const w = world()
@@ -717,24 +723,33 @@ export const contract = app.contract((c) => ({
 		expect(stored).not.toContain(RESEND_KEY)
 	})
 
-	test('a contract whose job sends through the installation does not deploy where the installation has no transport', async () => {
+	test('an installation without a transport deploys the contract, and hands its job the explicit none', async () => {
+		const w = mailingWorld()
+		await seed(w)
+		const { workloadCredentials } = await credentialed(w)
+		expect((await executeDeploy({ ...deps(w), workloadCredentials }, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(w.deploys[0]?.managedEnvironment['FABRIKA_EMAIL_PROVIDER']).toBe('none')
+		expect(mailVariables(w.deploys[0])).toEqual(['FABRIKA_EMAIL_PROVIDER'])
+	})
+
+	test('an invalid transport refuses the deploy that needs it, and points at the operator step', async () => {
 		const w = mailingWorld()
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
 		const quiet = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			const result = await executeDeploy({ ...deps(w), workloadCredentials }, { runId: await createdRun(w, 'stage') })
+			const result = await executeDeploy({ ...deps(w), workloadCredentials, mailTransport: invalidTransport }, { runId: await createdRun(w, 'stage') })
 			expect(result.status).toBe('failed')
 		} finally {
 			quiet.mockRestore()
 		}
-		expect([...w.logs.values()].join('\n')).toContain(
-			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and this installation cannot hand it a mail transport",
-		)
+		const logs = [...w.logs.values()].join('\n')
+		expect(logs).toContain(INVALID_REFUSAL)
+		expect(logs).toContain("'Set or rotate the mail transport'")
 		expect(w.deploys).toEqual([])
 	})
 
-	test('a dry run of the approved contract hands the same transport, and is refused the same way where the installation has none', async () => {
+	test('a dry run of the approved contract hands the same transport, and is refused the same way where it is invalid', async () => {
 		const w = mailingWorld()
 		await seed(w)
 		const { workloadCredentials } = await credentialed(w)
@@ -748,15 +763,30 @@ export const contract = app.contract((c) => ({
 
 		const quiet = spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage'), dryRun: true })).status).toBe('failed')
+			const refused = await executeDeploy({ ...deps(w), mailTransport: invalidTransport }, { runId: await createdRun(w, 'stage'), dryRun: true })
+			expect(refused.status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect([...w.logs.values()].join('\n')).toContain(INVALID_REFUSAL)
+		expect(w.deploys).toHaveLength(2)
+		expect([...w.logs.values()].join('\n')).not.toContain(RESEND_KEY)
+	})
+
+	test('a stored application variable in the family is refused with the command that deletes it', async () => {
+		const w = world()
+		await seed(w)
+		await w.db.registry.upsertAppVar({ appId: 'notes', env: null, name: 'FABRIKA_EMAIL_API_KEY', value: 'legacy' })
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage') })).status).toBe('failed')
 		} finally {
 			quiet.mockRestore()
 		}
 		expect([...w.logs.values()].join('\n')).toContain(
-			"the contract's job `digest` sends mail through the installation (mailer: 'installation'), and this installation cannot hand it a mail transport",
+			'is managed by Fabrika: delete it with `fabrika control apps variables delete --app=notes --name=FABRIKA_EMAIL_API_KEY`',
 		)
-		expect(w.deploys).toHaveLength(2)
-		expect([...w.logs.values()].join('\n')).not.toContain(RESEND_KEY)
+		expect(w.deploys).toEqual([])
 	})
 
 	test('a contract without such a job gets no mail variable while the installation has a transport', async () => {

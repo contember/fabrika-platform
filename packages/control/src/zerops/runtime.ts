@@ -37,7 +37,7 @@ import { gitHubAppClientFactory } from '../github/connections/credentials'
 import { createSourceConnections, type SourceConnectionPort } from '../github/connections/port'
 import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/workspace'
 import { controlPublicOrigin } from '../iam'
-import { readInstallationMailTransport } from '../mail-transport'
+import { readInstallationMail } from '../mail-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
 import { HttpIamAdminGateway } from './iam-admin'
@@ -119,7 +119,11 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		assetsDir: source['FABRIKA_CONTROL_ASSETS_DIR'] ?? './public',
 	}
 
-	const mailTransport = readInstallationMailTransport(pickEmailEnvironment(source), overrides.emailProviders ?? builtinEmailProviders)
+	const mailTransport = readInstallationMail(pickEmailEnvironment(source), overrides.emailProviders ?? builtinEmailProviders)
+	if (mailTransport.kind === 'invalid') {
+		// One bad variable must not take the Delivery plane down; the deploys that need the transport are refused instead.
+		console.warn(`control: the installation's mail transport is invalid, and every deploy that needs it is refused: ${mailTransport.reason}`)
+	}
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const queue = new PostgresJobQueue<ControlJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
@@ -159,7 +163,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(bootstrapAdmins === undefined ? {} : { FABRIKA_CONTROL_BOOTSTRAP_ADMINS: bootstrapAdmins }),
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
-		...(mailTransport === null ? {} : { MAIL_TRANSPORT: mailTransport }),
+		MAIL_TRANSPORT: mailTransport,
 	}
 	const github = zeropsGitHubSources(baseEnv, sourceSeams)
 	const env: Env = { ...baseEnv, COMMITS: github.commits }

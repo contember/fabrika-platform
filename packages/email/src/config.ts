@@ -32,7 +32,10 @@ export type EmailTransportConfig =
 	| { readonly kind: 'none' }
 	| { readonly kind: 'provider'; readonly provider: string; readonly from: EmailSenderIdentity; readonly variables: readonly EmailProviderVariable[] }
 
-const PROVIDER_VARIABLE = 'FABRIKA_EMAIL_PROVIDER'
+/** The variable that selects the provider. */
+export const EMAIL_PROVIDER_VARIABLE = 'FABRIKA_EMAIL_PROVIDER'
+/** `FABRIKA_EMAIL_PROVIDER=none`: the installation states it has no transport, which an absent variable does not. */
+export const NO_EMAIL_PROVIDER = 'none'
 const FROM_VARIABLE = 'FABRIKA_EMAIL_FROM'
 const FROM_NAME_VARIABLE = 'FABRIKA_EMAIL_FROM_NAME'
 const EMAIL_VARIABLE_PREFIX = 'FABRIKA_EMAIL_'
@@ -105,11 +108,13 @@ export function parseProviderVariables<Schema extends z.ZodTypeAny>(schema: Sche
 }
 
 function readTransport(env: EmailEnvironment, registry: EmailProviderRegistry, fetch: EmailFetch | undefined): Transport {
-	const providerName = presentValue(env[PROVIDER_VARIABLE])
-	if (providerName === undefined || providerName === 'none') return { config: { kind: 'none' }, sender: null }
+	const providerName = presentValue(env[EMAIL_PROVIDER_VARIABLE])
+	if (providerName === undefined || providerName === NO_EMAIL_PROVIDER) return { config: { kind: 'none' }, sender: null }
 	const provider = Object.hasOwn(registry, providerName) ? registry[providerName] : undefined
 	if (provider === undefined) {
-		throw new EmailDeliveryError(`${PROVIDER_VARIABLE} must be none or one of: ${Object.keys(registry).join(', ')}`, { code: 'invalid_configuration' })
+		throw new EmailDeliveryError(`${EMAIL_PROVIDER_VARIABLE} must be none or one of: ${Object.keys(registry).join(', ')}`, {
+			code: 'invalid_configuration',
+		})
 	}
 
 	const problems: ConfigurationProblem[] = []

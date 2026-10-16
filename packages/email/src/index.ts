@@ -1,4 +1,11 @@
-export { emailSenderFromEnv, parseProviderVariables, pickEmailEnvironment, readEmailTransportConfig } from './config.js'
+export {
+	EMAIL_PROVIDER_VARIABLE,
+	emailSenderFromEnv,
+	NO_EMAIL_PROVIDER,
+	parseProviderVariables,
+	pickEmailEnvironment,
+	readEmailTransportConfig,
+} from './config.js'
 export type {
 	EmailEnvironment,
 	EmailProvider,

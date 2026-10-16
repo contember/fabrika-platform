@@ -34,7 +34,7 @@ import {
 	type WebhookTables,
 } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
-import type { EmailProviderRegistry, EmailSender } from '@fabrika/email'
+import type { EmailProviderRegistry } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
@@ -47,7 +47,7 @@ import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
 import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
-import { resolveMailTransports } from '../jobs/mail'
+import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
 import { bindJobs, type ContractJobs, type HandlerErrorSink } from '../jobs/runner'
 import { environmentScrubber } from '../jobs/scrub'
@@ -138,8 +138,11 @@ export interface BootOptions {
 	 * `FABRIKA_EMAIL_PROVIDER` naming one is refused like any unknown provider. On a name both hold, `emailProviders` wins.
 	 */
 	readonly localEmailProviders?: EmailProviderRegistry
-	/** The test kit's stand-in for every mailer job; boot then reads neither `FABRIKA_EMAIL_*` nor `serve`'s `mail`. */
-	readonly mailStandIn?: EmailSender
+	/**
+	 * The test kit's stand-in for every mailer job, or `'none'` for an installation without mail; boot then reads neither
+	 * `FABRIKA_EMAIL_*` nor `serve`'s `mail`.
+	 */
+	readonly mailStandIn?: MailStandIn
 }
 
 export interface ContractApp {
