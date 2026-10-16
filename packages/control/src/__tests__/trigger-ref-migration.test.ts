@@ -107,7 +107,7 @@ describe.skipIf(!hasPostgres)(`${MIGRATION} on Postgres`, () => {
 			for (const appId of appIds()) await db.prepare(SEED_APP).bind(appId, `github.com/acme/${appId}`).run()
 			for (const [appId, env, triggerRef] of SEEDED) await db.prepare(SEED_ENV).bind(appId, env, triggerRef).run()
 
-			expect(await applyMigrations(db, migrations)).toEqual([MIGRATION])
+			expect(await applyMigrations(db, migrations.filter((migration) => migration.name <= MIGRATION))).toEqual([MIGRATION])
 
 			const { results } = await db.prepare(READ_ENVS).all<{ app_id: string; env: string; trigger_ref: string | null }>()
 			expect(byCoordinate(results)).toEqual(MIGRATED)
