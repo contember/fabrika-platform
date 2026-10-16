@@ -155,9 +155,14 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 	// Loads overlap (the five-second poll, a search, a click on a value), so only the newest one may land: an older
 	// answer arriving last would put the list, and the field, back on the filters it was asked for.
 	const latest = useRef(0)
+	// The filters last asked for, which a load after a change and the poll reuse. Not `appliedFilters`: a search made
+	// while a bulk change is still saving must survive the reload that change ends with, not be replaced by the filters
+	// that were applied when it started.
+	const requested = useRef(appliedFilters)
 
 	async function load(nextFilters: IssueFilters, append: boolean, clearSelection = !append) {
 		const ticket = ++latest.current
+		if (!append) requested.current = nextFilters
 		setPending(append ? 'more' : 'query')
 		setError(null)
 		try {
@@ -175,7 +180,7 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 
 	useEffect(() => {
 		if (pending !== null || selected.length > 0) return
-		const timer = window.setInterval(() => void load(appliedFilters, false, false), 5_000)
+		const timer = window.setInterval(() => void load(requested.current, false, false), 5_000)
 		return () => window.clearInterval(timer)
 	}, [appliedFilters, pending, selected.length])
 
@@ -185,7 +190,7 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 		setError(null)
 		try {
 			await onMutate(issueId, mutation)
-			await load(appliedFilters, false)
+			await load(requested.current, false)
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : 'The issue could not be changed.')
 		} finally {
@@ -200,7 +205,7 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 		try {
 			await onBulkStatus(selected, nextStatus)
 			setSelected([])
-			await load(appliedFilters, false)
+			await load(requested.current, false)
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : 'The selected issues could not be changed.')
 		} finally {
@@ -216,7 +221,7 @@ export function ErrorsView({ initialPage, sources, onQuery, onMutate, onBulkStat
 			await onBulkMerge(selected, targetIssueId)
 			setSelected([])
 			setBulkMergeTarget('')
-			await load(appliedFilters, false)
+			await load(requested.current, false)
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : 'The selected issues could not be merged.')
 		} finally {
