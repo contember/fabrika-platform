@@ -2,6 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import {
 	CONTROL_ACTIONS,
 	type CursorList,
+	type ListResponse,
 	type RunDto,
 	type RunListInput,
 	type RunLogLine,
@@ -79,6 +80,13 @@ export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput
 	const last = rows.at(-1)
 	const nextCursor = rows.length === limit && last ? last.id : null
 	return { items, nextCursor }
+}
+
+/** Per app environment, its newest finished run when that run failed, limited to the coordinates the caller may read. */
+export async function listLatestFailedRunsUseCase(c: RunReadContext): Promise<ListResponse<RunDto>> {
+	const rows = await c.repositories.runs.listLatestFailedRuns()
+	const visible = rows.filter((row) => canAtCoordinates(c.auth, CONTROL_ACTIONS.DEPLOY_READ, row.app_id, row.env))
+	return { items: visible.map(toRunDto) }
 }
 
 export async function getRunUseCase(c: RunReadContext, id: string): Promise<RunDto> {

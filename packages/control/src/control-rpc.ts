@@ -48,6 +48,7 @@ import {
 	cancelRunUseCase,
 	getRunLogUseCase,
 	getRunUseCase,
+	listLatestFailedRunsUseCase,
 	listRunsUseCase,
 	type RunsUseCaseContext,
 	tailRunLogUseCase,
@@ -329,6 +330,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 		}),
 		runs: rpc.router({
 			list: rpc.procedure.input(runListInput).query(({ ctx, input }) => controlCall(() => listRunsUseCase(runsContext(ctx), input))),
+			latestFailures: rpc.procedure.query(({ ctx }) => controlCall(() => listLatestFailedRunsUseCase(runsContext(ctx)))),
 			get: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getRunUseCase(runsContext(ctx), input.runId))),
 			log: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getRunLogUseCase(runsContext(ctx), input.runId))),
 			tail: rpc.procedure.input(tailRunInput).query(({ ctx, input }) =>

@@ -192,6 +192,8 @@ export interface ControlRpcContract {
 	}
 	runs: {
 		list: RpcProcedure<RunListInput, CursorList<RunDto>>
+		/** Per app environment, its newest finished run when that run failed: a later finished run supersedes a failure. */
+		latestFailures: RpcProcedure<void, ListResponse<RunDto>>
 		get: RpcProcedure<RunIdInput, RunDto>
 		log: RpcProcedure<RunIdInput, RunLogResponse>
 		tail: RpcProcedure<TailRunInput, RunTailResponse>

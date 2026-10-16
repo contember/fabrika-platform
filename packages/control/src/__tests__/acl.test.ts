@@ -79,6 +79,14 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect((await rpcResult(rpcRequest('runs.list', { appId: 'alpha' }), appRead.deps)).status).toBe(200)
 		expect((await rpcResult(rpcRequest('runs.list', { appId: 'beta' }), appRead.deps)).status).toBe(403)
 		expect((await rpcResult(rpcRequest('runs.list', {}), appRead.deps)).status).toBe(403)
+		for (const id of [alphaRun, betaRun]) {
+			appRead.sqlite.query(`UPDATE runs SET status = 'failed', finished_at = 1 WHERE id = ?`).run(id)
+		}
+		const latestFailures = await rpcResult(rpcRequest('runs.latestFailures'), appRead.deps)
+		expect(latestFailures.status).toBe(200)
+		const latestFailuresBody = await latestFailures.text()
+		expect(latestFailuresBody).toContain(alphaRun)
+		expect(latestFailuresBody).not.toContain(betaRun)
 
 		const envTrigger = makeDeps(authWithPermissions([{ action: 'deploy.trigger', scope: { type: 'environment', value: 'prod' } }]))
 		await envTrigger.deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })

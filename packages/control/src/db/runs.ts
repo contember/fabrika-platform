@@ -206,6 +206,23 @@ export class RunRepository {
 	}
 
 	/**
+	 * Per registered app environment, its newest finished run when that run failed, newest first. A later finished run
+	 * supersedes a failure; a run still in flight does not. A deleted environment has nothing left to fix.
+	 */
+	async listLatestFailedRuns(): Promise<RunRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT r.* FROM runs r
+				JOIN app_envs e ON e.app_id = r.app_id AND e.env = r.env
+				WHERE r.status = 'failed'
+					AND NOT EXISTS (SELECT 1 FROM runs later
+						WHERE later.app_id = r.app_id AND later.env = r.env AND later.id > r.id
+							AND later.status IN ('succeeded', 'failed'))
+				ORDER BY r.id DESC`)
+			.all<RunRow>()
+		return results
+	}
+
+	/**
 	 * Move a run `pending → running`: stamp `started_at` and the R2 log key. Guarded on the current
 	 * status so a redelivered queue message can't re-start a run already past pending. Returns true
 	 * iff the row transitioned.
