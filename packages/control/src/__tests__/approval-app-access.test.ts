@@ -33,20 +33,20 @@ describe('application-wide data in the approval diff', () => {
 	test('a new app endpoint says its grant is global; a new application table names its reason and every action', () => {
 		const { changes } = classifyAccess(snapshot(null), snapshot(fixture()))
 		expect(changes).toContainEqual({
-			widens: true,
+			effect: 'widens',
 			line: 'New endpoint `api.admin.add` (POST /api/admin.add) for human callers with `positions.manage` (app-wide: a global grant)',
 		})
 		expect(changes).toContainEqual({
-			widens: true,
+			effect: 'widens',
 			line:
 				'New application table `positions` (the open positions an administrator edits), read with `positions.read`, inserted with `positions.manage`, updated with `positions.manage`, removed with `positions.manage`',
 		})
 		expect(changes).toContainEqual({
-			widens: true,
+			effect: 'widens',
 			line: 'New application table `exports` (the log of every export across all candidates), read with `audit.read`, inserted with `candidates.export`',
 		})
 		expect(changes).toContainEqual({
-			widens: true,
+			effect: 'widens',
 			line:
 				'New table policy `candidates` read with `candidates.read`, read app-wide with `candidates.export`, counted app-wide with `candidates.count`',
 		})
@@ -61,14 +61,14 @@ describe('application-wide data in the approval diff', () => {
 		const gained = classifyAccess(snapshot(narrower), snapshot(files))
 		expect(gained.outcome).toBe('widening')
 		expect(gained.changes).toEqual([
-			{ widens: true, line: 'Table `candidates` is read app-wide with `candidates.export`' },
-			{ widens: true, line: 'Table `candidates` is counted app-wide with `candidates.count`' },
+			{ effect: 'widens', line: 'Table `candidates` is read app-wide with `candidates.export`' },
+			{ effect: 'widens', line: 'Table `candidates` is counted app-wide with `candidates.count`' },
 		])
 		const lost = classifyAccess(snapshot(files), snapshot(narrower))
 		expect(lost.outcome).toBe('removal')
 		expect(lost.changes).toEqual([
-			{ widens: false, line: 'Table `candidates` is no longer read app-wide with `candidates.export`' },
-			{ widens: false, line: 'Table `candidates` is no longer counted app-wide with `candidates.count`' },
+			{ effect: 'narrows', line: 'Table `candidates` is no longer read app-wide with `candidates.export`' },
+			{ effect: 'narrows', line: 'Table `candidates` is no longer counted app-wide with `candidates.count`' },
 		])
 	})
 
@@ -82,7 +82,7 @@ describe('application-wide data in the approval diff', () => {
 		expect(toApp.outcome).toBe('widening')
 		expect(toApp.changes).toEqual([
 			{
-				widens: true,
+				effect: 'widens',
 				line:
 					'Endpoint `api.admin.add` requirement changes from `{"access":{"dimension":"candidate","form":"over"},"action":"positions.manage","kind":"action"}` to `{"access":{"form":"app"},"action":"positions.manage","kind":"action"}`',
 			},

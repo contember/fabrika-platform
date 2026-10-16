@@ -159,12 +159,14 @@ describe('declared reach in the reviewed snapshot', () => {
 		const stage = await deploy(w, 'stage')
 		expect(stage.status).toBe('succeeded')
 		expect(classified(stage).outcome).toBe('widening')
-		expect(classified(stage).changes).toEqual([{ widens: true, line, review: 'closer' }])
+		expect(classified(stage).changes).toEqual([{ effect: 'widens', line, review: 'closer' }])
 
 		const prod = await deploy(w, 'prod')
 		expect(prod.status).toBe('awaiting_approval')
 		expect(closer(classified(prod))).toEqual([line])
-		expect([...w.logs.values()].join('\n')).toContain('access: access widens on protected `prod` (1 changes, 1 widening, 1 needing closer review;')
+		expect([...w.logs.values()].join('\n')).toContain(
+			'access: access widens on protected `prod` (1 changes, 1 widening, 0 narrowing, 0 unchanged, 1 needing closer review;',
+		)
 
 		// The environment page lists the published snapshot's deviations, protected or not.
 		expect(toAppEnvDto(await environment(w, 'stage')).deviationSubjects).toEqual([
@@ -188,15 +190,15 @@ describe('declared reach in the reviewed snapshot', () => {
 		expect(classifyAccess(writes, base)).toEqual({
 			outcome: 'removal',
 			changes: [
-				{ widens: false, line: 'Endpoint `api.notes.retitle` raw SQL changes from `write` to `read`' },
-				{ widens: false, line: 'Endpoint `api.notes.retitle` table `notes` unscoped changes from `write` to `read`' },
+				{ effect: 'narrows', line: 'Endpoint `api.notes.retitle` raw SQL changes from `write` to `read`' },
+				{ effect: 'narrows', line: 'Endpoint `api.notes.retitle` table `notes` unscoped changes from `write` to `read`' },
 			],
 		})
 
 		const unscoped = classifyAccess(await snapshotOf(commitOf()), await snapshotOf(commitOf({ retitle: "unscoped: { audit: 'read' }" })))
 		expect(unscoped).toEqual({
 			outcome: 'widening',
-			changes: [{ widens: true, line: 'Endpoint `api.notes.retitle` declares table `audit` unscoped (`read`)', review: 'closer' }],
+			changes: [{ effect: 'widens', line: 'Endpoint `api.notes.retitle` declares table `audit` unscoped (`read`)', review: 'closer' }],
 		})
 	})
 
@@ -221,7 +223,7 @@ describe('declared reach in the reviewed snapshot', () => {
 		w.files = commitOf()
 		const removal = await deploy(w, 'prod')
 		expect(removal.status).toBe('succeeded')
-		expect(classified(removal).changes).toEqual([{ widens: false, line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
+		expect(classified(removal).changes).toEqual([{ effect: 'narrows', line: 'Endpoint `api.notes.summary` no longer declares raw SQL' }])
 		expect(toAppEnvDto(await environment(w, 'prod')).deviationSubjects).toEqual([])
 	})
 
@@ -233,7 +235,7 @@ describe('declared reach in the reviewed snapshot', () => {
 			"The contract leaves the staged kit: its sites' reach off the paved road is no longer declared",
 		])
 		expect(classifyAccess(plain, kit).changes).toContainEqual({
-			widens: false,
+			effect: 'narrows',
 			line: 'The contract moves to the staged kit: each site reaches only what it declares',
 		})
 	})
@@ -248,9 +250,9 @@ describe('database code in the reviewed snapshot', () => {
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
 		expect(classified(parked).changes).toEqual([
-			{ widens: true, line: `New migration \`${AUDIT_TRIGGER_MIGRATION.name}\`` },
-			{ widens: true, line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares function \`record_retitle\``, review: 'closer' },
-			{ widens: true, line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares trigger \`notes.audit_retitle\``, review: 'closer' },
+			{ effect: 'widens', line: `New migration \`${AUDIT_TRIGGER_MIGRATION.name}\`` },
+			{ effect: 'widens', line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares function \`record_retitle\``, review: 'closer' },
+			{ effect: 'widens', line: `Migration \`${AUDIT_TRIGGER_MIGRATION.name}\` declares trigger \`notes.audit_retitle\``, review: 'closer' },
 		])
 
 		await publish(w, 'stage')

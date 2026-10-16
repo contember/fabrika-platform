@@ -272,7 +272,9 @@ it, and the proxy decides both:
   host), never the environment's own domain, at most `MAX_CROSS_ORIGINS` (16). Control hands them to the provider,
   which writes them into the application's manifest entry as `crossOrigins`; the manifest parser refuses a malformed
   one and the entry of an installation service carries none. A `crossOrigin: true` endpoint of an environment that
-  lists no origin answers no preflight, as before.
+  lists no origin answers no preflight, as before. A change of the list applies at once and is not approval-gated, on
+  a protected environment too. The page of an approval that waits for a decision shows the list as it stands, once,
+  and a decided approval shows none ([ADR-0050](0050-approved-access.md)).
 
 The proxy then decides, in the same pass as every other request of a contract application:
 

@@ -8,7 +8,7 @@ import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
 import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
-import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
@@ -26,11 +26,12 @@ const LIST_LIMIT = 100
 
 export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
 	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
-	return { items: rows.filter((row) => mayApprove(c.auth, row)).map(toApprovalDto) }
+	return { items: rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(row)) }
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
-	return toApprovalDto(await requireClassifiedRun(c, runId))
+	const run = await requireClassifiedRun(c, runId)
+	return toApprovalDto(run, await pendingCrossOrigins(c, run))
 }
 
 /**
@@ -118,7 +119,18 @@ async function requireClassifiedRun(c: ApprovalUseCaseContext, runId: string): P
 	return run
 }
 
-function toApprovalDto(run: RunRow): ApprovalDto {
+/**
+ * The run's environment's cross-origin list as it stands now, while the run waits for a decision: context for the
+ * approver, not part of the change. A decided run gets none, since the list may have changed since and no approval
+ * covers it; nor does a run whose environment is gone, since its list is unknown rather than empty.
+ */
+async function pendingCrossOrigins(c: ApprovalUseCaseContext, run: RunRow): Promise<string[] | undefined> {
+	if (run.status !== 'awaiting_approval') return undefined
+	const appEnv = await c.repositories.registry.getAppEnv(run.app_id, run.env)
+	return appEnv === null ? undefined : appEnvCrossOrigins(appEnv)
+}
+
+function toApprovalDto(run: RunRow, crossOrigins?: string[]): ApprovalDto {
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
 	const classification = parseClassification(run.classification_json)
 	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
@@ -126,7 +138,7 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 		run: toRunDto(run),
 		outcome: classification.outcome,
 		changes: classification.changes.map((change) => ({
-			widens: change.widens,
+			effect: change.effect,
 			line: change.line,
 			...(change.review === undefined ? {} : { review: change.review }),
 		})),
@@ -134,6 +146,7 @@ function toApprovalDto(run: RunRow): ApprovalDto {
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
+		...(crossOrigins === undefined ? {} : { crossOrigins }),
 		approval: approval === null ? null : { principalId: approval.principalId, label: approval.label, approvedAt: approval.approvedAt },
 	}
 }

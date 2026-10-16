@@ -46,17 +46,17 @@ describe("a form's then in the approval diff", () => {
 	test('a new then is shown and widens nothing', () => {
 		expect(classifyAccess(snapshot(FORM('')), snapshot(FORM(", then: 'welcome'")))).toEqual({
 			outcome: 'removal',
-			changes: [{ widens: false, line: 'Form `apply` starts job `welcome` after each accepted submission, beside its schedule' }],
+			changes: [{ effect: 'neutral', line: 'Form `apply` starts job `welcome` after each accepted submission, beside its schedule' }],
 		})
 	})
 
 	test('another job, or none, is shown and widens nothing', () => {
 		expect(classifyAccess(snapshot(FORM(", then: 'welcome'")), snapshot(FORM(", then: 'digest'"))).changes).toEqual([
-			{ widens: false, line: 'Form `apply` starts job `digest` after each accepted submission, beside its schedule' },
+			{ effect: 'neutral', line: 'Form `apply` starts job `digest` after each accepted submission, beside its schedule' },
 		])
 		expect(classifyAccess(snapshot(FORM(", then: 'welcome'")), snapshot(FORM('')))).toEqual({
 			outcome: 'removal',
-			changes: [{ widens: false, line: 'Form `apply` no longer starts job `welcome` after a submission' }],
+			changes: [{ effect: 'neutral', line: 'Form `apply` no longer starts job `welcome` after a submission' }],
 		})
 	})
 
@@ -65,7 +65,7 @@ describe("a form's then in the approval diff", () => {
 		expect(classification.outcome).toBe('widening')
 		expect(classification.changes).toEqual([
 			{
-				widens: true,
+				effect: 'widens',
 				line:
 					'Mount `apply` changes from `{"appendTo":"applications","kind":"form","path":"/apply"}` to `{"appendTo":"applications","kind":"form","path":"/apply","rate":{"perClient":60}}`',
 			},

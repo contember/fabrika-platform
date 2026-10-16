@@ -7,7 +7,7 @@ import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
-import { type AccessChange, type AccessOutcome, classifyAccess } from './diff'
+import { type AccessChange, type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
 import { type AccessSnapshot, type ActiveSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from './snapshot'
 
@@ -33,14 +33,29 @@ export interface StoredApproval {
 
 const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 
+const review = z.literal('closer').optional()
+
+/**
+ * A change line. A run classified before lines carried an effect stored `widens: boolean`. Such a line reads as
+ * `widens` or `narrows`, except a job a form or a mutation starts, which already widened nothing and is `neutral`.
+ */
+const changeSchema: z.ZodType<AccessChange, z.ZodTypeDef, unknown> = z.union([
+	z.object({ effect: z.enum(['widens', 'narrows', 'neutral']), line: z.string(), review }).strict(),
+	z.object({ widens: z.boolean(), line: z.string(), review }).strict().transform(({ widens, line, review }): AccessChange => ({
+		effect: widens ? 'widens' : isJobStartLine(line) ? 'neutral' : 'narrows',
+		line,
+		...(review === undefined ? {} : { review }),
+	})),
+])
+
 const classificationSchema = z.object({
 	outcome: z.enum(['unchanged', 'removal', 'widening']),
-	changes: z.array(z.object({ widens: z.boolean(), line: z.string(), review: z.literal('closer').optional() }).strict()),
+	changes: z.array(changeSchema),
 	candidateDigest: digest,
 	baselineDigest: digest,
 	baselineRunId: z.string().min(1).nullable(),
 	protected: z.boolean(),
-}).strict() satisfies z.ZodType<StoredClassification>
+}).strict() satisfies z.ZodType<StoredClassification, z.ZodTypeDef, unknown>
 
 const approvalSchema = z.object({
 	principalId: z.string().min(1),
@@ -207,16 +222,20 @@ async function requireAppEnv(repositories: ControlRepositories, run: RunRow): Pr
 }
 
 function logClassification(log: (line: string) => void, classification: StoredClassification, env: string): void {
+	const count = (effect: AccessEffect) => classification.changes.filter((change) => change.effect === effect).length
 	const summary = classification.outcome === 'unchanged'
 		? 'no access change'
-		: classification.outcome === 'removal'
+		: classification.outcome === 'widening'
+		? `access widens${classification.protected ? ` on protected \`${env}\`` : ''}`
+		: count('narrows') > 0
 		? 'access only narrows'
-		: `access widens${classification.protected ? ` on protected \`${env}\`` : ''}`
-	const widening = classification.changes.filter((change) => change.widens).length
+		: 'access is unchanged'
 	const closer = classification.changes.filter((change) => change.review === 'closer').length
 	// Counts only: the change lines quote the checkout, and the approval page shows them.
 	log(
-		`access: ${summary} (${classification.changes.length} changes, ${widening} widening, ${closer} needing closer review; against ${
+		`access: ${summary} (${classification.changes.length} changes, ${count('widens')} widening, ${count('narrows')} narrowing, ${
+			count('neutral')
+		} unchanged, ${closer} needing closer review; against ${
 			classification.baselineRunId === null ? 'nothing published' : `run ${classification.baselineRunId}`
 		})`,
 	)

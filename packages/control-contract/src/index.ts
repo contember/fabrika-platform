@@ -459,11 +459,12 @@ export interface RunDto {
 }
 
 /**
- * One plain-language line of an access change; `widens` when it can grant access the baseline did not. `review: 'closer'`
- * marks a step off the paved road (declared reach, database code) or a change the diff cannot classify.
+ * One plain-language line of an access change. `effect` is `widens` when it can grant access the baseline did not,
+ * `narrows` when it can only take access away, and `neutral` when it admits no one new and takes nothing away.
+ * `review: 'closer'` marks a step off the paved road (declared reach, database code) or a change the diff cannot classify.
  */
 export interface AccessChangeDto {
-	widens: boolean
+	effect: 'widens' | 'narrows' | 'neutral'
 	line: string
 	review?: 'closer'
 }
@@ -479,6 +480,12 @@ export interface ApprovalDto {
 	/** The published run the change was compared with; null when nothing was published. */
 	baselineRunId: string | null
 	protected: boolean
+	/**
+	 * The environment's cross-origin list as it stands now: the pages an endpoint the contract opens to another origin
+	 * answers. An operator sets it on the environment, it takes effect at once, and no approval covers it (ADR-0050).
+	 * Only on one approval read while the run waits for a decision and its environment exists; empty when it lists none.
+	 */
+	crossOrigins?: string[]
 	/** The human who approved it, once one did. */
 	approval: { principalId: string; label: string; approvedAt: number } | null
 }

@@ -158,26 +158,47 @@ covers:
 - a file collection's malware scan: turning `scan` off widens;
 - job and webhook actions, connector exports and imports;
 - a form's admission (its rate, honeypot and challenge): any change is shown and widens;
-- a form's or a mutation's `then` (the job a submission or a committed mutation kicks): shown, and it widens nothing,
-  because it reaches only a job of the same approved contract, which runs under its own declared actions;
+- a form's or a mutation's `then` (the job a submission or a committed mutation kicks): shown, and it leaves access
+  unchanged, because it reaches only a job of the same approved contract, which runs under its own declared actions;
 - CSP extensions, `script-src`, `frame-src`, `style-src` and `font-src` included;
 - each public variable a page reads from its browser config (an SPA mount's `public` list, a form challenge's
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare.
 
-The rule has three outcomes:
+Each line carries one effect: it **widens** (it can grant access the baseline did not), it **narrows** (it can only
+take access away), or it leaves access **unchanged** (it admits no one new and takes nothing away, but the approver
+should know it). The console shows the three in their own sections. The rule has three outcomes:
 
 - **No change** passes.
-- **A change that only removes** passes, with two exceptions (below).
+- **A change without a widening line** passes: lines that narrow, and lines that leave access unchanged. A removal
+  is not always such a line (the two exceptions below).
 - **Everything else** waits for approval on a protected environment.
 
-**A removed endpoint can widen access.** The proxy selects the most specific endpoint
-([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a
-broader parameter or wildcard endpoint. Removing the literal would send its paths to the broader one.
-A removal of an endpoint therefore passes only when none of its former paths matches another endpoint
-in the candidate table: `planEndpoint` over the candidate table selects no endpoint for those paths, so
-they become denied. Otherwise Control classifies the removal as a widening, and it waits like any other.
+**A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
+or wildcard endpoint, and removing it sends its paths to the broader one. Control compares the callers each endpoint
+that now matches those paths admits with the callers the removed one admitted:
+
+- no endpoint matches (`planEndpoint` over the candidate table selects none): the paths become denied, and it narrows;
+- each one admits exactly the removed endpoint's callers, with no body and no other origin the removed one refused:
+  access is unchanged;
+- each one admits no caller more: it narrows;
+- otherwise it widens, and it waits like any other widening. A signed-in page falling through to a public SPA is
+  the typical case.
+
+"The same callers" is read narrowly. Two signed-in endpoints admit the same callers when they have the same kind, the
+same requirement and the same caller kinds. A requirement whose scope is read from a path parameter is never the same,
+because a broader route reads it from another segment. A `link` caller is the same only on an endpoint of the same link
+mount, because a link key reaches only its own mount. An anonymous health check or public SPA admits anyone, so a
+signed-in endpoint after it admits fewer and another of those two kinds the same. A form and a webhook turn callers
+away themselves, with a challenge or a signature, so whatever takes over their paths widens.
+
+The line names who could open the paths before and who can now, so the approver does not have to know which
+endpoint is public. A removed mount takes all its endpoints with it, so it is one line: its routes, grouped by where
+they go now and by their effect, and the strongest effect among them. The mount also takes what is not a route: the
+public variables its pages read (named on the line), a form's admission, a link mount's grants. So only an SPA mount
+that served no public variable can leave access unchanged; any other removed mount narrows at least.
 
 **A removed column read policy widens access.** Without its own read policy, a column falls back to the
 table's read action. Removing a column's read policy is therefore a widening, and it waits. Removing a
@@ -230,6 +251,14 @@ cover them; the snapshot digest and the contract digest do.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
+
+**The environment's cross-origin list is not part of the change.** Which pages on other origins may call an endpoint
+the contract opens to them (`crossOrigin`) is a fact of the environment, not of the contract
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Cross-origin endpoints"). An operator with `app.manage`
+sets it, Control republishes the namespace proxy at once, and no approval covers it, on a protected environment too.
+While a run waits for a decision, its approval page shows the list as it stands, so the approver sees which pages an
+endpoint that opens to the environment's list reaches. A decided approval shows none: the list may have changed since,
+and nothing records it with the decision.
 
 ### 4. Only production is protected by default
 

@@ -15,7 +15,13 @@ import { republishNamespace } from '../api/namespaces'
 import { deleteAppUseCase } from '../api/registry/apps'
 import type { RegistryUseCaseContext } from '../api/registry/context'
 import { deleteAppEnvUseCase } from '../api/registry/environments'
-import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentProtectionUseCase } from '../approval/api'
+import {
+	type ApprovalUseCaseContext,
+	completeApprovalUseCase,
+	getApprovalUseCase,
+	listApprovalsUseCase,
+	setEnvironmentProtectionUseCase,
+} from '../approval/api'
 import { parseClassification } from '../approval/publish'
 import { type AccessSnapshot, approvedSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
@@ -367,6 +373,53 @@ describe('approved access through the run lifecycle', () => {
 		expect(await published(w, 'prod')).toEqual({ runId: parked.runId, generation: 1 })
 		expect(w.deploys.map((input) => input.environment.access?.contractDigest)).toEqual([DIGEST])
 		expect(w.republished.at(-1)?.members.map((member) => member.access?.contractDigest)).toEqual([DIGEST])
+	})
+
+	test("a waiting approval shows the environment's cross-origin list as it stands now, which no approval covers", async () => {
+		const w = world()
+		await seed(w)
+		const parked = await deploy(w, 'prod')
+		const read = () => getApprovalUseCase(approvals(w, auth()), parked.runId)
+		expect((await read()).crossOrigins).toEqual([])
+
+		await w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'prod',
+			domain: 'prod.notes.example.test',
+			namespaceId: 'apps-prod',
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			providerArtifactJson: HARBOR_ARTIFACT,
+			crossOrigins: ['https://shop.example.test'],
+		})
+		expect((await read()).crossOrigins).toEqual(['https://shop.example.test'])
+		// The list renders no origins, so it reads none; a decided run shows none, since the list may have moved since.
+		expect((await listApprovalsUseCase(approvals(w, auth()))).items.map((item) => item.crossOrigins)).toEqual([undefined])
+		expect((await approve(w, parked.runId)).crossOrigins).toBeUndefined()
+		expect((await read()).crossOrigins).toBeUndefined()
+	})
+
+	test('a run classified before lines carried an effect reads them by what they did: a job start leaves access unchanged', () => {
+		const digest = `sha256:${'0'.repeat(64)}`
+		const stored = parseClassification(JSON.stringify({
+			outcome: 'widening',
+			changes: [
+				{ widens: true, line: 'Role `editor` gains `notes.delete`' },
+				{ widens: false, line: 'Mount `old` is removed', review: 'closer' },
+				{ widens: false, line: 'Form `apply` starts job `welcome` after each accepted submission, beside its schedule' },
+				{ widens: false, line: 'Endpoint `api.kicks.touch` no longer starts job `digest` after a call' },
+			],
+			candidateDigest: digest,
+			baselineDigest: digest,
+			baselineRunId: null,
+			protected: true,
+		}))
+		expect(stored.changes).toEqual([
+			{ effect: 'widens', line: 'Role `editor` gains `notes.delete`' },
+			{ effect: 'narrows', line: 'Mount `old` is removed', review: 'closer' },
+			{ effect: 'neutral', line: 'Form `apply` starts job `welcome` after each accepted submission, beside its schedule' },
+			{ effect: 'neutral', line: 'Endpoint `api.kicks.touch` no longer starts job `digest` after a call' },
+		])
 	})
 
 	test('a service principal, an OAuth (MCP) token, a key and an operator cannot approve', async () => {
