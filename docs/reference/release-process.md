@@ -13,6 +13,16 @@ This repository verifies every pull request and `main` push. Version tags reuse 
 
 The workflow is also callable by `.github/workflows/release.yml`. A tag cannot reach its publish job until all four gates pass.
 
+### The same gates locally
+
+`bun run check:ci` (`scripts/check-ci.ts`) runs every `run` step of `ci.yml` in order: the frozen install once, the quality steps, the test suite, the builds and the release-artifact steps. It stops at the first failing step and names it.
+
+- **PostgreSQL.** When `FABRIKA_TEST_POSTGRES_URL` is unset and docker answers, it runs the test suite once per major of the CI matrix, each against a throwaway `postgres:<major>-alpine` container on a random loopback port, removed after its run. A set `FABRIKA_TEST_POSTGRES_URL` is used for one run instead of the matrix.
+- **S3.** When `FABRIKA_TEST_S3_ENDPOINT` is unset and docker answers, it starts the same SeaweedFS `mini` instance as CI on a random loopback port and sets every `FABRIKA_TEST_S3_*` value. Otherwise the environment's own values are used as they are.
+- **Release artifacts** need npm on `PATH`, as CI gets it from `setup-node`.
+
+Whatever it could not run — a backend without docker, the matrix replaced by a given database, the release-artifact steps without npm — it lists under `SKIPPED` at the end, with the duration of every step that ran. `scripts/__tests__/check-ci.test.ts` fails when its steps, the PostgreSQL majors, the images or the S3 values drift from `ci.yml`.
+
 ## Public package contract
 
 The release set is derived from workspace manifests and checked against an explicit inventory, so adding or removing a public package requires a deliberate release-tool update. A package ships when it is not private and declares `publishConfig.access: public`. Every public package must:
@@ -54,7 +64,7 @@ The Zerops platform services build and run on the `alpine/bun@1.3` base. Zerops 
 
 ## Cutting a release
 
-1. On an up-to-date `main`, run `bun run release:bump --tag=v1.2.3`, review the diff, and run `bun run format`, `bun run typecheck` and `bun run test`.
+1. On an up-to-date `main`, run `bun run release:bump --tag=v1.2.3`, review the diff, and run `bun run format` and `bun run check:ci`.
 2. Commit the result as `chore: release v1.2.3` and land it on `main`.
 3. Tag that commit `v1.2.3` and push the tag. `.github/workflows/release.yml` verifies, validates, packs, smokes, publishes and runs the registry smoke.
 

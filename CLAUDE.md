@@ -30,6 +30,7 @@ bun run test               # all tests; isolates DOM-heavy agent-interface suite
 bun test packages/provider-contract/src/__tests__/steps.test.ts   # a single file
 bun run lint               # biome
 bun run format             # dprint fmt  (format:check to verify only)
+bun run check:ci           # every step of CI's verify workflow, with throwaway Postgres + SeaweedFS; run before pushing to main
 
 bun run local:up           # the Docker stack: both Postgres, SeaweedFS, a Zerops emulator, all planes
 bun run local:status       # …:smoke (disruptive end-to-end), :reset (wipes volumes), :down
@@ -40,7 +41,12 @@ bun run release:validate   # publishability + dependency direction + tag = sourc
 bun run release:pack --local --artifacts=<dir>   # unreleased tarballs for an app outside the repo (app-setup.md)
 ```
 
-CPU-heavy runs (full typecheck, full test suite, docker builds) go through `cpu-lease run -n 4 -- …`.
+CPU-heavy runs (full typecheck, full test suite, docker builds, `check:ci`) go through `cpu-lease run -n 4 -- …`.
+
+Run `bun run check:ci` before a push to `main`: `release.yml` verifies a tag with the same workflow, so a red `main`
+blocks a release. It starts each backend it needs with docker unless `FABRIKA_TEST_POSTGRES_URL` or
+`FABRIKA_TEST_S3_ENDPOINT` already names one, and its summary lists everything it could not run. A test that fails
+without a code change is made deterministic or deleted the same day; CI never retries it.
 
 Suites that need a real backend **skip cleanly** when it is absent and say what to set to run them:
 `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and the IAM/control/Operations schemas) and

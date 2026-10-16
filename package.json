@@ -14,6 +14,7 @@
 		"test:builder": "bun run --filter @fabrika/builder test",
 		"test:examples": "bun run --cwd examples/zerops-app test && bun run --cwd examples/crm test",
 		"test:live": "bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts",
+		"check:ci": "bun scripts/check-ci.ts",
 		"lint": "biome lint .",
 		"format": "dprint fmt",
 		"format:check": "dprint check",

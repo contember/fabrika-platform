@@ -1,3 +1,4 @@
+# `bun run check:ci` (scripts/check-ci.ts) runs these steps locally; scripts/__tests__/check-ci.test.ts keeps the two equal.
 name: CI
 
 on:

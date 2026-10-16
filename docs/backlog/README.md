@@ -72,6 +72,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [175](175-a-scoped-user-administrator-lists-every-principal.md) — A user administrator scoped to one application still reads the whole directory.
 - [176](176-the-runtime-does-not-know-the-declared-secret-names.md) — An error report scrubs an application secret only when its variable name says it is one; the platform does not hand the runtime the declared names.
 - [177](177-the-cloudflare-proxy-manifest-is-a-worker-variable.md) — A Cloudflare proxy Worker carries its manifest as a variable, which Cloudflare caps at 5 KB; bake it into the bundle.
-- [183](183-a-red-main-blocks-a-release.md) — No local command equals CI, and a flaky timing test blocked a publish; add `check:ci` and a green-before-push rule.
 - [185](185-no-release-is-accepted-on-a-live-zerops-account.md) — Run a fresh-install acceptance (namespace, app with a database, one authenticated request, teardown) on a dedicated Zerops account per release.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
