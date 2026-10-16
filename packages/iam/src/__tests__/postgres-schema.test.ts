@@ -1136,12 +1136,13 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		// installation falls back on, so on Zerops this is the only way a browser ever gets a session.
 		await reset()
 		const principal = await db.principals.createUser('sub-exchange', 'exchange@x.cz')
+		const parentExpiresAt = now() + 3600
 		const parent = await db.sessions.createSession({
 			tokenHash: await hashToken('parent-session-plaintext'),
 			principalId: principal.id,
 			idpSub: 'sub-exchange',
 			email: 'exchange@x.cz',
-			expiresAt: now() + 3600,
+			expiresAt: parentExpiresAt,
 		})
 		// The code carries its own S256 challenge as a suffix, so redemption needs the browser's verifier
 		// (ADR-0023). `issueAuthCode` builds this shape; here the row is written directly.
@@ -1156,17 +1157,14 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		})
 
 		const h = handler()
-		const before = now()
 		const res = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, verifier, requestId: 'req-exchange-1' }))
-		const after = now()
 		expect(res.status).toBe(200)
 		const body: unknown = await res.json()
 		// The four fields `HttpIamGateway.exchangeAuthCode` reads; an empty or absent one is a 503 there.
 		expect(prop(body, 'ok')).toBe(true)
 		expect(prop(body, 'returnUrl')).toBe('https://opice.test/private?page=2')
-		// The session expires an hour after the exchange; a run that crosses a second boundary sees either second.
-		const expiresAt = prop(body, 'expiresAt')
-		expect(typeof expiresAt === 'number' && expiresAt >= before + 3600 && expiresAt <= after + 3600).toBe(true)
+		// The app session ends with the login it came from, never later.
+		expect(prop(body, 'expiresAt')).toBe(parentExpiresAt)
 		const session = prop(body, 'session')
 		expect(typeof session).toBe('string')
 
@@ -1174,6 +1172,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		const child = await db.sessions.getActiveSessionByHash(await hashToken(typeof session === 'string' ? session : ''))
 		expect(child?.app).toBe('opice')
 		expect(child?.parent_session_id).toBe(parent)
+		expect(child?.expires_at).toBe(parentExpiresAt)
 
 		// Single use, through the guarded UPDATE — this is the assertion the command-tag decoding backs.
 		const replay = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, verifier, requestId: 'req-exchange-2' }))
