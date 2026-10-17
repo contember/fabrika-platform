@@ -1,8 +1,19 @@
+import type { SurfaceEndpointDto } from '@fabrika/control-contract'
 import { expect, test } from 'bun:test'
 import { parseEnvironments, parseRun, PlatformRemote } from '../src/platform-remote'
 import { PlatformError } from '../src/platform-storage'
 
 test('remote projections keep exact identities, finite recursive JSON and forward-compatible fields', () => {
+	const health: SurfaceEndpointDto = {
+		id: 'health',
+		method: 'GET',
+		path: '/healthz',
+		kind: 'health',
+		reach: 'anyone',
+		callers: [],
+		requirement: null,
+		notes: [],
+	}
 	const envelope = { provider: 'zerops', version: 0, payload: { list: [null, true, 'x', 1.5] } }
 	const environment = {
 		appId: ' app ',
@@ -15,6 +26,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		protected: false,
 		publishedRunId: null,
 		deviationSubjects: [{ subject: 'Endpoint `api.notes.summary`', steps: ['declares raw SQL (`read`)'] }],
+		surface: [health],
 		namespaceId: null,
 		provider: 'zerops',
 		target: envelope,
@@ -24,8 +36,10 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 	expect(() => parseEnvironments({ items: [environment] })).toThrow(PlatformError)
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, ignored: true }], cursor: 'next' }))
 		.toEqual([{ ...environment, triggerRef: null }])
-	const { deviationSubjects: _, crossOrigins: __, ...fromOlderControl } = { ...environment, triggerRef: null }
-	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([{ ...environment, triggerRef: null, deviationSubjects: [], crossOrigins: [] }])
+	const { deviationSubjects: _, crossOrigins: __, surface: ___, ...fromOlderControl } = { ...environment, triggerRef: null }
+	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([
+		{ ...environment, triggerRef: null, deviationSubjects: [], crossOrigins: [], surface: [] },
+	])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')
 	const run: ReturnType<typeof parseRun> = { id: 'run', appId: 'app', env: 'dev', ref: 'sha', commitSha: null, status: 'running' }

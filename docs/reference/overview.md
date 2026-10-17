@@ -293,7 +293,8 @@ Right after the provider pins the run's commit, Control reads the run's **access
 fails the run). It classifies the snapshot against the environment's active snapshot (that of
 `app_envs.published_run_id`). A step off the paved road — a site's declared `sql`, `unscoped`, `connect` or link
 issuing, or a migration's database code — is a widening line marked "needs closer review", not a refusal; the
-console's environment page lists the published snapshot's. A widening on an environment with `protected` set (`prod` by
+console's environment page lists the published snapshot's, beside its surface: every endpoint under its most exposed
+caller (`snapshotSurface`). A widening on an environment with `protected` set (`prod` by
 default) parks the run in `awaiting_approval`; it publishes nothing until a person approves it in the
 console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries

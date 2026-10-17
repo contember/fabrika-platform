@@ -17,6 +17,7 @@ const environment = (env: string, deviationSubjects: DeviationSubjectDto[], isPr
 	protected: isProtected,
 	publishedRunId: deviationSubjects.length === 0 ? null : `01a144a6-${env}`,
 	deviationSubjects,
+	surface: [],
 	namespaceId: null,
 	provider: 'zerops',
 	target: { provider: 'zerops', version: 1, payload: {} },

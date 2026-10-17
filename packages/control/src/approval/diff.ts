@@ -13,6 +13,7 @@ import {
 	type DimensionArtifact,
 	type EndpointDirectory,
 	endpointMembers,
+	type EndpointRequirement,
 	type EndpointRow,
 	type FileCollectionArtifact,
 	type FormMountArtifact,
@@ -414,7 +415,7 @@ function callableFrom(row: EndpointRow): string {
 	return row.crossOrigin === undefined ? '' : `, callable from ${crossOriginReach(row.crossOrigin)}`
 }
 
-function crossOriginReach(form: CrossOriginForm): string {
+export function crossOriginReach(form: CrossOriginForm): string {
 	return form === 'any' ? 'a page on any origin' : 'a page on an origin the environment lists'
 }
 
@@ -428,9 +429,13 @@ function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to:
 
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
 function answersFile(row: EndpointRow): string {
-	return row.output !== null && isAttachmentShape(row.output)
-		? `, answering the ${row.output.format.toUpperCase()} file \`${row.output.filename}\``
-		: ''
+	const file = attachmentName(row)
+	return file === null ? '' : `, answering ${file}`
+}
+
+/** `the CSV file \`notes.csv\`` for an endpoint whose output is an attachment, otherwise null. */
+export function attachmentName(row: EndpointRow): string | null {
+	return row.output !== null && isAttachmentShape(row.output) ? `the ${row.output.format.toUpperCase()} file \`${row.output.filename}\`` : null
 }
 
 /**
@@ -701,12 +706,14 @@ function segmentsOf(path: string): string[] {
 function audience(row: EndpointRow): string {
 	if (row.kind === 'public-spa') return 'for anyone, without signing in'
 	if (row.requirement === null) return `for anonymous ${row.kind} requests`
-	const callers = row.callers.join(', ')
-	if (row.requirement.kind === 'member') return `for ${callers} callers who are members`
-	const { action, access } = row.requirement
-	return access.form === 'app'
-		? `for ${callers} callers with \`${action}\` (app-wide: a global grant)`
-		: `for ${callers} callers with \`${action}\` (${access.form} \`${access.dimension}\`)`
+	return `for ${row.callers.join(', ')} callers ${requirementPhrase(row.requirement)}`
+}
+
+/** What a credentialed caller must hold: `who are members`, or `` with `notes.read` (on `note`) ``. */
+export function requirementPhrase(requirement: EndpointRequirement): string {
+	if (requirement.kind === 'member') return 'who are members'
+	const { action, access } = requirement
+	return access.form === 'app' ? `with \`${action}\` (app-wide: a global grant)` : `with \`${action}\` (${access.form} \`${access.dimension}\`)`
 }
 
 function endpointMap(rows: readonly EndpointRow[]): Map<string, EndpointRow> {

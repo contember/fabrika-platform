@@ -83,7 +83,7 @@ export function deviationKey(deviation: MigrationDeviation): string {
 	return `${deviation.file}\n${deviation.kind}\n${deviation.object}`
 }
 
-const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+export const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
 /** What a provider publishes for a snapshot: the contract, its digest and the IAM schema compiled from it. */
 export function approvedAccess(snapshot: AccessSnapshot): ProviderApprovedAccess | undefined {

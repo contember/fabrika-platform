@@ -3,6 +3,7 @@ import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrik
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { snapshotDeviations } from '../../approval/diff'
 import { approvedSnapshot } from '../../approval/snapshot'
+import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../github/triggers/push-event'
 import { fail } from '../domain'
@@ -232,6 +233,7 @@ export function preparationFailure(cause: unknown): string {
 }
 
 export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
+	const { snapshot } = approvedSnapshot(row)
 	return {
 		appId: row.app_id,
 		env: row.env,
@@ -242,7 +244,8 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		authoring: row.authoring === 1,
 		protected: row.protected === 1,
 		publishedRunId: row.published_run_id,
-		deviationSubjects: snapshotDeviations(approvedSnapshot(row).snapshot),
+		deviationSubjects: snapshotDeviations(snapshot),
+		surface: snapshotSurface(snapshot),
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
