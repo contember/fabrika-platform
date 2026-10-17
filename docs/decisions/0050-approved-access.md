@@ -277,6 +277,10 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   an environment runs with stay visible after their approval. Control groups them by site and migration
   (`AppEnvDto.deviationSubjects`). The page is an inventory of published access, so it carries no closer-review mark:
   that mark belongs to the access change of a deploy.
+- **The environment page lists the published snapshot's surface**: every endpoint under its most exposed caller
+  (anyone, share links, other apps, machines, signed-in people), in the approval's words, with what else opens it —
+  another origin, a file it answers, an upload's body limit, a form's rate limit and challenge, a webhook's signature
+  (`AppEnvDto.surface`, `snapshotSurface`). It reads only the published snapshot, so it shows what the proxy serves.
 
 **Invariant: only a human user principal approves an access change.** No credential that an agent or a
 workload can hold completes an approval.

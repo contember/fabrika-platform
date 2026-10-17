@@ -6,6 +6,7 @@ import { DeviationsSection } from '../../components/app-detail/DeviationsSection
 import { EnvironmentsSection } from '../../components/app-detail/EnvironmentsSection'
 import { RecentRunsSection } from '../../components/app-detail/RecentRunsSection'
 import { SecretsSection } from '../../components/app-detail/SecretsSection'
+import { SurfaceSection } from '../../components/app-detail/SurfaceSection'
 import { VariablesSection } from '../../components/app-detail/VariablesSection'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
@@ -81,6 +82,7 @@ export default createPage()
 				<BuildConfigSection app={app} onDone={invalidate} />
 				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
 				<ApprovalsSection appId={app.id} envs={envs} onDone={invalidate} />
+				<SurfaceSection envs={envs} />
 				<DeviationsSection envs={envs} />
 				<SecretsSection appId={app.id} secrets={secrets} envs={envs} onDone={invalidate} />
 				<VariablesSection appId={app.id} vars={vars} envs={envs} onDone={invalidate} />
