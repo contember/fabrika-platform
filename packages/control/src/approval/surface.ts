@@ -1,0 +1,63 @@
+import { APP_CALLER_PREFIX, type ContractArtifact, type EndpointRow, type FormMountArtifact } from '@fabrika/auth-core'
+import { SURFACE_REACHES, type SurfaceEndpointDto, type SurfaceReach } from '@fabrika/control-contract'
+import { attachmentName, crossOriginReach, requirementPhrase } from './diff'
+import { type AccessSnapshot, compareText } from './snapshot'
+
+/** Every endpoint a snapshot publishes, grouped by who reaches it, most exposed first, then by path and method. */
+export function snapshotSurface(snapshot: AccessSnapshot): SurfaceEndpointDto[] {
+	const contract = snapshot.contract
+	if (contract === null) return []
+	return contract.endpoints
+		.map((row) => surfaceEndpoint(contract, row))
+		.sort((a, b) => reachRank(a.reach) - reachRank(b.reach) || compareText(a.path, b.path) || compareText(a.method, b.method))
+}
+
+function surfaceEndpoint(contract: ContractArtifact, row: EndpointRow): SurfaceEndpointDto {
+	return {
+		id: row.id,
+		method: row.method,
+		path: row.path,
+		kind: row.kind,
+		reach: reachOf(row),
+		callers: [...row.callers],
+		requirement: row.requirement === null ? null : requirementPhrase(row.requirement),
+		notes: notesOf(contract, row),
+	}
+}
+
+function reachOf(row: EndpointRow): SurfaceReach {
+	if (row.requirement === null) return 'anyone'
+	if (row.callers.includes('link')) return 'link'
+	if (row.callers.some((caller) => caller.startsWith(APP_CALLER_PREFIX))) return 'app'
+	return row.callers.includes('machine') ? 'machine' : 'human'
+}
+
+function notesOf(contract: ContractArtifact, row: EndpointRow): string[] {
+	const notes: string[] = []
+	if (row.crossOrigin !== undefined) notes.push(`callable from ${crossOriginReach(row.crossOrigin)}`)
+	const file = attachmentName(row)
+	if (file !== null) notes.push(`answers ${file}`)
+	if (row.kind === 'upload' && row.admission !== null) notes.push(uploadLimit(row.admission.maxBytes))
+	const mount = row.source.kind === 'mount' ? contract.mounts[row.source.name] : undefined
+	if (mount?.kind === 'form') notes.push(...formProtection(mount))
+	if (mount?.kind === 'webhook') notes.push(`verifies a ${mount.scheme} signature`)
+	return notes
+}
+
+function uploadLimit(maxBytes: number | null): string {
+	return maxBytes === null ? 'accepts a body of any size' : `accepts a body of at most ${maxBytes} bytes`
+}
+
+/** A form takes anonymous submissions, so its rate limits and challenge are what stand in front of its inbox. */
+function formProtection(form: FormMountArtifact): string[] {
+	const notes: string[] = []
+	if (form.rate?.perClient !== undefined) notes.push(`at most ${form.rate.perClient} submissions a minute per client`)
+	if (form.rate?.perForm !== undefined) notes.push(`at most ${form.rate.perForm} submissions a minute in all`)
+	if (form.challenge !== undefined) notes.push(`${form.challenge.provider} challenge`)
+	if (form.honeypot !== undefined) notes.push(`honeypot field \`${form.honeypot}\``)
+	return notes.length === 0 ? ['no rate limit and no challenge'] : notes
+}
+
+function reachRank(reach: SurfaceReach): number {
+	return SURFACE_REACHES.indexOf(reach)
+}

@@ -18,6 +18,7 @@ const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	protected: isProtected,
 	publishedRunId: null,
 	deviationSubjects: [],
+	surface: [],
 	namespaceId: null,
 	provider: 'zerops',
 	target: { provider: 'zerops', version: 1, payload: {} },

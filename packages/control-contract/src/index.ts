@@ -1,3 +1,4 @@
+import type { EndpointKind, EndpointMethod } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { z } from 'zod'
 
@@ -224,6 +225,8 @@ export interface AppEnvDto {
 	 * sites declare and the database code its migrations declare. Listed whether or not the environment is protected.
 	 */
 	deviationSubjects: DeviationSubjectDto[]
+	/** The published snapshot's endpoints as the outside reaches them, most exposed first; empty until a run publishes one. */
+	surface: SurfaceEndpointDto[]
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto
@@ -237,6 +240,27 @@ export interface DeviationSubjectDto {
 	subject: string
 	/** Each step, phrased to follow the subject: `declares raw SQL (\`read\`)`. */
 	steps: string[]
+}
+
+/** Who reaches an endpoint, most exposed first. */
+export const SURFACE_REACHES = ['anyone', 'link', 'app', 'machine', 'human'] as const
+
+/** An endpoint is listed under its most exposed caller: `anyone` for an anonymous kind, `app` for an `app:<id>` caller. */
+export type SurfaceReach = (typeof SURFACE_REACHES)[number]
+
+/** One endpoint of a published snapshot, in the approval's words. */
+export interface SurfaceEndpointDto {
+	id: string
+	method: EndpointMethod
+	path: string
+	kind: EndpointKind
+	reach: SurfaceReach
+	/** Every caller kind the endpoint admits; empty for an anonymous kind. */
+	callers: string[]
+	/** What a caller must hold: `who are members` or `` with `notes.read` (on `note`) ``; null for an anonymous kind. */
+	requirement: string | null
+	/** What else opens the endpoint: another origin, a file it answers, a body limit, a form's protection, a signature. */
+	notes: string[]
 }
 
 export interface PutAppEnvRequest {

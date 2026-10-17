@@ -450,7 +450,8 @@ other environment, before the provider prepares anything, and the write maps a r
   the digest appends it only when present, so stored digests stay valid. A refused statement in a file the environment
   has not published unchanged fails the read (`migrations-refused`, a count, never the statement), as the runner
   refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviationSubjects` lists the published
-  snapshot's, grouped by site and migration.
+  snapshot's, grouped by site and migration, and `AppEnvDto.surface` (`surface.ts`) its endpoints under their most
+  exposed caller, in `diff.ts`'s words.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

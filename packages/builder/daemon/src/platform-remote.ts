@@ -1,5 +1,13 @@
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
-import type { AppEnvDto, ControlRpcContract, JsonValue, ProviderEnvelopeDto, RunStatus } from '@fabrika/control-contract'
+import {
+	type AppEnvDto,
+	type ControlRpcContract,
+	type JsonValue,
+	type ProviderEnvelopeDto,
+	type RunStatus,
+	SURFACE_REACHES,
+	type SurfaceEndpointDto,
+} from '@fabrika/control-contract'
 import { z } from 'zod'
 import { parseBuilderOrigin } from '../../shared'
 import { PlatformError, type StoredCredential, storedIntegerSchema, storedTextSchema } from './platform-storage'
@@ -24,6 +32,16 @@ const envelopeSchema: z.ZodType<ProviderEnvelopeDto> = z.object({
 	version: storedIntegerSchema,
 	payload: jsonValueSchema,
 })
+const surfaceEndpointSchema: z.ZodType<SurfaceEndpointDto> = z.object({
+	id: storedTextSchema,
+	method: z.enum(['GET', 'POST']),
+	path: storedTextSchema,
+	kind: z.enum(['query', 'mutation', 'spa', 'upload', 'download', 'health', 'form', 'webhook', 'link-spa', 'public-spa']),
+	reach: z.enum(SURFACE_REACHES),
+	callers: z.array(storedTextSchema),
+	requirement: storedTextSchema.nullable(),
+	notes: z.array(storedTextSchema),
+})
 const environmentsSchema = z.object({
 	items: z.array(z.object({
 		appId: storedTextSchema,
@@ -38,6 +56,8 @@ const environmentsSchema = z.object({
 		publishedRunId: storedTextSchema.nullable(),
 		// A Control older than the field lists none.
 		deviationSubjects: z.array(z.object({ subject: storedTextSchema, steps: z.array(storedTextSchema) })).default([]),
+		// A Control older than the field lists none.
+		surface: z.array(surfaceEndpointSchema).default([]),
 		namespaceId: storedTextSchema.nullable(),
 		provider: storedTextSchema,
 		target: envelopeSchema,
