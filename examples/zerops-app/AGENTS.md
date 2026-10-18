@@ -1932,11 +1932,12 @@ if (created !== undefined && row.photo !== null) {
 }
 ```
 
+- Only a job's `tx.files` has `attach`; a mutation's has none. `tx.ref` is `ctx.ref` located in the transaction.
 - `attach` answers `false` when no file of the collection waits under the id (none was sent, or its hold of seven days
   ended) and `true` again for one the same owner attached before; it never moves another owner's file. Past
   `maxPerOwner` it throws 409, and the transaction rolls back with the file still held.
 - The attached file is `quarantined` until the scan job's clean verdict, like any upload of a scanning collection.
-- A file nobody attached is deleted by the sweep job once its hold ends.
+- A file nobody attached is deleted by the sweep job an hour after its hold of seven days ended.
 
 ## Storage
 
@@ -2652,6 +2653,12 @@ export const contract = app.contract((c) => ({
   a file `photo` from anyone into files `photos`". A file the collection refuses (a type it does not admit, bytes
   that are not that type, too large) is 415 or 413 after the challenge was spent, so the page checks the type and the
   size before it submits, and solves the challenge again after a refusal.
+  While no file is `required`, the form still takes the JSON body it took before (every file column `NULL`): deploy the
+  application first, then switch each page to multipart. A form with files accepts 20 submissions a minute unless
+  `rate.perForm` says otherwise, and its files write at most 512 MiB an hour in all (`rate: { bytesPerHour }` to raise
+  it, never below the largest file): each file reserves its collection's `maxBytes` first, so with a 15 MiB photo about
+  34 maximal photos fit in an hour, more of the usual 2–5 MB ones; past it the form answers 429 until the hour ends.
+  Size the budget for the expected peak: a flood that spends it costs that hour's photos, not the storage.
 - **The kick.** `then: 'intake'` makes each accepted submission start a run of the job within seconds, once its row
   committed, under the job's own key. The visitor's answer is the same constant and never waits for the run. Kicks
   coalesce on the job's lease (at most one run and one pending, however many visitors submit), so a flood adds no

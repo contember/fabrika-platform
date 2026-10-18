@@ -123,6 +123,13 @@ until the pin moves. Before an application of an upgraded namespace declares
 `crossOrigin`, or its environment lists an origin, re-pin the namespace with
 `fabrika control namespaces update --namespace=<id> --proxy-source=current`.
 
+A form that takes files ([ADR-0061](../decisions/0061-a-form-takes-files-beside-its-input.md)) fails open on an old
+pin instead: its row only admits `multipart/form-data`, which an older proxy parses, and that proxy forwards such a
+form's request from any origin, because the refusal of an origin the row does not admit is newer than the pin (the
+form's challenge still stops a foreign page, whose widget cannot verify for the application's host). Control does not
+detect this. Before an application of an upgraded namespace declares `files` on a form, re-pin the namespace the same
+way.
+
 Deployment then adds control-owned managed environment values independently of
 the namespace and provider artifact. Providers reject an app-authored
 `FABRIKA_OPERATIONS_DSN` or `FABRIKA_RELEASE`, inject current values at their
