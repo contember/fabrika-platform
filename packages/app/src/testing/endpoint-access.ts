@@ -774,17 +774,23 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			return { status }
 		},
 		async file(name, operation, caller) {
+			if (operation === 'upload') {
+				// An upload needs owners only: a seeded file would hold the owner's place, and a collection of
+				// `maxPerOwner: 1` could never take the probe's.
+				const collection = collectionOf(name)
+				const worlds = await postgres.seedWorlds(tables, collection.owner)
+				const grants = [{ action: caller === 'reader' ? collection.read : collection.write, scope: { type: worlds.dimension, value: worlds.own.scope } }]
+				const file = sampleFile(name, collection.types)
+				const path = fileRow(name, 'upload').path.replace(':owner', encodeURIComponent(worlds[caller === 'other' ? 'other' : 'own'].key))
+				const fetch = kit.browser(kit.testCaller(grants))
+				return { status: (await fetch(path, { method: 'POST', headers: { 'Content-Type': file.type }, body: file.bytes })).status }
+			}
 			const { collection, worlds, own, other } = await seedFiles(name)
-			const operationAction = { upload: collection.write, download: collection.read, remove: collection.delete }[operation]
+			const operationAction = operation === 'download' ? collection.read : collection.delete
 			const grants = [{ action: caller === 'reader' ? collection.read : operationAction, scope: { type: worlds.dimension, value: worlds.own.scope } }]
 			const world = caller === 'other' ? 'other' : 'own'
 			const fetch = kit.browser(kit.testCaller(grants))
 			const row = fileRow(name, operation)
-			if (operation === 'upload') {
-				const file = sampleFile(name, collection.types)
-				const path = row.path.replace(':owner', encodeURIComponent(worlds[world].key))
-				return { status: (await fetch(path, { method: 'POST', headers: { 'Content-Type': file.type }, body: file.bytes })).status }
-			}
 			const fileId = world === 'own' ? own : other
 			if (operation === 'download') {
 				return { status: (await fetch(row.path.replace(':fileId', encodeURIComponent(fileId)))).status }

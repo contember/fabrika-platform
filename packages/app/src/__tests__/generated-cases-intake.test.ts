@@ -67,6 +67,24 @@ const configured = app.contract((c) => ({
 	files: guarded.surface.files,
 }))
 
+/** The same intake whose collection holds one file per owner: every generated file case still holds. */
+const single = app.contract((c) => ({
+	register: guarded.surface.register,
+	resend: guarded.surface.resend,
+	files: {
+		attachments: c.files({
+			owner: 'candidates',
+			read: 'candidates.read',
+			write: 'candidates.attach',
+			delete: 'candidates.process',
+			maxBytes: 65536,
+			types: ['application/pdf'],
+			maxPerOwner: 1,
+			scan: true,
+		}),
+	},
+}))
+
 /** The intake's tables with a registration form named `probe`, as the policy kit's own probe mount is. */
 const probeNamedTables = defineTables(vocabulary, columns)({
 	candidates: { scope: { dimension: 'candidate' }, actions: { read: 'candidates.read', insert: 'candidates.process' }, insert: ['email', 'name'] },
@@ -98,6 +116,17 @@ if (postgres !== null) {
 			const kit = endpointAccessKit(serve(guarded, { database: scoped(tables) }), tables, postgres)
 			expect(await kit.file('attachments', 'download', 'own')).toEqual({ status: 200 })
 			expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })
+		})
+
+		test('the file cases of a collection that holds one file per owner each pass', async () => {
+			const kit = endpointAccessKit(serve(single, { database: scoped(tables) }), tables, postgres)
+			expect(await kit.file('attachments', 'upload', 'own')).toEqual({ status: 200 })
+			expect(await kit.file('attachments', 'upload', 'other')).toEqual({ status: 404 })
+			expect(await kit.file('attachments', 'upload', 'reader')).toEqual({ status: 403 })
+			expect(await kit.file('attachments', 'download', 'own')).toEqual({ status: 200 })
+			expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })
+			expect(await kit.file('attachments', 'remove', 'own')).toEqual({ status: 200 })
+			expect(await kit.file('attachments', 'remove', 'reader')).toEqual({ status: 403 })
 		})
 
 		test("the endpoint access kit boots without a challenge's site key or an SPA mount's public variable", async () => {
