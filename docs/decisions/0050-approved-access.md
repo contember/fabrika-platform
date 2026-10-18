@@ -177,12 +177,17 @@ should know it). The console shows the three in their own sections. The rule has
 
 **A removed endpoint is classified by who answers its paths now.** The proxy selects the most specific endpoint
 ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a broader parameter
-or wildcard endpoint, and removing it sends its paths to the broader one. Control compares the callers each endpoint
-that now matches those paths admits with the callers the removed one admitted:
+or wildcard endpoint, and removing it sends its paths to the broader one. A broader endpoint may also answer only some
+of those paths or none, and an endpoint that merely overlaps them may have answered only its own paths all along. So
+Control asks the canonical matcher (`planEndpoint`) about one path for each way the two tables tell the removed
+endpoint's paths apart: which ones the removed endpoint answered before, and which endpoint answers each now. It
+compares the callers each endpoint that now answers one admits with the callers the removed one admitted:
 
-- no endpoint matches (`planEndpoint` over the candidate table selects none): the paths become denied, and it narrows;
-- each one admits exactly the removed endpoint's callers, with no body and no other origin the removed one refused:
-  access is unchanged;
+- no endpoint answers any: the paths become denied, and it narrows;
+- some are denied and the rest reach endpoints that admit no caller more: it narrows, and the line says the rest are
+  denied;
+- every path reaches an endpoint, and each one admits exactly the removed endpoint's callers, with no body and no
+  other origin the removed one refused: access is unchanged;
 - each one admits no caller more: it narrows;
 - otherwise it widens, and it waits like any other widening. A signed-in page falling through to a public SPA is
   the typical case.
