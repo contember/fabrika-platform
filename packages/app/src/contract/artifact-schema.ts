@@ -189,7 +189,7 @@ const mount = z.discriminatedUnion('kind', [
 		kind: z.literal('form'),
 		path: name,
 		appendTo: name,
-		rate: z.strictObject({ perClient: formRate.optional(), perForm: formRate.optional() }).optional(),
+		rate: z.strictObject({ perClient: formRate.optional(), perForm: formRate.optional(), bytesPerHour: z.int().positive().optional() }).optional(),
 		honeypot: name.optional(),
 		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() }).optional(),
 		then: name.optional(),

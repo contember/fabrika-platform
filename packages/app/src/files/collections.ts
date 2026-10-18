@@ -20,7 +20,7 @@ import {
 } from '@fabrika/db/framework'
 import { type FileObjectStore, type StoredObject, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
-import { FILE_LIMITS, FORM_FILE_LIMITS } from '../contract/defaults'
+import { FILE_LIMITS } from '../contract/defaults'
 import { FileLinkListInput, FileListInput, FileListOutput } from '../contract/file-schemas'
 import { HttpError, jsonResponse, NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type RequestFrame } from '../implement/capability'
@@ -28,7 +28,7 @@ import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase, ImplementationDatabase } from '../implement/implement'
 import type { OperationsReporter } from '../jobs/report'
-import type { FileCollectionHandle, FileCollections as FilesOfSite, FileListing, FileListPage, OpenedFile, OpenOptions } from './handle'
+import type { FileCollectionJobHandle, FileCollections as FilesOfSite, FileListing, FileListPage, OpenedFile, OpenOptions } from './handle'
 import { type FileScanner, runScanPass } from './scan'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
@@ -66,6 +66,8 @@ export interface FileSite {
 	readonly session: () => Promise<Session>
 	/** `null` where `removeAll` runs (a mutation, a job's transaction); otherwise why it does not. */
 	readonly readOnly: string | null
+	/** Whether `attach` runs here: only in a job's transaction, the job that drains a form's inbox. */
+	readonly attaches: boolean
 }
 
 interface Collection {
@@ -154,8 +156,8 @@ async function readHead(
 	return { head: buffered.subarray(0, size), stream }
 }
 
-/** The body as it is stored: hashed on the way, and failed once `timeoutMs` passes before it ends. */
-function digesting(body: ReadableStream<Uint8Array>, timeoutMs: number): {
+/** The body as it is stored: hashed on the way, and failed once `timeoutMs` (`null`: no timer) passes before it ends. */
+function digesting(body: ReadableStream<Uint8Array>, timeoutMs: number | null): {
 	readonly stream: ReadableStream<Uint8Array>
 	digest(): string
 	timedOut(): boolean
@@ -167,10 +169,12 @@ function digesting(body: ReadableStream<Uint8Array>, timeoutMs: number): {
 	const stream = body.pipeThrough(
 		new TransformStream<Uint8Array, Uint8Array>({
 			start(controller) {
-				timer = setTimeout(() => {
-					expired = true
-					controller.error(new Error('the upload did not finish in time'))
-				}, timeoutMs)
+				if (timeoutMs !== null) {
+					timer = setTimeout(() => {
+						expired = true
+						controller.error(new Error('the upload did not finish in time'))
+					}, timeoutMs)
+				}
 			},
 			transform(chunk, controller) {
 				hasher.update(chunk)
@@ -242,7 +246,7 @@ export class FileCollections {
 	}
 
 	/** `ctx.files` of one site: each collection's handle, by its name. */
-	site(site: FileSite): FilesOfSite<FileCollectionHandle> {
+	site(site: FileSite): FilesOfSite<FileCollectionJobHandle> {
 		const handles = new Map(this.#collections.map((collection) => [collection.name, this.#handle(collection, site)]))
 		return (name) => {
 			site.check()
@@ -257,7 +261,7 @@ export class FileCollections {
 		}
 	}
 
-	#handle(collection: Collection, site: FileSite): FileCollectionHandle {
+	#handle(collection: Collection, site: FileSite): FileCollectionJobHandle {
 		return Object.freeze({
 			list: async (owner: unknown, page: FileListPage = {}) => {
 				site.check()
@@ -279,8 +283,11 @@ export class FileCollections {
 			},
 			attach: async (owner: unknown, id: unknown) => {
 				site.check()
-				if (site.readOnly !== null) {
-					throw new QueryRefusedError('read_only', `${site.where}: files '${collection.name}' attach: ${site.readOnly}`)
+				if (!site.attaches) {
+					throw new QueryRefusedError(
+						'undeclared_reach',
+						`${site.where}: files '${collection.name}' attach runs only in a job's ctx.transaction((tx) => …), as tx.files`,
+					)
 				}
 				const grant = this.#ownerGrant(collection, site, owner, ['write'])
 				if (typeof id !== 'string') {
@@ -305,10 +312,14 @@ export class FileCollections {
 				&& [...grant.chain].every(([dimension, value]) => located.get(dimension) === value)
 		}
 		// Thrown, not answered: the transaction rolls back, and the claimed file stays held for a later attempt.
-		if (collection.artifact.maxPerOwner !== null && (await collection.table.countHeld(owner, session)) >= collection.artifact.maxPerOwner) {
+		const limit = collection.artifact.maxPerOwner
+		if ((await collection.table.adopt(owner, claimed, session, limit)) === 'limit') {
 			throw tooMany(collection)
 		}
-		await collection.table.adopt(owner, claimed, session)
+		// Counted again: an upload of a person may have passed its own count beside this one.
+		if (limit !== null && (await collection.table.countHeld(owner, session)) > limit) {
+			throw tooMany(collection)
+		}
 		return true
 	}
 
@@ -346,7 +357,8 @@ export class FileCollections {
 		const id = uuidv7()
 		const objectKey = `${name}/${id}`
 		await this.#formFiles.stage({ id, form, collection: name, objectKey, contentType: type, originalName: cleanName(part.filename ?? '') })
-		const body = digesting(stream, FORM_FILE_LIMITS.timeoutMs)
+		// The form's own deadline bounds the whole body, so the digest needs no timer of its own.
+		const body = digesting(stream, null)
 		try {
 			const { size } = await this.#store.write(objectKey, body.stream, { contentType: type, maxBytes: artifact.maxBytes })
 			return Object.freeze({ id, objectKey, size, sha256: body.digest() })
@@ -359,9 +371,6 @@ export class FileCollections {
 			await this.releaseFormFiles([{ id, objectKey }])
 			if (isNamed(error, 'ObjectTooLargeError')) {
 				throw tooLarge(collection)
-			}
-			if (body.timedOut()) {
-				throw new HttpError(408, 'timeout', `The submission did not arrive within ${FORM_FILE_LIMITS.timeoutMs / 1000} seconds`)
 			}
 			throw error
 		} finally {

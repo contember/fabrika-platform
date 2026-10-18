@@ -181,14 +181,15 @@ describe("a form's files in the approval diff", () => {
 		`\tfiles: { photos: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.delete', maxBytes: 4096, types: ['image/jpeg'], scan: true }) },`
 	const withFiles = (files: string): string => edited(HEALTH, `${HEALTH}\n${PHOTOS}`, FORM(`${CHALLENGED}${files}`))
 
-	test('a new file field widens and names its collection; a required one is shown; a removed one narrows', () => {
+	test('a new file field widens and names its collection; requiring it narrows; a removed one narrows', () => {
 		const plain = snapshot(withFiles(''), tables)
 		const taking = snapshot(withFiles(", files: { photo: { collection: 'photos' } }"), tables)
 		const requiring = snapshot(withFiles(", files: { photo: { collection: 'photos', required: true } }"), tables)
 		const added = classifyAccess(plain, taking)
 		expect(added.outcome).toBe('widening')
 		expect(added.changes).toContainEqual({ widens: true, line: 'Form `apply` takes a file `photo` from anyone into files `photos`' })
-		expect(classifyAccess(taking, requiring).changes).toContainEqual({ widens: true, line: 'Form `apply` requires its file `photo`' })
+		expect(classifyAccess(taking, requiring).changes).toContainEqual({ widens: false, line: 'Form `apply` requires its file `photo`' })
+		expect(classifyAccess(requiring, taking).changes).toContainEqual({ widens: true, line: 'Form `apply` no longer requires its file `photo`' })
 		expect(classifyAccess(taking, plain).changes).toContainEqual({
 			widens: false,
 			line: 'Form `apply` no longer takes a file `photo` into files `photos`',

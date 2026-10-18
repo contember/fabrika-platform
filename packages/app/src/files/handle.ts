@@ -62,12 +62,21 @@ export interface FileCollectionReader {
 }
 
 /** A site that writes also removes: a mutation, and a job inside `ctx.transaction`. */
-export interface FileCollectionHandle extends FileCollectionReader {
+export interface FileCollectionWriter extends FileCollectionReader {
 	/**
 	 * Marks every file of the owner removed, in this site's transaction, and answers how many; `owner` is a `Ref` for the
 	 * collection's `delete` action. The framework's sweep deletes their objects after the commit.
 	 */
 	removeAll(owner: Ref<string, string>): Promise<number>
+}
+
+/** A mutation's handle: it writes, and attaches nothing, since only the job that drains a form's inbox does. */
+export type FileCollectionHandle = FileCollectionWriter & {
+	readonly attach: Unavailable<"only a job attaches a form's file, inside ctx.transaction((tx) => …), as tx.files">
+}
+
+/** A job's transaction also attaches the files a form received: the job that drains the form's inbox. */
+export interface FileCollectionJobHandle extends FileCollectionWriter {
 	/**
 	 * Attaches the file a form received under `id` (the id its inbox column holds) to `owner`, a `Ref` for the
 	 * collection's `write` action, in this site's transaction: the one that wrote the owner, located with `tx.ref`. A

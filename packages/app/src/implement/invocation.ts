@@ -267,6 +267,7 @@ export class Invocation {
 			check: boundTo(this.#frame, () => transaction.ended, 'ctx.files'),
 			session: () => transaction.session(),
 			readOnly: kind === 'mutation' && !transaction.readOnly ? null : 'a query reads only; remove files in a mutation',
+			attaches: false,
 		}
 	}
 

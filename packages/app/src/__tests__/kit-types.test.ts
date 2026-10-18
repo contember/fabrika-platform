@@ -44,7 +44,8 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'31-job-links-without-issues.ts': "declare issues: '<link mount>' on this job to issue its share links",
 	'32-form-kicks-an-unknown-job.ts': "then names a job of the contract's jobs section",
 	// The compiler lists a union's members in no fixed order.
-	'33-form-field-that-is-no-inbox-column.ts': 'the inbox registrations has no column fullName: each input field is named like its column (columns: ',
+	'33-form-field-that-is-no-inbox-column.ts':
+		'the inbox registrations has no column fullName: each input and file field is named like its column (columns: ',
 	'34-unscoped-write-of-a-reference-table.ts':
 		"countries is a reference table, which no site writes: its rows come from a migration, so declare unscoped: { countries: 'read' }",
 	'35-unscoped-write-of-an-inbox.ts': "registrations is a form's inbox, which only its form writes: declare unscoped: { registrations: 'read' }",
@@ -65,7 +66,8 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'48-job-mail-without-mailer.ts': "declare mailer: 'installation' or 'own' on this job to send mail",
 	'49-mail-in-an-endpoint.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
 	'50-mail-in-a-webhook.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
-	'51-form-file-that-is-no-inbox-column.ts': 'the inbox registrations has no column selfie: each input field is named like its column (columns: ',
+	'51-form-file-that-is-no-inbox-column.ts':
+		'the inbox registrations has no column selfie: each input and file field is named like its column (columns: ',
 }
 
 /**

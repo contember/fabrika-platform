@@ -33,7 +33,15 @@ import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
-import { BROWSER_CONFIG_FILE, FORM_FILE_LIMITS, FORM_INPUT_PART, joinPath, PAGE_CALLER_FILE, WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
+import {
+	BROWSER_CONFIG_FILE,
+	FORM_FILE_LIMITS,
+	FORM_INPUT_PART,
+	FORM_MULTIPART_TYPE,
+	joinPath,
+	PAGE_CALLER_FILE,
+	WEBHOOK_BINDING_PARAMETER,
+} from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import {
 	BadRequestError,
@@ -48,7 +56,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
+import { abortedBody, bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
 import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -173,6 +181,10 @@ export type ServedEndpoint =
 export interface FormFileAdmission {
 	readonly fields: ReadonlyMap<string, FormFileArtifact>
 	readonly collections: FileCollections
+	/** The bytes all the form's files may write per hour; each file reserves its collection's `maxBytes` first. */
+	readonly bytesPerHour: number
+	/** How long the whole body may take to arrive. */
+	readonly timeoutMs: number
 }
 
 /** What a form admits, decided once at boot from the approved artifact and the application's variables. */
@@ -750,7 +762,8 @@ export class ContractRuntime {
 		if (!(await admissions.take(served.form, clientBucket(request), admission.perClient))) {
 			throw formRateLimited(served.row)
 		}
-		if (admission.files !== null) {
+		// A form with files whose every file is optional also takes the JSON body of a page that sends none.
+		if (admission.files !== null && mediaType(request.headers.get('Content-Type')) === FORM_MULTIPART_TYPE) {
 			return await this.#multipartForm(served, admission.files, request, exec)
 		}
 		const body = await readBoundedBody(request, maxBytesOf(served.row))
@@ -778,7 +791,7 @@ export class ContractRuntime {
 	 * is the input as JSON (within the form's `maxBytes`), so the input, the honeypot and the challenge are decided before
 	 * a byte of any file is read. Each file part then lands in its collection under a pending row of its own, owned by
 	 * nobody, and the inbox row that names each file's id makes them held in its own transaction. A submission that does
-	 * not commit deletes every file it received. The whole body arrives within `FORM_FILE_LIMITS.timeoutMs`.
+	 * not commit deletes every file it received. The whole body arrives within the form's `timeoutMs`.
 	 */
 	async #multipartForm(
 		served: Extract<ServedEndpoint, { kind: 'form' }>,
@@ -799,14 +812,18 @@ export class ContractRuntime {
 		if (Number.isFinite(declared) && declared > limit) {
 			throw new HttpError(413, 'too_large', `The body is larger than the ${limit} bytes the form's input and files can hold`)
 		}
-		const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(FORM_FILE_LIMITS.timeoutMs)])
+		const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(files.timeoutMs)])
 		const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: FORM_FILE_LIMITS.maxPartHeaderBytes })
 		const stop = () => {
 			parts.cancel().catch(() => {})
 		}
 		deadline.addEventListener('abort', stop, { once: true })
 		const received: ReceivedFormFile[] = []
-		let committed = false
+		/**
+		 * `kept` once the inbox row may have committed: an append that threw may have committed before its answer was
+		 * lost, so its files are left to the sweep, which deletes a pending row's object after an hour and never a held one.
+		 */
+		let kept = false
 		try {
 			const submission = await this.#multipartInput(served, parts)
 			if (submission.trapped) {
@@ -828,7 +845,7 @@ export class ContractRuntime {
 						`'${served.row.id}': a part is no file field of the form, a field arrives twice, or a file has no filename`,
 					)
 				}
-				const file = await files.collections.receiveFormFile(served.form, field.collection, part)
+				const file = await this.#receiveFormFile(served, files, field.collection, part)
 				if (file !== null) {
 					received.push(file)
 				}
@@ -845,16 +862,18 @@ export class ContractRuntime {
 				row[name] = id
 			}
 			const held = { files: received.map(({ id, size, sha256 }) => ({ id, size, sha256 })), holdMs: FORM_FILE_LIMITS.holdMs }
-			if (!(await this.#framework().appendToInbox(served.form, row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }, held))) {
+			kept = true
+			const appended = await this.#framework().appendToInbox(served.form, row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }, held)
+			if (!appended) {
+				kept = false
 				throw formRateLimited(served.row)
 			}
-			committed = true
 		} catch (error) {
 			throw multipartFailure(error, parts, deadline, request)
 		} finally {
 			deadline.removeEventListener('abort', stop)
 			await parts.cancel()
-			if (!committed) {
+			if (!kept) {
 				await files.collections.releaseFormFiles(received)
 			}
 		}
@@ -864,6 +883,28 @@ export class ContractRuntime {
 			exec?.waitUntil(kicked)
 		}
 		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	/**
+	 * One file of a submission, within the form's hourly byte budget: it reserves its collection's `maxBytes` before its
+	 * first byte is written (429 when they no longer fit) and gives back what it did not use. A file that failed keeps
+	 * its reservation: its bytes may have been written.
+	 */
+	async #receiveFormFile(
+		served: Extract<ServedEndpoint, { kind: 'form' }>,
+		files: FormFileAdmission,
+		collection: string,
+		part: { readonly filename: string | null; readonly contentType: string | null; readonly body: ReadableStream<Uint8Array> },
+	): Promise<ReceivedFormFile | null> {
+		const admissions = this.#framework().forms
+		const reserved = files.collections.maxBytesOf(collection)
+		if (!(await admissions.reserveBytes(served.form, reserved, files.bytesPerHour))) {
+			await part.body.cancel()
+			throw new HttpError(429, 'rate_limited', `'${served.row.id}' takes no more files this hour; try again later`)
+		}
+		const file = await files.collections.receiveFormFile(served.form, collection, part)
+		await admissions.releaseBytes(served.form, reserved - (file?.size ?? 0))
+		return file
 	}
 
 	/** The first part of a multipart form: its input, as JSON within the form's `maxBytes`, parsed strictly. */
@@ -1071,10 +1112,16 @@ function multipartFailure(error: unknown, parts: MultipartReader, deadline: Abor
 	if (isStructuralError(error) && error.httpStatus < 500) {
 		return error
 	}
-	if (deadline.aborted && !request.signal.aborted) {
-		return new HttpError(408, 'timeout', `The submission did not arrive within ${FORM_FILE_LIMITS.timeoutMs / 1000} seconds`)
+	if (request.signal.aborted) {
+		return abortedBody()
+	}
+	if (deadline.aborted) {
+		return new HttpError(408, 'timeout', 'The submission did not arrive in time')
 	}
 	const broken = error instanceof MultipartError ? error : parts.failure()
+	if (broken?.reason === 'interrupted') {
+		return abortedBody()
+	}
 	if (broken !== null) {
 		return new HttpError(400, 'multipart', `The body is not the multipart/form-data the form reads: ${broken.message}`)
 	}

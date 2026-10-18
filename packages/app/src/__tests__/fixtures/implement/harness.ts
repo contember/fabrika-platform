@@ -273,7 +273,8 @@ export function bootApp(app: ContractImplementation, options: Partial<BootOption
 			}
 			const headers = new Headers(request.headers)
 			headers.set(ENDPOINT_HEADER, header)
-			return runtime.fetch(new Request(request, { headers }), exec)
+			// Not `new Request(request, …)`, which buffers the body: the runtime meets it as a stream, as behind the proxy.
+			return runtime.fetch(new Request(request.url, { method: request.method, headers, body: request.body, signal: request.signal }), exec)
 		},
 		jobs: runtime.jobs,
 		stopKicks: runtime.stopKicks,

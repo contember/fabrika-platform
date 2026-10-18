@@ -12,6 +12,7 @@ export const JOB_KICKS_TABLE = 'fabrika_job_kicks'
 export const FORM_ADMISSIONS_TABLE = 'fabrika_form_admissions'
 export const FORM_CHALLENGES_TABLE = 'fabrika_form_challenges'
 export const FORM_FILES_TABLE = 'fabrika_form_files'
+export const FORM_BYTES_TABLE = 'fabrika_form_bytes'
 
 export interface FrameworkMigration {
 	/** Ordered by name; an applied one is immutable, like an application's. */
@@ -115,6 +116,18 @@ CREATE TABLE ${FORM_FILES_TABLE} (
 	held_until TIMESTAMPTZ
 );
 CREATE INDEX ${FORM_FILES_TABLE}_created_at ON ${FORM_FILES_TABLE} (created_at);
+`,
+	}),
+	Object.freeze({
+		name: '0006_form_bytes.sql',
+		sql: `-- The bytes a form's files may write per hour, shared by every instance: one row per form and hour, which the next
+-- reservation of a later hour prunes. A file reserves its collection's maxBytes before its object is written.
+CREATE TABLE ${FORM_BYTES_TABLE} (
+	form TEXT NOT NULL,
+	window_start TIMESTAMPTZ NOT NULL,
+	bytes BIGINT NOT NULL,
+	PRIMARY KEY (form, window_start)
+);
 `,
 	}),
 ])

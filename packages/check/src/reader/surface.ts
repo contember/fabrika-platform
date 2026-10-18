@@ -1048,14 +1048,19 @@ function importDeclaration(name: string, value: LiteralValue): ImportDeclaration
 }
 
 /** A form's `rate`, as `buildArtifact` reads it: per-minute counts, each optional. */
-function formRate(value: LiteralValue | undefined): { perClient?: number; perForm?: number } | undefined {
+function formRate(value: LiteralValue | undefined): { perClient?: number; perForm?: number; bytesPerHour?: number } | undefined {
 	if (value === undefined) {
 		return undefined
 	}
-	const fields = strictFields(value, 'rate', [], ['perClient', 'perForm'])
+	const fields = strictFields(value, 'rate', [], ['perClient', 'perForm', 'bytesPerHour'])
 	const perClient = optionalNumber(fields.get('perClient'), 'perClient')
 	const perForm = optionalNumber(fields.get('perForm'), 'perForm')
-	return { ...(perClient === undefined ? {} : { perClient }), ...(perForm === undefined ? {} : { perForm }) }
+	const bytesPerHour = optionalNumber(fields.get('bytesPerHour'), 'bytesPerHour')
+	return {
+		...(perClient === undefined ? {} : { perClient }),
+		...(perForm === undefined ? {} : { perForm }),
+		...(bytesPerHour === undefined ? {} : { bytesPerHour }),
+	}
 }
 
 /** A form's `files`: each file field's collection and whether a submission must carry it; `buildArtifact` checks them. */

@@ -6,9 +6,18 @@
 
 import { Buffer } from 'node:buffer'
 
-/** A body that is not the `multipart/form-data` a form reads. Its message names what is wrong, never a byte of it. */
+/**
+ * A body that is not the `multipart/form-data` a form reads (`malformed`), or one whose stream failed before its end
+ * (`interrupted`: the client closed the connection). Its message names what is wrong, never a byte of it.
+ */
 export class MultipartError extends Error {
 	override readonly name = 'MultipartError'
+	readonly reason: 'malformed' | 'interrupted'
+
+	constructor(message: string, reason: 'malformed' | 'interrupted' = 'malformed') {
+		super(message)
+		this.reason = reason
+	}
 }
 
 export interface MultipartPart {
@@ -170,11 +179,11 @@ export function multipartParts(body: ReadableStream<Uint8Array>, boundary: strin
 	let failed: MultipartError | null = null
 
 	/** A break of the format; once reading was cancelled, the end it meets is the cancellation's, not the sender's. */
-	const fail = (message: string): never => {
+	const fail = (message: string, reason: 'malformed' | 'interrupted' = 'malformed'): never => {
 		if (cancelled) {
 			throw new MultipartError('the body was not read to its end')
 		}
-		failed = new MultipartError(message)
+		failed = new MultipartError(message, reason)
 		throw failed
 	}
 
@@ -183,7 +192,13 @@ export function multipartParts(body: ReadableStream<Uint8Array>, boundary: strin
 		if (ended) {
 			return false
 		}
-		const next = await source.read()
+		let next: Awaited<ReturnType<typeof source.read>>
+		try {
+			next = await source.read()
+		} catch {
+			// A closed connection, or a body stream that failed: the sender's, never the application's.
+			return fail('the body could not be read to its end', 'interrupted')
+		}
 		if (next.done) {
 			ended = true
 			return false
@@ -221,6 +236,9 @@ export function multipartParts(body: ReadableStream<Uint8Array>, boundary: strin
 	async function headers(): Promise<PartHeaders> {
 		for (;;) {
 			const end = buffer.indexOf(HEADERS_END)
+			if (end > options.maxHeaderBytes || (end < 0 && buffer.byteLength > options.maxHeaderBytes)) {
+				return fail(`a part's headers are longer than ${options.maxHeaderBytes} bytes`)
+			}
 			if (end >= 0) {
 				const block = buffer.subarray(0, end)
 				buffer = buffer.subarray(end + HEADERS_END.byteLength)
@@ -229,9 +247,6 @@ export function multipartParts(body: ReadableStream<Uint8Array>, boundary: strin
 				} catch (error) {
 					return fail(error instanceof Error ? error.message : 'a part header is malformed')
 				}
-			}
-			if (buffer.byteLength > options.maxHeaderBytes) {
-				return fail(`a part's headers are longer than ${options.maxHeaderBytes} bytes`)
 			}
 			if (!(await fill())) {
 				return fail("the body ends inside a part's headers")

@@ -6,13 +6,26 @@ import { LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
 import { readBoundedBytes } from './bounded'
 
-/** The body as bytes, read until `maxBytes`; a longer one stops the read and is a 413. */
+/**
+ * The body as bytes, read until `maxBytes`; a longer one stops the read and is a 413. A body whose stream fails before
+ * its end (the client closed the connection) is the sender's 400 `aborted`, never a failure of the application.
+ */
 export async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> {
-	const body = await readBoundedBytes(request.body, { maxBytes, declaredLength: request.headers.get('Content-Length') })
+	let body: Uint8Array<ArrayBuffer> | null
+	try {
+		body = await readBoundedBytes(request.body, { maxBytes, declaredLength: request.headers.get('Content-Length') })
+	} catch {
+		throw abortedBody()
+	}
 	if (body === null) {
 		throw new HttpError(413, 'too_large', `The body is larger than ${maxBytes} bytes`)
 	}
 	return body
+}
+
+/** What a request answers whose body did not arrive whole: nobody reads it, and no failure is reported. */
+export function abortedBody(): HttpError {
+	return new HttpError(400, 'aborted', 'The body could not be read to its end')
 }
 
 /**

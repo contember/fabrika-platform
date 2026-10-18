@@ -5,6 +5,7 @@
 // admit or whose bytes lie, a part the form does not declare, and a page on an origin the environment does not list.
 // Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
+import { FORM_FILE_LIMITS } from '@fabrika/app/contract'
 import { type ChallengeFetch, FILE_SCAN_JOB, FILE_SWEEP_JOB, type FileScanner } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { applicationSchema, Database } from '@fabrika/db'
@@ -15,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { PHOTO_MAX_BYTES } from './fixtures/form-files/fabrika.contract'
 import { migration } from './fixtures/form-files/migration'
 import { signupApp } from './fixtures/form-files/src/app'
+import { bootApp, environment, frameworkEnvFor } from './fixtures/implement/harness'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -56,7 +58,7 @@ beforeEach(async () => {
 	for (const kit of kits.splice(0)) await kit.drain()
 	await admin((sql) =>
 		sql.unsafe(
-			`truncate ${schema}.fabrika_files_photos, ${schema}.fabrika_form_files, ${schema}.candidates, ${schema}.registrations, ${schema}.applications; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks; delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges`,
+			`truncate ${schema}.fabrika_files_photos, ${schema}.fabrika_form_files, ${schema}.candidates, ${schema}.registrations, ${schema}.applications, ${schema}.reattach_requests; delete from ${schema}.fabrika_form_bytes; delete from ${schema}.fabrika_job_leases; delete from ${schema}.fabrika_job_kicks; delete from ${schema}.fabrika_form_admissions; delete from ${schema}.fabrika_form_challenges`,
 		)
 	)
 })
@@ -201,6 +203,13 @@ describe.skipIf(!hasPostgres)('a form that takes files', () => {
 
 	test('an optional file left out writes null; a required one left out is refused and keeps nothing', async () => {
 		const { kit, store } = start()
+		// A page that does not send files yet posts JSON, as before the form took any.
+		const json = await submit(kit, '/register', JSON.stringify({ email: 'eva@example.com', name: 'Eva', challengeToken: 'token-json' }), {
+			'Content-Type': 'application/json',
+		})
+		expect(json).toMatchObject({ status: 200, body: { result: { received: true } } })
+		expect(await rows('registrations', 'email, photo')).toEqual([{ email: 'eva@example.com', photo: null }])
+		await admin((sql) => sql.unsafe(`truncate ${schema}.registrations`))
 		expect((await submit(kit, '/register', registration({ files: [] }))).status).toBe(200)
 		expect(await rows('registrations', 'photo')).toEqual([{ photo: null }])
 		// A file input the visitor left empty: an empty part without a file name.
@@ -240,7 +249,7 @@ describe.skipIf(!hasPostgres)('a form that takes files', () => {
 		expect(await rows('registrations')).toEqual([])
 		await kit.runJob(FILE_SWEEP_JOB)
 		expect((await rows('fabrika_form_files')).length).toBe(1)
-		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_form_files set held_until = now() - interval '1 second'`))
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_form_files set held_until = now() - interval '2 hours'`))
 		await kit.runJob(FILE_SWEEP_JOB)
 		expect(await rows('fabrika_form_files')).toEqual([])
 		expect([...store.objects.keys()]).toEqual([])
@@ -319,7 +328,8 @@ describe.skipIf(!hasPostgres)('an anonymous upload is refused', () => {
 		late.append('photo', photo, 'a.jpg')
 		late.append('input', JSON.stringify({ email: 'jana@example.com', name: 'Jana', challengeToken: 'token-late' }))
 		expect((await submit(kit, '/register', late)).status).toBe(400)
-		const json = await submit(kit, '/register', JSON.stringify({ email: 'jana@example.com', name: 'Jana', challengeToken: 't' }), {
+		// A form whose file is required takes no JSON body: the proxy admits only multipart there.
+		const json = await submit(kit, '/apply', JSON.stringify({ email: 'jana@example.com', challengeToken: 't' }), {
 			'Content-Type': 'application/json',
 		})
 		expect(json.status).toBe(400)
@@ -340,5 +350,215 @@ describe.skipIf(!hasPostgres)('an anonymous upload is refused', () => {
 			files: [['portrait', new Blob([JPEG], { type: 'image/jpeg' }), 'me.jpg']],
 		})
 		expect((await submit(kit, '/apply', apply, { Origin: WEB })).status).toBe(403)
+	})
+})
+
+const encoder = new TextEncoder()
+const BOUNDARY = 'xBoundary123'
+const MULTIPART = { 'Content-Type': `multipart/form-data; boundary=${BOUNDARY}` }
+
+function inputPart(input: Record<string, unknown>): string {
+	return `--${BOUNDARY}\r\nContent-Disposition: form-data; name="input"\r\n\r\n${JSON.stringify(input)}\r\n`
+}
+const PHOTO_HEAD = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="photo"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
+
+/** A body that sends `first`, then `then`: stalls for ever, fails as a closed connection does, or ends there. */
+function streamed(first: Uint8Array, then: 'stall' | 'fail' | 'end'): { readonly body: ReadableStream<Uint8Array>; pulledPast(): boolean } {
+	let sent = false
+	let past = false
+	const body = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (!sent) {
+				sent = true
+				controller.enqueue(first)
+				return
+			}
+			past = true
+			if (then === 'fail') {
+				controller.error(new DOMException('The connection was closed.', 'AbortError'))
+				return
+			}
+			if (then === 'end') {
+				controller.close()
+				return
+			}
+			return new Promise<void>(() => {})
+		},
+	})
+	return { body, pulledPast: () => past }
+}
+
+function withJpegHead(text: string, extra = 0): Uint8Array {
+	const head = encoder.encode(text)
+	const bytes = new Uint8Array(head.byteLength + 4 + extra)
+	bytes.set(head)
+	bytes.set([0xff, 0xd8, 0xff, 0xe0], head.byteLength)
+	return bytes
+}
+
+describe.skipIf(!hasPostgres)('a body as it streams', () => {
+	test('a failed challenge is answered before a byte of the file is read, the client still sending it', async () => {
+		const { kit, store } = start()
+		const sent = streamed(encoder.encode(inputPart({ email: 'a@example.com', name: 'A', challengeToken: 'bad-x' }) + PHOTO_HEAD), 'stall')
+		const answer = await Promise.race([
+			kit.fetch('/register', { method: 'POST', body: sent.body, headers: { Origin: kit.origin, ...MULTIPART } }),
+			Bun.sleep(3000).then(() => new Response('stalled', { status: 599 })),
+		])
+		expect(answer.status).toBe(400)
+		// Answered while the client stalls: the stall that follows the file's headers was never waited for.
+		expect(errorType(await answer.json())).toBe('challenge_failed')
+		await nothingKept(store)
+	})
+
+	test('a declared Content-Length past what the input and the files can hold is 413 unread', async () => {
+		const { kit, store } = start()
+		const sent = streamed(encoder.encode(inputPart({ email: 'a@example.com', name: 'A', challengeToken: 'token-long' })), 'stall')
+		const answer = await kit.fetch('/register', {
+			method: 'POST',
+			body: sent.body,
+			headers: { Origin: kit.origin, ...MULTIPART, 'Content-Length': String(PHOTO_MAX_BYTES * 100) },
+		})
+		expect(answer.status).toBe(413)
+		expect(sent.pulledPast()).toBe(false)
+		await nothingKept(store)
+	})
+
+	test("a body truncated inside a file, or one whose connection closed there, is the sender's 400 and keeps nothing", async () => {
+		const { kit, store } = start()
+		for (const [then, type] of [['end', 'multipart'], ['fail', 'aborted']] as const) {
+			const input = inputPart({ email: 'a@example.com', name: 'A', challengeToken: `token-${then}` })
+			const sent = streamed(withJpegHead(input + PHOTO_HEAD, 64), then)
+			const answer = await kit.fetch('/register', { method: 'POST', body: sent.body, headers: { Origin: kit.origin, ...MULTIPART } })
+			expect(answer.status).toBe(400)
+			expect(errorType(await answer.json())).toBe(type)
+		}
+		await nothingKept(store)
+	})
+
+	test("a JSON form's body whose connection closed is the sender's 400 too, never a failure of the application", async () => {
+		const { kit } = start()
+		const sent = streamed(encoder.encode('{"email":"a@example.com",'), 'fail')
+		const answer = await kit.fetch('/register', {
+			method: 'POST',
+			body: sent.body,
+			headers: { Origin: kit.origin, 'Content-Type': 'application/json' },
+		})
+		expect(answer.status).toBe(400)
+		expect(errorType(await answer.json())).toBe('aborted')
+	})
+
+	test("a body that does not arrive within the form's deadline is 408, and the file it began is deleted", async () => {
+		const database = Database.postgres({ url, schema, max: 2 })
+		opened.push(database)
+		const store = new MemoryFileObjects()
+		const app = signupApp()
+		const booted = bootApp(app, {
+			database,
+			files: store,
+			challengeFetch: siteverify,
+			environment: environment({ ...frameworkEnvFor(app), FABRIKA_IAM_APP_ID: 'signup@prod', TURNSTILE_SECRET: 'turnstile-secret' }),
+			formFileTimeoutMs: 300,
+		})
+		const input = inputPart({ email: 'a@example.com', name: 'A', challengeToken: 'token-slow' })
+		const sent = streamed(withJpegHead(input + PHOTO_HEAD, 64), 'stall')
+		const answer = await booted.fetch(
+			new Request('https://notes.test/register', { method: 'POST', body: sent.body, headers: { ...MULTIPART, 'Sec-Fetch-Site': 'same-origin' } }),
+		)
+		expect(answer.status).toBe(408)
+		await nothingKept(store)
+	})
+})
+
+describe.skipIf(!hasPostgres)("a form's limits", () => {
+	/** Every counter lives in one database minute; a test that started a second before it ends would see two. */
+	async function awayFromMinuteEdge(): Promise<void> {
+		const [row] = await admin((sql) => sql.unsafe('select extract(second from now())::float8 as second'))
+		const second = Number(row?.['second'])
+		if (second > 55) await Bun.sleep((61 - second) * 1000)
+	}
+
+	test(`takes ${FORM_FILE_LIMITS.perForm} submissions a minute by default; one past them is 429 and keeps nothing`, async () => {
+		const { kit, store } = start()
+		await awayFromMinuteEdge()
+		await admin((sql) =>
+			sql.unsafe(
+				`insert into ${schema}.fabrika_form_admissions (form, bucket, window_start, count) values ('register', 'accepted', date_trunc('minute', now()), $1)`,
+				[FORM_FILE_LIMITS.perForm],
+			)
+		)
+		const refused = await submit(kit, '/register', registration())
+		expect(refused.status).toBe(429)
+		await nothingKept(store)
+	}, 70_000)
+
+	test("a file reserves its collection's maxBytes of the hourly budget first, and keeps only what it wrote", async () => {
+		const { kit, store } = start()
+		expect((await submit(kit, '/register', registration())).status).toBe(200)
+		expect(await rows('fabrika_form_bytes', 'form, bytes')).toEqual([{ form: 'register', bytes: String(JPEG.byteLength) }])
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_form_bytes set bytes = $1`, [FORM_FILE_LIMITS.bytesPerHour - PHOTO_MAX_BYTES + 1]))
+		const refused = await submit(kit, '/register', registration({ input: { email: 'eva@example.com', name: 'Eva', challengeToken: 'token-budget' } }))
+		expect(refused.status).toBe(429)
+		expect(await rows('registrations', 'email')).toEqual([{ email: 'jana@example.com' }])
+		expect([...store.objects.keys()].length).toBe(1)
+	})
+
+	test('a submission whose inbox row fails leaves its file pending, and the sweep deletes it an hour later', async () => {
+		const { kit, store } = start()
+		await admin((sql) => sql.unsafe(`alter table ${schema}.registrations add constraint no_failing_name check (name <> 'fail')`))
+		try {
+			const failed = await submit(kit, '/register', registration({ input: { email: 'f@example.com', name: 'fail', challengeToken: 'token-fail' } }))
+			expect(failed.status).toBe(500)
+		} finally {
+			await admin((sql) => sql.unsafe(`alter table ${schema}.registrations drop constraint no_failing_name`))
+		}
+		expect(await rows('registrations')).toEqual([])
+		expect(await rows('fabrika_form_files', 'status')).toEqual([{ status: 'pending' }])
+		await kit.runJob(FILE_SWEEP_JOB)
+		expect((await rows('fabrika_form_files')).length).toBe(1)
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_form_files set created_at = now() - interval '2 hours'`))
+		await kit.runJob(FILE_SWEEP_JOB)
+		await nothingKept(store)
+	})
+})
+
+describe.skipIf(!hasPostgres)('attach', () => {
+	const known = (email: string) =>
+		admin((sql) =>
+			sql.unsafe(`insert into ${schema}.candidates (id, email, name, created_by, version) values ($1, $2, 'Known', 'user-1', 1)`, [
+				Bun.randomUUIDv7(),
+				email,
+			])
+		)
+
+	test('answers true again for the file the same owner attached before', async () => {
+		const { kit } = start()
+		expect((await submit(kit, '/register', registration())).status).toBe(200)
+		const [{ photo } = { photo: null }] = await rows('registrations', 'photo::text as photo')
+		await kit.runJob('intake')
+		await admin((sql) => sql.unsafe(`insert into ${schema}.reattach_requests (email, photo) values ('jana@example.com', $1)`, [photo]))
+		await kit.runJob('reattach')
+		expect(await rows('reattach_requests', 'outcome')).toEqual([{ outcome: 'true' }])
+		expect((await rows('fabrika_files_photos')).length).toBe(1)
+	})
+
+	test('past maxPerOwner rolls the transaction back, and the file stays held for a later attempt', async () => {
+		const { kit } = start()
+		await known('known@example.com')
+		for (const token of ['token-p1', 'token-p2', 'token-p3']) {
+			const input = { email: 'known@example.com', name: 'Known', challengeToken: token }
+			expect((await submit(kit, '/register', registration({ input }))).status).toBe(200)
+		}
+		const photos = (await rows('registrations order by received_at', 'photo::text as photo')).map((row) => row['photo'])
+		// A known address: the intake job attaches none of them.
+		await kit.runJob('intake')
+		for (const photo of photos) {
+			await admin((sql) =>
+				sql.unsafe(`insert into ${schema}.reattach_requests (id, email, photo) values ($1, 'known@example.com', $2)`, [Bun.randomUUIDv7(), photo])
+			)
+		}
+		await kit.runJob('reattach')
+		expect((await rows('reattach_requests order by id', 'outcome')).map((row) => row['outcome'])).toEqual(['true', 'true', 'refused'])
+		expect((await rows('fabrika_files_photos')).length).toBe(2)
+		expect(await rows('fabrika_form_files', 'id::text as id, status')).toEqual([{ id: photos[2], status: 'held' }])
 	})
 })

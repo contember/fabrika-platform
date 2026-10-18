@@ -6,7 +6,7 @@
 
 import { runFixedStatement, type Session, sessionOf } from './database'
 import { QueryRefusedError } from './errors'
-import { FORM_ADMISSIONS_TABLE, FORM_CHALLENGES_TABLE } from './migrations'
+import { FORM_ADMISSIONS_TABLE, FORM_BYTES_TABLE, FORM_CHALLENGES_TABLE } from './migrations'
 import type { DataLayerRuntime } from './store'
 
 /** The bucket of `fabrika_form_admissions` an inbox append takes from, in the append's own transaction. */
@@ -26,6 +26,13 @@ export interface FormAdmissions {
 	 * recorded and has not expired, which makes the token's second use a replay.
 	 */
 	recordChallenge(form: string, tokenDigest: string, retainMs: number): Promise<boolean>
+	/**
+	 * Reserves `bytes` of `form`'s hourly byte budget `limit`, in the database's current hour; `false`, with nothing
+	 * taken, when they no longer fit. The check and the counter are one statement.
+	 */
+	reserveBytes(form: string, bytes: number, limit: number): Promise<boolean>
+	/** Gives back `bytes` of a reservation of the current hour that a written file did not need. */
+	releaseBytes(form: string, bytes: number): Promise<void>
 }
 
 const A = FORM_ADMISSIONS_TABLE
@@ -45,6 +52,21 @@ const SQL_TAKE = `with pruned as (
 insert into ${A} (form, bucket, window_start, count) values ($1, $2, date_trunc('minute', now()), 1)
 on conflict (form, bucket, window_start) do update set count = ${A}.count + 1 where ${A}.count < $3::int
 returning count`
+
+const B = FORM_BYTES_TABLE
+
+const SQL_RESERVE_BYTES = `with pruned as (
+	delete from ${B} where (form, window_start) in (
+		select form, window_start from ${B} where window_start < date_trunc('hour', now())
+		limit ${PRUNE_BATCH} for update skip locked
+	)
+)
+insert into ${B} (form, window_start, bytes) select $1, date_trunc('hour', now()), $2::bigint where $2::bigint <= $3::bigint
+on conflict (form, window_start) do update set bytes = ${B}.bytes + excluded.bytes where ${B}.bytes + excluded.bytes <= $3::bigint
+returning bytes`
+
+const SQL_RELEASE_BYTES = `update ${B} set bytes = greatest(bytes - $2::bigint, 0)
+where form = $1 and window_start = date_trunc('hour', now()) returning bytes`
 
 const SQL_RECORD_CHALLENGE = `with pruned as (
 	delete from ${C} where (form, token_digest) in (
@@ -77,6 +99,21 @@ export function formAdmissions(runtime: () => DataLayerRuntime): FormAdmissions 
 		async recordChallenge(form: string, tokenDigest: string, retainMs: number): Promise<boolean> {
 			const rows = await runFixedStatement(session(), SQL_RECORD_CHALLENGE, [form, tokenDigest, positiveInteger(retainMs, 'a retention')])
 			return rows.length > 0
+		},
+
+		async reserveBytes(form: string, bytes: number, limit: number): Promise<boolean> {
+			const rows = await runFixedStatement(session(), SQL_RESERVE_BYTES, [
+				form,
+				positiveInteger(bytes, 'a reservation'),
+				positiveInteger(limit, 'a byte budget'),
+			])
+			return rows.length > 0
+		},
+
+		async releaseBytes(form: string, bytes: number): Promise<void> {
+			if (bytes > 0) {
+				await runFixedStatement(session(), SQL_RELEASE_BYTES, [form, positiveInteger(bytes, 'a release')])
+			}
 		},
 	})
 }

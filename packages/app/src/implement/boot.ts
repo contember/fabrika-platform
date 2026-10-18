@@ -41,7 +41,7 @@ import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { exportBase, FORM_CHALLENGE_FIELD, FORM_LIMITS, spaPrefixRowId } from '../contract/defaults'
+import { exportBase, FORM_CHALLENGE_FIELD, FORM_FILE_LIMITS, FORM_LIMITS, spaPrefixRowId } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
@@ -126,6 +126,8 @@ export interface BootOptions {
 	 * Turnstile's always-passing test widget hands out for every submission. Every other token stays single use.
 	 */
 	readonly repeatableChallengeToken?: string
+	/** How long a form's multipart body may take to arrive; `FORM_FILE_LIMITS.timeoutMs` unless a framework test shortens it. */
+	readonly formFileTimeoutMs?: number
 	/**
 	 * The developer's own machine only (`fabrika app dev`): what a job's handler threw, which every log of a deployed
 	 * application withholds because it may carry a credential.
@@ -569,9 +571,15 @@ function formAdmission(
 	}
 	return Object.freeze({
 		perClient: mount.rate?.perClient ?? FORM_LIMITS.perClient,
-		perForm: mount.rate?.perForm ?? FORM_LIMITS.perForm,
+		// A form with files accepts fewer submissions by default: each may write its collections' maxBytes.
+		perForm: mount.rate?.perForm ?? (fileFields.size === 0 ? FORM_LIMITS.perForm : FORM_FILE_LIMITS.perForm),
 		fields: Object.freeze(submissionFieldsOf(mount)),
-		files: fileFields.size === 0 || files === null ? null : { fields: fileFields, collections: files },
+		files: fileFields.size === 0 || files === null ? null : {
+			fields: fileFields,
+			collections: files,
+			bytesPerHour: mount.rate?.bytesPerHour ?? FORM_FILE_LIMITS.bytesPerHour,
+			timeoutMs: options.formFileTimeoutMs ?? FORM_FILE_LIMITS.timeoutMs,
+		},
 		challenge,
 		repeatableToken: challenge === null ? null : (options.repeatableChallengeToken ?? null),
 	})

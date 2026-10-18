@@ -348,6 +348,12 @@ export interface FormMountArtifact {
 	readonly files?: Readonly<Record<string, FormFileArtifact>>
 }
 
+/**
+ * The media type of a form that takes files. A browser sends it from any page without a CORS preflight, so the proxy
+ * refuses such a form's request from an origin its row does not admit (ADR-0061).
+ */
+export const FORM_MULTIPART_TYPE = 'multipart/form-data'
+
 /** One file field of a form: the collection the file lands in, and whether a submission must carry it. */
 export interface FormFileArtifact {
 	readonly collection: string
@@ -357,6 +363,8 @@ export interface FormFileArtifact {
 export interface FormRate {
 	readonly perClient?: number
 	readonly perForm?: number
+	/** The bytes a form that takes files may write per hour, all its submissions together. */
+	readonly bytesPerHour?: number
 }
 
 /** The closed list of challenge providers; each one's verification endpoint and browser origins are fixed. */

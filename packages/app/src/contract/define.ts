@@ -326,7 +326,8 @@ export type FormOptions<I, T> =
 		readonly input: I & NotLoose<I>
 		readonly appendTo: string
 		readonly maxBytes?: number
-		readonly rate?: { readonly perClient?: number; readonly perForm?: number }
+		/** Per minute; `bytesPerHour` only on a form with files, the bytes all its submissions write per hour. */
+		readonly rate?: { readonly perClient?: number; readonly perForm?: number; readonly bytesPerHour?: number }
 		readonly honeypot?: string
 		readonly challenge?: FormChallengeOption
 		/** The cron job each accepted submission kicks, in the background of the constant answer. */

@@ -228,8 +228,11 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly input: S
 	readonly appendTo: string
 	readonly maxBytes?: number
-	/** Submissions per minute from one client and accepted in all; `FORM_LIMITS` holds the defaults. */
-	readonly rate?: { readonly perClient?: number; readonly perForm?: number }
+	/**
+	 * Submissions per minute from one client and accepted in all, and the bytes a form with files writes per hour;
+	 * `FORM_LIMITS` and `FORM_FILE_LIMITS` hold the defaults.
+	 */
+	readonly rate?: { readonly perClient?: number; readonly perForm?: number; readonly bytesPerHour?: number }
 	/** An input field that must stay empty. */
 	readonly honeypot?: string
 	/**

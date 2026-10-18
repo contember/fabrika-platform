@@ -191,7 +191,20 @@ function builtAssets(root: string): SpaAssets {
 }
 
 function toRequest(origin: string, input: RequestInfo | URL, init: RequestInit | undefined): Request {
-	return input instanceof Request ? new Request(input, init) : new Request(new URL(input, origin), init)
+	if (!(input instanceof Request)) {
+		return new Request(new URL(input, origin), init)
+	}
+	// Never `new Request(request, …)`: Bun would buffer the body the application must meet as a stream.
+	const base = { method: input.method, headers: input.headers, body: input.body, signal: input.signal, redirect: input.redirect }
+	return init === undefined ? input : new Request(input.url, { ...base, ...init })
+}
+
+/**
+ * `request` with `headers`, its body passed on as the stream it is: `new Request(request, { headers })` would have Bun
+ * buffer the body, and the application must meet a body as it streams, as it does behind the proxy.
+ */
+function withHeaders(request: Request, headers: Headers): Request {
+	return new Request(request.url, { method: request.method, headers, body: request.body, signal: request.signal, redirect: request.redirect })
 }
 
 /** Every header only the proxy may assert, deleted before the decision as Caddy and the proxy Worker delete them. */
@@ -559,7 +572,7 @@ export function bootTestKit<C extends AnyContract>(
 		for (const [header, value] of outcome.asserted) {
 			headers.set(header, value)
 		}
-		const answer = await application.fetch(new Request(request, { headers }), exec)
+		const answer = await application.fetch(withHeaders(request, headers), exec)
 		const decorated = new Headers(answer.headers)
 		outcome.decorate(decorated)
 		return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers: decorated })
@@ -584,7 +597,7 @@ export function bootTestKit<C extends AnyContract>(
 				const cookies = headers.get('Cookie')
 				headers.set('Cookie', cookies === null || cookies === '' ? caller.cookie : `${cookies}; ${caller.cookie}`)
 			}
-			return kitFetch(new Request(request, { headers }))
+			return kitFetch(withHeaders(request, headers))
 		}
 	}
 

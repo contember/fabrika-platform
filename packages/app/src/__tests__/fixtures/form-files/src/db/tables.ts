@@ -12,4 +12,10 @@ export const tables = defineTables(vocabulary, columns)({
 	},
 	registrations: { scope: { inbox: 'register', read: 'candidates.process' } },
 	applications: { scope: { inbox: 'apply', read: 'candidates.process' } },
+	reattach_requests: {
+		scope: { app: 'the photos a test asks the reattach job to attach to a known candidate' },
+		actions: { read: 'candidates.process', insert: 'candidates.process', update: 'candidates.process' },
+		insert: ['email', 'photo'],
+		update: ['outcome'],
+	},
 })

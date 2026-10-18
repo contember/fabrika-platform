@@ -193,7 +193,7 @@ type InboxTarget<Ix extends AnyDbIndex, T, Fields, H, Ch> = unknown extends OneN
 	: OneName<T, LiteralInbox>
 
 type ExtraFields<T extends string, Extra extends string, Columns extends string> = [Extra] extends [never] ? unknown
-	: Unavailable<`the inbox ${T} has no column ${ListOf<Extra>}: each input field is named like its column (columns: ${ListOf<Columns>})`>
+	: Unavailable<`the inbox ${T} has no column ${ListOf<Extra>}: each input and file field is named like its column (columns: ${ListOf<Columns>})`>
 
 /** The challenge token's field, exempt from the inbox's columns where the form declares a challenge. */
 type ChallengeField<Ch> = [Ch] extends [never] ? never : typeof FORM_CHALLENGE_FIELD

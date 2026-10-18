@@ -69,20 +69,27 @@ export interface FormFiles {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-/** Removable: held past its hold, or pending for longer than the grace in parameter `$<grace>`. */
+/**
+ * Removable: held for an hour past its hold, or pending for longer than the grace in parameter `$<grace>`. The hour
+ * keeps the sweep off a file a job's transaction, which started before the hold ended, may still claim.
+ */
 const removable = (grace: number): string =>
-	`(status = 'pending' and created_at < now() - $${grace}::bigint * interval '1 millisecond') or (status = 'held' and held_until <= now())`
+	`(status = 'pending' and created_at < now() - $${grace}::bigint * interval '1 millisecond')
+	or (status = 'held' and held_until <= now() - interval '1 hour')`
 
 const SQL_STAGE = `insert into ${F} (id, form, collection, status, object_key, content_type, original_name, created_at)
 values ($1::uuid, $2, $3, 'pending', $4, $5, $6, now()) returning id`
 
 const SQL_ABANDON = `delete from ${F} where id = $1::uuid and status = 'pending' returning id`
 
-const SQL_HOLD = `update ${F} set status = 'held', size = $2::bigint, sha256 = $3,
+/** Every file of a submission at once: ids, sizes and digests as comma-separated lists, in the same order. */
+const SQL_HOLD = `update ${F} as f set status = 'held', size = v.size, sha256 = v.sha256,
 	held_until = now() + $4::bigint * interval '1 millisecond'
-where id = $1::uuid and status = 'pending' returning id`
+from unnest(string_to_array($1, ',')::uuid[], string_to_array($2, ',')::bigint[], string_to_array($3, ',')) as v (id, size, sha256)
+where f.id = v.id and f.status = 'pending' returning f.id`
 
-const SQL_CLAIM = `delete from ${F} where id = $1::uuid and collection = $2 and status = 'held' and held_until > now()
+// The clock of the statement, not of the transaction: a job's transaction may have started before the hold ended.
+const SQL_CLAIM = `delete from ${F} where id = $1::uuid and collection = $2 and status = 'held' and held_until > clock_timestamp()
 returning id::text as id, object_key, size, sha256, content_type, original_name, created_at`
 
 const SQL_REMOVABLE = `select id::text as id, object_key from ${F} where ${removable(1)} order by created_at limit $2::int`
@@ -99,6 +106,13 @@ function positive(value: number, what: string): number {
 function nonNegative(value: number, what: string): number {
 	if (!Number.isSafeInteger(value) || value < 0) {
 		throw new QueryRefusedError('invalid_argument', `${what} must be a whole number`)
+	}
+	return value
+}
+
+function sha256(value: string): string {
+	if (!/^[0-9a-f]{64}$/.test(value)) {
+		throw new QueryRefusedError('invalid_argument', 'a form file is recorded with the hex SHA-256 of its bytes')
 	}
 	return value
 }
@@ -139,13 +153,18 @@ function size(row: Readonly<Record<string, unknown>>): number {
  * not commit leaves its files pending for the form to clean up. A file that is no longer pending fails the transaction.
  */
 export async function holdFormFiles(session: Session, held: HeldFormFiles): Promise<void> {
-	const holdMs = positive(held.holdMs, 'a form file hold')
-	for (const file of held.files) {
-		const parameters: FixedParameter[] = [uuid(file.id), nonNegative(file.size, 'a form file size'), file.sha256, holdMs]
-		const rows = await runFixedStatement(session, SQL_HOLD, parameters)
-		if (rows.length !== 1) {
-			throw new QueryRefusedError('unexpected_row', `the form file ${file.id} is no longer pending; the submission writes nothing`)
-		}
+	if (held.files.length === 0) {
+		return
+	}
+	const parameters: FixedParameter[] = [
+		held.files.map((file) => uuid(file.id)).join(','),
+		held.files.map((file) => nonNegative(file.size, 'a form file size')).join(','),
+		held.files.map((file) => sha256(file.sha256)).join(','),
+		positive(held.holdMs, 'a form file hold'),
+	]
+	const rows = await runFixedStatement(session, SQL_HOLD, parameters)
+	if (rows.length !== held.files.length) {
+		throw new QueryRefusedError('unexpected_row', 'a form file is no longer pending; the submission writes nothing')
 	}
 }
 
