@@ -736,9 +736,11 @@ if (postgres !== null) {
 ```
 
 - `web/__tests__/dom.ts` comes first: imports run in order, and React reads `window` when it loads. `installDom` keeps
-  Bun's `fetch`, `AbortController`, `URL`, `Blob`, `File` and `FormData`, because the clients, the kit, a form's
-  challenge and a download run on them, and turns navigation off, so a download's link click leaves the page for the
-  next test. Run the tests with `bun test --isolate`, which gives each file its own globals.
+  Bun's `fetch`, `AbortController`, `URL`, `Blob`, `File`, `FormData` and its `ReadableStream`, `WritableStream` and
+  `TransformStream`, because the clients, the kit, a form's challenge, a form's file and a download run on them, and
+  turns navigation off, so a download's link click leaves the page for the next test. A DOM registration of your own
+  keeps the same classes of Bun, or a form with a file fails in the kit. Run the tests with `bun test --isolate`, which
+  gives each file its own globals.
 - `await type('Title', 'report')` types into the control whose label (or `aria-label`) is `Title` as React reads a
   person typing; a select takes the option's value. `controlByLabel(label)` answers the control, and
   `waitForText(text)` waits until the page shows it.
