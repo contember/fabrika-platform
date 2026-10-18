@@ -65,6 +65,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'48-job-mail-without-mailer.ts': "declare mailer: 'installation' or 'own' on this job to send mail",
 	'49-mail-in-an-endpoint.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
 	'50-mail-in-a-webhook.ts': 'an endpoint sends no mail: write an outbox row and kick a job that declares mailer',
+	'51-form-file-that-is-no-inbox-column.ts': 'the inbox registrations has no column selfie: each input field is named like its column (columns: ',
 }
 
 /**

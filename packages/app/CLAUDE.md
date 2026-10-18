@@ -45,6 +45,8 @@ bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimensio
 bun test src/__tests__/form-admission.test.ts   # a form's shared buckets, honeypot and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/form-challenge.test.ts   # the client key and the Turnstile verification, no database
 bun test src/__tests__/form-kick.test.ts        # a form's then: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/form-files.test.ts       # a form's files: the multipart wire, held until the job attaches, scan, sweep, every refusal (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/multipart.test.ts        # the streaming multipart reader a form with files reads its body through, no database
 bun test src/__tests__/mutation-kick.test.ts    # a mutation's then: a run after the commit, nothing on a refusal, stopKicks (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-mail.test.ts         # ctx.mail: the kit's stand-in, prefixed keys, the installation's and the own transport, an installation without mail, fail-closed boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
@@ -149,6 +151,7 @@ src/
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
     anonymous.ts      the bounded body read, the share bootstrap, GitHub's signature
     form-admission.ts a form's client bucket (`X-Fabrika-Client-Ip` only) and what its submission carries beside the row
+    multipart.ts      the `multipart/form-data` reader of a form with files: part by part as the body streams, strict
     challenge.ts      a form's challenge: Turnstile's siteverify under a deadline, strictly read
     webhook.ts        the generated binding endpoints and a delivery's principal
     faults.ts         ServerFault: a framework failure whose message only the log sees
@@ -648,6 +651,18 @@ vocabulary (`packages/db/CLAUDE.md`).
   kick (`BoundJobs.kick`) goes to the request's `waitUntil` or runs detached, never rejects, and starts nothing for a
   refused, honeypotted or challenge-failed submission. The kicked run is the job's own (its key, its lease, its
   retries), never the request's. Never await the kick, and never give it a payload: the job reads its inbox.
+- **A form with files reads its multipart body as it streams, its input first** (`#multipartForm`, ADR-0061): the
+  client bucket, then the `input` part (JSON within `maxBytes`), the honeypot and the challenge, all before a byte of a
+  file is read; then each file part, sniffed and written by `FileCollections.receiveFormFile` under a `pending` row of
+  `fabrika_form_files`; then the inbox row and every file's `held` state in the accepted bucket's transaction. A
+  submission that does not commit deletes what it wrote (`releaseFormFiles`). Never buffer a part but the input, never
+  read a file before the challenge, and never let a form with files boot without a challenge or with a collection
+  that does not scan. The proxy refuses such a form's request from an origin its row does not admit; the framework
+  cannot repeat it.
+- **A form's file reaches an owner only through `attach`** (`files/collections.ts`): in the site's transaction, with a
+  `Ref` of the owner for the collection's `write` action (a job's `tx.ref`, which locates in that transaction), it
+  claims the held row and inserts the file under the owner, `quarantined` in a scanning collection. Never serve, list
+  or open a held file, and never move one that another owner already holds.
 - **A form's challenge is verified before its row and recorded after it passed** (`challenge.ts`). The provider
   list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`, which `buildArtifact` adds to
   `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the body (`CHALLENGE_LIMITS`),

@@ -20,6 +20,7 @@ export {
 } from './errors'
 export { fileTableName } from './file-table-sql'
 export type {
+	AdoptedFile,
 	FileCollectionSpec,
 	FileCollectionTable,
 	FilePage,
@@ -32,6 +33,7 @@ export type {
 	StoredFile,
 } from './file-tables'
 export type { FormAdmissions, InboxQuota } from './form-admissions'
+export type { ClaimedFormFile, FormFiles, HeldFormFiles, RemovableFormFile, StagedFormFile, WrittenFormFile } from './form-files'
 export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { DataAccess, DataHandles, DataSite } from './orm'

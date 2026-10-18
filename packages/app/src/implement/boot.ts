@@ -45,7 +45,7 @@ import { exportBase, FORM_CHALLENGE_FIELD, FORM_LIMITS, spaPrefixRowId } from '.
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import type { RequestExecutionContext } from '../fetch'
-import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, fileCollections } from '../files/collections'
+import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, type FileCollections, fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
@@ -518,7 +518,8 @@ function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTable
 			const fields = (input?.type === 'object' ? Object.keys(input.fields) : []).filter((field) =>
 				field !== submitted.honeypot && !(submitted.challenge && field === FORM_CHALLENGE_FIELD)
 			)
-			problems.push(...framework.inboxProblems(name, fields))
+			// A file field's column receives the id of the file the submission carried.
+			problems.push(...framework.inboxProblems(name, [...fields, ...Object.keys(mount.files ?? {})]))
 		}
 	}
 }
@@ -535,10 +536,25 @@ function submissionFieldsOf(mount: FormMountArtifact): SubmissionFields {
  * A form's admission from its approved mount: the declared rate or the defaults, and a challenge verified with the
  * secret the application variable it names holds. Without that variable the application does not boot.
  */
-function formAdmission(name: string, artifact: ContractArtifact, options: BootOptions, problems: string[]): FormAdmission | null {
+function formAdmission(
+	name: string,
+	artifact: ContractArtifact,
+	options: BootOptions,
+	files: FileCollections | null,
+	problems: string[],
+): FormAdmission | null {
 	const mount = artifact.mounts[name]
 	if (mount?.kind !== 'form') {
 		return null
+	}
+	const fileFields = new Map(Object.entries(mount.files ?? {}))
+	for (const [field, file] of fileFields) {
+		if (files === null || !files.has(file.collection)) {
+			problems.push(`form '${name}' takes its file '${field}' into files '${file.collection}', which this runtime does not serve`)
+		}
+	}
+	if (fileFields.size > 0 && mount.challenge === undefined) {
+		problems.push(`form '${name}' takes files and declares no challenge; an anonymous upload needs a solved one`)
 	}
 	let challenge: ChallengeVerifier | null = null
 	if (mount.challenge !== undefined) {
@@ -555,6 +571,7 @@ function formAdmission(name: string, artifact: ContractArtifact, options: BootOp
 		perClient: mount.rate?.perClient ?? FORM_LIMITS.perClient,
 		perForm: mount.rate?.perForm ?? FORM_LIMITS.perForm,
 		fields: Object.freeze(submissionFieldsOf(mount)),
+		files: fileFields.size === 0 || files === null ? null : { fields: fileFields, collections: files },
 		challenge,
 		repeatableToken: challenge === null ? null : (options.repeatableChallengeToken ?? null),
 	})
@@ -719,7 +736,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			}
 		} else if (mount.kind === 'form') {
 			const row = rows.get(name)
-			const admission = formAdmission(name, artifact, options, problems)
+			const admission = formAdmission(name, artifact, options, files, problems)
 			const approved = artifact.mounts[name]
 			const then = approved?.kind === 'form' ? (approved.then ?? null) : null
 			if (row !== undefined && admission !== null) {

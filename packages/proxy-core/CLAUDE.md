@@ -103,7 +103,9 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   `preflightHeaders` and `PREFLIGHT_HEADER`, which both compositions return as the whole answer without dialling the
   app; anything else is 403 (`cross_origin`, or `no_endpoint`). An installation entry's `OPTIONS` is an ordinary
   request. On any other request `admittedOrigin` gives the allow's `crossOrigin` (copied by the composition onto the
-  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A listed origin's request is never
+  app's answer with `applyCrossOriginHeaders`) and a denial's (set on it directly). A form row that admits `multipart/form-data` (a form that takes
+  files, ADR-0061) refuses a request whose `Origin` is neither the entry's own (`<scheme>://<host>`) nor admitted
+  (`admitFormOrigin`, 403 `cross_origin`): a browser sends that type without a preflight. A listed origin's request is never
   session-authenticated: without `Authorization` it is 401 `no_credential`, never a bounce. No answer carries
   `Access-Control-Allow-Credentials`.
 - **A workload key opens no `machine` row.** The caller `machine` admits only a `service` key: a key whose token has

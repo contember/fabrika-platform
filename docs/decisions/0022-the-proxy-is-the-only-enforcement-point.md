@@ -249,8 +249,9 @@ not describe its rules. Array order has no meaning. The proxy makes one pass ove
 of a link SPA, and a public SPA, `c.spa` with `access: { public: true }`) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
 It does not forward a `px_` key or a session that arrives on such a request; only an installation
 entry's `protocol` row keeps the `Authorization` header (below). Admission still applies:
-a form admits only its content type. Its body limit is the framework's, because `forward_auth` hands
-the proxy the headers and never the body. A webhook's signature is verified by the framework, not by
+a form admits only its content type, and a form that takes files also refuses a browser's request from an origin
+its row does not admit ("Cross-origin endpoints", item 5). Its body limit is the framework's, because `forward_auth`
+hands the proxy the headers and never the body. A webhook's signature is verified by the framework, not by
 the proxy.
 
 **Cross-origin endpoints.** Applications are isolated from each other by their own hosts, host-only cookies and
@@ -300,6 +301,12 @@ The proxy then decides, in the same pass as every other request of a contract ap
    and the framework does the same in-process. On Zerops the auth service tells Caddy which origin to admit, and
    Caddy writes the preflight's `204` and the decoration from that answer; Caddy's configuration names no origin and
    decides nothing.
+5. **A multipart form refuses an origin it does not admit at the request.** A form that takes files
+   ([ADR-0061](0061-a-form-takes-files-beside-its-input.md)) admits `multipart/form-data`, which a browser sends from
+   any page without a preflight. On such a row a request whose `Origin` is neither the application's own
+   (`<scheme>://<host>` of the entry) nor admitted by the row is 403 `cross_origin`, before it reaches the application:
+   what the preflight refuses for a JSON form. A request without `Origin` passes, as a script's JSON request does. The
+   application does not repeat the check; it does not know the environment's origins.
 
 Operations' error ingest keeps its own `Access-Control-Allow-Origin: *` on preflight-free simple requests: it is an
 installation service's `protocol` row, which authenticates itself, and an installation entry has no cross-origin

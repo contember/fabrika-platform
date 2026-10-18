@@ -325,6 +325,28 @@ CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_a
   for something else (a one-click answer): a mount the list does not name has no file route and need not grant
   the collection's actions. Its holder gets 403 from the proxy, which finds no endpoint for the path.
 
+## A file with a public form
+
+A visitor without an account reaches no collection endpoint. A form takes the file with its submission instead
+(`references/public-intake.md` builds it): `files: { photo: { collection: 'photos' } }` on `c.form`, into a collection
+with `scan: true`, beside a challenge. The file waits owned by nobody, and nothing reads it; its id lands in the inbox
+column of its field (`photo UUID`). The job that drains the inbox creates the record and attaches the file in the same
+transaction, with a `Ref` of the new record for the collection's `write` action, which `tx.ref` locates in that
+transaction:
+
+```text
+const [created] = await tx.sql(Id)`insert into candidates (…) values (…) on conflict (email) do nothing returning id`
+if (created !== undefined && row.photo !== null) {
+	await tx.files('photos').attach(await tx.ref('candidates.attach', 'candidate', created.id), row.photo)
+}
+```
+
+- `attach` answers `false` when no file of the collection waits under the id (none was sent, or its hold of seven days
+  ended) and `true` again for one the same owner attached before; it never moves another owner's file. Past
+  `maxPerOwner` it throws 409, and the transaction rolls back with the file still held.
+- The attached file is `quarantined` until the scan job's clean verdict, like any upload of a scanning collection.
+- A file nobody attached is deleted by the sweep job once its hold ends.
+
 ## Storage
 
 On Zerops, declare one `object-storage` service in `fabrika.config.ts`; the platform writes `FABRIKA_APP_STORAGE_*`

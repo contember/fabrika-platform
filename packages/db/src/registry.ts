@@ -2,15 +2,20 @@
 // `store.ts`, which registers and builds the framework's stores, `framework.ts`, which `@fabrika/app` alone imports, and `testing.ts`, which only test
 // files may import.
 
+import type { Session } from './database'
 import type { FileTables } from './file-tables'
 import type { FormAdmissions, InboxQuota } from './form-admissions'
+import type { FormFiles, HeldFormFiles } from './form-files'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { DataAccess } from './orm'
 import type { DataLayerRuntime, TableContext, TableProbe } from './store'
 
-/** Answers what the framework's access check reads from the database: an object's containers, by dimension. */
-export type Locator = (dimension: string, id: string) => Promise<ReadonlyMap<string, string> | null>
+/**
+ * Answers what the framework's access check reads from the database: an object's containers, by dimension. `using` is
+ * the session to read in (a job's transaction, which sees the object it just wrote); a statement of its own otherwise.
+ */
+export type Locator = (dimension: string, id: string, using?: Session) => Promise<ReadonlyMap<string, string> | null>
 
 /** What the framework writes itself: a form's inbox row and its own `fabrika_*` tables. Usable once bound. */
 export interface FrameworkTables {
@@ -18,13 +23,16 @@ export interface FrameworkTables {
 	inboxProblems(form: string, fields: readonly string[]): readonly string[]
 	/**
 	 * Appends one row of `values` (column → value) to the inbox table of `form`, taking one from `quota` in the same
-	 * transaction; `false`, with nothing written, when the bucket is full.
+	 * transaction, and makes the submission's `held` files held in it too; `false`, with nothing written, when the
+	 * bucket is full.
 	 */
-	appendToInbox(form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota): Promise<boolean>
+	appendToInbox(form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota, held?: HeldFormFiles): Promise<boolean>
 	readonly webhooks: WebhookTables
 	readonly jobs: JobLeases
 	/** A form's admission counters and the challenge tokens it accepted. */
 	readonly forms: FormAdmissions
+	/** The files forms received, until the job that drains each inbox attaches them to their owner. */
+	readonly formFiles: FormFiles
 }
 
 export interface FrameworkSide {

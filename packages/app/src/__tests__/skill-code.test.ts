@@ -295,6 +295,11 @@ describe('the code blocks of the agent skill', () => {
 			name: 'attachments',
 			owner: { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] },
 		},
+		{
+			path: 'db/migrations/20261013090150_photos.sql',
+			name: 'photos',
+			owner: { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] },
+		},
 	]
 	for (const table of fileTables) {
 		test(`the file collection's migration ${table.path} is what fileTableSql writes`, () => {

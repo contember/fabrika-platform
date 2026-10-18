@@ -79,8 +79,13 @@ const HEALTH = anonymousRow({ id: 'health', kind: 'health', method: 'GET', path:
 const HOOK = anonymousRow({ id: 'hook', kind: 'webhook', method: 'POST', path: '/hooks/:binding', admission: JSON_BODY })
 const SHELL = anonymousRow({ id: 'shared', kind: 'link-spa', method: 'GET', path: '/s/*', admission: null })
 const FEEDBACK = anonymousRow({ id: 'feedback', kind: 'form', method: 'POST', path: '/feedback', admission: JSON_BODY })
+/** Forms that take files: `multipart/form-data`, which a browser sends from any page without a preflight. */
+const MULTIPART: BodyAdmission = { contentTypes: ['multipart/form-data'], maxBytes: 4096 }
+const REGISTER = anonymousRow({ id: 'register', kind: 'form', method: 'POST', path: '/register', admission: MULTIPART, crossOrigin: 'environment' })
+const APPLY = anonymousRow({ id: 'apply', kind: 'form', method: 'POST', path: '/apply', admission: MULTIPART })
+const EMBED = anonymousRow({ id: 'embed', kind: 'form', method: 'POST', path: '/embed', admission: MULTIPART, crossOrigin: 'any' })
 
-const TABLE = [OPEN, CLOSED, SIGNUP, CONTACT, SPA, DOWNLOAD, UPLOAD, HEALTH, HOOK, SHELL, FEEDBACK]
+const TABLE = [OPEN, CLOSED, SIGNUP, CONTACT, SPA, DOWNLOAD, UPLOAD, HEALTH, HOOK, SHELL, FEEDBACK, REGISTER, APPLY, EMBED]
 const RESERVED = ['/api']
 
 const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
@@ -254,6 +259,48 @@ describe('the answer to an admitted cross-origin request', () => {
 		expect(response.status).toBe(204)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+	})
+})
+
+describe('a multipart form, which a browser sends without a preflight', () => {
+	/** What a page's `fetch` of a FormData sends: no preflight, its `Origin`, a multipart body. */
+	const upload = (path: string, origin: string | null, site = 'cross-site'): VerifyRequestOptions => ({
+		method: 'POST',
+		path,
+		headers: {
+			...(origin === null ? {} : { Origin: origin }),
+			'Content-Type': 'multipart/form-data; boundary=x',
+			'Sec-Fetch-Site': site,
+		},
+	})
+
+	test("is refused from an origin its row does not admit, as a JSON form's preflight is", async () => {
+		const { iam, verify } = service({})
+		for (const [path, origin] of [['/register', STRANGER], ['/register', 'null'], ['/apply', PARTNER], ['/apply', STRANGER]] as const) {
+			const response = await verify(verifyRequest(upload(path, origin)))
+			expect(response.status).toBe(403)
+			expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull()
+		}
+		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
+	})
+
+	test("is forwarded from the application's own page, from a listed origin, without Origin, and on a row open to any", async () => {
+		const { verify } = service({})
+		const own = await verify(verifyRequest(upload('/apply', `https://${HOST}`, 'same-origin')))
+		expect(own.status).toBe(204)
+		expect(own.headers.get('Access-Control-Allow-Origin')).toBeNull()
+		const listed = await verify(verifyRequest(upload('/register', PARTNER)))
+		expect(listed.status).toBe(204)
+		expect(listed.headers.get('Access-Control-Allow-Origin')).toBe(PARTNER)
+		expect((await verify(verifyRequest(upload('/apply', null)))).status).toBe(204)
+		const any = await verify(verifyRequest(upload('/embed', STRANGER)))
+		expect(any.status).toBe(204)
+		expect(any.headers.get('Access-Control-Allow-Origin')).toBe('*')
+	})
+
+	test('admits only its own media type: a JSON body to a multipart form is a 400', async () => {
+		const { verify } = service({})
+		expect((await verify(verifyRequest(call('/register', PARTNER)))).status).toBe(400)
 	})
 })
 

@@ -25,6 +25,7 @@ import {
 	type ExportArtifact,
 	type FileCollectionArtifact,
 	type FormChallenge,
+	type FormFileArtifact,
 	type FormMountArtifact,
 	type FormRate,
 	type ImportArtifact,
@@ -82,7 +83,10 @@ import {
 	fileCollectionPaths,
 	FILES_PREFIX,
 	FORM_CHALLENGE_FIELD,
+	FORM_FILE_LIMITS,
+	FORM_INPUT_PART,
 	FORM_LIMITS,
+	FORM_MULTIPART_TYPE,
 	joinPath,
 	JSON_ADMISSION,
 	LINK_API_SEGMENT,
@@ -121,6 +125,8 @@ const DECLARED_ALLOWED =
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
+/** A form's file field names the inbox column its file's id lands in. */
+const FORM_FILE_FIELD = /^[a-z_][a-z0-9_]*$/
 /** Turnstile's `action`: the form's name, which the verification expects back. */
 const CHALLENGE_ACTION = /^[A-Za-z0-9_-]{1,32}$/
 
@@ -524,26 +530,24 @@ class ArtifactBuilder {
 				this.#prefix(where, mount.path)
 				this.#anonymous(name, 'health', 'GET', mount.path, null, null)
 				return { kind: 'health', path: mount.path }
-			case 'form':
+			case 'form': {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
 				this.#nonEmpty(`${where} appendTo`, mount.appendTo)
-				this.#anonymous(
-					name,
-					'form',
-					'POST',
-					mount.path,
-					this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes),
-					mount.input,
-					this.#crossOrigin(where, mount.crossOrigin, true),
-				)
+				const files = mount.files === undefined ? null : this.#formFiles(where, mount, mount.files)
+				const limit = this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes)
+				// A form that takes files is multipart: `maxBytes` bounds its input part, each collection its file.
+				const admission: BodyAdmission = files === null ? limit : { contentTypes: [FORM_MULTIPART_TYPE], maxBytes: limit.maxBytes }
+				this.#anonymous(name, 'form', 'POST', mount.path, admission, mount.input, this.#crossOrigin(where, mount.crossOrigin, true))
 				return {
 					kind: 'form',
 					path: mount.path,
 					appendTo: mount.appendTo,
 					...this.#formAdmission(name, where, mount),
 					...(mount.then === undefined ? {} : { then: this.#kickedJob(where, mount.then) }),
+					...(files === null ? {} : { files }),
 				}
+			}
 			case 'webhook': {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
@@ -606,6 +610,65 @@ class ArtifactBuilder {
 			admission.challenge = this.#formChallenge(name, where, mount.challenge, fields)
 		}
 		return admission
+	}
+
+	/**
+	 * A form's file fields: at most `FORM_FILE_LIMITS.maxFields`, each a lowercase column name that no input field, the
+	 * honeypot, the challenge token or the input part takes, each landing in a declared collection that scans. An
+	 * anonymous visitor's file reaches the people who read the collection, so the form must declare a challenge too.
+	 */
+	#formFiles(where: string, mount: FormMountDeclaration<SchemaShape>, declared: unknown): Readonly<Record<string, FormFileArtifact>> | null {
+		const example = "files: { photo: { collection: '<a c.files collection with scan: true>' } }"
+		if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) {
+			this.#problem(where, `files is not an object of file fields (allowed: ${example})`)
+			return null
+		}
+		const entries = Object.entries(declared)
+		if (entries.length === 0 || entries.length > FORM_FILE_LIMITS.maxFields) {
+			this.#problem(where, `files declares ${entries.length} file fields (allowed: 1 to ${FORM_FILE_LIMITS.maxFields}, one file each)`)
+		}
+		if (mount.challenge === undefined) {
+			this.#problem(where, "takes files, so it declares a challenge: an anonymous upload needs a solved one (challenge: { provider: 'turnstile', … })")
+		}
+		const fields = mount.input.type === 'object' ? mount.input.fields : {}
+		const files: Record<string, FormFileArtifact> = {}
+		for (const [field, option] of entries) {
+			const at = `${where} file '${field}'`
+			if (!FORM_FILE_FIELD.test(field)) {
+				this.#problem(at, 'is not a column name (allowed: lowercase snake_case, as its inbox column is named)')
+			}
+			if (field === FORM_INPUT_PART || field === FORM_CHALLENGE_FIELD || field === mount.honeypot || Object.hasOwn(fields, field)) {
+				this.#problem(at, `is also the name of the input part, the challenge token, the honeypot or an input field; name the file its own field`)
+			}
+			if (typeof option !== 'object' || option === null || Array.isArray(option)) {
+				this.#problem(at, `is not { collection, required? } (allowed: ${example})`)
+				continue
+			}
+			this.#keys(at, option, ['collection', 'required'])
+			const collection: unknown = Reflect.get(option, 'collection')
+			const required: unknown = Reflect.get(option, 'required')
+			if (required !== undefined && typeof required !== 'boolean') {
+				this.#problem(at, `required ${JSON.stringify(required)} is not true or false`)
+			}
+			const collections = this.#contract.files
+			const target: { readonly kind: string; readonly scan?: boolean } | undefined =
+				typeof collection === 'string' && Object.hasOwn(collections, collection) ? collections[collection] : undefined
+			if (typeof collection !== 'string' || target === undefined || target.kind !== 'files') {
+				const names = Object.keys(collections)
+				this.#problem(
+					at,
+					`collection ${JSON.stringify(collection)} is not a file collection of the contract (collections: ${
+						names.length === 0 ? 'none' : names.join(', ')
+					})`,
+				)
+				continue
+			}
+			if (target.scan !== true) {
+				this.#problem(at, `lands in files '${collection}', which does not scan; an anonymous visitor's file waits for a clean verdict (scan: true)`)
+			}
+			files[field] = { collection, required: required === true }
+		}
+		return files
 	}
 
 	#formRate(where: string, rate: object): FormRate {
@@ -1782,14 +1845,15 @@ class ArtifactBuilder {
 		if (columns === undefined || mount.input.type !== 'object') {
 			return
 		}
-		for (const field of Object.keys(mount.input.fields)) {
+		const fileFields = typeof mount.files === 'object' && mount.files !== null ? Object.keys(mount.files) : []
+		for (const field of [...Object.keys(mount.input.fields), ...fileFields]) {
 			const exempt = field === mount.honeypot || (mount.challenge !== undefined && field === FORM_CHALLENGE_FIELD)
 			if (!exempt && !columns.includes(field)) {
 				this.#problem(
 					`mount '${name}'`,
-					`the input field '${field}' is not a column of its inbox ${mount.appendTo}${suggestion(field, columns)} (allowed: a field named like a column: ${
-						columns.join(', ')
-					})`,
+					`the ${fileFields.includes(field) ? 'file' : 'input'} field '${field}' is not a column of its inbox ${mount.appendTo}${
+						suggestion(field, columns)
+					} (allowed: a field named like a column: ${columns.join(', ')})`,
 				)
 			}
 		}

@@ -77,7 +77,10 @@ export type DenyReason =
 	| 'cross_site'
 	/** The request's `Content-Type` is not one the endpoint admits. */
 	| 'content_type'
-	/** A preflight for an endpoint the contract does not open to another origin, or from an origin it does not admit. */
+	/**
+	 * A preflight for an endpoint the contract does not open to another origin, or from an origin it does not admit; or a
+	 * multipart form's request from such an origin, which a browser sends without a preflight.
+	 */
 	| 'cross_origin'
 	/** IAM refused the delegation grant a membership or scope-creating endpoint needs. */
 	| 'delegation_refused'
@@ -301,7 +304,8 @@ export class Authorizer {
 	private async decideRow(app: ProxyApp, row: ManifestEndpointRow, request: ForwardedRequest, crossOrigin: string | null): Promise<Decision> {
 		const endpoint = formatEndpointHeader(row.id, row.digest)
 		if (row.requirement === null) {
-			return admitBody(row, request.headers) ?? { outcome: 'allow', token: null, subject: null, endpoint, delegation: null, crossOrigin }
+			return admitBody(row, request.headers) ?? admitFormOrigin(app, row, request, crossOrigin)
+				?? { outcome: 'allow', token: null, subject: null, endpoint, delegation: null, crossOrigin }
 		}
 		const oauth = oauthBindingOf(app, row)
 		if (oauth === 'unregistered') {
@@ -654,6 +658,23 @@ function withBearerChallenge(denial: Denial, oauth: OAuthBinding | null): Denial
 	}
 	const challenge: OAuthBearerChallenge = { resource_metadata: oauth.resource.resourceMetadata }
 	return { ...denial, challenge: denial.status === 401 ? { ...challenge, error: 'invalid_token' } : challenge }
+}
+
+/** The media type of a form that takes files: a CORS simple request, which a browser sends without a preflight. */
+const MULTIPART_FORM_TYPE = 'multipart/form-data'
+
+/**
+ * A multipart form admits a browser's request only from the application's own origin or one the row admits (ADR-0022
+ * "Cross-origin endpoints"). A page on any origin sends `multipart/form-data` without a preflight, so the proxy refuses
+ * at the request what it refuses at the preflight of a JSON form. A request without `Origin` is no browser's
+ * cross-origin request.
+ */
+function admitFormOrigin(app: ProxyApp, row: ManifestEndpointRow, request: ForwardedRequest, crossOrigin: string | null): Denial | null {
+	const origin = request.headers.get(ORIGIN_HEADER)
+	if (row.kind !== 'form' || origin === null || crossOrigin !== null || !(row.admission?.contentTypes.includes(MULTIPART_FORM_TYPE) ?? false)) {
+		return null
+	}
+	return origin === `${app.scheme}://${request.url.host}` ? null : { outcome: 'deny', status: 403, reason: 'cross_origin' }
 }
 
 /** An endpoint that admits a body admits only its declared media types (ADR-0022 rule 3, admission). */

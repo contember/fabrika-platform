@@ -137,7 +137,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		if (!Object.hasOwn(baseline.roles, name)) changes.add(...externalChange(name, undefined, role.external))
 	}
 	compareKeyed(changes, record(baseline.mounts), record(candidate.mounts), {
-		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}`,
+		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}${takenFiles(mount)}`,
 		removed: (name) => (mountsShown.has(name) ? [] : `Mount \`${name}\` is removed`),
 		changed: mountChanges,
 	})
@@ -1191,6 +1191,14 @@ function directoryChange(name: string, before: 'labels' | undefined, after: 'lab
 		: [narrowing(`Holders of the members.list action of \`${name}\` and the endpoints below \`${name}\` no longer see member labels`)]
 }
 
+/** The collections a new form puts an anonymous visitor's files into. */
+function takenFiles(mount: MountArtifact): string {
+	const files = mount.kind === 'form' ? Object.entries(mount.files ?? {}) : []
+	return files.length === 0
+		? ''
+		: `, taking files from anyone: ${files.map(([field, file]) => `\`${field}\` into files \`${file.collection}\``).join(', ')}`
+}
+
 /** The public variables a new mount hands its pages: an SPA's own list, a challenge's site key. */
 function servedVariables(mount: MountArtifact): string {
 	const names = servedNames(mount)
@@ -1217,10 +1225,11 @@ function mountChanges(name: string, from: MountArtifact, to: MountArtifact): Acc
 		]
 	}
 	if (from.kind !== 'form' || to.kind !== 'form') return valueChange(`Mount \`${name}\``, from, to)
-	const { then: before, ...fromRest } = withoutSiteKey(from)
-	const { then: after, ...toRest } = withoutSiteKey(to)
+	const { then: before, files: filesBefore = {}, ...fromRest } = withoutSiteKey(from)
+	const { then: after, files: filesAfter = {}, ...toRest } = withoutSiteKey(to)
 	return [
 		...valueChange(`Mount \`${name}\``, fromRest, toRest),
+		...formFileChanges(name, filesBefore, filesAfter),
 		...setChanges(
 			`Form \`${name}\``,
 			siteKeyOf(from),
@@ -1233,6 +1242,30 @@ function mountChanges(name: string, from: MountArtifact, to: MountArtifact): Acc
 }
 
 const siteKeyOf = (form: FormMountArtifact): readonly string[] => (form.challenge?.siteKey === undefined ? [] : [form.challenge.siteKey])
+
+type FormFiles = NonNullable<FormMountArtifact['files']>
+
+/**
+ * A form's file field lets an anonymous visitor put a file into a collection, which its readers then open: a new or
+ * moved field widens, a field a submission must now carry is shown, a removed one narrows.
+ */
+function formFileChanges(name: string, before: FormFiles, after: FormFiles): AccessChange[] {
+	const changes: AccessChange[] = []
+	for (const [field, file] of Object.entries(after)) {
+		const was = before[field]
+		if (was === undefined || was.collection !== file.collection) {
+			changes.push(widening(`Form \`${name}\` takes a file \`${field}\` from anyone into files \`${file.collection}\``))
+		} else if (was.required !== file.required) {
+			changes.push(widening(`Form \`${name}\` ${file.required ? 'requires' : 'no longer requires'} its file \`${field}\``))
+		}
+	}
+	for (const [field, file] of Object.entries(before)) {
+		if (after[field] === undefined) {
+			changes.push(removal(`Form \`${name}\` no longer takes a file \`${field}\` into files \`${file.collection}\``))
+		}
+	}
+	return changes
+}
 
 /** A form without its challenge's site key, which `mountChanges` shows on a line of its own. */
 function withoutSiteKey(form: FormMountArtifact): FormMountArtifact {
