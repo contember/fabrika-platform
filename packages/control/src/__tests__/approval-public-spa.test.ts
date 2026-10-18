@@ -43,6 +43,16 @@ describe('a public SPA in the approval diff', () => {
 		})
 	})
 
+	test('a public SPA mount removed while only narrower SPAs remain narrows: they answer their own paths, not its', () => {
+		const SITE = "site: c.spa('/site', { dir: 'dist/site', access: { public: true } }),"
+		const baseline = snapshot(edited(MEMBER_SPA, `${PUBLIC_SPA}\n\t${SITE}`))
+		const candidate = snapshot(edited(MEMBER_SPA, SITE))
+		expect(classifyAccess(baseline, candidate)).toEqual({
+			outcome: 'no-widening',
+			changes: [{ effect: 'narrows', line: 'Mount `app` is removed: GET /* is denied' }],
+		})
+	})
+
 	test('a public SPA mount removed, its paths falling to a member SPA, narrows', () => {
 		expect(classifyAccess(withMount(MEMBER_SPA, INTEREST), snapshot()).changes).toEqual([{
 			effect: 'narrows',
@@ -108,6 +118,22 @@ describe('a removed endpoint whose paths fall through, on rows set by hand', () 
 		const baseline = withRows(PUBLIC, (rows) => [...rows, linkRow(rows, 'a.get', '/x/a', 'a'), linkRow(rows, 'b.all', '/x/*', 'b')])
 		const candidate = withRows(PUBLIC, (rows) => [...rows, linkRow(rows, 'b.all', '/x/*', 'b')])
 		expect(classifyAccess(baseline, candidate).changes.find((change) => change.line.startsWith('Endpoint `a.get`'))?.effect).toBe('widens')
+	})
+
+	test('paths only some of which reach an endpoint narrow, though it admits the same callers, and the line says the rest are denied', () => {
+		// `/:page/x` loses to `/a/*` on `/a/x` while both stand, so it answers that path only once `/a/*` is gone.
+		const publicRow = (rows: readonly EndpointRow[], id: string, path: string): EndpointRow => {
+			const app = rows.find((row) => row.id === 'app')
+			if (app === undefined) throw new Error('the base has no app')
+			return { ...app, id, path, source: { kind: 'mount', name: id } }
+		}
+		const without = (rows: readonly EndpointRow[]) => rows.filter((row) => row.id !== 'app')
+		const baseline = withRows(PUBLIC, (rows) => [...without(rows), publicRow(rows, 'area', '/a/*'), publicRow(rows, 'page', '/:page/x')])
+		const candidate = withRows(PUBLIC, (rows) => [...without(rows), publicRow(rows, 'page', '/:page/x')])
+		expect(classifyAccess(baseline, candidate).changes.find((change) => change.line.startsWith('Endpoint `area`'))).toEqual({
+			effect: 'narrows',
+			line: 'Endpoint `area` (GET /a/*) is removed; its paths now reach `page` for anyone, without signing in, as before, and are otherwise denied',
+		})
 	})
 
 	test("a link endpoint's path falling to an endpoint of the same link mount changes nothing", () => {

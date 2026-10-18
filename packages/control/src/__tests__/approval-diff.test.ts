@@ -3,7 +3,7 @@
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import { ContractError, readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
-import { classifyAccess, pathsOverlap } from '../approval/diff'
+import { classifyAccess, probePaths } from '../approval/diff'
 import { type AccessSnapshot, EMPTY_SNAPSHOT, type MigrationEntry } from '../approval/snapshot'
 import { BASE, edited } from './helpers/contracts'
 
@@ -446,19 +446,18 @@ describe('classifyAccess compares output shapes', () => {
 	})
 })
 
-describe('pathsOverlap', () => {
+describe('probePaths', () => {
+	// Every path a pattern matches behaves, for each endpoint of both tables, like one of its probes.
 	test.each([
-		['/healthz', '/*', true],
-		['/api/get', '/api/:name', true],
-		['/api/get', '/api/list', false],
-		['/a/:x', '/a/', false],
-		['/a/*', '/a', false],
-		['/a/*', '/a/b/c', true],
-		['/a/:x', '/a/:y/c', false],
-		['/', '/*', true],
-		['/', '/a', false],
-	])('%s and %s overlap: %p', (a, b, overlap) => {
-		expect(pathsOverlap(a, b)).toBe(overlap)
-		expect(pathsOverlap(b, a)).toBe(overlap)
+		['/*', ['/site', '/site/*'], ['/', '/site', '/site/x', '/site/', '/x']],
+		['/api/:name', ['/api/get', '/*'], ['/', '/api', '/api/get', '/api/x']],
+		['/a/*', ['/a/', '/a/:x', '/a/:x/*'], ['/', '/a', '/a/', '/a/x', '/a/x/x', '/a/x/']],
+		['/', ['/*'], ['/']],
+	])('%s among %p', (pattern, patterns, probes) => {
+		expect(probePaths(pattern, patterns)).toEqual(probes)
+	})
+
+	test('the fresh segment is no literal of any pattern', () => {
+		expect(probePaths('/:page', ['/x', '/xx'])).toEqual(['/', '/x', '/xx', '/xxx'])
 	})
 })

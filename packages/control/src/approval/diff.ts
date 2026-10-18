@@ -7,6 +7,8 @@ import {
 	canonicalizeArtifact,
 	canonicalJson,
 	type ColumnPolicyArtifact,
+	type CompiledEndpointTable,
+	compileEndpointTable,
 	type ContractArtifact,
 	type CrossOriginForm,
 	type DeclaredReach,
@@ -25,6 +27,7 @@ import {
 	type MountArtifact,
 	type NumberShape,
 	type OutputShape,
+	planEndpoint,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
@@ -459,33 +462,104 @@ interface Fate {
 
 /**
  * Where the paths of a removed endpoint go. The proxy selects the most specific endpoint, so a removed one may have
- * shadowed a broader one (ADR-0050 §3). The paths answer the callers the endpoints that reach them admit: no endpoint
- * narrows, endpoints that admit exactly the removed one's callers change nothing, endpoints that admit no caller more
- * narrow, and any other widens.
+ * shadowed a broader one (ADR-0050 §3), which then answers all of its paths, some or none. The canonical matcher says
+ * which endpoint each path reaches before and after (`probePaths`), so an endpoint that only ever answered its own paths
+ * is never taken for one that answers the removed one's. The paths answer the callers the endpoints that reach them
+ * admit: no endpoint narrows, endpoints that admit exactly the removed one's callers change nothing, endpoints that
+ * admit no caller more narrow, and any other widens. Paths of which some are denied narrow at least.
  */
 function fallThrough(row: EndpointRow, baseline: ContractArtifact, candidate: ContractArtifact): Fate {
-	const reserved = reservedPrefixOf(row.path, candidate.reservedPrefixes)
-	const reached = candidate.endpoints.filter((other) =>
-		other.method === row.method && pathsOverlap(row.path, other.path) && (reserved === null || other.path.startsWith(`${reserved}/`))
-	)
-	if (reached.length === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false }
-	const reach = (plural: boolean) => (plural ? 'now reach' : 'now reaches')
-	const was = audience(row)
-	const environmentOrigins = row.crossOrigin === undefined && reached.some((other) => other.crossOrigin === 'environment')
-	const removed = { row, artifact: baseline }
-	const answering = reached.map((other) => ({ row: other, artifact: candidate }))
-	const fewer = answering.every((other) => admitsNoMoreThan(other, removed))
-	const same = fewer && answering.every((other) => admitsNoMoreThan(removed, other))
-	if (same && reached.every((other) => audience(other) === was)) {
-		const ids = listOf(reached.map((other) => other.id), 'none')
-		return { effect: 'neutral', words: (plural) => `${reach(plural)} ${ids} ${was}, as before`, environmentOrigins }
+	const before = compiledTable(baseline)
+	const after = compiledTable(candidate)
+	const reached = new Map<string, EndpointRow>()
+	let denied = false
+	for (const path of probePaths(row.path, [...baseline.endpoints, ...candidate.endpoints].map((other) => other.path))) {
+		const then = planEndpoint(before, row.method, path)
+		if (then.outcome !== 'endpoint' || then.endpoint.id !== row.id) continue
+		const now = planEndpoint(after, row.method, path)
+		if (now.outcome === 'endpoint') reached.set(now.endpoint.id, now.endpoint)
+		else denied = true
 	}
-	const answers = reached.map((other) => `\`${other.id}\` ${audience(other)}`).join(', ')
+	if (reached.size === 0) return { effect: 'narrows', words: (plural) => (plural ? 'are denied' : 'is denied'), environmentOrigins: false }
+	const answering = [...reached.values()]
+	const reach = (plural: boolean) => (plural ? 'now reach' : 'now reaches')
+	const rest = (plural: boolean) => (denied ? `, and ${plural ? 'are' : 'is'} otherwise denied` : '')
+	const was = audience(row)
+	const environmentOrigins = row.crossOrigin === undefined && answering.some((other) => other.crossOrigin === 'environment')
+	const removed = { row, artifact: baseline }
+	const sided = answering.map((other) => ({ row: other, artifact: candidate }))
+	const fewer = sided.every((other) => admitsNoMoreThan(other, removed))
+	const same = fewer && sided.every((other) => admitsNoMoreThan(removed, other))
+	const effect: AccessEffect = !fewer ? 'widens' : same && !denied ? 'neutral' : 'narrows'
+	if (same && answering.every((other) => audience(other) === was)) {
+		const ids = listOf(answering.map((other) => other.id), 'none')
+		return { effect, words: (plural) => `${reach(plural)} ${ids} ${was}, as before${rest(plural)}`, environmentOrigins }
+	}
+	const answers = answering.map((other) => `\`${other.id}\` ${audience(other)}`).join(', ')
 	return {
-		effect: same ? 'neutral' : fewer ? 'narrows' : 'widens',
-		words: (plural) => `${reach(plural)} ${answers}, where ${plural ? 'they were' : 'it was'} ${was}`,
+		effect,
+		words: (plural) => `${reach(plural)} ${answers}, where ${plural ? 'they were' : 'it was'} ${was}${rest(plural)}`,
 		environmentOrigins,
 	}
+}
+
+const COMPILED = new WeakMap<ContractArtifact, CompiledEndpointTable>()
+
+/** An artifact's endpoint table for the canonical matcher, compiled once per artifact. */
+function compiledTable(artifact: ContractArtifact): CompiledEndpointTable {
+	const known = COMPILED.get(artifact)
+	if (known !== undefined) return known
+	const table = compileEndpointTable(artifact)
+	COMPILED.set(artifact, table)
+	return table
+}
+
+/**
+ * Request paths that stand for every path `pattern` matches, as finely as `patterns` tell paths apart. A segment matters
+ * only where a pattern that may still match has a literal: each such literal is tried, one fresh value stands for every
+ * other segment, and an empty last segment (a trailing `/`) for itself. Once every pattern that may still match has
+ * passed its wildcard, longer paths behave alike, so the path goes no deeper. The paths only enumerate: which endpoint
+ * one reaches is the canonical matcher's to say (`planEndpoint`), so they may include paths `pattern` does not match.
+ */
+export function probePaths(pattern: string, patterns: readonly string[]): string[] {
+	const own = segmentsOf(pattern)
+	const all = [own, ...patterns.map(segmentsOf)]
+	const literals = new Set(all.flat().filter(isLiteral))
+	let fresh = 'x'
+	while (literals.has(fresh)) fresh += 'x'
+	const paths: string[] = []
+	const extend = (prefix: readonly string[], live: readonly (readonly string[])[]): void => {
+		paths.push(`/${prefix.join('/')}`)
+		const index = prefix.length
+		const mine = own[index]
+		const pastWildcard = own.at(-1) === '*' && index >= own.length - 1
+		// A trailing `/` ends the path; past the end of `pattern`, or of every pattern that may still match, nothing differs.
+		if (prefix.at(-1) === '' || (mine === undefined && !pastWildcard)) return
+		if (live.every((segments) => segments.at(-1) === '*' && segments.length <= index)) return
+		const values = mine !== undefined && isLiteral(mine) ? [mine] : [
+			...new Set(live.flatMap((segments) => {
+				const segment = segments[index]
+				return segment !== undefined && isLiteral(segment) && (segment !== '' || pastWildcard) ? [segment] : []
+			})),
+			fresh,
+			...(pastWildcard && index > 0 ? [''] : []),
+		]
+		for (const value of new Set(values)) extend([...prefix, value], live.filter((segments) => mayMatch(segments, index, value)))
+	}
+	extend([], all)
+	return [...new Set(paths)]
+}
+
+/** Whether a pattern that may match a path's first `index` segments may still match it with `value` as the next one. */
+function mayMatch(segments: readonly string[], index: number, value: string): boolean {
+	const segment = segments[index]
+	if (segment === undefined) return segments.at(-1) === '*' && segments.length <= index
+	if (segment === '*') return true
+	return segment.startsWith(':') ? value !== '' : segment === value
+}
+
+function isLiteral(segment: string): boolean {
+	return segment !== '*' && !segment.startsWith(':')
 }
 
 /** A row and the artifact it is read from, for what the proxy derives from the artifact (its delegation). */
@@ -840,43 +914,6 @@ function lowerLimitChange(subject: string, before: number | null, after: number 
 function shownValue(json: string): string {
 	const value: unknown = JSON.parse(json)
 	return typeof value === 'string' ? `\`${value}\`` : shown(json)
-}
-
-/**
- * Whether some path matches both patterns: literal segments must agree, a parameter takes any non-empty segment and a
- * terminal `*` the rest. Reserved prefixes are ignored, so the answer only ever errs towards an overlap.
- */
-export function pathsOverlap(a: string, b: string): boolean {
-	const left = segmentsOf(a)
-	const right = segmentsOf(b)
-	for (let index = 0;; index++) {
-		const x = left[index]
-		const y = right[index]
-		if (x === '*' || y === '*') {
-			// A non-root wildcard needs a segment at its position, as the matcher's `/x/*` does.
-			const other = x === '*' ? y : x
-			return index === 0 || other !== undefined
-		}
-		if (x === undefined || y === undefined) return x === y
-		if (x.startsWith(':') && y.startsWith(':')) continue
-		if (x.startsWith(':') || y.startsWith(':')) {
-			if ((x.startsWith(':') ? y : x) === '') return false
-			continue
-		}
-		if (x !== y) return false
-	}
-}
-
-/**
- * The longest reserved prefix the pattern lies under by its literal text. Every path it matches lies under that prefix
- * or a longer one, so only endpoints under it compete for those paths.
- */
-function reservedPrefixOf(path: string, prefixes: readonly string[]): string | null {
-	let longest: string | null = null
-	for (const prefix of prefixes) {
-		if (path.startsWith(`${prefix}/`) && (longest === null || prefix.length > longest.length)) longest = prefix
-	}
-	return longest
 }
 
 function segmentsOf(path: string): string[] {
