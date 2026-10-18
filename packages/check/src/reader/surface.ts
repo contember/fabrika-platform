@@ -386,6 +386,7 @@ class SurfaceReader {
 					challenge: formChallenge(options.get('challenge')),
 					then: optionalText(options.get('then'), 'then'),
 					...crossOriginOption(options.get('crossOrigin')),
+					...formFiles(options.get('files')),
 					unknownOptions: optionKeys(options, 'form'),
 				}
 			}
@@ -1055,6 +1056,26 @@ function formRate(value: LiteralValue | undefined): { perClient?: number; perFor
 	const perClient = optionalNumber(fields.get('perClient'), 'perClient')
 	const perForm = optionalNumber(fields.get('perForm'), 'perForm')
 	return { ...(perClient === undefined ? {} : { perClient }), ...(perForm === undefined ? {} : { perForm }) }
+}
+
+/** A form's `files`: each file field's collection and whether a submission must carry it; `buildArtifact` checks them. */
+function formFiles(value: LiteralValue | undefined): { readonly files?: Record<string, { collection: string; required?: boolean }> } {
+	if (value === undefined) {
+		return {}
+	}
+	if (value.kind !== 'object') {
+		throw new Refused(value.at, `files is a ${describeKind(value)}`, "files: { photo: { collection: '<collection>' } }")
+	}
+	const files: Record<string, { collection: string; required?: boolean }> = {}
+	for (const [field, entry] of value.entries) {
+		const fields = strictFields(entry, `file '${field}'`, ['collection'], ['required'])
+		const required = fields.get('required')
+		files[field] = {
+			collection: text(fields.get('collection'), entry, 'collection'),
+			...(required === undefined ? {} : { required: boolean(required, 'required') }),
+		}
+	}
+	return { files }
 }
 
 /** A form's `challenge`: a provider of the closed list and the names of the application variables with its secret and site key. */

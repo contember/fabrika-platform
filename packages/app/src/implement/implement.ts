@@ -4,6 +4,7 @@
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import type { DataLayer } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
+import type { Session } from '@fabrika/db/framework'
 import type { EmailSender } from '@fabrika/email'
 import type { ConnectSnapshot } from '../contract/connect'
 import type { AnyContract } from '../contract/define'
@@ -16,8 +17,11 @@ import type { ConnectSnapshots, ExactHandlers, HandlersOf } from './types'
  */
 export interface ContractDatabase {
 	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
-	/** The containers an object lies in, by dimension, or `null` when the table that owns `dimension` has no such row. */
-	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
+	/**
+	 * The containers an object lies in, by dimension, or `null` when the table that owns `dimension` has no such row.
+	 * `using` is a job's transaction, which also sees the object it wrote; a layer of the application's own ignores it.
+	 */
+	locate(dimension: string, id: string, using?: Session): Promise<ReadonlyMap<string, string> | null>
 }
 
 /** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */

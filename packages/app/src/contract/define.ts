@@ -313,6 +313,13 @@ export interface FormChallengeOption {
 	readonly siteKey?: string
 }
 
+/** A file field of a form: the collection its file lands in (a `scan: true` one), and whether a submission must carry it. */
+export interface FormFileOption {
+	readonly collection: string
+	/** `true`: a submission without the file is refused (400). Absent or `false`: the column gets `null`. */
+	readonly required?: boolean
+}
+
 /** What `c.form(path, options)` takes. */
 export type FormOptions<I, T> =
 	& {
@@ -326,6 +333,11 @@ export type FormOptions<I, T> =
 		readonly then?: T
 		/** A page on another origin may submit it: `true` from the environment's listed origins, `'*'` from any. */
 		readonly crossOrigin?: true | '*'
+		/**
+		 * Files a submission carries beside its input, by field. The form becomes `multipart/form-data` and needs a
+		 * challenge; each file waits, owned by nobody, until the job that drains the inbox attaches it.
+		 */
+		readonly files?: { readonly [field: string]: FormFileOption }
 	}
 	& Owned<'kind' | 'path'>
 
@@ -494,6 +506,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			challenge: options.challenge,
 			then: options.then,
 			...(options.crossOrigin === undefined ? {} : { crossOrigin: options.crossOrigin }),
+			...(options.files === undefined ? {} : { files: options.files }),
 			unknownOptions: unknownOptions(options, 'form'),
 		}),
 		webhook: (path, options) => ({

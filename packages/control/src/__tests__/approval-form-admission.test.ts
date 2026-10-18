@@ -164,3 +164,40 @@ describe("a form's admission in the approval diff", () => {
 		])
 	})
 })
+
+describe("a form's files in the approval diff", () => {
+	const NOTES: TablePolicyArtifact = {
+		scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
+		actions: { read: 'notes.read', insert: 'notes.write', update: null, delete: null },
+		insert: [],
+		update: [],
+		version: null,
+		createdBy: null,
+		columns: {},
+	}
+	const tables = { applications: INBOX, notes: NOTES }
+	const CHALLENGED = ", challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' }"
+	const PHOTOS =
+		`\tfiles: { photos: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.delete', maxBytes: 4096, types: ['image/jpeg'], scan: true }) },`
+	const withFiles = (files: string): string => edited(HEALTH, `${HEALTH}\n${PHOTOS}`, FORM(`${CHALLENGED}${files}`))
+
+	test('a new file field widens and names its collection; a required one is shown; a removed one narrows', () => {
+		const plain = snapshot(withFiles(''), tables)
+		const taking = snapshot(withFiles(", files: { photo: { collection: 'photos' } }"), tables)
+		const requiring = snapshot(withFiles(", files: { photo: { collection: 'photos', required: true } }"), tables)
+		const added = classifyAccess(plain, taking)
+		expect(added.outcome).toBe('widening')
+		expect(added.changes).toContainEqual({ widens: true, line: 'Form `apply` takes a file `photo` from anyone into files `photos`' })
+		expect(classifyAccess(taking, requiring).changes).toContainEqual({ widens: true, line: 'Form `apply` requires its file `photo`' })
+		expect(classifyAccess(taking, plain).changes).toContainEqual({
+			widens: false,
+			line: 'Form `apply` no longer takes a file `photo` into files `photos`',
+		})
+	})
+
+	test('a new form names the collections it takes files into', () => {
+		const base = snapshot(edited(HEALTH, `${HEALTH}\n${PHOTOS}`), { notes: NOTES })
+		const changes = classifyAccess(base, snapshot(withFiles(", files: { photo: { collection: 'photos' } }"), tables)).changes
+		expect(changes).toContainEqual({ widens: true, line: 'New form mount `apply`, taking files from anyone: `photo` into files `photos`' })
+	})
+})

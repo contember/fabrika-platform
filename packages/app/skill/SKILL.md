@@ -220,14 +220,15 @@ the access check. `references/spa.md` shows the stack.
 
 ## Off the road: declare it
 
-| What the handler needs         | Declare on the endpoint         | It gets                                            |
-| ------------------------------ | ------------------------------- | -------------------------------------------------- |
-| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)    | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope` |
-| rows outside its capability    | `unscoped: { <table>: 'read' }` | `ctx.db.unscoped.<table>`                          |
-| another application's export   | `connect: ['<import>']`         | `ctx.connect.<import>`                             |
-| a share link                   | `issues: '<link mount>'`        | `ctx.links.issue`                                  |
-| e-mail (a cron job only)       | `mailer: 'installation'`        | `ctx.mail.send`                                    |
-| a trigger, function or view    | its migration                   | —                                                  |
+| What the handler needs         | Declare on the endpoint                        | It gets                                             |
+| ------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
+| a join, a report, a bulk write | `sql: 'read'` (or `'write'`)                   | `` ctx.sql(Row)`…` ``, scoped with `ctx.sql.scope`  |
+| rows outside its capability    | `unscoped: { <table>: 'read' }`                | `ctx.db.unscoped.<table>`                           |
+| another application's export   | `connect: ['<import>']`                        | `ctx.connect.<import>`                              |
+| a share link                   | `issues: '<link mount>'`                       | `ctx.links.issue`                                   |
+| e-mail (a cron job only)       | `mailer: 'installation'`                       | `ctx.mail.send`                                     |
+| a file with a public form      | `files: { photo: { collection } }` on `c.form` | the id in the inbox; the job's `tx.files(…).attach` |
+| a trigger, function or view    | its migration                                  | —                                                   |
 
 Scope every scoped table a raw statement reads with `${ctx.sql.scope(<capability>, '<table>', '<alias>')}`, a conjunct
 of its WHERE or JOIN … ON (`where (<filter>) and ${…}`): `ctx.target` for `on` and `in`, `ctx.within` for `over`, a
@@ -258,7 +259,7 @@ Which promise the types, the checker, boot, the runtime or the approver keeps, a
 - A 401, a 403 or a failing generated test: never loosen the contract, a role, a policy or a test to pass. Tell the
   human which action or role the caller lacks.
 - When the task does not already ask for it, before you add a role, a grant, an action, a declared deviation, an
-  anonymous endpoint (`c.form`, a webhook, a link), an export or an import, or a job, or before you drop or rename a
+  anonymous endpoint (`c.form`, a form's `files`, a webhook, a link), an export or an import, or a job, or before you drop or rename a
   column: say in one sentence what it lets someone do, and wait for a yes. A data repair goes to the operator, not
   into a job.
 - A file refused as protected: stop and ask. Do not move the change elsewhere.

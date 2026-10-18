@@ -8,7 +8,7 @@
 import type { IamMembership } from '@fabrika/auth'
 import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type JobMailer, type PermissionEntry, permits } from '@fabrika/auth-core'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
-import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
+import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError, type Session } from '@fabrika/db/framework'
 import { EmailDeliveryError, type EmailSenderCapabilities, mayRetryDelivery } from '@fabrika/email'
 import { NotFoundError } from '../errors'
 import type { FileCollections } from '../files/collections'
@@ -747,29 +747,38 @@ function jobContext(
 			throw new CapabilityRefusedError('undeclared_dimension', `job '${job.name}' named a dimension the contract does not declare`)
 		}
 	}
+	/** A located `Ref`, read in `using` (a job's transaction, which sees what it wrote) or a statement of its own. */
+	const ref = async <const Act extends string, const Dim extends string>(
+		action: Act,
+		dimension: Dim,
+		id: string,
+		using?: Session,
+	): Promise<Ref<Dim, Act>> => {
+		check(action, dimension)
+		if (typeof id !== 'string' || id === '') {
+			throw new CapabilityRefusedError('missing_id', `job '${job.name}' named an object without an id`)
+		}
+		const database = context.database
+		const chain = database === null || !context.ownedDimensions.has(dimension) ? new Map<string, string>() : await database.locate(dimension, id, using)
+		if (chain === null) {
+			throw new NotFoundError('Not found')
+		}
+		return context.mint.ref(frame, dimension, action, principal.id, id, chain)
+	}
 	return Object.freeze({
 		principal,
 		runId: frame.id,
 		attempt,
 		signal,
-		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id)),
+		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id, ref)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
 			return context.mint.within(frame, dimension, action, principal.id, 'all')
 		},
-		async ref<const Act extends string, const Dim extends string>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>> {
-			check(action, dimension)
-			if (typeof id !== 'string' || id === '') {
-				throw new CapabilityRefusedError('missing_id', `job '${job.name}' named an object without an id`)
-			}
-			const database = context.database
-			const chain = database === null || !context.ownedDimensions.has(dimension) ? new Map<string, string>() : await database.locate(dimension, id)
-			if (chain === null) {
-				throw new NotFoundError('Not found')
-			}
-			return context.mint.ref(frame, dimension, action, principal.id, id, chain)
+		ref<const Act extends string, const Dim extends string>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>> {
+			return ref(action, dimension, id)
 		},
 	})
 }
@@ -833,6 +842,7 @@ function kitJobContext(
 	name: string,
 	site: SiteDeclaration,
 	principal: string,
+	ref: (action: string, dimension: string, id: string, using: Session) => Promise<Ref<string, string>>,
 ): Readonly<Record<string, unknown>> {
 	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false)
 	const job = `job '${name}'`
@@ -857,7 +867,12 @@ function kitJobContext(
 					const removing = files === null
 						? noFileCollections(job)
 						: files.site({ where: job, frame, check: boundTo(frame, () => !open, 'tx.files'), session: async () => session, readOnly: null })
-					return await work(Object.freeze({ db: siteData(writes), sql, files: removing }))
+					// Located in this transaction, so an object it wrote is found before the commit.
+					const located = (action: string, dimension: string, id: string) => {
+						boundTo(frame, () => !open, 'tx.ref')()
+						return ref(action, dimension, id, session)
+					}
+					return await work(Object.freeze({ db: siteData(writes), sql, files: removing, ref: located }))
 				} finally {
 					open = false
 				}

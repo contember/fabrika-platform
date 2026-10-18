@@ -1,7 +1,7 @@
 # references/public-intake.md — the public intake recipe
 
-A visitor who has no account submits a form on a public page, confirms the e-mail address through a link, attaches
-files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code lists of
+A visitor who has no account submits a form on a public page, with a photo from the phone's camera if they like,
+confirms the e-mail address through a link, attaches files, and asks for a new link when the first one is lost. HR reviews the records, an HR lead edits the code lists of
 open positions and of the reasons a decision records, HR exports every candidate with an audit row, and an HR person
 checks the mail setup with a test e-mail to their own address. This file is an application of its own (`intake`); its
 `package.json`, `tsconfig.json` and `src/app-kit.ts` are those of `app-setup.md`.
@@ -136,13 +136,15 @@ CREATE TABLE candidate_events (
 );
 CREATE INDEX candidate_events_candidate ON candidate_events (candidate_id);
 
--- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token. A form
--- writes its input fields only, so every other column has a default: id names the row for the job, received_at keeps
--- the time of the submission, and a registration counts the job's failed attempts at it.
+-- The forms' inboxes: a column per input field, of its name, except the honeypot and the challenge token, and one per
+-- file field, which receives the id of the file the submission carried (NULL without one). A form writes those
+-- columns only, so every other column has a default: id names the row for the job, received_at keeps the time of the
+-- submission, and a registration counts the job's failed attempts at it.
 CREATE TABLE registrations (
 	id UUID NOT NULL DEFAULT gen_random_uuid(),
 	email TEXT NOT NULL,
 	full_name TEXT NOT NULL,
+	photo UUID,
 	received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	attempts INTEGER NOT NULL DEFAULT 0,
 	last_failure TEXT
@@ -214,8 +216,31 @@ CREATE INDEX fabrika_files_attachments_removable ON fabrika_files_attachments (c
 CREATE INDEX fabrika_files_attachments_scan ON fabrika_files_attachments (scan_after) WHERE status = 'quarantined';
 ```
 
-The file table is `fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })`
-(`references/files.md`): a top-level owner has no chain.
+```sql db/migrations/20261013090150_photos.sql
+CREATE TABLE fabrika_files_photos (
+	id UUID PRIMARY KEY,
+	owner_id UUID,
+	status TEXT NOT NULL CONSTRAINT fabrika_files_photos_status CHECK (status IN ('pending', 'live', 'quarantined', 'rejected')),
+	object_key TEXT NOT NULL UNIQUE,
+	size BIGINT,
+	content_type TEXT NOT NULL,
+	sha256 TEXT,
+	original_name TEXT,
+	created_by TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL,
+	deleted_at TIMESTAMPTZ,
+	object_version TEXT,
+	scan_attempts INTEGER NOT NULL DEFAULT 0,
+	scan_after TIMESTAMPTZ,
+	FOREIGN KEY (owner_id) REFERENCES candidates (id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+CREATE INDEX fabrika_files_photos_owner ON fabrika_files_photos (owner_id) WHERE deleted_at IS NULL;
+CREATE INDEX fabrika_files_photos_removable ON fabrika_files_photos (created_at) WHERE deleted_at IS NOT NULL OR owner_id IS NULL OR status = 'pending';
+CREATE INDEX fabrika_files_photos_scan ON fabrika_files_photos (scan_after) WHERE status = 'quarantined';
+```
+
+The file tables are `fileTableSql('attachments', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })`
+and the same for `photos` (`references/files.md`): a top-level owner has no chain.
 
 ```ts src/db/tables.ts
 import { defineTables } from '@fabrika/db/tables'
@@ -359,6 +384,7 @@ export const contract = app.contract((c) => ({
 			secret: 'TURNSTILE_SECRET',
 			siteKey: 'TURNSTILE_SITE_KEY',
 		},
+		files: { photo: { collection: 'photos' } },
 		then: 'intake',
 	}),
 	resend: c.form('/resend', {
@@ -383,6 +409,16 @@ export const contract = app.contract((c) => ({
 			types: ['application/pdf'],
 			maxPerOwner: 5,
 			link: true,
+			scan: true,
+		}),
+		photos: c.files({
+			owner: 'candidates',
+			read: 'candidates.read',
+			write: 'candidates.attach',
+			delete: 'candidates.review',
+			maxBytes: 15728640,
+			types: ['image/jpeg', 'image/png', 'image/webp'],
+			maxPerOwner: 1,
 			scan: true,
 		}),
 	},
@@ -421,6 +457,16 @@ export const contract = app.contract((c) => ({
   `styleSrc`, `fontSrc` and `frameAncestors`: exact `https://` origins, at most 16 each. Each new origin is a widening the approver sees.
 - **Scanned files.** A visitor's upload waits `quarantined` until ClamAV answers clean (`references/files.md`): its
   download answers 409 until then. On Zerops the deploy service needs `verticalAutoscaling: { minRam: 2 }`.
+- **A photo with the registration.** `files: { photo: { collection: 'photos' } }` lets the form carry one file beside
+  its input; `required: true` refuses a submission without it. The form becomes `multipart/form-data` (the page's code
+  is below) and must declare a challenge; each field lands in a collection that has `scan: true`, whose `types`,
+  `maxBytes` and `maxPerOwner` bound the file, while the form's `maxBytes` bounds only its input. The inbox has a
+  column named like the field (`photo UUID`), which receives the file's id, or `NULL` when the visitor sent none. Until
+  the job attaches it, the file is owned by nobody and nobody can read it; one the job never attaches (a known address,
+  a registration that stays dead) is deleted seven days after the submission. The approver sees "Form `register` takes
+  a file `photo` from anyone into files `photos`". A file the collection refuses (a type it does not admit, bytes
+  that are not that type, too large) is 415 or 413 after the challenge was spent, so the page checks the type and the
+  size before it submits, and solves the challenge again after a refusal.
 - **The kick.** `then: 'intake'` makes each accepted submission start a run of the job within seconds, once its row
   committed, under the job's own key. The visitor's answer is the same constant and never waits for the run. Kicks
   coalesce on the job's lease (at most one run and one pending, however many visitors submit), so a flood adds no
@@ -505,6 +551,7 @@ const Queued = z.strictObject({
 	id: z.string(),
 	email: z.string(),
 	fullName: z.string(),
+	photo: z.nullable(z.string()),
 })
 const Ask = z.strictObject({ email: z.string() })
 const Id = z.strictObject({ id: z.string() })
@@ -574,18 +621,27 @@ export const intake = app.cron('* * * * *', {
 				ctx.transaction(async (tx) => {
 					// Claimed where it is consumed: a row other work holds is skipped, not waited for.
 					const [row] = await tx.sql(Queued)`
-						select id, email, full_name from registrations
+						select id, email, full_name, photo from registrations
 						where id = ${id} and attempts < ${MAX_ATTEMPTS}
 						for update skip locked`
 					if (row === undefined) return
 					await tx.sql(Id)`
 						delete from registrations where id = ${row.id} returning id`
-					await tx.sql(Id)`
+					const [created] = await tx.sql(Id)`
 						insert into candidates (id, email, name, created_by, version)
 						values (${crypto.randomUUID()}, ${row.email}, ${row.fullName},
 							${ctx.principal.id}, 1)
 						on conflict (email) do nothing
 						returning id`
+					// The photo becomes the new candidate's in this transaction; a known address gets none.
+					if (created !== undefined && row.photo !== null) {
+						const candidate = await tx.ref(
+							'candidates.attach',
+							'candidate',
+							created.id,
+						)
+						await tx.files('photos').attach(candidate, row.photo)
+					}
 				}), async () => {
 				const [counted] = await ctx.transaction((tx) =>
 					tx.sql(Attempts)`
@@ -922,9 +978,15 @@ export const siteKey = async (): Promise<string | null> => {
 ```
 
 The public page sends the form with a plain `fetch`: a form has no typed client, and its answer never depends on the
-data.
+data. A form that takes files is `multipart/form-data`: the first part is named `input` and holds the input as JSON,
+and each file follows in a part named after its field. Let the browser write the `Content-Type` with its boundary:
+never set it yourself.
 
 ```ts web/site/register.ts
+/** What the `photos` collection admits; the page checks it before it spends the challenge. */
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const PHOTO_MAX_BYTES = 15728640
+
 export const register = async (
 	form: HTMLFormElement,
 	challengeToken: string,
@@ -934,16 +996,25 @@ export const register = async (
 		const value = data.get(name)
 		return typeof value === 'string' ? value : ''
 	}
-	const response = await fetch('/register', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
+	const body = new FormData()
+	body.append(
+		'input',
+		JSON.stringify({
 			email: field('email'),
 			full_name: field('full_name'),
 			website: field('website'),
 			challengeToken,
 		}),
-	})
+	)
+	// <input type="file" name="photo" accept="image/*" capture="environment">; an empty one sends nothing.
+	const photo = data.get('photo')
+	if (photo instanceof File && photo.size > 0) {
+		if (!PHOTO_TYPES.includes(photo.type) || photo.size > PHOTO_MAX_BYTES) {
+			return false
+		}
+		body.append('photo', photo, photo.name)
+	}
+	const response = await fetch('/register', { method: 'POST', body })
 	return response.ok
 }
 ```
@@ -1525,7 +1596,12 @@ export const testMails = app.cron('* * * * *', {
   job's key, so `kit.runJob('intake')` needs `testKit(app, { membership })` with an `IamMembershipRpc` of your own that
   answers `issueLink` and `revokeLink`. A test of a form passes `env: {
   TURNSTILE_SECRET: '…', TURNSTILE_SITE_KEY: '…' }` and `challengeFetch`, a stand-in for Turnstile's answer, to `testKit`, and a fresh
-  `challengeToken` with each submission: a token is single use. Test each stop of a delivery (a refused e-mail, IAM
+  `challengeToken` with each submission: a token is single use. A form that takes files is sent as the page sends it,
+  a `FormData` with the `input` part first, through `kit.fetch` with the page's `Origin` (`kit.origin`), and needs
+  `files: new MemoryFileObjects()` in `testKit`; `kit.runJob('intake')` then attaches the photo, and the scan job
+  (`FILE_SCAN_JOB`, with a `scanner`) makes it downloadable. Test the refusals beside the success: no or a failed
+  token, a filled honeypot, a file too large or of another type, a part the form does not declare, a page on another
+  origin; each keeps nothing. Test each stop of a delivery (a refused e-mail, IAM
   down, a crash after each step, an answer lost after the provider took the e-mail): the next run must leave exactly
   one live, e-mailed link and the transport one message per key. Test a bad record beside good ones too: a
   registration the insert refuses and a recipient whose e-mail hangs end dead after `MAX_ATTEMPTS` runs, a recipient

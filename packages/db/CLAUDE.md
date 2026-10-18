@@ -39,6 +39,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                                          |
 | `job-leases.ts`        | `fabrika_job_leases` and `fabrika_job_kicks`: a job run's lease, its generations and deadlines, a kick's pending run, the last run; `fencedTransaction`.       |
 | `form-admissions.ts`   | `fabrika_form_admissions` and `fabrika_form_challenges`: a form's per-minute buckets and accepted challenge tokens, one statement each.                        |
+| `form-files.ts`        | `fabrika_form_files`: a form's received files, pending before their object, held in the inbox row's transaction, claimed by `attach`; one statement each.      |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                          |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).                             |
 | `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`, `withoutInboxes`, the framework's `defineStore`.                 |

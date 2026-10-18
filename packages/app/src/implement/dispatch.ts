@@ -13,6 +13,7 @@ import {
 	type EndpointPlan,
 	type EndpointRow,
 	type ExportDescription,
+	type FormFileArtifact,
 	isAttachmentShape,
 	type LinkTokenClaims,
 	parseEndpointHeader,
@@ -32,7 +33,7 @@ import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
-import { BROWSER_CONFIG_FILE, joinPath, PAGE_CALLER_FILE, WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
+import { BROWSER_CONFIG_FILE, FORM_FILE_LIMITS, FORM_INPUT_PART, joinPath, PAGE_CALLER_FILE, WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import {
 	BadRequestError,
@@ -45,18 +46,18 @@ import {
 	UnauthorizedError,
 } from '../errors'
 import type { RequestExecutionContext } from '../fetch'
-import type { FileCollections } from '../files/collections'
+import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
-import { handlerSignal } from './bounded'
+import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
 import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
 import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
-import { ACCEPTED_BUCKET, clientBucket, type SubmissionFields, submissionOf } from './form-admission'
+import { ACCEPTED_BUCKET, clientBucket, type Submission, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { endpointData, Invocation, noFileCollections, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
@@ -70,6 +71,7 @@ import {
 	type MembershipRequest,
 	type ReadDirectory,
 } from './membership'
+import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
 import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
@@ -167,6 +169,12 @@ export type ServedEndpoint =
 		readonly site?: SiteDeclaration
 	}
 
+/** A form's file fields and the collections they land in: such a form reads `multipart/form-data`. */
+export interface FormFileAdmission {
+	readonly fields: ReadonlyMap<string, FormFileArtifact>
+	readonly collections: FileCollections
+}
+
 /** What a form admits, decided once at boot from the approved artifact and the application's variables. */
 export interface FormAdmission {
 	/** Requests per minute from one client, admitted before the body is read. */
@@ -174,6 +182,8 @@ export interface FormAdmission {
 	/** Submissions per minute the form accepts in all: only one that passed its honeypot and its challenge counts. */
 	readonly perForm: number
 	readonly fields: SubmissionFields
+	/** The form's file fields; `null` for a form that takes none, whose body is JSON. */
+	readonly files: FormFileAdmission | null
 	/** The challenge's verifier, with the secret the application variable holds; `null` without a challenge. */
 	readonly challenge: ChallengeVerifier | null
 	/** The one token the challenge does not record, so it passes again: `fabrika app dev`'s test widget's; `null` otherwise. */
@@ -740,6 +750,9 @@ export class ContractRuntime {
 		if (!(await admissions.take(served.form, clientBucket(request), admission.perClient))) {
 			throw formRateLimited(served.row)
 		}
+		if (admission.files !== null) {
+			return await this.#multipartForm(served, admission.files, request, exec)
+		}
 		const body = await readBoundedBody(request, maxBytesOf(served.row))
 		const submission = submissionOf(strictInput(served.row, served.input, parseJson(body)), admission.fields)
 		if (submission.trapped) {
@@ -758,6 +771,114 @@ export class ContractRuntime {
 			exec?.waitUntil(kicked)
 		}
 		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	/**
+	 * A form that takes files reads its `multipart/form-data` body as it streams, in the order of `#form`: its first part
+	 * is the input as JSON (within the form's `maxBytes`), so the input, the honeypot and the challenge are decided before
+	 * a byte of any file is read. Each file part then lands in its collection under a pending row of its own, owned by
+	 * nobody, and the inbox row that names each file's id makes them held in its own transaction. A submission that does
+	 * not commit deletes every file it received. The whole body arrives within `FORM_FILE_LIMITS.timeoutMs`.
+	 */
+	async #multipartForm(
+		served: Extract<ServedEndpoint, { kind: 'form' }>,
+		files: FormFileAdmission,
+		request: Request,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response> {
+		const { admission } = served
+		const boundary = multipartBoundary(request.headers.get('Content-Type'))
+		if (boundary === null) {
+			throw new HttpError(400, 'admission', `'${served.row.id}' takes multipart/form-data with a boundary`)
+		}
+		// Each part is bounded on its own as it streams; a declared length past all of them together is refused unread.
+		const declaredFiles = [...files.fields.values()]
+		const limit = maxBytesOf(served.row) + declaredFiles.reduce((sum, field) => sum + files.collections.maxBytesOf(field.collection), 0)
+			+ (declaredFiles.length + 1) * MULTIPART_PART_OVERHEAD
+		const declared = Number(request.headers.get('Content-Length') ?? '')
+		if (Number.isFinite(declared) && declared > limit) {
+			throw new HttpError(413, 'too_large', `The body is larger than the ${limit} bytes the form's input and files can hold`)
+		}
+		const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(FORM_FILE_LIMITS.timeoutMs)])
+		const parts = multipartParts(request.body ?? new Blob([]).stream(), boundary, { maxHeaderBytes: FORM_FILE_LIMITS.maxPartHeaderBytes })
+		const stop = () => {
+			parts.cancel().catch(() => {})
+		}
+		deadline.addEventListener('abort', stop, { once: true })
+		const received: ReceivedFormFile[] = []
+		let committed = false
+		try {
+			const submission = await this.#multipartInput(served, parts)
+			if (submission.trapped) {
+				return jsonResponse({ result: { received: true } }, 200)
+			}
+			if (admission.challenge === null) {
+				// `boot` refuses a form with files and no challenge; reaching this is a composition bug.
+				throw new ServerFault('contract_inconsistent', `'${served.row.id}' takes files without a challenge`)
+			}
+			await this.#challenge(served.form, admission.challenge, submission.token, request, admission.repeatableToken)
+			const columns = new Map<string, string | null>()
+			for (let part = await parts.next(); part !== null; part = await parts.next()) {
+				const field = files.fields.get(part.name)
+				if (field === undefined || columns.has(part.name) || part.filename === null) {
+					await part.body.cancel()
+					throw new HttpError(
+						400,
+						'multipart',
+						`'${served.row.id}': a part is no file field of the form, a field arrives twice, or a file has no filename`,
+					)
+				}
+				const file = await files.collections.receiveFormFile(served.form, field.collection, part)
+				if (file !== null) {
+					received.push(file)
+				}
+				columns.set(part.name, file?.id ?? null)
+			}
+			const row: Record<string, unknown> = { ...submission.row }
+			for (const [name, field] of files.fields) {
+				const id = columns.get(name) ?? null
+				if (id === null && field.required) {
+					throw new HttpError(400, 'validation', `${name}: the form needs this file`, {
+						issues: [{ path: name, code: 'required', message: 'a file is required' }],
+					})
+				}
+				row[name] = id
+			}
+			const held = { files: received.map(({ id, size, sha256 }) => ({ id, size, sha256 })), holdMs: FORM_FILE_LIMITS.holdMs }
+			if (!(await this.#framework().appendToInbox(served.form, row, { bucket: ACCEPTED_BUCKET, limit: admission.perForm }, held))) {
+				throw formRateLimited(served.row)
+			}
+			committed = true
+		} catch (error) {
+			throw multipartFailure(error, parts, deadline, request)
+		} finally {
+			deadline.removeEventListener('abort', stop)
+			await parts.cancel()
+			if (!committed) {
+				await files.collections.releaseFormFiles(received)
+			}
+		}
+		if (served.then !== null) {
+			// Without an execution context the kick runs detached; it never rejects.
+			const kicked = this.#parts.kick(served.then)
+			exec?.waitUntil(kicked)
+		}
+		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	/** The first part of a multipart form: its input, as JSON within the form's `maxBytes`, parsed strictly. */
+	async #multipartInput(served: Extract<ServedEndpoint, { kind: 'form' }>, parts: MultipartReader): Promise<Submission> {
+		const first = await parts.next()
+		if (first === null || first.name !== FORM_INPUT_PART || first.filename !== null) {
+			await first?.body.cancel()
+			throw new HttpError(400, 'multipart', `'${served.row.id}': the first part is the input as JSON, named '${FORM_INPUT_PART}', without a filename`)
+		}
+		const limit = maxBytesOf(served.row)
+		const bytes = await readBoundedBytes(first.body, { maxBytes: limit })
+		if (bytes === null) {
+			throw new HttpError(413, 'too_large', `The input is larger than ${limit} bytes`)
+		}
+		return submissionOf(strictInput(served.row, served.input, parseJson(bytes)), served.admission.fields)
 	}
 
 	/**
@@ -937,6 +1058,27 @@ function admit(row: CredentialedEndpoint, request: Request): void {
 		throw new HttpError(403, 'admission', 'A session request that is not a GET must be same-origin (Sec-Fetch-Site: same-origin)')
 	}
 	admitContentType(row, request)
+}
+
+/** What one part adds to a multipart body beside its bytes: its delimiter and its headers, at most. */
+const MULTIPART_PART_OVERHEAD = FORM_FILE_LIMITS.maxPartHeaderBytes + 128
+
+/**
+ * What a failed multipart submission answers: a body that broke the format 400, one that did not arrive in time 408,
+ * and otherwise the failure itself, whichever step met the broken stream first.
+ */
+function multipartFailure(error: unknown, parts: MultipartReader, deadline: AbortSignal, request: Request): unknown {
+	if (isStructuralError(error) && error.httpStatus < 500) {
+		return error
+	}
+	if (deadline.aborted && !request.signal.aborted) {
+		return new HttpError(408, 'timeout', `The submission did not arrive within ${FORM_FILE_LIMITS.timeoutMs / 1000} seconds`)
+	}
+	const broken = error instanceof MultipartError ? error : parts.failure()
+	if (broken !== null) {
+		return new HttpError(400, 'multipart', `The body is not the multipart/form-data the form reads: ${broken.message}`)
+	}
+	return error
 }
 
 /** The content types an endpoint admits; an anonymous endpoint has no session, so this is its whole admission. */

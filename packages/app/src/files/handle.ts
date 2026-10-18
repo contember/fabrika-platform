@@ -68,10 +68,20 @@ export interface FileCollectionHandle extends FileCollectionReader {
 	 * collection's `delete` action. The framework's sweep deletes their objects after the commit.
 	 */
 	removeAll(owner: Ref<string, string>): Promise<number>
+	/**
+	 * Attaches the file a form received under `id` (the id its inbox column holds) to `owner`, a `Ref` for the
+	 * collection's `write` action, in this site's transaction: the one that wrote the owner, located with `tx.ref`. A
+	 * scanning collection holds it `quarantined` until the scan job's verdict. `false` when no file of this collection
+	 * waits under the id (none was sent, or its hold of 7 days ended); `true` again for one this owner attached before.
+	 */
+	attach(owner: Ref<string, string>, id: string): Promise<boolean>
 }
 
 /** A site that only reads: a query, and a job outside `ctx.transaction`. */
-export type FileCollectionReadHandle<Why extends string> = FileCollectionReader & { readonly removeAll: Unavailable<Why> }
+export type FileCollectionReadHandle<Why extends string> = FileCollectionReader & {
+	readonly removeAll: Unavailable<Why>
+	readonly attach: Unavailable<Why>
+}
 
 /** `ctx.files(<collection>)`: the handle of one collection of the contract, by its name in `files`. */
 export type FileCollections<H> = (collection: string) => H

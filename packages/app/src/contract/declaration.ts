@@ -51,7 +51,7 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
-	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then', 'crossOrigin'], owned: ['kind', 'path'] },
+	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then', 'crossOrigin', 'files'], owned: ['kind', 'path'] },
 	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
 	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
@@ -241,6 +241,8 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly then?: string
 	/** `true` (the environment's listed origins) or `'*'` (any origin), as written; `buildArtifact` refuses anything else. */
 	readonly crossOrigin?: unknown
+	/** The file fields, by name: `{ collection, required? }` each, as written; `buildArtifact` checks them. */
+	readonly files?: unknown
 }
 
 export interface WebhookMountDeclaration<S> extends OptionsRecord {

@@ -193,6 +193,7 @@ const mount = z.discriminatedUnion('kind', [
 		honeypot: name.optional(),
 		challenge: z.strictObject({ provider: z.literal('turnstile'), secret: applicationVariable, siteKey: applicationVariable.optional() }).optional(),
 		then: name.optional(),
+		files: z.record(name, z.strictObject({ collection: name, required: z.boolean() })).optional(),
 	}),
 	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions }),
 ])

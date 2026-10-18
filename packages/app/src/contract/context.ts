@@ -396,6 +396,13 @@ export type JobTransaction<K extends KitTypes, A extends string, D extends Decla
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], 'mutation'>
+	& {
+		/**
+		 * `ctx.ref`, located in this transaction: an object it wrote is found before the commit, so the same transaction
+		 * attaches a form's file to the record it just created.
+		 */
+		ref<const Act extends A, const Dim extends K['dimension']>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>>
+	}
 
 /**
  * `ctx.links` of a cron job that declares the link mount it issues (`issues: '<mount>'`): a link for an object the job

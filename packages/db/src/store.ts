@@ -44,6 +44,7 @@ import {
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { fileTables } from './file-tables'
 import { formAdmissions, type InboxQuota, takeFromBucket } from './form-admissions'
+import { formFiles, type HeldFormFiles, holdFormFiles } from './form-files'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { fencedTransaction, jobLeases } from './job-leases'
@@ -1551,16 +1552,17 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			}
 			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities, readOnly: runtime.readOnly })
 			connection.runtime = bound
-			return async (dimension, id) => locateObject(models, bound, dimension, id)
+			return async (dimension, id, using) => locateObject(models, bound, dimension, id, using)
 		},
 		files: fileTables(models, () => runtimeOf(connection)),
 		framework: freeze({
 			inboxProblems: (form: string, fields: readonly string[]) => inboxProblems(models, form, fields),
-			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota) =>
-				appendToInbox(models, runtimeOf(connection), form, values, quota),
+			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>, quota: InboxQuota, held?: HeldFormFiles) =>
+				appendToInbox(models, runtimeOf(connection), form, values, quota, held),
 			webhooks: webhookTables(() => runtimeOf(connection)),
 			jobs: jobLeases(() => runtimeOf(connection)),
 			forms: formAdmissions(() => runtimeOf(connection)),
+			formFiles: formFiles(() => runtimeOf(connection)),
 		}),
 		data: dataAccess({
 			models,
@@ -1639,8 +1641,9 @@ function inboxProblems(models: TableModels, form: string, fields: readonly strin
 
 /**
  * One row of the form's declared fields, taken from the form's `quota` bucket in the same transaction: a row that
- * fails to insert gives its place back. `false`, with nothing written, when the bucket is full. An inbox answers
- * nothing, so the form reads nothing back.
+ * fails to insert gives its place back. The submission's files become held in that transaction too, so a row that does
+ * not commit holds none. `false`, with nothing written, when the bucket is full. An inbox answers nothing, so the form
+ * reads nothing back.
  */
 async function appendToInbox(
 	models: TableModels,
@@ -1648,6 +1651,7 @@ async function appendToInbox(
 	form: string,
 	values: Readonly<Record<string, unknown>>,
 	quota: InboxQuota,
+	held: HeldFormFiles | undefined,
 ): Promise<boolean> {
 	const inbox = inboxOf(models, form)
 	if (inbox === undefined) {
@@ -1664,6 +1668,9 @@ async function appendToInbox(
 			joins: {},
 			scope: undefined,
 		})
+		if (held !== undefined) {
+			await holdFormFiles(transaction, held)
+		}
 		return true
 	})
 }
@@ -1695,6 +1702,7 @@ async function locateObject(
 	runtime: DataLayerRuntime,
 	dimension: string,
 	id: string,
+	using: Session | undefined,
 ): Promise<ReadonlyMap<string, string> | null> {
 	const owner = locatedOwner(models, dimension)
 	if (typeof id !== 'string' || id.length === 0) {
@@ -1707,7 +1715,7 @@ async function locateObject(
 		columns[columns.length] = owner.chain[index]?.column ?? ''
 	}
 	const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope }
-	const [row] = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
+	const [row] = await (using ?? sessionOf(runtime)).run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
 	if (row === undefined) {
 		return null
 	}

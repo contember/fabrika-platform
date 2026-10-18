@@ -4,6 +4,9 @@ import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { compileContract, ContractError, defineContract } from '../contract'
 import { applicationPolicy } from '../implement/headers'
+import { contract as formFilesContract } from './fixtures/form-files/fabrika.contract'
+import { tables as formFilesTables } from './fixtures/form-files/src/db/tables'
+import { vocabulary as formFilesVocabulary } from './fixtures/form-files/src/vocabulary'
 import { contract } from './fixtures/intake/fabrika.contract'
 import { tables } from './fixtures/intake/src/db/tables'
 import { vocabulary } from './fixtures/intake/src/vocabulary'
@@ -150,5 +153,83 @@ describe('compileContract refuses', () => {
 			"csp scriptSrc: 'http://widgets.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
 			"csp frameSrc: 'https://*.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
 		])
+	})
+})
+
+describe('a form that takes files', () => {
+	const photos = (scan: boolean) =>
+		({
+			owner: 'candidates',
+			read: 'candidates.read',
+			write: 'candidates.attach',
+			delete: 'candidates.review',
+			maxBytes: 4096,
+			types: ['image/jpeg'],
+			...(scan ? { scan: true } : {}),
+		}) as const
+	const Register = z.strictObject({ email: z.email(), name: z.string(), website: z.optional(z.string()), challengeToken: z.string() })
+	const challenge = { provider: 'turnstile', secret: 'TURNSTILE_SECRET' } as const
+
+	test('is multipart in its row, bounded by maxBytes for its input, and names each file field in its mount', () => {
+		const artifact = compileContract(formFilesContract, formFilesTables)
+		expect(artifact.mounts['register']).toEqual({
+			kind: 'form',
+			path: '/register',
+			appendTo: 'registrations',
+			honeypot: 'website',
+			challenge: { provider: 'turnstile', secret: 'TURNSTILE_SECRET' },
+			files: { photo: { collection: 'photos', required: false } },
+		})
+		expect(artifact.mounts['apply']).toMatchObject({ files: { portrait: { collection: 'photos', required: true } } })
+		expect(artifact.endpoints.find((row) => row.id === 'register')?.admission).toEqual({ contentTypes: ['multipart/form-data'], maxBytes: 2048 })
+	})
+
+	test('needs a challenge, a declared collection that scans, and fields of their own that are inbox columns', () => {
+		const wrong = defineContract(formFilesVocabulary, (c) => ({
+			register: c.form('/register', {
+				input: Register,
+				appendTo: 'registrations',
+				honeypot: 'website',
+				files: { photo: { collection: 'portraits' }, website: { collection: 'photos' }, input: { collection: 'photos' } },
+			}),
+			apply: c.form('/apply', {
+				input: z.strictObject({ email: z.email(), challengeToken: z.string() }),
+				appendTo: 'applications',
+				challenge,
+				files: { portrait: { collection: 'unscanned' }, selfie: { collection: 'photos' } },
+			}),
+			files: { photos: c.files(photos(true)), unscanned: c.files(photos(false)) },
+		}))
+		expect(problemsOf(() => compileContract(wrong, formFilesTables))).toEqual([
+			"mount 'register': takes files, so it declares a challenge: an anonymous upload needs a solved one (challenge: { provider: 'turnstile', … })",
+			"mount 'register' file 'photo': collection \"portraits\" is not a file collection of the contract (collections: photos, unscanned)",
+			"mount 'register' file 'website': is also the name of the input part, the challenge token, the honeypot or an input field; name the file its own field",
+			"mount 'register' file 'input': is also the name of the input part, the challenge token, the honeypot or an input field; name the file its own field",
+			"mount 'apply' file 'portrait': lands in files 'unscanned', which does not scan; an anonymous visitor's file waits for a clean verdict (scan: true)",
+			"mount 'register': the input field 'challengeToken' is not a column of its inbox registrations (allowed: a field named like a column: id, email, name, photo, received_at)",
+			"mount 'register': the file field 'input' is not a column of its inbox registrations (allowed: a field named like a column: id, email, name, photo, received_at)",
+			"mount 'apply': the file field 'selfie' is not a column of its inbox applications (allowed: a field named like a column: id, email, portrait, received_at)",
+		])
+	})
+
+	test('takes at most four file fields, each { collection, required? }', () => {
+		const many = defineContract(formFilesVocabulary, (c) => ({
+			apply: c.form('/apply', {
+				input: z.strictObject({ email: z.email(), challengeToken: z.string() }),
+				appendTo: 'applications',
+				challenge,
+				files: {
+					a: { collection: 'photos' },
+					b: { collection: 'photos' },
+					c: { collection: 'photos' },
+					d: { collection: 'photos' },
+					e: { collection: 'photos' },
+				},
+			}),
+			files: { photos: c.files(photos(true)) },
+		}))
+		expect(problemsOf(() => compileContract(many, formFilesTables))[0]).toBe(
+			"mount 'apply': files declares 5 file fields (allowed: 1 to 4, one file each)",
+		)
 	})
 })

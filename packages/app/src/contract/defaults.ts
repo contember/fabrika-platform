@@ -27,6 +27,25 @@ export const FORM_LIMITS = {
 /** The input field that carries a form's challenge token; a form with a challenge declares it as a string. */
 export const FORM_CHALLENGE_FIELD = 'challengeToken'
 
+/**
+ * A form that takes files is `multipart/form-data`: its input travels as JSON in the first part, named `input`, and each
+ * file in a part named after its field. The proxy admits only that type for such a form.
+ */
+export const FORM_MULTIPART_TYPE = 'multipart/form-data'
+export const FORM_INPUT_PART = 'input'
+
+/**
+ * The bounds of a form's files: at most `maxFields` file fields, a file each; a received file waits `holdMs` for the
+ * job that drains the inbox to attach it, then the sweep deletes it; a submission's body must arrive within
+ * `timeoutMs`; a part's headers hold at most `maxPartHeaderBytes`.
+ */
+export const FORM_FILE_LIMITS = {
+	maxFields: 4,
+	holdMs: 7 * 24 * 60 * 60 * 1000,
+	timeoutMs: 5 * 60 * 1000,
+	maxPartHeaderBytes: 8 * 1024,
+} as const
+
 /** Each challenge provider's fixed browser origins: its widget's script and its frame. */
 export const CHALLENGE_ORIGINS: Readonly<Record<ChallengeProvider, { readonly scriptSrc: readonly string[]; readonly frameSrc: readonly string[] }>> =
 	{

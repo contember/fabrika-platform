@@ -34,6 +34,7 @@ import {
 	type CronJob,
 	type Export,
 	type FormChallengeOption,
+	type FormFileOption,
 	type FormJobs,
 	type FormMount,
 	type FormOptions,
@@ -197,6 +198,9 @@ type ExtraFields<T extends string, Extra extends string, Columns extends string>
 /** The challenge token's field, exempt from the inbox's columns where the form declares a challenge. */
 type ChallengeField<Ch> = [Ch] extends [never] ? never : typeof FORM_CHALLENGE_FIELD
 
+/** A form's file fields: each is a column of its inbox too, which receives the held file's id. */
+type FileFields<F> = [F] extends [never] ? never : keyof F
+
 /** The builders of the contract's callback: the mounts that take no handler, and `rpc`, which mounts groups. */
 export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K['dimension'], K['creatable']>, 'spa' | 'health' | 'files'> {
 	/** A form that appends each submission to its inbox `appendTo`, one column per input field, and answers a constant. */
@@ -206,12 +210,14 @@ export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K
 		const H extends string = never,
 		const Ch extends FormChallengeOption = never,
 		const Then extends string = never,
+		const F extends { readonly [field: string]: FormFileOption } = never,
 	>(
 		path: Path,
 		options: FormOptions<I, Then> & {
-			readonly appendTo: T & NoInfer<InboxTarget<K['index'], T, keyof z.output<I>, H, ChallengeField<Ch>>>
+			readonly appendTo: T & NoInfer<InboxTarget<K['index'], T, keyof z.output<I> | FileFields<F>, H, ChallengeField<Ch>>>
 			readonly honeypot?: H & NoInfer<OneName<H, LiteralHoneypot>>
 			readonly challenge?: Ch
+			readonly files?: F
 		},
 	): FormMount<I, NoInfer<Then>>
 	/** The groups' endpoints at `POST <prefix>/<group>.<endpoint>`, to the callers the groups name. */

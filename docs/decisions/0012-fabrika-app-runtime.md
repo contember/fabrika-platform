@@ -224,7 +224,8 @@ metadata from the application's schema: containment, the creator role, the membe
   admits it only for the mount the approved schema records with the job, and lets it revoke only links it issued.
   The job is app-wide for that mount: the link is bound to one object, the job is not. This is how an anonymous
   visitor gets a credential: a form appends a row and answers a constant, and the job creates the record and issues
-  the link. Single use stays application state (a `verified_at` set once under `getForUpdate`); IAM's revocation is
+  the link. A form may also take files with the submission; each waits owned by nobody until the job attaches it to the
+  record in the transaction that creates it ([ADR-0061](0061-a-form-takes-files-beside-its-input.md)). Single use stays application state (a `verified_at` set once under `getForUpdate`); IAM's revocation is
   the stop, effective within the token lifetime of 300 s.
 
 `endpointMembers` (`@fabrika/auth-core`) decides which members facility an endpoint has, for the types, `boot` and

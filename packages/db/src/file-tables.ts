@@ -53,6 +53,18 @@ export interface PendingFile {
 	readonly createdAt: Date
 }
 
+/** A file whose object was written before it had an owner (a form's): `adopt` gives it one. */
+export interface AdoptedFile {
+	readonly id: string
+	readonly objectKey: string
+	readonly size: number
+	readonly sha256: string
+	readonly contentType: string
+	readonly originalName: string | null
+	/** When its object was received. */
+	readonly createdAt: Date
+}
+
 /** A file whose upload completed: served when `live`, `409` while `quarantined`, gone when `rejected`. */
 export type HeldStatus = Exclude<FileStatus, 'pending'>
 
@@ -112,8 +124,14 @@ export interface FileCollectionTable {
 	complete(owner: unknown, id: string, written: { readonly size: number; readonly sha256: string }, status: 'live' | 'quarantined'): Promise<void>
 	/** Deletes the caller's own pending row once its object is gone. */
 	abandon(id: string): Promise<void>
+	/**
+	 * Locks the owner where `owner` (a `Ref` for the write action) says it lies and inserts a held row for a file whose
+	 * object already exists, in `using`: `quarantined` in a scanning collection, so the scan job decides about it, else
+	 * `live`. `NotFoundError` when the owner is not there.
+	 */
+	adopt(owner: unknown, file: AdoptedFile, using: Session): Promise<void>
 	/** The owner's files that hold a place in its quota: live, quarantined and rejected, until removed. */
-	countHeld(owner: unknown): Promise<number>
+	countHeld(owner: unknown, using?: Session): Promise<number>
 	/** Marks a held file of `owner` removed. */
 	retract(owner: unknown, id: string, at: Date): Promise<void>
 	/**
@@ -381,14 +399,35 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			await session().run(deleteNode(table, where, 'id'), guard('DeleteQueryNode', table, scope))
 		},
 
-		async countHeld(capability: unknown): Promise<number> {
+		async adopt(capability: unknown, file: AdoptedFile, transaction: Session): Promise<void> {
+			const grant = grantOf(capability, owner.dimension, spec.actions.write)
+			const values = new Map<string, string | number | Date | null>([['id', file.id]])
+			for (const { link, value } of linkValues(table, fileOwnerLinks, grant)) {
+				values.set(link.column, value)
+			}
+			values.set('status', spec.scan ? 'quarantined' : 'live')
+			values.set('object_key', file.objectKey)
+			values.set('size', file.size)
+			values.set('content_type', file.contentType)
+			values.set('sha256', file.sha256)
+			values.set('original_name', file.originalName)
+			values.set('created_by', grant.principal)
+			values.set('created_at', file.createdAt)
+			if (spec.scan) {
+				values.set('scan_after', new Date())
+			}
+			await lockOwner(transaction, grant)
+			await transaction.run(insertNode(table, values, acknowledgement(table, 'id', undefined)), guard('InsertQueryNode', table, undefined))
+		},
+
+		async countHeld(capability: unknown, using?: Session): Promise<number> {
 			const grant = grantOf(capability, owner.dimension, spec.actions.write)
 			const scope = linksPredicate(table, linkValues(table, fileOwnerLinks, grant))
 			const count = SelectionNode.create(
 				AliasNode.create(AggregateFunctionNode.create('count', [SelectAllNode.create()]), IdentifierNode.create('count')),
 			)
 			const conditions = allOf([isHeld(), isNull(table, 'deleted_at', false)])
-			const [row] = await session().run<Readonly<Record<string, unknown>>>(
+			const [row] = await (using ?? session()).run<Readonly<Record<string, unknown>>>(
 				selectNode(table, [count], conditions, scope),
 				guard('SelectQueryNode', table, scope),
 			)

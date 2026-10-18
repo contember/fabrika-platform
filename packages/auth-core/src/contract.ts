@@ -340,6 +340,18 @@ export interface FormMountArtifact {
 	readonly challenge?: FormChallenge
 	/** The cron job each accepted submission kicks: one run in the background, coalesced on the job's lease. */
 	readonly then?: string
+	/**
+	 * The files a submission carries beside its input, by field: each lands in its collection owned by nobody, and its
+	 * id in the inbox column of the field's name, until the job that drains the inbox attaches it to its owner. Present
+	 * only when declared, so every other form keeps its digest; such a form is `multipart/form-data` and challenged.
+	 */
+	readonly files?: Readonly<Record<string, FormFileArtifact>>
+}
+
+/** One file field of a form: the collection the file lands in, and whether a submission must carry it. */
+export interface FormFileArtifact {
+	readonly collection: string
+	readonly required: boolean
 }
 
 export interface FormRate {

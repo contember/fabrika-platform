@@ -11,6 +11,7 @@ export const JOB_LEASES_TABLE = 'fabrika_job_leases'
 export const JOB_KICKS_TABLE = 'fabrika_job_kicks'
 export const FORM_ADMISSIONS_TABLE = 'fabrika_form_admissions'
 export const FORM_CHALLENGES_TABLE = 'fabrika_form_challenges'
+export const FORM_FILES_TABLE = 'fabrika_form_files'
 
 export interface FrameworkMigration {
 	/** Ordered by name; an applied one is immutable, like an application's. */
@@ -92,6 +93,28 @@ CREATE TABLE ${JOB_KICKS_TABLE} (
 	job TEXT PRIMARY KEY,
 	pending BOOLEAN NOT NULL
 );
+`,
+	}),
+	Object.freeze({
+		name: '0005_form_files.sql',
+		sql: `-- A file a form received with a submission, owned by nobody and served by no endpoint. It is 'pending' from before
+-- its object (<collection>/<id>) is written until the submission's inbox row commits, then 'held' until held_until:
+-- the job that drains the inbox attaches it to its owner, which moves it into the collection's own table, or the
+-- sweep deletes its object and the row once the hold ended (a pending row once it is an hour old).
+CREATE TABLE ${FORM_FILES_TABLE} (
+	id UUID PRIMARY KEY,
+	form TEXT NOT NULL,
+	collection TEXT NOT NULL,
+	status TEXT NOT NULL CONSTRAINT ${FORM_FILES_TABLE}_status CHECK (status IN ('pending', 'held')),
+	object_key TEXT NOT NULL UNIQUE,
+	size BIGINT,
+	sha256 TEXT,
+	content_type TEXT NOT NULL,
+	original_name TEXT,
+	created_at TIMESTAMPTZ NOT NULL,
+	held_until TIMESTAMPTZ
+);
+CREATE INDEX ${FORM_FILES_TABLE}_created_at ON ${FORM_FILES_TABLE} (created_at);
 `,
 	}),
 ])
