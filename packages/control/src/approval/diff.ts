@@ -1256,7 +1256,12 @@ function formFileChanges(name: string, before: FormFiles, after: FormFiles): Acc
 		if (was === undefined || was.collection !== file.collection) {
 			changes.push(widening(`Form \`${name}\` takes a file \`${field}\` from anyone into files \`${file.collection}\``))
 		} else if (was.required !== file.required) {
-			changes.push(widening(`Form \`${name}\` ${file.required ? 'requires' : 'no longer requires'} its file \`${field}\``))
+			// A required file refuses the submissions without one; no longer requiring it admits them.
+			changes.push(
+				file.required
+					? removal(`Form \`${name}\` requires its file \`${field}\``)
+					: widening(`Form \`${name}\` no longer requires its file \`${field}\``),
+			)
 		}
 	}
 	for (const [field, file] of Object.entries(before)) {

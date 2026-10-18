@@ -87,7 +87,7 @@ describe('the parts', () => {
 		const { boundary, bytes } = await encoded(form)
 		const reader = multipartParts(chunked(bytes, 4), boundary, { maxHeaderBytes: 8192 })
 		await reader.next()
-		expect(reader.next()).rejects.toBeInstanceOf(MultipartError)
+		await expect(reader.next()).rejects.toBeInstanceOf(MultipartError)
 	})
 
 	test('after a cancelled body there is no further part to tell from a missing one', async () => {
@@ -98,7 +98,7 @@ describe('the parts', () => {
 		const reader = multipartParts(chunked(bytes, 4), boundary, { maxHeaderBytes: 8192 })
 		const first = await reader.next()
 		await first?.body.cancel()
-		expect(reader.next()).rejects.toThrow('the body was not read to its end')
+		await expect(reader.next()).rejects.toThrow('the body was not read to its end')
 	})
 })
 
@@ -138,6 +138,30 @@ describe('a malformed body is refused', () => {
 			"a part's name is malformed or given twice",
 		)
 		expect(await refused(`--xyz\r\nnonsense\r\n\r\nx\r\n--xyz--`)).toBe('a part header is not a name and a value')
+	})
+
+	test('with headers past their bound that arrive in one read', async () => {
+		const raw = `--xyz\r\nContent-Disposition: form-data; name="input"\r\nX-Pad: ${'a'.repeat(15_000)}\r\n\r\n{}\r\n--xyz--\r\n`
+		const reader = multipartParts(chunked(encoder.encode(raw), 1_000_000), boundary, { maxHeaderBytes: 8192 })
+		await expect(reader.next()).rejects.toThrow("a part's headers are longer than 8192 bytes")
+	})
+
+	test('whose stream fails, as a closed connection does, as interrupted', async () => {
+		let sent = false
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (sent) {
+					controller.error(new DOMException('The connection was closed.', 'AbortError'))
+					return
+				}
+				sent = true
+				controller.enqueue(encoder.encode('--xyz\r\nContent-Disposition: form-data; name="input"\r\n\r\n{"a":'))
+			},
+		})
+		const reader = multipartParts(body, boundary, { maxHeaderBytes: 8192 })
+		const part = await reader.next()
+		await expect(part === null ? null : new Response(part.body).text()).rejects.toThrow('the body could not be read to its end')
+		expect(reader.failure()?.reason).toBe('interrupted')
 	})
 
 	test('with headers past their bound, or garbage after a delimiter', async () => {

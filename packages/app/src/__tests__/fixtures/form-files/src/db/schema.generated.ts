@@ -18,6 +18,13 @@ export interface CandidatesTable {
 	version: number
 }
 
+export interface ReattachRequestsTable {
+	id: Generated<string>
+	email: string
+	photo: string
+	outcome: string | null
+}
+
 export interface RegistrationsTable {
 	id: Generated<string>
 	email: string
@@ -29,6 +36,7 @@ export interface RegistrationsTable {
 export interface DB {
 	applications: ApplicationsTable
 	candidates: CandidatesTable
+	reattach_requests: ReattachRequestsTable
 	registrations: RegistrationsTable
 }
 
@@ -50,6 +58,16 @@ export const columns: TypedColumnList<DB> = {
 			'name',
 			'created_by',
 			'version',
+		],
+		foreignKeys: [],
+		timestamps: [],
+	},
+	'reattach_requests': {
+		columns: [
+			'id',
+			'email',
+			'photo',
+			'outcome',
 		],
 		foreignKeys: [],
 		timestamps: [],

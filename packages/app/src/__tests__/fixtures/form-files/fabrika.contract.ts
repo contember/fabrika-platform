@@ -2,7 +2,7 @@
 // job creates the candidate and attaches it; a scan clears it before anyone downloads it. A second form requires its file.
 
 import { app } from './src/app-kit'
-import { intake } from './src/intake/endpoints'
+import { intake, reattach } from './src/intake/endpoints'
 import { Apply, Register } from './src/schemas'
 
 /** Small enough for a test to send one file over it. */
@@ -36,5 +36,5 @@ export const contract = app.contract((c) => ({
 			scan: true,
 		}),
 	},
-	jobs: { intake },
+	jobs: { intake, reattach },
 }))

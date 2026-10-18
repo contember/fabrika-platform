@@ -855,6 +855,7 @@ function kitJobContext(
 			check: boundTo(frame, () => false, 'ctx.files'),
 			session: async () => data.direct(),
 			readOnly: 'a job removes files inside ctx.transaction((tx) => …), as tx.files',
+			attaches: false,
 		}),
 		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
 			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
@@ -866,7 +867,14 @@ function kitJobContext(
 					const sql = site.sql === null ? undeclaredSql(job, 'job', 'tx.sql') : jobSql(frame, data, site.sql, session, () => !open)
 					const removing = files === null
 						? noFileCollections(job)
-						: files.site({ where: job, frame, check: boundTo(frame, () => !open, 'tx.files'), session: async () => session, readOnly: null })
+						: files.site({
+							where: job,
+							frame,
+							check: boundTo(frame, () => !open, 'tx.files'),
+							session: async () => session,
+							readOnly: null,
+							attaches: true,
+						})
 					// Located in this transaction, so an object it wrote is found before the commit.
 					const located = (action: string, dimension: string, id: string) => {
 						boundTo(frame, () => !open, 'tx.ref')()

@@ -18,7 +18,7 @@ import type {
 	WithinTables,
 } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { FileCollectionHandle, FileCollectionReadHandle, FileCollections } from '../files/handle'
+import type { FileCollectionHandle, FileCollectionJobHandle, FileCollectionReadHandle, FileCollections } from '../files/handle'
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
@@ -135,12 +135,14 @@ type SqlContext<S, Ix extends AnyDbIndex> = {
 }
 
 /** `ctx.files(<collection>)`: removal where the site writes (a mutation, a job's transaction), reading everywhere. */
-type FilesContext<Ix, K extends DataKind> = {
+type FilesContext<Ix, K extends DataKind | 'transaction'> = {
 	readonly files: Ix extends NoTablesIndex ? Unavailable<'this application declares no tables, so it has no file collections'>
-		: FileCollections<K extends 'mutation' ? FileCollectionHandle : FileCollectionReadHandle<RemovesIn<K>>>
+		: FileCollections<
+			K extends 'transaction' ? FileCollectionJobHandle : K extends 'mutation' ? FileCollectionHandle : FileCollectionReadHandle<RemovesIn<K>>
+		>
 }
 
-type RemovesIn<K extends DataKind> = K extends 'job' ? 'a job removes files inside ctx.transaction((tx) => …), as tx.files'
+type RemovesIn<K extends DataKind | 'transaction'> = K extends 'job' ? 'a job removes files inside ctx.transaction((tx) => …), as tx.files'
 	: 'a query reads only; remove files in a mutation'
 
 type UnscopedData<Ix extends AnyDbIndex, U, K extends DataKind> = {
@@ -395,7 +397,7 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string,
 export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, string, JobMailer>> =
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
-	& FilesContext<K['index'], 'mutation'>
+	& FilesContext<K['index'], 'transaction'>
 	& {
 		/**
 		 * `ctx.ref`, located in this transaction: an object it wrote is found before the commit, so the same transaction

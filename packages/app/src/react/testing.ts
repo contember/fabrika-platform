@@ -23,6 +23,9 @@ const BUN_GLOBALS = [
 	'TextEncoder',
 	'TextDecoder',
 	'ReadableStream',
+	// happy-dom replaces these with its own, which Bun's streams refuse to pipe through: a form's upload digests through one.
+	'WritableStream',
+	'TransformStream',
 ] as const
 
 export interface InstalledDom {

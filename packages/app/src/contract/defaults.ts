@@ -31,7 +31,7 @@ export const FORM_CHALLENGE_FIELD = 'challengeToken'
  * A form that takes files is `multipart/form-data`: its input travels as JSON in the first part, named `input`, and each
  * file in a part named after its field. The proxy admits only that type for such a form.
  */
-export const FORM_MULTIPART_TYPE = 'multipart/form-data'
+export { FORM_MULTIPART_TYPE } from '@fabrika/auth-core'
 export const FORM_INPUT_PART = 'input'
 
 /**
@@ -44,6 +44,14 @@ export const FORM_FILE_LIMITS = {
 	holdMs: 7 * 24 * 60 * 60 * 1000,
 	timeoutMs: 5 * 60 * 1000,
 	maxPartHeaderBytes: 8 * 1024,
+	/**
+	 * A form with files accepts this many submissions per minute unless it declares `rate.perForm`, and its files write
+	 * at most `bytesPerHour` per hour unless it declares `rate.bytesPerHour` (at most `maxBytesPerHour`). Each file
+	 * reserves its collection's `maxBytes` before its first byte is written, and gives back what it did not use.
+	 */
+	perForm: 20,
+	bytesPerHour: 512 * 1024 * 1024,
+	maxBytesPerHour: 64 * 1024 * 1024 * 1024,
 } as const
 
 /** Each challenge provider's fixed browser origins: its widget's script and its frame. */

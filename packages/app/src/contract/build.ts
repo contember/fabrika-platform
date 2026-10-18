@@ -535,9 +535,14 @@ class ArtifactBuilder {
 				this.#objectSchema(`${where} input`, mount.input)
 				this.#nonEmpty(`${where} appendTo`, mount.appendTo)
 				const files = mount.files === undefined ? null : this.#formFiles(where, mount, mount.files)
+				this.#formByteBudget(where, mount, files)
 				const limit = this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.formMaxBytes)
-				// A form that takes files is multipart: `maxBytes` bounds its input part, each collection its file.
-				const admission: BodyAdmission = files === null ? limit : { contentTypes: [FORM_MULTIPART_TYPE], maxBytes: limit.maxBytes }
+				// A form that takes files is multipart: `maxBytes` bounds its input part, each collection its file. While no
+				// file is required it also takes the JSON body it took before, so its existing pages keep working.
+				const optional = files !== null && Object.values(files).every((file) => !file.required)
+				const admission: BodyAdmission = files === null
+					? limit
+					: { contentTypes: optional ? ['application/json', FORM_MULTIPART_TYPE] : [FORM_MULTIPART_TYPE], maxBytes: limit.maxBytes }
 				this.#anonymous(name, 'form', 'POST', mount.path, admission, mount.input, this.#crossOrigin(where, mount.crossOrigin, true))
 				return {
 					kind: 'form',
@@ -671,9 +676,33 @@ class ArtifactBuilder {
 		return files
 	}
 
+	/** `bytesPerHour` belongs to a form with files, and fits at least the largest file one of its fields admits. */
+	#formByteBudget(where: string, mount: FormMountDeclaration<SchemaShape>, files: Readonly<Record<string, FormFileArtifact>> | null): void {
+		const declared: unknown = typeof mount.rate === 'object' && mount.rate !== null ? Reflect.get(mount.rate, 'bytesPerHour') : undefined
+		if (declared === undefined) {
+			return
+		}
+		if (files === null) {
+			this.#problem(where, 'declares rate.bytesPerHour and takes no files (allowed: on a form with files)')
+			return
+		}
+		const largest = Math.max(...Object.values(files).map((file) => this.#contract.files[file.collection]?.maxBytes ?? 0))
+		if (typeof declared === 'number' && declared < largest) {
+			this.#problem(where, `rate.bytesPerHour ${declared} is less than the ${largest} bytes one of its files may hold`)
+		}
+	}
+
 	#formRate(where: string, rate: object): FormRate {
-		this.#keys(where, rate, ['perClient', 'perForm'])
-		const parsed: { perClient?: number; perForm?: number } = {}
+		this.#keys(where, rate, ['perClient', 'perForm', 'bytesPerHour'])
+		const parsed: { perClient?: number; perForm?: number; bytesPerHour?: number } = {}
+		const bytes: unknown = Reflect.get(rate, 'bytesPerHour')
+		if (bytes !== undefined) {
+			if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 1 || bytes > FORM_FILE_LIMITS.maxBytesPerHour) {
+				this.#problem(where, `bytesPerHour ${String(bytes)} is not a whole number of bytes from 1 to ${FORM_FILE_LIMITS.maxBytesPerHour}`)
+			} else {
+				parsed.bytesPerHour = bytes
+			}
+		}
 		for (const key of ['perClient', 'perForm'] as const) {
 			const value: unknown = Reflect.get(rate, key)
 			if (value === undefined) {

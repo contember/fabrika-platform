@@ -127,9 +127,11 @@ export interface FileCollectionTable {
 	/**
 	 * Locks the owner where `owner` (a `Ref` for the write action) says it lies and inserts a held row for a file whose
 	 * object already exists, in `using`: `quarantined` in a scanning collection, so the scan job decides about it, else
-	 * `live`. `NotFoundError` when the owner is not there.
+	 * `live`. The owner's held files are counted under that lock, so two adoptions never both pass `maxPerOwner`
+	 * (`null`: no limit); `limit`, with nothing inserted, when the owner holds that many. `NotFoundError` when the owner
+	 * is not there.
 	 */
-	adopt(owner: unknown, file: AdoptedFile, using: Session): Promise<void>
+	adopt(owner: unknown, file: AdoptedFile, using: Session, maxPerOwner: number | null): Promise<'adopted' | 'limit'>
 	/** The owner's files that hold a place in its quota: live, quarantined and rejected, until removed. */
 	countHeld(owner: unknown, using?: Session): Promise<number>
 	/** Marks a held file of `owner` removed. */
@@ -399,7 +401,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			await session().run(deleteNode(table, where, 'id'), guard('DeleteQueryNode', table, scope))
 		},
 
-		async adopt(capability: unknown, file: AdoptedFile, transaction: Session): Promise<void> {
+		async adopt(capability: unknown, file: AdoptedFile, transaction: Session, maxPerOwner: number | null): Promise<'adopted' | 'limit'> {
 			const grant = grantOf(capability, owner.dimension, spec.actions.write)
 			const values = new Map<string, string | number | Date | null>([['id', file.id]])
 			for (const { link, value } of linkValues(table, fileOwnerLinks, grant)) {
@@ -417,7 +419,11 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 				values.set('scan_after', new Date())
 			}
 			await lockOwner(transaction, grant)
+			if (maxPerOwner !== null && (await this.countHeld(capability, transaction)) >= maxPerOwner) {
+				return 'limit'
+			}
 			await transaction.run(insertNode(table, values, acknowledgement(table, 'id', undefined)), guard('InsertQueryNode', table, undefined))
+			return 'adopted'
 		},
 
 		async countHeld(capability: unknown, using?: Session): Promise<number> {

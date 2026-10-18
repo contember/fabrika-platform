@@ -23,5 +23,12 @@ create table applications (
 	portrait uuid not null,
 	received_at timestamptz not null default now()
 );
+-- What the reattach job attaches to a known candidate, and what attach answered: a probe of its retry and its limit.
+create table reattach_requests (
+	id uuid primary key default gen_random_uuid(),
+	email text not null,
+	photo uuid not null,
+	outcome text
+);
 ${fileTableSql('photos', { table: 'candidates', key: { column: 'id', type: 'uuid' }, chain: [] })}
 `

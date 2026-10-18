@@ -26,6 +26,7 @@ import {
 	callerAdmittedAt,
 	callerOf,
 	type CompiledEndpointTable,
+	FORM_MULTIPART_TYPE,
 	formatEndpointHeader,
 	planEndpoint,
 	satisfies,
@@ -660,9 +661,6 @@ function withBearerChallenge(denial: Denial, oauth: OAuthBinding | null): Denial
 	return { ...denial, challenge: denial.status === 401 ? { ...challenge, error: 'invalid_token' } : challenge }
 }
 
-/** The media type of a form that takes files: a CORS simple request, which a browser sends without a preflight. */
-const MULTIPART_FORM_TYPE = 'multipart/form-data'
-
 /**
  * A multipart form admits a browser's request only from the application's own origin or one the row admits (ADR-0022
  * "Cross-origin endpoints"). A page on any origin sends `multipart/form-data` without a preflight, so the proxy refuses
@@ -671,7 +669,7 @@ const MULTIPART_FORM_TYPE = 'multipart/form-data'
  */
 function admitFormOrigin(app: ProxyApp, row: ManifestEndpointRow, request: ForwardedRequest, crossOrigin: string | null): Denial | null {
 	const origin = request.headers.get(ORIGIN_HEADER)
-	if (row.kind !== 'form' || origin === null || crossOrigin !== null || !(row.admission?.contentTypes.includes(MULTIPART_FORM_TYPE) ?? false)) {
+	if (row.kind !== 'form' || origin === null || crossOrigin !== null || !(row.admission?.contentTypes.includes(FORM_MULTIPART_TYPE) ?? false)) {
 		return null
 	}
 	return origin === `${app.scheme}://${request.url.host}` ? null : { outcome: 'deny', status: 403, reason: 'cross_origin' }

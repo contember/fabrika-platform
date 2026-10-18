@@ -170,7 +170,7 @@ describe('a form that takes files', () => {
 	const Register = z.strictObject({ email: z.email(), name: z.string(), website: z.optional(z.string()), challengeToken: z.string() })
 	const challenge = { provider: 'turnstile', secret: 'TURNSTILE_SECRET' } as const
 
-	test('is multipart in its row, bounded by maxBytes for its input, and names each file field in its mount', () => {
+	test('is multipart in its row (JSON too while no file is required), bounded by maxBytes, and names each file field', () => {
 		const artifact = compileContract(formFilesContract, formFilesTables)
 		expect(artifact.mounts['register']).toEqual({
 			kind: 'form',
@@ -181,7 +181,12 @@ describe('a form that takes files', () => {
 			files: { photo: { collection: 'photos', required: false } },
 		})
 		expect(artifact.mounts['apply']).toMatchObject({ files: { portrait: { collection: 'photos', required: true } } })
-		expect(artifact.endpoints.find((row) => row.id === 'register')?.admission).toEqual({ contentTypes: ['multipart/form-data'], maxBytes: 2048 })
+		// Its file is optional, so the JSON its pages sent before still goes in; a required file makes it multipart only.
+		expect(artifact.endpoints.find((row) => row.id === 'register')?.admission).toEqual({
+			contentTypes: ['application/json', 'multipart/form-data'],
+			maxBytes: 2048,
+		})
+		expect(artifact.endpoints.find((row) => row.id === 'apply')?.admission?.contentTypes).toEqual(['multipart/form-data'])
 	})
 
 	test('needs a challenge, a declared collection that scans, and fields of their own that are inbox columns', () => {
@@ -231,5 +236,53 @@ describe('a form that takes files', () => {
 		expect(problemsOf(() => compileContract(many, formFilesTables))[0]).toBe(
 			"mount 'apply': files declares 5 file fields (allowed: 1 to 4, one file each)",
 		)
+	})
+})
+
+describe("a form's byte budget", () => {
+	const challenge = { provider: 'turnstile', secret: 'TURNSTILE_SECRET' } as const
+	const Apply = z.strictObject({ email: z.email(), challengeToken: z.string() })
+	const photos = {
+		owner: 'candidates',
+		read: 'candidates.read',
+		write: 'candidates.attach',
+		delete: 'candidates.review',
+		maxBytes: 4096,
+		types: ['image/jpeg'],
+		scan: true,
+	} as const
+
+	test('is declared in rate, only on a form with files, and fits at least its largest file', () => {
+		const declared = defineContract(formFilesVocabulary, (c) => ({
+			apply: c.form('/apply', {
+				input: Apply,
+				appendTo: 'applications',
+				challenge,
+				rate: { bytesPerHour: 1_000_000 },
+				files: { portrait: { collection: 'photos' } },
+			}),
+			register: c.form('/register', { input: z.strictObject({ email: z.email(), name: z.string() }), appendTo: 'registrations' }),
+			files: { photos: c.files(photos) },
+		}))
+		expect(compileContract(declared, formFilesTables).mounts['apply']).toMatchObject({ rate: { bytesPerHour: 1_000_000 } })
+		const wrong = defineContract(formFilesVocabulary, (c) => ({
+			apply: c.form('/apply', {
+				input: Apply,
+				appendTo: 'applications',
+				challenge,
+				rate: { bytesPerHour: 100 },
+				files: { portrait: { collection: 'photos' } },
+			}),
+			register: c.form('/register', {
+				input: z.strictObject({ email: z.email(), name: z.string() }),
+				appendTo: 'registrations',
+				rate: { bytesPerHour: 1_000_000 },
+			}),
+			files: { photos: c.files(photos) },
+		}))
+		expect(problemsOf(() => compileContract(wrong, formFilesTables))).toEqual([
+			"mount 'apply': rate.bytesPerHour 100 is less than the 4096 bytes one of its files may hold",
+			"mount 'register': declares rate.bytesPerHour and takes no files (allowed: on a form with files)",
+		])
 	})
 })
