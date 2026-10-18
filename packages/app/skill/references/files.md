@@ -341,11 +341,12 @@ if (created !== undefined && row.photo !== null) {
 }
 ```
 
+- Only a job's `tx.files` has `attach`; a mutation's has none. `tx.ref` is `ctx.ref` located in the transaction.
 - `attach` answers `false` when no file of the collection waits under the id (none was sent, or its hold of seven days
   ended) and `true` again for one the same owner attached before; it never moves another owner's file. Past
   `maxPerOwner` it throws 409, and the transaction rolls back with the file still held.
 - The attached file is `quarantined` until the scan job's clean verdict, like any upload of a scanning collection.
-- A file nobody attached is deleted by the sweep job once its hold ends.
+- A file nobody attached is deleted by the sweep job an hour after its hold of seven days ended.
 
 ## Storage
 

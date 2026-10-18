@@ -659,10 +659,16 @@ vocabulary (`packages/db/CLAUDE.md`).
   read a file before the challenge, and never let a form with files boot without a challenge or with a collection
   that does not scan. The proxy refuses such a form's request from an origin its row does not admit; the framework
   cannot repeat it.
-- **A form's file reaches an owner only through `attach`** (`files/collections.ts`): in the site's transaction, with a
-  `Ref` of the owner for the collection's `write` action (a job's `tx.ref`, which locates in that transaction), it
-  claims the held row and inserts the file under the owner, `quarantined` in a scanning collection. Never serve, list
-  or open a held file, and never move one that another owner already holds.
+- **A form's file reaches an owner only through `attach`** (`files/collections.ts`), only in a job's transaction
+  (`FileSite.attaches`), with a `Ref` of the owner for the collection's `write` action (`tx.ref`, which locates in that
+  transaction): it claims the held row on the statement's clock and inserts the file under the owner, counted under the
+  owner's lock, `quarantined` in a scanning collection. Never serve, list or open a held file, never move one that
+  another owner already holds, and never let the sweep delete a held file before an hour past its hold.
+- **A form's files write within its hourly byte budget** (`fabrika_form_bytes`, `FormAdmissions.reserveBytes`): each
+  file reserves its collection's `maxBytes` before `receiveFormFile` stages it and gives back what it did not use. A
+  submission refused before its inbox append deletes what it wrote; one whose append threw leaves its files to the
+  sweep, because the row may have committed. A body whose stream fails (a closed connection) is 400 `aborted`, never a
+  5xx: an interrupted upload is the sender's. A form whose files are all optional also takes its JSON body.
 - **A form's challenge is verified before its row and recorded after it passed** (`challenge.ts`). The provider
   list is closed (`turnstile`) and its origins are fixed (`CHALLENGE_ORIGINS`, which `buildArtifact` adds to
   `scriptSrc`/`frameSrc`). Turnstile's siteverify gets one deadline for the call and the body (`CHALLENGE_LIMITS`),
