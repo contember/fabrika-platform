@@ -11,6 +11,7 @@ const USAGE = `agent-canvas review — comments on a running application
 
   agent-canvas review snippet               Print the <script> tag that adds the review widget to the app
   agent-canvas review watch                 Wait for threads the reviewer sends (blocks)
+  agent-canvas review watch --follow        Keep waiting; print every batch the reviewer sends
   agent-canvas review fetch                 Take the threads already sent (returns immediately)
   agent-canvas review reply <thread> <text> [--resolve]
                                             Answer a thread; --resolve closes it
@@ -70,6 +71,52 @@ function waitForRequests(project: string): Promise<string> {
 	})
 }
 
+const FOLLOW_RECONNECT_MS = 2_000
+const FOLLOW_GIVE_UP_MS = 60_000
+
+/**
+ * The streaming watcher for hosts that turn each output line into an event (Claude Code's Monitor). One socket stays
+ * open, so the reviewer keeps seeing an agent listening between batches. Status goes to stderr; stdout carries only
+ * batches and the line that ends the watch, so every stdout event is worth acting on.
+ */
+function followRequests(project: string): Promise<never> {
+	let claiming = Promise.resolve()
+	let unreachableSince: number | null = null
+
+	const claimAndPrint = () => {
+		claiming = claiming.then(async () => {
+			const markdown = await claim(project)
+			if (markdown !== undefined) process.stdout.write(`${markdown}\n`)
+		}).catch((error: unknown) => {
+			console.error(`review watch: claim failed: ${error instanceof Error ? error.message : String(error)}`)
+		})
+	}
+
+	const connect = () => {
+		const socket = new WebSocket(`${WS_URL}/ws/review-wait/${encodeURIComponent(project)}`)
+		socket.onopen = () => {
+			unreachableSince = null
+			console.error(`review watch: listening for ${project}`)
+			claimAndPrint()
+		}
+		socket.onmessage = (event) => {
+			// Any frame on the wait socket means "something was queued"; the claim reads what, so the frame needs no parsing.
+			if (typeof event.data === 'string') claimAndPrint()
+		}
+		socket.onclose = () => {
+			unreachableSince ??= Date.now()
+			if (Date.now() - unreachableSince > FOLLOW_GIVE_UP_MS) {
+				console.log(`review watch: the daemon at ${BASE_URL} has been unreachable for a minute; stopped watching ${project}.`)
+				process.exit(1)
+			}
+			setTimeout(connect, FOLLOW_RECONNECT_MS)
+		}
+	}
+
+	connect()
+	return new Promise<never>(() => {})
+}
+
 export async function handleReview(args: string[]) {
 	const [subcommand, ...rest] = args
 	const { values, positionals } = parseArgs({
@@ -78,6 +125,7 @@ export async function handleReview(args: string[]) {
 		options: {
 			project: { type: 'string' },
 			resolve: { type: 'boolean', default: false },
+			follow: { type: 'boolean', default: false },
 		},
 	})
 	const project = values.project ?? defaultProject()
@@ -89,6 +137,7 @@ export async function handleReview(args: string[]) {
 			return
 		case 'watch': {
 			await ensureDaemon()
+			if (values.follow) return followRequests(project)
 			process.stdout.write((await claim(project)) ?? (await waitForRequests(project)))
 			return
 		}
