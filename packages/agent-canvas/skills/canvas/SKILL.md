@@ -40,3 +40,8 @@ bunx agent-canvas instructions --list
 ```
 
 **Getting detailed docs**: Run `bunx agent-canvas instructions <topic>` for detailed documentation on any component or flow. For example: `bunx agent-canvas instructions component-mermaid` or `bunx agent-canvas instructions flow-feature`.
+
+## Reviewing a running application
+
+When the user wants to comment on a running application instead of a canvas, follow
+`bunx agent-canvas instructions app-review`. Review mode needs no session ID; it uses a project name.

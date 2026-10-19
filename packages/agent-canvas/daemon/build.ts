@@ -148,6 +148,21 @@ ${themeCss}
 
 	writeFileSync(join(DIST, 'index.html'), indexHtml)
 
+	// The review widget runs inside someone else's page, so it carries its own Preact and needs no import map.
+	console.log('  Building review widget...')
+	const reviewResult = await Bun.build({
+		entrypoints: [join(ROOT, 'review-widget', 'index.tsx')],
+		outdir: DIST,
+		format: 'iife',
+		target: 'browser',
+		naming: 'review.js',
+		minify: true,
+	})
+	if (!reviewResult.success) {
+		console.error('Review widget build failed:', reviewResult.logs)
+		process.exit(1)
+	}
+
 	// 7. Mirror runtime bundles into the canvas-share worker's static assets
 	// dir so the worker serves the same version of the runtime as the daemon.
 	// This is critical: a version drift between worker assets and the
@@ -180,8 +195,8 @@ ${themeCss}
 build().then(() => {
 	if (process.argv.includes('--watch')) {
 		let timeout: ReturnType<typeof setTimeout> | null = null
-		console.log('Watching for changes in client/ and the kernel client...')
-		for (const dir of [join(ROOT, 'client'), KERNEL_CLIENT, dirname(ANNOTATIONS_RUNTIME)]) {
+		console.log('Watching for changes in client/, review-widget/ and the kernel client...')
+		for (const dir of [join(ROOT, 'client'), join(ROOT, 'review-widget'), KERNEL_CLIENT, dirname(ANNOTATIONS_RUNTIME)]) {
 			fsWatch(dir, { recursive: true }, (_event: string, filename: string | null) => {
 				if (!filename || filename.endsWith('~')) return
 				if (timeout) clearTimeout(timeout)

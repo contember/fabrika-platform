@@ -13,3 +13,6 @@ export const UPLOADS_DIR = paths.uploadsDir
 
 /** Capability used only by the CLI to resolve secret values */
 export const CLI_AUTH_FILE = join(paths.tempDir, 'daemon-auth-token')
+
+/** Review-mode threads, one JSON file per project */
+export const REVIEWS_DIR = join(paths.dataDir, 'reviews')

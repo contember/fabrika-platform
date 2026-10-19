@@ -190,6 +190,10 @@ Agent needs the user to complete manual steps? → RUNBOOK flow
 
 **Always push a summary after implementation** unless the change was trivially small (1-2 file edit).
 
+## Review Mode
+
+To collect comments on a running application instead of a canvas, read `bunx agent-canvas instructions app-review`.
+
 ## Flow Execution Pattern
 
 1. **Determine flow** from user intent

@@ -26,7 +26,7 @@
 	"scripts": {
 		"build": "bun daemon/build.ts",
 		"release:prepare": "bun run build",
-		"typecheck": "tsc --noEmit && tsc --noEmit -p daemon/tsconfig.json",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p daemon/tsconfig.json && tsc --noEmit -p daemon/review-widget/tsconfig.json",
 		"test": "bun test"
 	},
 	"dependencies": {
