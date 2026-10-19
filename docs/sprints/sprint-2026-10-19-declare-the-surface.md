@@ -101,3 +101,13 @@ back and runs `bun run check:ci` on the integration branch.
   the endpoint id with `.` → `_`. Public procedures do not reach record (dimension, child) tables.
 - **Open.** Should IAM refuse a custom policy that grants a public action? Should the Zerops pin check compare proxy
   capabilities instead of the exact source?
+- **Merged WU-5.** Verifier presets (`github-sha256`, `standard-webhooks`, `stripe`) and `{ hmac }`; `boundTo: 'app'`;
+  `binds` on a credentialed mutation; the delivery claim under a lease (migration `0007_webhook_delivery_claims.sql`,
+  a row without a lease stays a completed delivery, so 0.5 rows stay replays); `limits` on jobs (`timeout` →
+  `limits.timeoutMs`, ceiling 24 h) and webhooks (1 MiB, 10 s / 60 s). Upcast: a 0.5 job's `'5m'` → 300000, `null`
+  → 15 min, a webhook → 10 s; fixture `webhooks-0.5.5.json`.
+- **WU-5 blocked.** `{ basic }` and `{ bearer }` are refused at build: the proxy strips `Authorization` from anonymous
+  rows (ADR-0022 rule 3), so the application never sees the credential. Enabling them is a proxy protocol decision.
+- **WU-5 open.** Stripe and Standard Webhooks senders issue their own secret, but `bind` generates it: a set-secret
+  operation is missing. Slack and Twilio signatures do not fit `{ hmac }`. Inbound mail with attachments exceeds the
+  1 MiB webhook ceiling. `put` in webhooks waits for WU-3.
