@@ -276,6 +276,30 @@ if (postgres !== null) {
 			await kit.runJob(FILE_SCAN_JOB)
 			expect((await files()).find((row) => row.id === photo?.id)?.status).toBe('live')
 		})
+
+		test('charges bytesPerHour the declared body length, or the body limit without one, and refuses past the budget', async () => {
+			await admin((sql) => sql.unsafe(`delete from ${schema}.fabrika_form_bytes where form = 'api.intake.register'`))
+			const charged = async (): Promise<number> => {
+				const [row] = await admin((sql) => sql.unsafe(`select bytes::int as bytes from ${schema}.fabrika_form_bytes where form = 'api.intake.register'`))
+				return row?.bytes ?? 0
+			}
+			const register = async (declared: boolean) => {
+				const form = multipart({ name: 'Bo', challengeToken: crypto.randomUUID() }, [['photo', PNG, 'bo.png', 'image/png']])
+				const encoded = new Response(form)
+				const headers = new Headers({ 'Content-Type': encoded.headers.get('Content-Type') ?? '' })
+				const bytes = new Uint8Array(await encoded.arrayBuffer())
+				if (declared) headers.set('Content-Length', String(bytes.byteLength))
+				const response = await kit.fetch('/api/intake.register', { method: 'POST', headers, body: bytes })
+				return { status: response.status, length: bytes.byteLength }
+			}
+			const declared = await register(true)
+			expect(declared).toMatchObject({ status: 200 })
+			expect(await charged()).toBe(declared.length)
+			// The body limit is 64 KiB of input and one 256 KiB photo; the budget of 1 MiB holds three such charges more.
+			for (let call = 0; call < 3; call++) expect((await register(false)).status).toBe(200)
+			expect(await charged()).toBe(declared.length + 3 * 327680)
+			expect((await register(false)).status).toBe(429)
+		})
 	})
 
 	describe('the isolation fixture', () => {

@@ -28,7 +28,8 @@ export interface FormAdmissions {
 	recordChallenge(form: string, tokenDigest: string, retainMs: number): Promise<boolean>
 	/**
 	 * Reserves `bytes` of `form`'s hourly byte budget `limit`, in the database's current hour; `false`, with nothing
-	 * taken, when they no longer fit. The check and the counter are one statement.
+	 * taken, when they no longer fit. The check and the counter are one statement. `form` is a form's name, or the
+	 * endpoint id of a procedure whose `bytesPerHour` is charged its declared body length.
 	 */
 	reserveBytes(form: string, bytes: number, limit: number): Promise<boolean>
 	/** Gives back `bytes` of a reservation of the current hour that a written file did not need. */

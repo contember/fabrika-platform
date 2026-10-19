@@ -564,7 +564,7 @@ export class ContractRuntime {
 	): Promise<Response | FileDownload> {
 		const caller = await this.#authorize(served.row, request)
 		const admission = served.admission ?? DEFAULT_ADMISSION
-		await this.#admit(served.row.id, admission, request, caller.subject)
+		await this.#admit(served.row, admission, request, caller.subject)
 		const body = await procedureBody(served, request, this.#parts.fileKinds)
 		const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
@@ -1163,7 +1163,7 @@ export class ContractRuntime {
 		let multipart: MultipartInput | null = null
 		try {
 			const { admission } = served
-			await this.#admit(served.row.id, admission, request, null)
+			await this.#admit(served.row, admission, request, null)
 			const body = await procedureBody({ row: served.row, input: served.input }, request, this.#parts.fileKinds)
 			multipart = body.multipart
 			const fields = body.multipart === null ? body.input : body.multipart.json
@@ -1202,13 +1202,25 @@ export class ContractRuntime {
 
 	/**
 	 * Takes one from each bucket of the endpoint, in order, before the body is read; a full one is a 429, and a take
-	 * stays taken whatever the request does next. `caller` is the principal a `perCaller` bucket counts.
+	 * stays taken whatever the request does next. `caller` is the principal a `perCaller` bucket counts. A
+	 * `bytesPerHour` budget is charged the body's declared length, at most the endpoint's body limit, or that limit when
+	 * the body declares none.
 	 */
-	async #admit(endpoint: string, admission: ProcedureAdmission, request: Request, caller: string | null): Promise<void> {
+	async #admit(row: EndpointRow, admission: ProcedureAdmission, request: Request, caller: string | null): Promise<void> {
+		const endpoint = row.id
 		for (const { bucket, limit } of bucketsOf(admission.rate, request, caller)) {
 			if (!(await this.#framework().forms.take(endpoint, bucket, limit))) {
 				throw new HttpError(429, 'rate_limited', `'${endpoint}' admits no more calls this minute; try again later`)
 			}
+		}
+		const bytesPerHour = admission.rate.bytesPerHour
+		if (bytesPerHour === null) {
+			return
+		}
+		const declared = Number(request.headers.get('Content-Length') ?? '')
+		const charged = Math.min(Number.isSafeInteger(declared) && declared > 0 ? declared : maxBytesOf(row), maxBytesOf(row))
+		if (charged > 0 && !(await this.#framework().forms.reserveBytes(endpoint, charged, bytesPerHour))) {
+			throw new HttpError(429, 'rate_limited', `'${endpoint}' admits no more bytes this hour; try again later`)
 		}
 	}
 
