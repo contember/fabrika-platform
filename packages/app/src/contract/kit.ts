@@ -287,9 +287,12 @@ export interface App<K extends KitTypes> {
 		schedule: string,
 		options: CronOptions<Acts, Sc, S, U, Is, K['index'], M, Ks>,
 	): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>, Ks>
-	/** A GitHub webhook bound per value of `boundTo`; the contract mounts it by name. */
+	/**
+	 * A webhook whose deliveries `scheme` verifies, bound per value of `boundTo` or once for the application (`'app'`);
+	 * the contract mounts it by name.
+	 */
 	webhook<
-		const B extends K['dimension'],
+		const B extends K['dimension'] | 'app',
 		const Acts extends readonly [K['action'], ...K['action'][]],
 		I extends InputSchema,
 		const S extends SqlMode = never,

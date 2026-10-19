@@ -149,11 +149,12 @@ src/
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
     capability.ts     Ref, Within, createCapabilityIssuer (a mint and its CapabilityAuthority)
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
-    anonymous.ts      the bounded body read, the share bootstrap, GitHub's signature
+    anonymous.ts      the bounded body read, the share bootstrap
     form-admission.ts a form's client bucket (`X-Fabrika-Client-Ip` only) and what its submission carries beside the row
     multipart.ts      the `multipart/form-data` reader of a form with files: part by part as the body streams, strict
     challenge.ts      a form's challenge: Turnstile's siteverify under a deadline, strictly read
-    webhook.ts        the generated binding endpoints and a delivery's principal
+    webhook.ts        a webhook's bindings (ctx.webhooks, a GitHub webhook's generated endpoints) and a delivery's principal
+    verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
@@ -310,7 +311,7 @@ src/
   for a dimension with `in`, because IAM's `createScope` makes only top-level values.
 - Membership, scopes and share links are requests to IAM through `@fabrika/auth`'s
   `IamMembership`. The framework writes no grant and mints no credential.
-- A webhook bound to a dimension generates `POST /api/webhooks.<name>.bind` and `.unbind`
+- A GitHub webhook (`github-sha256`) bound to a dimension generates `POST /api/webhooks.<name>.bind` and `.unbind`
   (`WEBHOOKS_PREFIX`), for a holder of that dimension's `members.manage`; their shapes
   (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `boot` parses with
   (`webhook.ts`) must describe each other (`membership-shapes.test.ts`).
@@ -595,7 +596,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   by default), within the per-minute budget. Listeners start only after a successful boot, so a boot failure is not
   reported twice; a request's and a job's failures are caught before any listener. Tests inject the event source:
   never let a test install a listener on the real `process`.
-- **`boot` refuses to start rather than answer nothing**: a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
+- **`boot` refuses to start rather than answer nothing**: an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
   form field that is not a column of its inbox (its honeypot and `challengeToken` excepted), a form whose challenge
   names an application variable that is not set, a job that cannot run (see Jobs), an endpoint that asks IAM with no
@@ -679,6 +680,15 @@ vocabulary (`packages/db/CLAUDE.md`).
   (`repeatableChallengeToken`, Turnstile's test-widget token, which never changes); never set it outside `app dev`. The secret is the application
   variable the contract names (`challenge.secret`), read by `boot`, which refuses to start without it; never put
   the value in the contract or a log.
+- **A webhook's verifier is framework code** (`verifiers.ts`): a preset (`github-sha256`, `standard-webhooks`, `stripe`)
+  or an `{ hmac }` shape, over the raw body, a signed timestamp within `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. `buildArtifact`
+  refuses `{ basic }` and `{ bearer }`: the proxy removes `Authorization` from an anonymous endpoint's request (ADR-0022
+  rule 3), so they could never verify. Only `github-sha256` checks the account the payload names.
+- **A binding is written by a procedure that declares `binds: '<webhook>'`** (`webhookBindings`): `ctx.webhooks('<name>')`
+  names only that webhook, `.bind(capability, account)` and `.unbind(capability, id)` take a capability of this
+  request on the bound value (a `Ref` of the webhook's dimension, an `AppCapability` for `'app'`) and run in the
+  procedure's transaction. A webhook bound to `'app'` has one row per binding with the scope `APP_BINDING_SCOPE`; its
+  handler mints `ctx.app('<action>')` for a declared action, as a job does, and holds no `ctx.refs`.
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the
   raw body with that binding's secret (401), account (403), input after dropping every
   undeclared field (400, `project` then the strict schema), the webhook's credential (503:

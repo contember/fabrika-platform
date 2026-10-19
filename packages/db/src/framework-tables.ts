@@ -4,7 +4,7 @@
 // statement is a guarded tree like a store's, keyed by equalities on the framework table itself.
 
 import { BinaryOperationNode, type OperationNode, OperatorNode, ValueNode } from 'kysely'
-import { sessionOf } from './database'
+import { type Session, sessionOf } from './database'
 import { DatabaseError, QueryRefusedError } from './errors'
 import type { GuardContext } from './guard'
 import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
@@ -17,7 +17,7 @@ export interface WebhookBinding {
 	/** The webhook mount's name. */
 	readonly webhook: string
 	readonly scope: { readonly type: string; readonly value: string }
-	/** `installation:<id>` or `repository:<id>`: the GitHub account a delivery must name. */
+	/** The provider account: for GitHub, `installation:<id>` or `repository:<id>`, which a delivery must name. */
 	readonly account: string
 	readonly secret: string
 }
@@ -28,11 +28,12 @@ export interface NewWebhookBinding extends WebhookBinding {
 }
 
 export interface WebhookTables {
-	createBinding(binding: NewWebhookBinding): Promise<void>
+	/** Records a binding, in `using` when given: the transaction of the procedure that binds. */
+	createBinding(binding: NewWebhookBinding, using?: Session): Promise<void>
 	/** The binding `id` of `webhook`, or `null`. */
 	binding(webhook: string, id: string): Promise<WebhookBinding | null>
-	/** Removes the binding when it belongs to `webhook` and `scope`; `false` when there was none. */
-	removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }): Promise<boolean>
+	/** Removes the binding when it belongs to `webhook` and `scope`, in `using` when given; `false` when there was none. */
+	removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }, using?: Session): Promise<boolean>
 	/**
 	 * Records a delivery key; `false` when the binding already received it within the retention window. Keys of the
 	 * binding older than `retainedSince` are dropped first, so the table stays bounded.
@@ -64,7 +65,7 @@ function isUniqueViolation(error: unknown): boolean {
 export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 	const session = () => sessionOf(runtime())
 	return Object.freeze({
-		async createBinding(binding: NewWebhookBinding): Promise<void> {
+		async createBinding(binding: NewWebhookBinding, using?: Session): Promise<void> {
 			const values = new Map<string, string | number>([
 				['id', binding.id],
 				['webhook', binding.webhook],
@@ -76,7 +77,7 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 				['created_at', binding.createdAt],
 			])
 			const node = insertNode(WEBHOOK_BINDINGS_TABLE, values, acknowledgement(WEBHOOK_BINDINGS_TABLE, 'id', undefined))
-			await session().run(node, guard('InsertQueryNode', WEBHOOK_BINDINGS_TABLE, undefined))
+			await (using ?? session()).run(node, guard('InsertQueryNode', WEBHOOK_BINDINGS_TABLE, undefined))
 		},
 
 		async binding(webhook: string, id: string): Promise<WebhookBinding | null> {
@@ -97,14 +98,14 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 			})
 		},
 
-		async removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }): Promise<boolean> {
+		async removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }, using?: Session): Promise<boolean> {
 			const predicate = allOf([
 				equals(WEBHOOK_BINDINGS_TABLE, 'id', id),
 				equals(WEBHOOK_BINDINGS_TABLE, 'webhook', webhook),
 				equals(WEBHOOK_BINDINGS_TABLE, 'scope_type', scope.type),
 				equals(WEBHOOK_BINDINGS_TABLE, 'scope_value', scope.value),
 			])
-			const removed = await session().run(
+			const removed = await (using ?? session()).run(
 				deleteNode(WEBHOOK_BINDINGS_TABLE, scopedWhere(undefined, predicate), 'id'),
 				guard('DeleteQueryNode', WEBHOOK_BINDINGS_TABLE, predicate),
 			)

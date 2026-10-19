@@ -107,9 +107,11 @@ try { serve(contract, { database: null }); console.log('served') } catch (error)
 			'api.deals.product',
 			'api.deals.reopen',
 			'api.deals.share',
+			'api.ledgers.connect',
 			'exports.pipeline.deal',
 			'github',
 			'jobs.close',
+			'ledger',
 			'shared.deal',
 		])
 	})

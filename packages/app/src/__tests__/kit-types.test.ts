@@ -73,6 +73,9 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'54-kick-an-undeclared-job.ts': `Argument of type '"digest"' is not assignable to parameter of type '"close"'`,
 	'55-kick-without-kicks.ts': "declare kicks: ['<cron job>'] on this site to kick a job after its commit",
 	'56-kicks-on-a-query.ts': 'a query kicks no job: declare kicks on a mutation',
+	'57-binds-on-a-query.ts': 'a query binds no webhook: declare binds on a mutation',
+	'58-webhooks-without-binds.ts': "declare binds: '<webhook>' on this mutation to create and remove its bindings",
+	'59-files-in-a-webhook.ts': 'a webhook writes no file in this release',
 }
 
 /**

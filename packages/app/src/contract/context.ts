@@ -31,6 +31,7 @@ import type { AppMail, JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
 import type { MemberAccess, Schema } from './define'
 import type { App } from './kit'
+import type { WebhookBindings } from './webhook-binding'
 
 export type { Unavailable } from '@fabrika/db/tables'
 
@@ -418,6 +419,14 @@ export type KickContext<Ks> = [Ks] extends [never]
 	: Ks extends readonly (infer N extends string)[] ? { kick(job: N): void }
 	: never
 
+/**
+ * `ctx.webhooks('<webhook>')` of a mutation that declares `binds`: the webhook's bindings, on the value a capability of
+ * this request names, written in the mutation's transaction.
+ */
+export type WebhooksContext<Bs> = [Bs] extends [never]
+	? { readonly webhooks: Unavailable<"declare binds: '<webhook>' on this mutation to create and remove its bindings"> }
+	: { webhooks(name: Bs): WebhookBindings }
+
 /** A link procedure acts on the one object its key is bound to. */
 export type LinkContext<
 	K extends KitTypes,
@@ -507,18 +516,29 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 	& JobMailContext<Of<D, 'mailer'>>
 	& { transaction<R>(work: (tx: JobTransaction<K, A, D>) => Promise<R>): Promise<R> }
 
-/** What a webhook delivery's handler receives: one transaction per delivery, idempotent by `ctx.delivery.key`. */
+type BoundToValue = 'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'
+
+/**
+ * What a webhook delivery's handler receives: one transaction per delivery, idempotent by `ctx.delivery.key`. A webhook
+ * bound to a dimension acts on its bound value through `ctx.refs`; one bound to `'app'` acts application-wide, as its
+ * own workload: `ctx.app('<action>')` and `ctx.db.app('<action>')`.
+ */
 export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& RequestContext<WebhookPrincipal>
-	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
-	// A webhook bound to a dimension acts on its bound value only, so it holds no application-wide capability.
-	& { readonly app: Unavailable<'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'> }
+	& { readonly delivery: WebhookDelivery }
+	& ([B] extends ['app'] ? {
+			/** A capability of one of the webhook's declared actions, application-wide, bound to this delivery. */
+			app<const A extends Acts>(action: A): AppCapability<A>
+			readonly refs: Unavailable<'a webhook bound to the application has no bound value: use ctx.app(<action>) and ctx.db.app(<action>)'>
+		}
+		: { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly app: Unavailable<BoundToValue> })
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& {
 		readonly db:
 			& SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>>
-			& { readonly app: Unavailable<'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'> }
+			& ([B] extends ['app'] ? WorkloadAppData<K['index'], 'mutation', Acts> : { readonly app: Unavailable<BoundToValue> })
 	}
+	& { readonly files: Unavailable<'a webhook writes no file in this release'> }
 	& NoMail
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never

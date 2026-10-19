@@ -346,6 +346,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		mailer: z.enum(JOB_MAILERS).optional(),
 		actions: actions.nonempty().optional(),
 		kicks: z.array(name).nonempty().optional(),
+		binds: name.optional(),
 	})).superRefine((declared, context) => {
 		for (const [site, reach] of Object.entries(declared)) {
 			if (reach.actions !== undefined && !isOwnWorkloadName('public', site)) {

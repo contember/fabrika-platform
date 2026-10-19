@@ -100,6 +100,7 @@ describe("the kit's builders", () => {
 			'api.deals.pipeline': { sql: 'read', unscoped: {}, connect: [], issues: null },
 			'api.deals.product': { sql: null, unscoped: {}, connect: ['catalog'], issues: null },
 			'api.deals.share': { sql: null, unscoped: {}, connect: [], issues: 'shared' },
+			'api.ledgers.connect': { sql: null, unscoped: {}, connect: [], issues: null, binds: 'ledger' },
 			'job:close': { sql: 'write', unscoped: {}, connect: [], issues: null },
 		})
 	})

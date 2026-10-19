@@ -76,7 +76,7 @@ import type { ContractDatabase, ContractImplementation, ImplementationDatabase }
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
-import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
+import { type BindableWebhook, bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, workloadSite, type WorkloadTokenSource } from './workload'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
@@ -283,9 +283,6 @@ function unservable(
 		if (mount.kind === 'link' && !owned.has(mount.dimension)) {
 			// Every link request re-reads where the object lies; without the table that records it, nothing could.
 			problems.push(`link mount '${name}' shares a '${mount.dimension}', but no table in src/db/tables.ts owns that dimension to locate it`)
-		}
-		if (mount.kind === 'webhook' && mount.boundTo.kind === 'app') {
-			problems.push(`webhook '${name}' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')`)
 		}
 	}
 	for (const row of artifact.endpoints) {
@@ -664,6 +661,25 @@ function publicEndpoint(
 	}
 }
 
+/** The webhook a procedure binds (`binds`), as the approved artifact declares it. */
+function bindsOf(
+	id: string,
+	declaration: SiteDeclaration | null,
+	artifact: ContractArtifact,
+	problems: string[],
+): { readonly binds?: BindableWebhook } {
+	const name = declaration?.binds ?? null
+	if (name === null) {
+		return {}
+	}
+	const mount = Object.hasOwn(artifact.mounts, name) ? artifact.mounts[name] : undefined
+	if (mount?.kind !== 'webhook') {
+		problems.push(`procedure '${id}' binds '${name}', which is not a webhook of the contract`)
+		return {}
+	}
+	return { binds: { name, path: mount.path, scheme: mount.scheme, boundTo: mount.boundTo } }
+}
+
 /** `frameworkProblems` refused a webhook without the framework tables, so this answers only after a bug. */
 function frameworkOf(framework: FrameworkTables | null): FrameworkTables {
 	if (framework === null) {
@@ -825,6 +841,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
 						...(bound.declaration?.then == null ? {} : { then: bound.declaration.then }),
+						...bindsOf(id, bound.declaration, artifact, problems),
 						...admissionOf(id, artifact, options, problems),
 						...queryOf(id, artifact),
 					})
@@ -852,7 +869,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					row,
 					webhook: name,
 					scheme: approved.scheme,
-					dimension: mount.boundTo,
+					boundTo: approved.boundTo,
 					actions: mount.actions,
 					input: mount.input,
 					handler: bound.handler,

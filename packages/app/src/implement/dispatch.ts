@@ -29,6 +29,7 @@ import {
 	type RedirectShape,
 	satisfies,
 	type SchemaShape,
+	type ScopeBinding,
 	scopedValues,
 	sha256Hex,
 	type WebhookScheme,
@@ -111,7 +112,16 @@ import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
 import { githubAccounts, verifyDelivery } from './verifiers'
-import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
+import {
+	APP_BINDING_SCOPE,
+	type BindableWebhook,
+	deliveryKey,
+	WEBHOOK_REPLAY_RETENTION_MS,
+	webhookBindings,
+	webhookFiles,
+	type WebhookPrincipal,
+	webhookSubject,
+} from './webhook'
 import type { WorkloadCredential } from './workload'
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
@@ -165,6 +175,8 @@ export type ServedEndpoint =
 		readonly admission?: ProcedureAdmission
 		/** A POST's `query`, parsed from the URL beside the body: its schema and its shape. */
 		readonly query?: ProcedureQuery
+		/** The webhook whose bindings `ctx.webhooks` creates and removes; absent without `binds`. */
+		readonly binds?: BindableWebhook
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -215,7 +227,7 @@ export type ServedEndpoint =
 		readonly row: EndpointRow
 		readonly webhook: string
 		readonly scheme: WebhookScheme
-		readonly dimension: string
+		readonly boundTo: ScopeBinding
 		readonly actions: readonly string[]
 		readonly input: Schema
 		readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
@@ -571,6 +583,9 @@ export class ContractRuntime {
 						...(site === undefined || invocation === null || served.readOnly === true
 							? {}
 							: { files: this.#files(served.row.id, frame, invocation, site.kind) }),
+						...(served.binds === undefined || invocation === null
+							? {}
+							: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
 						kick: kicks.kick,
 					})
 					return await served.handler({ input: access.input, ctx, ...(query === undefined ? {} : { query }) })
@@ -597,6 +612,18 @@ export class ContractRuntime {
 			return attachmentResponse(served.row.id, file, served.output, result)
 		}
 		return outputResponse(served.row, served.output, result, request)
+	}
+
+	/** `ctx.webhooks` of a procedure that declares `binds`: its bindings are written in the invocation's transaction. */
+	#webhookBindings(endpoint: string, webhook: BindableWebhook, invocation: Invocation, principal: string): (name: string) => object {
+		return webhookBindings({
+			site: `'${endpoint}'`,
+			webhook,
+			tables: () => this.#framework().webhooks,
+			authority: this.#parts.capabilities,
+			...invocation.frameworkSite('ctx.webhooks'),
+			principal,
+		})
 	}
 
 	/** `ctx.files` of a staged-kit site, in its invocation's transaction. */
@@ -1172,10 +1199,11 @@ export class ContractRuntime {
 	}
 
 	/**
-	 * A GitHub delivery, in order: the binding the path names, the signature over the raw body with that binding's
-	 * secret, the account the payload names, the input, then the delivery key — the hash of the binding and the
+	 * A webhook delivery, in order: the binding the path names, the signature over the raw body with that binding's
+	 * secret, the account a GitHub payload names, the input, then the delivery key — the hash of the binding and the
 	 * signed body, so a replay is ignored whatever its unsigned headers say. The handler gets a `Ref` of the bound
-	 * value for each declared action and the key, and runs at least once: a failed run is forgotten and redelivered.
+	 * value for each declared action, or mints application-wide ones when the webhook is bound to `'app'`, and the
+	 * key; it runs at least once: a failed run is forgotten and redelivered.
 	 */
 	async #webhook(
 		served: Extract<ServedEndpoint, { kind: 'webhook' }>,
@@ -1200,13 +1228,14 @@ export class ContractRuntime {
 			throw new ForbiddenError('The delivery names another account than its binding accepts')
 		}
 		const input = strictInput(served.row, served.input, stripped(served, payload))
-		if (binding.scope.type !== served.dimension) {
+		const bound = served.boundTo.kind === 'app' ? APP_BINDING_SCOPE.type : served.boundTo.dimension
+		if (binding.scope.type !== bound) {
 			throw new ServerFault(
 				'webhook_binding_mismatch',
-				`binding '${binding.id}' reaches a '${binding.scope.type}', and '${served.webhook}' is bound to '${served.dimension}'`,
+				`binding '${binding.id}' reaches a '${binding.scope.type}', and '${served.webhook}' is bound to '${bound}'`,
 			)
 		}
-		const chain = await this.#chain(binding.scope.type, binding.scope.value)
+		const chain = served.boundTo.kind === 'app' ? new Map<string, string>() : await this.#chain(binding.scope.type, binding.scope.value)
 		if (chain === null) {
 			throw new NotFoundError('The bound value no longer exists')
 		}
@@ -1233,25 +1262,31 @@ export class ContractRuntime {
 			try {
 				await runInRequest(frame, async () => {
 					const subject = webhookSubject(binding.id)
-					const refs = Object.freeze(
-						Object.fromEntries(
-							served.actions.map((action) => [action, this.#parts.mint.ref(frame, served.dimension, action, subject, binding.scope.value, chain)]),
-						),
-					)
+					const reach = this.#webhookReach(served, frame, subject, binding.scope.value, chain)
 					const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
 					const delivery = Object.freeze({ key })
-					const app = boundWebhookApp(served.webhook)
-					const data = site === undefined || invocation === null
+					const handles = site === undefined || invocation === null ? null : invocation.handles('mutation', site, subject)
+					const data = site === undefined || invocation === null || handles === null
 						? {}
 						: {
-							db: siteData(invocation.handles('mutation', site, subject), app),
+							db: siteData(handles, (action) => handles.app(reach.app(action))),
 							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
 						}
 					const signal = handlerSignal(request)
 					const client = requestClient(request, this.#parts.clientVouched)
 					await served.handler({
 						input,
-						ctx: Object.freeze({ principal, requestId: frame.id, signal, client, refs, delivery, app, kick: kicks.kick, ...data }),
+						ctx: Object.freeze({
+							principal,
+							requestId: frame.id,
+							signal,
+							client,
+							...reach.context,
+							delivery,
+							files: webhookFiles(served.webhook),
+							kick: kicks.kick,
+							...data,
+						}),
 					})
 				})
 			} finally {
@@ -1268,6 +1303,39 @@ export class ContractRuntime {
 			throw error
 		}
 		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	/**
+	 * What a delivery's handler acts with: a `Ref` of the bound value for each declared action, or, for a webhook bound to
+	 * `'app'`, `ctx.app(<action>)`, which mints a declared action the webhook's token carries; `ctx.db.app` binds its
+	 * handles to what `app` mints, and a webhook bound to a dimension refuses both.
+	 */
+	#webhookReach(
+		served: Extract<ServedEndpoint, { kind: 'webhook' }>,
+		frame: RequestFrame,
+		subject: string,
+		value: string,
+		chain: ReadonlyMap<string, string>,
+	): { readonly context: Readonly<Record<string, unknown>>; readonly app: (action: string) => AppCapability<string> } {
+		const boundTo = served.boundTo
+		if (boundTo.kind === 'dimension') {
+			const refs = Object.freeze(
+				Object.fromEntries(served.actions.map((action) => [action, this.#parts.mint.ref(frame, boundTo.dimension, action, subject, value, chain)])),
+			)
+			const app = boundWebhookApp(served.webhook)
+			return { context: { refs, app }, app }
+		}
+		// The delivery checked once that the token carries every declared action, before it was recorded.
+		const app = (action: string): AppCapability<string> => {
+			if (frame.ended) {
+				throw new CapabilityRefusedError('ended', `delivery ${frame.id} has ended; it mints no capability`)
+			}
+			if (!served.actions.includes(action)) {
+				throw new CapabilityRefusedError('undeclared_action', `webhook '${served.webhook}' does not declare this action`)
+			}
+			return this.#parts.mint.app(frame, action, subject)
+		}
+		return { context: { app }, app }
 	}
 
 	#framework(): FrameworkTables {

@@ -268,8 +268,11 @@ describe('compileContract refuses what the types let through', () => {
 		const hook = (scheme: WebhookScheme) =>
 			defineContract(vocabulary, (c) => ({ hook: c.webhook('/hooks/in', { scheme, boundTo: 'app', actions: ['tasks.write'], input: Id }) }))
 		const shopify: WebhookScheme = { hmac: { header: 'X-Shopify-Hmac-Sha256', algorithm: 'sha256', encoding: 'base64', signed: 'body' } }
-		for (const scheme of ['stripe', 'standard-webhooks', shopify, { basic: true }, { bearer: true }] satisfies WebhookScheme[]) {
+		for (const scheme of ['stripe', 'standard-webhooks', shopify] satisfies WebhookScheme[]) {
 			expect(compileContract(hook(scheme), {}).mounts['hook']).toMatchObject({ kind: 'webhook', scheme })
+		}
+		for (const scheme of [{ basic: true }, { bearer: true }] satisfies WebhookScheme[]) {
+			expect(compileProblems(hook(scheme))[0]).toContain('which the proxy removes from an anonymous endpoint')
 		}
 		const refused = (scheme: unknown) => {
 			const options = { scheme: 'stripe', boundTo: 'app', actions: ['tasks.write'], input: Id } as const

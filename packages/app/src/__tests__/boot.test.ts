@@ -147,7 +147,7 @@ describe('what this version does not serve yet stops the boot', () => {
 		expect(() => boot(app, { ...options, membership: new RecordingMembership() })).not.toThrow()
 	})
 
-	test('a form and a webhook write through @fabrika/db, and a webhook bound to the whole application is not served', () => {
+	test('a form and a webhook write through @fabrika/db', () => {
 		const anonymous = defineContract({
 			app: 'notes',
 			dimensions: { note: {} },
@@ -169,7 +169,6 @@ describe('what this version does not serve yet stops the boot', () => {
 		})
 		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, workloadTokens: workloadTokensFor(app) })))
 			.toEqual([
-				"webhook 'hook' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')",
 				"mount 'contact' is a form, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })",
 				"mount 'hook' is a webhook, which writes through @fabrika/db: pass serve(contract, { database: scoped(tables) })",
 			])

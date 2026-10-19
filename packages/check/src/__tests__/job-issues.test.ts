@@ -9,7 +9,7 @@ import { companies } from '../../../app/src/__tests__/kit-fixture/src/companies/
 import { tables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { deals } from '../../../app/src/__tests__/kit-fixture/src/deals/endpoints'
 import { pipeline } from '../../../app/src/__tests__/kit-fixture/src/exports'
-import { github } from '../../../app/src/__tests__/kit-fixture/src/hooks'
+import { github, ledger, ledgers } from '../../../app/src/__tests__/kit-fixture/src/hooks'
 import { shared } from '../../../app/src/__tests__/kit-fixture/src/shared'
 import { readContractSource } from '../contract'
 import { KIT_ROOT, readTree } from './colocated-helpers'
@@ -25,9 +25,10 @@ export const close = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'
 const close = app.cron('* * * * *', { actions: ['crm.read', 'deals.share'], scope: 'app', issues: 'shared' }).handle(async () => {})
 
 const evaluated = app.contract((c) => ({
-	api: c.rpc('/api', { deals, companies }),
+	api: c.rpc('/api', { deals, companies, ledgers }),
 	shared,
 	github,
+	ledger,
 	health: c.health('/healthz'),
 	jobs: { close },
 	exports: { pipeline },

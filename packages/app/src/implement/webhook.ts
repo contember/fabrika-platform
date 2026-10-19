@@ -1,15 +1,20 @@
-// `c.webhook` for GitHub (docs/reference/application-runtime.md). A holder of the bound dimension's `members.manage`
-// creates a binding through the generated `webhooks.<name>.bind` endpoint; the framework generates the secret and
-// keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding, the
-// signature over the raw body, the account, the input, the delivery id — before its handler sees a `Ref` of the
-// bound value only.
+// A webhook's bindings and deliveries (docs/reference/application-runtime.md). A procedure that declares `binds`
+// creates a binding through `ctx.webhooks('<name>')`; a GitHub webhook bound to a dimension also has the generated
+// `webhooks.<name>.bind` endpoint, for a holder of that dimension's `members.manage`. The framework generates the
+// secret and keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding,
+// the signature over the raw body, the account, the input, the delivery key — before its handler sees a `Ref` of the
+// bound value, or its application-wide capabilities when the webhook is bound to `'app'`.
 
-import type { WebhookTables } from '@fabrika/db/framework'
+import type { ScopeBinding, WebhookScheme } from '@fabrika/auth-core'
+import { type CapabilityAuthority, describeGrant } from '@fabrika/db/capability'
+import type { Session, WebhookTables } from '@fabrika/db/framework'
 import { uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
 import { joinPath, WEBHOOK_ACCOUNT_PATTERN, WEBHOOK_SCOPE_FIELD } from '../contract/defaults'
-import { NotFoundError } from '../errors'
-import { Ref } from './capability'
+import type { WebhookBindings, WebhookSecret } from '../contract/webhook-binding'
+import { BadRequestError, NotFoundError } from '../errors'
+import { CapabilityRefusedError, Ref } from './capability'
+import { ServerFault } from './faults'
 
 /** The input and output of the generated binding endpoints; `build.ts`'s `WEBHOOK_BIND_*` shapes describe them. */
 export const webhookBindInput = z.strictObject({
@@ -55,10 +60,104 @@ export interface WebhookDelivery {
 	readonly key: string
 }
 
-/** 32 random bytes as hex: the HMAC key GitHub signs with, shown once to the member who binds. */
-function generateSecret(): string {
+/**
+ * 32 random bytes, shown once to the member who binds: as hex, the key a provider signs with or sends as its password
+ * or token; for Standard Webhooks, `whsec_` and the bytes in base64, as its senders expect.
+ */
+function generateSecret(scheme: WebhookScheme): string {
 	const bytes = crypto.getRandomValues(new Uint8Array(32))
+	if (scheme === 'standard-webhooks') {
+		return `whsec_${btoa(String.fromCharCode(...bytes))}`
+	}
 	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/** The scope a binding of a webhook bound to `'app'` records: the application, which has no value. */
+export const APP_BINDING_SCOPE = Object.freeze({ type: 'app', value: '' })
+
+/** The longest account a binding records for a provider other than GitHub. */
+const MAX_ACCOUNT_LENGTH = 200
+
+/** What a procedure that binds needs of its webhook: where deliveries arrive, how they are signed, what they reach. */
+export interface BindableWebhook {
+	readonly name: string
+	readonly path: string
+	readonly scheme: WebhookScheme
+	readonly boundTo: ScopeBinding
+}
+
+/** Where `ctx.webhooks` runs: the procedure's transaction, bound to its request like every handle. */
+export interface BindingSite {
+	readonly site: string
+	readonly webhook: BindableWebhook
+	readonly tables: () => WebhookTables
+	readonly authority: CapabilityAuthority
+	readonly session: () => Promise<Session>
+	readonly check: () => void
+	/** Who binds: the caller's subject, recorded with the binding. */
+	readonly principal: string
+}
+
+/** `ctx.webhooks` of a procedure that declares `binds`: only its declared webhook, only on the value its capability names. */
+export function webhookBindings(site: BindingSite): (name: string) => WebhookBindings {
+	const { webhook } = site
+	const scopeOf = (capability: unknown): { readonly type: string; readonly value: string } => {
+		site.check()
+		const grant = site.authority.resolve(capability)
+		if (webhook.boundTo.kind === 'app' && grant.kind === 'app') {
+			return APP_BINDING_SCOPE
+		}
+		if (webhook.boundTo.kind === 'dimension' && grant.kind === 'ref' && grant.dimension === webhook.boundTo.dimension) {
+			return { type: grant.dimension, value: grant.id }
+		}
+		const wanted = webhook.boundTo.kind === 'app' ? 'an app capability (ctx.app)' : `a Ref of ${webhook.boundTo.dimension}`
+		throw new CapabilityRefusedError(
+			'wrong_binding',
+			`${site.site}: webhook '${webhook.name}' binds with ${wanted}, and it was handed ${describeGrant(grant)}`,
+		)
+	}
+	const bindings: WebhookBindings = Object.freeze({
+		async bind(capability: unknown, account: unknown): Promise<WebhookSecret> {
+			const scope = scopeOf(capability)
+			const recorded = accountOf(webhook.scheme, account)
+			const id = uuidv7()
+			const secret = generateSecret(webhook.scheme)
+			await site.tables().createBinding(
+				{ id, webhook: webhook.name, scope, account: recorded, secret, createdBy: site.principal, createdAt: Date.now() },
+				await site.session(),
+			)
+			return { id, url: joinPath(webhook.path, id), secret }
+		},
+		async unbind(capability: unknown, id: unknown): Promise<boolean> {
+			const scope = scopeOf(capability)
+			if (typeof id !== 'string' || !z.uuid().safeParse(id).success) {
+				return false
+			}
+			return await site.tables().removeBinding(webhook.name, id, scope, await site.session())
+		},
+	})
+	return (name) => {
+		if (name !== webhook.name) {
+			throw new CapabilityRefusedError('undeclared_binding', `${site.site} does not declare binds: '${String(name)}'`)
+		}
+		return bindings
+	}
+}
+
+/** The account a binding records: GitHub's `installation:<id>` or `repository:<id>`, another provider's own label. */
+function accountOf(scheme: WebhookScheme, account: unknown): string {
+	if (scheme === 'github-sha256') {
+		const parsed = webhookBindInput.shape.account.safeParse(account)
+		if (!parsed.success) {
+			throw new BadRequestError("A GitHub binding's account is installation:<id> or repository:<id>")
+		}
+		return parsed.data
+	}
+	const printable = (text: string) => [...text].every((char) => char >= ' ' && char !== '\u007f')
+	if (typeof account !== 'string' || account === '' || account.length > MAX_ACCOUNT_LENGTH || !printable(account)) {
+		throw new BadRequestError(`A binding's account is a text of 1 to ${MAX_ACCOUNT_LENGTH} printable characters`)
+	}
+	return account
 }
 
 export interface BindingHandlers {
@@ -84,7 +183,7 @@ export function bindingHandlers(webhook: string, path: string, tables: () => Web
 			const { scope, principal } = accessOf(ctx)
 			const account = z.parse(webhookBindInput.shape.account, input['account'])
 			const id = uuidv7()
-			const secret = generateSecret()
+			const secret = generateSecret('github-sha256')
 			await tables().createBinding({
 				id,
 				webhook,
@@ -105,4 +204,15 @@ export function bindingHandlers(webhook: string, path: string, tables: () => Web
 			return { id }
 		},
 	}
+}
+
+/**
+ * `ctx.files` of a delivery's handler. A webhook writes no file in this release; the types refuse it too, and at run
+ * time it exists only to refuse by name.
+ */
+export function webhookFiles(webhook: string): object {
+	const refuse = (): never => {
+		throw new ServerFault('facility_unbound', `webhook '${webhook}': ctx.files.put in a webhook is not served by this release`)
+	}
+	return Object.freeze({ put: refuse })
 }

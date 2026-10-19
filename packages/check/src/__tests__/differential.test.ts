@@ -680,15 +680,20 @@ export const tables = defineTables<DB, 'tasks.read' | 'tasks.write'>(columns)({}
 				'api.deals.pipeline',
 				'api.deals.product',
 				'api.deals.share',
+				'api.ledgers.connect',
 				'job:close',
 			])
 			expect(read().imports['catalog']?.usedBy).toEqual(['api.deals.product'])
 		})
 
-		test('a link mount, a webhook, a cron job and an export of the kit read the same', () => {
+		test('a link mount, the webhooks, a cron job and an export of the kit read the same', () => {
 			const [source, runtime] = [read(), evaluated()]
 			expect(source.mounts['shared']).toEqual(runtime.mounts['shared'])
 			expect(source.mounts['github']).toEqual(runtime.mounts['github'])
+			expect(source.mounts['ledger']).toEqual(runtime.mounts['ledger'])
+			expect(source.mounts['ledger']).toMatchObject({ boundTo: { kind: 'app' }, scheme: { hmac: { header: 'X-Ledger-Signature' } } })
+			expect(source.declared?.['api.ledgers.connect']).toEqual(runtime.declared?.['api.ledgers.connect'])
+			expect(source.declared?.['api.ledgers.connect']?.binds).toBe('ledger')
 			expect(source.jobs['close']).toEqual(runtime.jobs['close'])
 			expect(source.exports['pipeline']).toEqual(runtime.exports['pipeline'])
 			const kinds = (artifact: ContractArtifact) => artifact.endpoints.filter((row) => ['shared.deal', 'pipeline.v1.deal', 'github'].includes(row.id))

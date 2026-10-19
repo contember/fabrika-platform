@@ -1,6 +1,7 @@
 // Reads the literal subset of `rules/literal.ts` into values, without executing the application: names resolve through
 // `ModuleGraph`, `z` chains build real zod schemas, `c.*` calls stay unapplied for `surface.ts`.
 
+import { WebhookSecret } from '@fabrika/app/contract'
 import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
@@ -265,6 +266,11 @@ export class ValueReader {
 	#identifier(located: Located, scope: Scope): LiteralValue | null {
 		const name = identifierName(located.node) ?? ''
 		const builder = this.#builderOf(located.module, name)
+		const imported = builder === 'value' ? this.#graph.index(located.module).imports.get(name)?.imported : undefined
+		const exported = imported === undefined || !Object.hasOwn(PACKAGE_SCHEMAS, imported) ? undefined : PACKAGE_SCHEMAS[imported]
+		if (exported !== undefined) {
+			return { kind: 'schema', schema: exported, nodes: 4, depth: 2, steps: [name], at: located }
+		}
 		if (scope.has(name) || builder !== undefined || isKitName(this.#graph, located.module, name)) {
 			this.#problems.add(located, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
 			return null
@@ -330,6 +336,9 @@ export class ValueReader {
 				return this.#attachmentCall(located, links, scope)
 			case 'redirect':
 				return this.#redirectCall(located, links, scope)
+			case 'value':
+				this.#problems.add(located, `${rootName} used other than as it is`, 'output: WebhookSecret')
+				return null
 			default:
 				if (this.#isConstName(located.module, rootName) && links[0]?.kind === 'member') {
 					return this.#schemaMethods(located, root, links, scope)
@@ -581,6 +590,9 @@ export class ValueReader {
 		return imported === undefined ? undefined : BUILDER_IMPORTS[imported.specifier]?.[imported.imported]
 	}
 }
+
+/** The schemas `@fabrika/app/contract` exports for an output, by their exported name. */
+const PACKAGE_SCHEMAS: Readonly<Record<string, z.ZodType>> = { WebhookSecret }
 
 interface SchemaStep {
 	readonly name: string

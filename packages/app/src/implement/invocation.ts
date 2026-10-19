@@ -31,6 +31,8 @@ export interface SiteDeclaration {
 	readonly mailer: JobMailer | null
 	/** The cron jobs `ctx.kick` may name. */
 	readonly kicks: readonly string[]
+	/** The webhook whose bindings `ctx.webhooks` creates and removes. */
+	readonly binds: string | null
 }
 
 export type SiteFunction = (args: { readonly input?: unknown; readonly ctx: object }) => unknown
@@ -66,6 +68,7 @@ const NO_DECLARATION: SiteDeclaration = Object.freeze({
 	then: null,
 	mailer: null,
 	kicks: Object.freeze([]),
+	binds: null,
 })
 
 function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -148,6 +151,10 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 	if (kicksField !== undefined && (!Array.isArray(kicksField) || kicks.length !== kicksField.length)) {
 		problems.push(`${where}: kicks is not a list of job names`)
 	}
+	const binds = ownField(declared, 'binds')
+	if (binds !== undefined && typeof binds !== 'string') {
+		problems.push(`${where}: binds is not the name of a webhook`)
+	}
 	return Object.freeze({
 		sql: sql === 'read' || sql === 'write' ? sql : null,
 		unscoped: Object.freeze(unscoped),
@@ -156,6 +163,7 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		then: typeof then === 'string' ? then : null,
 		mailer,
 		kicks: Object.freeze([...new Set(kicks)].sort()),
+		binds: typeof binds === 'string' ? binds : null,
 	})
 }
 
@@ -199,6 +207,7 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			then: reach.then ?? null,
 			mailer: reach.mailer ?? null,
 			kicks: Object.freeze([...(reach.kicks ?? [])]),
+			binds: reach.binds ?? null,
 		})
 }
 
@@ -216,6 +225,7 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 		...(declaration.then === null ? {} : { then: declaration.then }),
 		...(declaration.mailer === null ? {} : { mailer: declaration.mailer }),
 		...(declaration.kicks.length === 0 ? {} : { kicks: declaration.kicks }),
+		...(declaration.binds === null ? {} : { binds: declaration.binds }),
 	})
 }
 
@@ -284,6 +294,12 @@ export class Invocation {
 			readOnly: kind === 'mutation' && !transaction.readOnly ? null : 'a query reads only; remove files in a mutation',
 			attaches: false,
 		}
+	}
+
+	/** Where the framework writes for this site (a webhook binding): this invocation's transaction, bound like every handle. */
+	frameworkSite(handle: string): { readonly check: () => void; readonly session: () => Promise<Session> } {
+		const transaction = this.#transaction
+		return { check: boundTo(this.#frame, () => transaction.ended, handle), session: () => transaction.session() }
 	}
 
 	/** Commits; a request the caller abandoned meanwhile rolls back instead. */

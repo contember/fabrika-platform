@@ -280,7 +280,7 @@ export type Composition = [
 	Expect<Equal<typeof contract extends AnyContract ? true : false, true>>,
 	Expect<Equal<typeof contract.surface.api.callers, readonly ['human']>>,
 	Expect<Equal<typeof contract.surface.api.procedures.deals.reopen.type, 'mutation'>>,
-	Expect<Equal<keyof typeof contract.surface.api.procedures, 'deals' | 'companies'>>,
+	Expect<Equal<keyof typeof contract.surface.api.procedures, 'deals' | 'companies' | 'ledgers'>>,
 ]
 
 type Client = ReturnType<typeof createClient<typeof contract, 'api'>>

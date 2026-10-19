@@ -135,7 +135,7 @@ const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'used
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>'"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -819,6 +819,16 @@ class ArtifactBuilder {
 	/** The webhook's verifier: a preset, or a framework-owned shape the runtime computes. */
 	#webhookScheme(where: string, value: unknown): WebhookScheme | null {
 		const parsed = z.safeParse(webhookSchemeSchema, value)
+		if (parsed.success && typeof parsed.data === 'object' && !('hmac' in parsed.data)) {
+			// The verifier runs in the framework, behind the proxy, which forwards no `Authorization` it did not read.
+			this.#problem(
+				where,
+				`scheme ${
+					JSON.stringify(value)
+				} needs the request's Authorization header, which the proxy removes from an anonymous endpoint's request (ADR-0022 rule 3); this release serves the presets and the hmac shape`,
+			)
+			return null
+		}
 		if (parsed.success) {
 			return parsed.data
 		}
@@ -2000,7 +2010,7 @@ class ArtifactBuilder {
 		}
 		const workload = place.kind === 'rpc' ? place.actions : null
 		if (workload !== null) {
-			for (const field of ['sql', 'unscoped', 'connect', 'issues'] as const) {
+			for (const field of ['sql', 'unscoped', 'connect', 'issues', 'binds'] as const) {
 				if (value[field] !== undefined) {
 					this.#problem(where, `is public and declares ${field}: a public procedure reaches its actions only (allowed: kicks)`)
 				}
@@ -2009,6 +2019,7 @@ class ArtifactBuilder {
 		const then = this.#then(where, value['then'], place)
 		const mailer = this.#mailer(where, value['mailer'], place)
 		const kicks = this.#kicks(where, value['kicks'], place)
+		const binds = this.#binds(where, value['binds'], place)
 		const reach: DeclaredReach = {
 			sql: this.#sqlMode(where, value['sql'], place.readOnly),
 			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
@@ -2022,6 +2033,7 @@ class ArtifactBuilder {
 			...(mailer === undefined ? {} : { mailer }),
 			...(workload === null || workload.length === 0 ? {} : { actions: workload }),
 			...(kicks.length === 0 ? {} : { kicks }),
+			...(binds === undefined ? {} : { binds }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -2031,7 +2043,7 @@ class ArtifactBuilder {
 		}
 		if (
 			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
-			|| reach.mailer !== undefined || reach.actions !== undefined || reach.kicks !== undefined
+			|| reach.mailer !== undefined || reach.actions !== undefined || reach.kicks !== undefined || reach.binds !== undefined
 		) {
 			this.#declared[site] = reach
 		}
@@ -2158,6 +2170,36 @@ class ArtifactBuilder {
 			)
 		}
 		return name
+	}
+
+	/**
+	 * The webhook whose bindings a credentialed mutation of an RPC mount creates and removes: a webhook of this contract.
+	 * `undefined` when it declares none or after a problem.
+	 */
+	#binds(where: string, value: unknown, place: DeclaringSite): string | undefined {
+		if (value === undefined) {
+			return undefined
+		}
+		if (place.kind !== 'rpc' || place.readOnly || place.actions !== null) {
+			// A public procedure is refused with the other reach it may not declare.
+			if (place.kind !== 'rpc' || place.actions === null) {
+				this.#problem(where, 'declares binds, which only a credentialed mutation of an RPC mount declares')
+			}
+			return undefined
+		}
+		const mounts = this.#contract.mounts
+		const webhook = typeof value === 'string' && Object.hasOwn(mounts, value) ? mounts[value] : undefined
+		if (typeof value !== 'string' || webhook?.kind !== 'webhook') {
+			const names = Object.entries(mounts).filter(([, mount]) => mount.kind === 'webhook').map(([name]) => name)
+			this.#problem(
+				where,
+				`binds ${JSON.stringify(value)} is not a webhook of the contract (webhooks: ${names.length === 0 ? 'none' : names.join(', ')})${
+					typeof value === 'string' ? suggestion(value, names) : ''
+				}`,
+			)
+			return undefined
+		}
+		return value
 	}
 
 	/** The cron job a mutation kicks once its transaction committed; `undefined` when it declares none or after a problem. */

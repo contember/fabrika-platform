@@ -482,6 +482,8 @@ export type WebhookPreset = (typeof WEBHOOK_PRESETS)[number]
 /**
  * How a delivery proves it holds its binding's secret: a preset, an HMAC the framework computes in a declared shape,
  * or the secret itself as a Basic password or a bearer token. A verifier is framework code, never the application's.
+ * `basic` and `bearer` read `Authorization`, which the proxy removes from an anonymous endpoint's request (ADR-0022
+ * rule 3), so `buildArtifact` refuses them while it does.
  */
 export type WebhookScheme =
 	| WebhookPreset
@@ -596,6 +598,11 @@ export interface DeclaredReach {
 	readonly kicks?: readonly string[]
 	/** The mail transport this job reaches: the installation's or its own; absent unless declared. */
 	readonly mailer?: JobMailer
+	/**
+	 * The webhook whose bindings this mutation creates and removes (`ctx.webhooks('<name>')`), seeing each new binding's
+	 * secret once. Absent unless declared, so the digest stays.
+	 */
+	readonly binds?: string
 	/**
 	 * A public procedure's workload actions, sorted: all its handler holds, through the key Control issues for the
 	 * endpoint (`contractWorkloads`). Present only on a public procedure's entry, so every other digest stays.

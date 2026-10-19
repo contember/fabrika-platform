@@ -19,6 +19,7 @@ import type {
 	LinkContext,
 	PublicContext,
 	SqlMode,
+	WebhooksContext,
 } from './context'
 import type { ProcedureType } from './declaration'
 import type {
@@ -94,11 +95,22 @@ type KickField<Th> =
 	}
 	& ([Th] extends [never] ? unknown : { readonly then: Th & NoInfer<OneJob<Th>> })
 
-/** A query writes nothing, so it has nothing to kick a job for. */
+/** A query writes nothing, so it has nothing to kick a job for and no binding to write. */
 type NoKick = {
 	readonly then?: Unavailable<'a query kicks no job: declare then on a mutation'>
 	readonly kicks?: Unavailable<'a query kicks no job: declare kicks on a mutation'>
+	readonly binds?: Unavailable<'a query binds no webhook: declare binds on a mutation'>
 }
+
+/** `binds` names one webhook, as a literal. */
+type OneWebhook<Bs> = string extends Bs ? Unavailable<"binds names one webhook, as a literal: binds: 'stripe'">
+	: true extends IsUnion<Bs> ? Unavailable<"binds names one webhook, as a literal: binds: 'stripe'">
+	: unknown
+
+/** The webhook whose bindings a mutation writes (`ctx.webhooks`), inferred from its optional field and then required. */
+type BindsField<Bs> =
+	& { readonly binds?: Bs }
+	& ([Bs] extends [never] ? unknown : { readonly binds: Bs & NoInfer<OneWebhook<Bs>> })
 
 /** The jobs a mutation may kick (`ctx.kick`), inferred from its optional field and then required, as a literal list. */
 export type KicksField<Ks> =
@@ -153,8 +165,10 @@ export type ProcedureContext<
 	Acts extends readonly string[],
 	D extends Declared<SqlMode, unknown, readonly string[], string>,
 	Ks = never,
+	Bs = never,
 > =
-	& ([Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]> : EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D>)
+	& ([Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]>
+		: EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D> & WebhooksContext<Bs>)
 	& KickContext<Ks>
 
 /** A group without callers holds public procedures only; any other group may hold both. */
@@ -299,15 +313,22 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Acts extends readonly K['action'][] = never,
 		Q extends InputSchema = never,
 		const Ks extends readonly string[] = never,
+		const Bs extends string = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & HttpField<Q> & KickField<Th> & KicksField<Ks>,
+		def:
+			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
+			& PublicFields<Acc, Acts>
+			& HttpField<Q>
+			& KickField<Th>
+			& KicksField<Ks>
+			& BindsField<Bs>,
 	): EndpointBuilder<
 		'mutation',
 		I,
 		O,
 		Acc,
 		Declared<S, U, Cn, Is>,
-		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks>,
+		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks, Bs>,
 		QueryArgs<Q>
 	>
 }

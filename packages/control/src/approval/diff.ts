@@ -41,6 +41,7 @@ import {
 	type TableActionArtifact,
 	tableActions,
 	type TablePolicyArtifact,
+	type WebhookScheme,
 } from '@fabrika/auth-core'
 import type { DeviationSubjectDto } from '@fabrika/control-contract'
 import type { MigrationDeviation } from '@fabrika/platform-node/sql'
@@ -145,7 +146,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		if (!Object.hasOwn(baseline.roles, name)) changes.add(...externalChange(name, undefined, role.external))
 	}
 	compareKeyed(changes, record(baseline.mounts), record(candidate.mounts), {
-		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}${takenFiles(mount)}`,
+		added: (name, mount) => `New ${mount.kind} mount \`${name}\`${servedVariables(mount)}${takenFiles(mount)}${webhookPhrase(mount)}`,
 		removed: (name) => (mountsShown.has(name) ? [] : `Mount \`${name}\` is removed`),
 		changed: mountChanges,
 	})
@@ -360,7 +361,23 @@ function compareDeclared(
 		changes.add(...endpointKickChange(site, sites[site]?.then, after[site]?.then))
 		changes.add(...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH))
 		changes.add(...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []))
+		changes.add(...bindsChange(site, sites[site]?.binds, after[site]?.binds))
 	}
+}
+
+/**
+ * The webhook whose bindings a mutation creates and removes (`binds`): each binding it creates admits a provider's
+ * deliveries, which run as the webhook's workload, and the mutation sees the binding's secret once.
+ */
+function bindsChange(site: string, before: string | undefined, after: string | undefined): AccessChange[] {
+	if (before === after) return []
+	const name = siteName(site)
+	return [
+		...(after === undefined
+			? []
+			: [closerWidening(`${name} binds webhook \`${after}\`: it creates and removes its bindings, and sees each new binding's secret`)]),
+		...(before === undefined ? [] : [narrowing(`${name} no longer binds webhook \`${before}\``)]),
+	]
 }
 
 /**
@@ -1357,6 +1374,19 @@ function takenFiles(mount: MountArtifact): string {
 	return files.length === 0
 		? ''
 		: `, taking files from anyone: ${files.map(([field, file]) => `\`${field}\` into files \`${file.collection}\``).join(', ')}`
+}
+
+/** How a new webhook verifies a delivery, and what one binding of it reaches. */
+function webhookPhrase(mount: MountArtifact): string {
+	if (mount.kind !== 'webhook') return ''
+	const bound = mount.boundTo.kind === 'app' ? 'once for the whole application' : `to one \`${mount.boundTo.dimension}\` each`
+	return `, verified by ${schemeName(mount.scheme)}, its bindings ${bound}`
+}
+
+function schemeName(scheme: WebhookScheme): string {
+	if (typeof scheme === 'string') return `the \`${scheme}\` preset`
+	if ('hmac' in scheme) return `an HMAC-${scheme.hmac.algorithm.toUpperCase()} in \`${scheme.hmac.header}\``
+	return 'basic' in scheme ? "the binding's secret as a Basic password" : "the binding's secret as a bearer token"
 }
 
 /** The public variables a new mount hands its pages: an SPA's own list, a challenge's site key. */
