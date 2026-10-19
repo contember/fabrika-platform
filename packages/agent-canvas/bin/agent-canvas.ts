@@ -6,6 +6,7 @@ import { handleFetch } from './lib/commands/fetch.ts'
 import { handleInstall } from './lib/commands/install.ts'
 import { handleInstructions } from './lib/commands/instructions.ts'
 import { handlePush } from './lib/commands/push.ts'
+import { handleReview } from './lib/commands/review.ts'
 import { handleWatch } from './lib/commands/watch.ts'
 import { VERSION } from './lib/config.ts'
 
@@ -18,6 +19,7 @@ Commands:
   agent-canvas push <directory>        Push canvases, open browser
   agent-canvas fetch [--session <id>]  Check for feedback (returns immediately)
   agent-canvas watch [--session <id>]  Wait for user feedback (blocks until submitted)
+  agent-canvas review <command>        Comment on a running application (see: agent-canvas review --help)
   agent-canvas exec --secret ENV=id -- <command>
                                       Run a command with an in-memory secret
   agent-canvas daemon status           Show daemon status
@@ -52,6 +54,8 @@ async function main() {
 			return handleFetch(rest)
 		case 'watch':
 			return handleWatch(rest)
+		case 'review':
+			return handleReview(rest)
 		case 'exec':
 			return handleExec(rest)
 		case 'instructions':

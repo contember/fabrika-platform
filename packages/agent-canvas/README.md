@@ -73,6 +73,26 @@ bunx agent-canvas exec \
 
 Secret resolution requires a daemon capability available to the CLI but not to canvas JavaScript. A new canvas revision, daemon shutdown, or session cleanup clears the value. The target command must not print its environment or credentials.
 
+### Review mode
+
+Review mode puts the same comment loop on a running web application: a prototype, a mock or any dev server. Add the
+widget's script tag to the application's page in development:
+
+```bash
+bunx agent-canvas review snippet --project my-app
+# <script src="http://localhost:19400/assets/review.js" data-project="my-app"></script>
+```
+
+The widget mounts a toolbar in its own shadow root. The reviewer clicks **Comment**, picks an element or selects text,
+and saves the comment as a note or sends it to the agent. The agent waits with `bunx agent-canvas review watch`,
+receives each thread with its page URL, the element's role and accessible name, a CSS path and the React components that
+own it, changes the code and answers with `bunx agent-canvas review reply <thread> "<text>" --resolve`. The answer and
+the thread's state show up next to the element.
+
+Threads are stored per project under the daemon's data directory. The daemon accepts widget requests only from loopback
+origins (`localhost`, `127.0.0.1`, `*.localhost`) and agent requests only from clients that send no `Origin`, so a web
+page cannot queue work for the agent.
+
 ## Theming
 
 Agent Canvas supports light and dark themes, automatically matching your system preference.

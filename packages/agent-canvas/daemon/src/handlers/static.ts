@@ -41,7 +41,8 @@ async function serveStaticAsset(_req: Request, url: URL): Promise<Response> {
 
 	const ext = path.split('.').pop() || ''
 	return new Response(file, {
-		headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' },
+		// A rebuild keeps the file names, and pages that load the review widget would otherwise keep a stale copy.
+		headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' },
 	})
 }
 

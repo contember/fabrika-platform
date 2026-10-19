@@ -7,8 +7,10 @@ import { createApiHandlers } from './handlers/api'
 import { createFileHandlers } from './handlers/files'
 import { createStaticHandlers } from './handlers/static'
 import { createUploadHandlers } from './handlers/uploads'
-import { CLI_AUTH_FILE, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
+import { CLI_AUTH_FILE, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
+import { createReviewServer, type ReviewSocketData } from './review/server'
+import { ReviewStore } from './review/store'
 
 const PORT = parseInt(process.env.CANVAS_PORT || '19400', 10)
 const VERSION = JSON.parse(readFileSync(join(dirname(import.meta.dir), '..', 'package.json'), 'utf-8')).version as string
@@ -23,6 +25,18 @@ chmodSync(CLI_AUTH_FILE, 0o600)
 
 const sessionManager = new SessionManager(SESSIONS_DIR)
 const wsManager = createWebSocketManager(sessionManager)
+const review = createReviewServer(new ReviewStore(REVIEWS_DIR))
+
+type SocketData = WSData | ReviewSocketData
+type Socket = Bun.ServerWebSocket<SocketData>
+
+function isReviewSocket(socket: Socket): socket is Bun.ServerWebSocket<ReviewSocketData> {
+	return socket.data.type === 'review'
+}
+
+function isCanvasSocket(socket: Socket): socket is Bun.ServerWebSocket<WSData> {
+	return socket.data.type !== 'review'
+}
 
 const routes = [
 	...createApiHandlers({
@@ -38,11 +52,16 @@ const routes = [
 	...createStaticHandlers(),
 ]
 
-const server = Bun.serve<WSData>({
+const server = Bun.serve<SocketData>({
 	port: PORT,
 	hostname: 'localhost',
 	fetch(req, server) {
 		const url = new URL(req.url)
+
+		// Review mode answers its own preflights: the application under review runs on another port.
+		const reviewResponse = review.fetch(req, url, server)
+		if (reviewResponse === 'upgraded') return undefined
+		if (reviewResponse !== null) return reviewResponse
 
 		// CORS preflight
 		if (req.method === 'OPTIONS') {
@@ -82,7 +101,24 @@ const server = Bun.serve<WSData>({
 		return jsonResponse({ error: 'Not found' }, 404)
 	},
 
-	websocket: wsManager.handlers,
+	websocket: {
+		open(socket) {
+			if (isReviewSocket(socket)) review.channel.handlers.open(socket)
+			else if (isCanvasSocket(socket)) wsManager.handlers.open(socket)
+		},
+		message(socket, message) {
+			if (isReviewSocket(socket)) review.channel.handlers.message(socket, message)
+			else if (isCanvasSocket(socket)) wsManager.handlers.message(socket, message)
+		},
+		pong(socket) {
+			if (isReviewSocket(socket)) review.channel.handlers.pong(socket)
+			else if (isCanvasSocket(socket)) wsManager.handlers.pong(socket)
+		},
+		close(socket) {
+			if (isReviewSocket(socket)) review.channel.handlers.close(socket)
+			else if (isCanvasSocket(socket)) wsManager.handlers.close(socket)
+		},
+	},
 })
 
 export { server, sessionManager }
