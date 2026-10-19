@@ -3,6 +3,7 @@
 // access widens it.
 
 import {
+	type AdmissionRate,
 	type AttachmentShape,
 	canonicalizeArtifact,
 	canonicalJson,
@@ -19,6 +20,7 @@ import {
 	type EndpointRequirement,
 	type EndpointRow,
 	type FileCollectionArtifact,
+	type FormChallenge,
 	type FormMountArtifact,
 	isAttachmentShape,
 	JOB_SITE_PREFIX,
@@ -29,6 +31,7 @@ import {
 	type NumberShape,
 	type OutputShape,
 	planEndpoint,
+	type ProcedureArtifact,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
@@ -196,7 +199,86 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: tableChanges,
 	})
 	compareDeclared(changes, baseline.declared, candidate.declared)
+	compareProcedures(changes, baseline, candidate)
 	compareDirectories(changes, baseline, candidate)
+}
+
+// ── Procedure admission and limits ──────────────────────────────────────────────────────────────
+
+/**
+ * Each procedure's admission and time limit (ADR-0050): a procedure whose rules the baseline does not record (a new one,
+ * or every one of an older release's contract) is shown with its effective values; a changed bound widens when it
+ * admits more or runs longer, and narrows otherwise.
+ */
+function compareProcedures(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): void {
+	const before = baseline.procedures ?? {}
+	for (const [id, rules] of Object.entries(candidate.procedures ?? {})) {
+		const row = candidate.endpoints.find((endpoint) => endpoint.id === id)
+		const from = Object.hasOwn(before, id) ? before[id] : undefined
+		if (from === undefined) {
+			changes.add(
+				neutral(
+					`\`${id}\` admits ${ratePhrase(rules.rate)}${challengePhrase(rules.challenge)}; it runs at most ${seconds(rules.timeoutMs)}${bodyPhrase(row)}`,
+				),
+			)
+			continue
+		}
+		changes.add(...procedureChanges(`\`${id}\``, from, rules))
+	}
+}
+
+const BUCKETS = [
+	['perClient', 'per client'],
+	['perCaller', 'per caller'],
+	['perEndpoint', 'in all'],
+	['bytesPerHour', 'bytes per hour'],
+] as const
+
+/** `10 calls per minute per client and 100 in all`, or `any number of calls` without a bucket. */
+function ratePhrase(rate: AdmissionRate): string {
+	const counted = BUCKETS.flatMap(([bucket, words]) => {
+		const value = rate[bucket]
+		if (value === null) return []
+		if (bucket === 'bytesPerHour') return [`${value} ${words}`]
+		// On Zerops the proxy sees the balancer, not the visitor, until its range is trusted.
+		return [bucket === 'perClient' ? `${value} ${words} (one client on Zerops)` : `${value} ${words}`]
+	})
+	return counted.length === 0 ? 'any number of calls' : `calls per minute: ${andList(counted)}`
+}
+
+function challengePhrase(challenge: FormChallenge | null): string {
+	return challenge === null ? '' : `, after a ${challenge.provider} challenge`
+}
+
+function bodyPhrase(row: EndpointRow | undefined): string {
+	const limit = row?.admission?.maxBytes ?? null
+	return limit === null ? '' : `, with a body of at most ${bytes(limit)}`
+}
+
+function seconds(ms: number): string {
+	return ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`
+}
+
+function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureArtifact): AccessChange[] {
+	const buckets = BUCKETS.flatMap(([bucket, words]): AccessChange[] => {
+		const before = from.rate[bucket]
+		const after = to.rate[bucket]
+		if (before === after) return []
+		// A bucket removed or raised admits more calls.
+		const more = after === null || (before !== null && after > before)
+		return [(more ? widening : narrowing)(`${name} bucket ${words} changes from ${before ?? 'none'} to ${after ?? 'none'}`)]
+	})
+	const challenge = canonicalJson(from.challenge) === canonicalJson(to.challenge)
+		? []
+		: to.challenge === null
+		? [widening(`${name} no longer asks for a challenge`)]
+		: from.challenge === null
+		? [narrowing(`${name} asks for a ${to.challenge.provider} challenge`)]
+		: valueChange(`${name} challenge`, from.challenge, to.challenge)
+	const time = from.timeoutMs === to.timeoutMs
+		? []
+		: [(to.timeoutMs > from.timeoutMs ? widening : narrowing)(`${name} time limit changes from ${seconds(from.timeoutMs)} to ${seconds(to.timeoutMs)}`)]
+	return [...buckets, ...challenge, ...time]
 }
 
 // ── Member directories ──────────────────────────────────────────────────────────────────────────
@@ -411,7 +493,9 @@ function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidat
 	compareKeyed(changes, endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
 		added: (id, row) => {
 			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}`
-			return row.crossOrigin === 'environment' ? { ...widening(line), environmentOrigins: true } : line
+			// Code anyone can call gets a closer review than code a signed-in caller reaches.
+			const change = row.kind === 'public' ? closerWidening(line) : widening(line)
+			return row.crossOrigin === 'environment' ? { ...change, environmentOrigins: true } : change
 		},
 		removed: () => [],
 		changed: endpointChanges,
@@ -641,7 +725,7 @@ const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: Endpoin
 
 /** An anonymous endpoint that turns no caller away: anyone who asks gets the answer. */
 function opensToAnyone(row: EndpointRow): boolean {
-	return row.kind === 'health' || row.kind === 'public-spa'
+	return row.kind === 'health' || row.kind === 'public-spa' || row.kind === 'public'
 }
 
 /** Whether the row's requirement takes its scope from one of the row's path parameters. */
@@ -667,9 +751,11 @@ function andList(values: readonly string[]): string {
 
 function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): AccessChange[] {
 	const name = `Endpoint \`${id}\``
-	const becomesPublic = from.requirement !== null && to.kind === 'public-spa'
+	const becomesPublic = from.requirement !== null && (to.kind === 'public-spa' || to.kind === 'public')
 	return [
-		...(becomesPublic ? [widening(`${name} becomes public: anyone opens it without signing in`)] : []),
+		...(!becomesPublic ? [] : to.kind === 'public'
+			? [closerWidening(`${name} becomes public: anyone calls it without signing in`)]
+			: [widening(`${name} becomes public: anyone opens it without signing in`)]),
 		...valueChange(`${name} kind`, from.kind, to.kind),
 		...valueChange(`${name} route`, `${from.method} ${from.path}`, `${to.method} ${to.path}`),
 		...setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller'),
@@ -943,7 +1029,7 @@ function segmentsOf(path: string): string[] {
 }
 
 function audience(row: EndpointRow): string {
-	if (row.kind === 'public-spa') return 'for anyone, without signing in'
+	if (row.kind === 'public-spa' || row.kind === 'public') return 'for anyone, without signing in'
 	if (row.requirement === null) return `for anonymous ${row.kind} requests`
 	return `for ${row.callers.join(', ')} callers ${requirementPhrase(row.requirement)}`
 }
