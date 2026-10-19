@@ -10,6 +10,7 @@ import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { DataAccess } from './orm'
 import type { DataLayerRuntime, TableContext, TableProbe } from './store'
+import type { StoredFiles } from './stored-files'
 
 /**
  * Answers what the framework's access check reads from the database: an object's containers, by dimension. `using` is
@@ -33,6 +34,8 @@ export interface FrameworkTables {
 	readonly forms: FormAdmissions
 	/** The files forms received, until the job that drains each inbox attaches them to their owner. */
 	readonly formFiles: FormFiles
+	/** Every stored file (`fabrika_files`): staged before its object, claimed at its first reference, swept unreferenced. */
+	readonly files: StoredFiles
 }
 
 export interface FrameworkSide {

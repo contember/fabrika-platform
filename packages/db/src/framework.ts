@@ -18,6 +18,8 @@ export {
 	type QueryRefusal,
 	QueryRefusedError,
 } from './errors'
+export type { FileBinding } from './file-columns'
+export { type FileHolding, fileHoldingOf, type FileReference, fileReference, holdsFile } from './file-references'
 export { fileTableName } from './file-table-sql'
 export type {
 	AdoptedFile,
@@ -39,6 +41,7 @@ export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-l
 export type { DataAccess, DataHandles, DataSite } from './orm'
 export type { FrameworkTables, Locator } from './registry'
 export type { SqlMode, SqlSite, SqlTag, SqlValue } from './sql'
+export type { FileColumnRef, QuarantinedStoredFile, ServedFile, StagedFile, StoredFileMeta, StoredFiles, StoredFileStatus } from './stored-files'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */
 export function isScopedDatabase(value: unknown): boolean {

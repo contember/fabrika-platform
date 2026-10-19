@@ -91,7 +91,15 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	readonly columns?: ColumnPolicies<Col, A>
 	/** A queue table: its rows are claimed (`claim`) and finished through `row.ref`; it needs `version` and an update action. */
 	readonly queue?: QueuePolicy<Col>
+	/**
+	 * The file columns, each with the file kind it holds: a `uuid` foreign key to `fabrika_files`, written only with a
+	 * file reference. The table's actions are the file's authority.
+	 */
+	readonly files?: FilePolicies<Col>
 }
+
+/** A table's file columns: column → the name of a file kind of the contract (`c.files`). */
+export type FilePolicies<Col extends string> = { readonly [C in Col]?: string }
 
 /**
  * A column's own actions. `read`: only a capability of exactly that action reads, filters or sorts by the column;
@@ -130,6 +138,7 @@ interface ReadOnlyPolicy<Col extends string, A extends string> {
 	readonly version?: never
 	readonly createdBy?: never
 	readonly queue?: never
+	readonly files?: never
 	readonly columns?: ColumnReadPolicies<Col, A>
 }
 
@@ -213,6 +222,8 @@ export interface TableModel {
 	readonly version: string | undefined
 	readonly createdBy: string | undefined
 	readonly queue: QueueModel | undefined
+	/** The file columns, each with its file kind: a reference to `fabrika_files`, written only with a file reference. */
+	readonly files: Readonly<Record<string, string>>
 	/** The columns that declare their own read action, as declared (also those equal to the table's). */
 	readonly columnReads: Readonly<Record<string, string>>
 	/** The columns that declare their own write action: only a capability of it updates them. */
@@ -353,7 +364,7 @@ function parseVocabulary(input: unknown): VocabularyModel {
 
 const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
-const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue'])
+const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue', 'files'])
 const QUEUE_FIELDS = nameSet(['attempts', 'due', 'maxAttempts'])
 const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete', 'appRead', 'appCount'])
 const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
@@ -524,10 +535,11 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	}
 	const writable = scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app'
 	const queueInput = ownEntry(policy, 'queue')
+	const filesInput = ownEntry(policy, 'files')
 	if (
 		!writable
 		&& (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined
-			|| ownKeys(columnWrites).length > 0 || queueInput !== undefined)
+			|| ownKeys(columnWrites).length > 0 || queueInput !== undefined || filesInput !== undefined)
 	) {
 		throw new PolicyError(`${table}: a ${scope.mode} table is never written by a handler`)
 	}
@@ -536,6 +548,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const queue = queueInput === undefined
 		? undefined
 		: parseQueue(table, queueInput, column, { columns, timestamps, version, actions, update, columnWrites })
+	const files = filesInput === undefined ? freeze({}) : parseFileColumns(table, filesInput, column, { scope, version, createdBy, queue })
 	const visible: string[] = []
 	for (let index = 0; index < columnNames.length; index++) {
 		const name = columnNames[index] ?? ''
@@ -554,12 +567,64 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		version,
 		createdBy,
 		queue,
+		files,
 		columnReads: freeze(columnReads),
 		columnWrites: freeze(columnWrites),
 		dates,
 		timestamps,
 		foreignKeys,
 	}
+}
+
+/**
+ * The file columns: each names a column that holds data, never one the layer stamps (the key, the version, the
+ * creator, a queue's), with a file kind's name. The kind is the contract's, which the contract's build checks.
+ */
+function parseFileColumns(
+	table: string,
+	input: unknown,
+	column: (name: unknown, field: string) => string,
+	stamped: {
+		readonly scope: ParsedScope
+		readonly version: string | undefined
+		readonly createdBy: string | undefined
+		readonly queue: QueueModel | undefined
+	},
+): Readonly<Record<string, string>> {
+	const files = plainRecord(input, `${table}: files`)
+	const names = ownKeys(files)
+	if (names.length === 0) {
+		throw new PolicyError(`${table}: files declares no column; remove it or name a column and its file kind`)
+	}
+	const scope = stamped.scope
+	const layerColumns: string[] = []
+	if (scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app') {
+		layerColumns[layerColumns.length] = scope.key
+	}
+	if (scope.mode === 'dimension' && scope.container !== undefined) {
+		layerColumns[layerColumns.length] = scope.container.column
+	}
+	if (scope.mode === 'child' && scope.column !== undefined) {
+		layerColumns[layerColumns.length] = scope.column
+	}
+	for (const name of [stamped.version, stamped.createdBy, stamped.queue?.attempts, stamped.queue?.due]) {
+		if (name !== undefined) {
+			layerColumns[layerColumns.length] = name
+		}
+	}
+	const parsed: Record<string, string> = {}
+	for (let index = 0; index < names.length; index++) {
+		const name = column(names[index], 'files')
+		if (includes(layerColumns, name)) {
+			throw new PolicyError(`${table}: files names ${name}, which the layer writes itself; a file column holds a file reference`)
+		}
+		const kind = ownEntry(files, name)
+		if (typeof kind !== 'string' || !isPlainIdentifier(kind)) {
+			throw new PolicyError(`${table}: files.${name} names no file kind (allowed: the name of a c.files({ … }) kind of the contract)`)
+		}
+		setOwn(parsed, name, kind)
+	}
+	return freeze(parsed)
 }
 
 /**

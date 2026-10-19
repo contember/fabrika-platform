@@ -7,6 +7,7 @@ import { PolicyError } from './errors'
 import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
 export { PolicyError } from './errors'
+export type { FileReference } from './file-references'
 export type {
 	AnyDbIndex,
 	ApplicationRows,
@@ -64,6 +65,7 @@ export {
 	defineTables,
 	type DimensionPolicy,
 	type DimensionScope,
+	type FilePolicies,
 	type InboxPolicy,
 	type InboxScope,
 	isTables,
@@ -154,6 +156,7 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		version: model.version ?? null,
 		createdBy: model.createdBy ?? null,
 		columns,
+		...(ownKeys(model.files).length === 0 ? {} : { files: { ...model.files } }),
 	}
 }
 

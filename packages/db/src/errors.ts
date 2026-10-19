@@ -59,6 +59,9 @@ export const QUERY_REFUSALS = {
 	claim_site: 'claim leases rows in a transaction of its own: a job calls it on ctx.db, never inside ctx.transaction or a request',
 	on_conflict: "an insert's onConflict names no column of the table, a column the insert leaves empty, or another action",
 	public_reach: "a public procedure updates, removes, locks or claims no row, and an insert's conflict writes nothing",
+	file_value:
+		"a file column takes a file reference this request holds and may read (an incoming file, a put, or a read under the table's read action) of the column's kind, or null",
+	file_scope: 'a file is referenced from another top-level scope than the one its first reference set',
 } as const
 
 export type QueryRefusal = keyof typeof QUERY_REFUSALS

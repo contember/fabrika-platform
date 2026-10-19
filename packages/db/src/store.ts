@@ -42,6 +42,7 @@ import {
 	type TableShape,
 } from './description'
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
+import { answerFiles, type FileBinding, fileValue, referenceFiles, rowScope, storedRowScope } from './file-columns'
 import { fileTables } from './file-tables'
 import { formAdmissions, type InboxQuota, takeFromBucket } from './form-admissions'
 import { formFiles, type HeldFormFiles, holdFormFiles } from './form-files'
@@ -100,6 +101,7 @@ import {
 } from './policy'
 import { frameworkSideOf, type Locator, register } from './registry'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
+import { storedFiles } from './stored-files'
 import { type TablePolicies, tablePolicies } from './tables'
 import { answerDays, dayInput, timestampInput } from './temporal'
 
@@ -760,6 +762,8 @@ export interface Runner {
 	read(): Promise<Session>
 	/** Runs `work` in one transaction. */
 	write<T>(work: (transaction: Session) => Promise<T>): Promise<T>
+	/** Where file references are made and checked; a store's own runner has none, and its file columns read as ids. */
+	readonly files?: FileBinding
 }
 
 /**
@@ -820,6 +824,10 @@ export function readValues(values: unknown, allowed: NameSet, what: 'insert' | '
 		const key = keys[index] ?? ''
 		const value: unknown = descriptors[index]?.value
 		if (value === undefined) {
+			continue
+		}
+		if (hasOwn(model.files, key)) {
+			copied.set(key, fileValue(model, key, value))
 			continue
 		}
 		if (value !== null && !isPrimitive(value)) {
@@ -912,17 +920,66 @@ function joinedDays(own: NameSet, state: SelectState): NameSet {
 	return nameSet(names)
 }
 
-/** One row by its scope predicate, with `visible` columns (the table's read action's, unless a capability reads its own). */
-export async function selectOne<O>(context: TableContext, run: Runner, scope: OperationNode, visible = context.model.visible): Promise<O> {
+/**
+ * One row by its scope predicate, with `visible` columns (the table's read action's, unless a capability reads its own).
+ * `action` is what read it: each file column then answers a reference that reads the file only under a read action.
+ */
+export async function selectOne<O>(
+	context: TableContext,
+	run: Runner,
+	scope: OperationNode,
+	visible = context.model.visible,
+	action?: string,
+): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
 	const node = selectNode(state, visible, scope, undefined, context.model.dates)
-	const rows = await (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
+	const session = await run.read()
+	const rows = await session.run<O>(node, guard(context, 'SelectQueryNode', scope))
 	const [row] = answerDays(context.model.name, context.model.dates, rows)
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
+	if (action !== undefined) {
+		await answerFiles(context.model, run.files, session, [row], action)
+	}
 	return row
+}
+
+/** The file references an insert wrote, in its transaction: stamped with the scope of the row's own values. */
+async function referenceInserted(
+	context: TableContext,
+	run: Runner,
+	transaction: Session,
+	values: ReadonlyMap<string, Primitive | null>,
+): Promise<void> {
+	const model = context.model
+	await referenceFiles(model, run.files, transaction, values, async () => {
+		const scope = rowScope(model, values)
+		if (scope === undefined) {
+			throw new QueryRefusedError('unexpected_row', `an insert into ${model.name} carries no value of its top-level scope`)
+		}
+		return scope
+	})
+}
+
+/** The file references an update wrote, in its transaction: stamped with the scope the updated row lies in. */
+async function referenceUpdated(
+	context: TableContext,
+	run: Runner,
+	transaction: Session,
+	changes: ReadonlyMap<string, Primitive | null>,
+	row: unknown,
+): Promise<void> {
+	const model = context.model
+	await referenceFiles(model, run.files, transaction, changes, async () => {
+		const key = keyOf(model)
+		const value: unknown = typeof row === 'object' && row !== null ? ownDescriptor(row, key)?.value : undefined
+		if (typeof value !== 'string') {
+			throw new QueryRefusedError('unexpected_row', `an update of ${model.name} answered no ${key}`)
+		}
+		return storedRowScope(model, transaction, key, value)
+	})
 }
 
 export function answer(context: TableContext): ReturningNode {
@@ -982,6 +1039,7 @@ export async function insertRow<O>(
 			throw new QueryRefusedError('unexpected_row', `the insert into ${context.model.name} returned no row`)
 		}
 		checkVersion(context, row)
+		await referenceInserted(context, run, transaction, values)
 		return row
 	})
 }
@@ -1112,6 +1170,7 @@ function insertedScope(context: TableContext, values: ReadonlyMap<string, Primit
  */
 async function insertOnConflict(
 	context: TableContext,
+	run: Runner,
 	transaction: Session,
 	values: ReadonlyMap<string, Primitive | null>,
 	conflict: OnConflict,
@@ -1135,6 +1194,7 @@ async function insertOnConflict(
 		})
 		if (row !== undefined) {
 			checkVersion(context, row)
+			await referenceInserted(context, run, transaction, values)
 			return { ...row, inserted: true }
 		}
 		if (scope === undefined) {
@@ -1151,6 +1211,7 @@ async function insertOnConflict(
 		)
 		if (updated !== undefined) {
 			checkVersion(context, updated)
+			await referenceUpdated(context, run, transaction, conflict.updates, updated)
 			return { ...updated, inserted: false }
 		}
 	}
@@ -1220,6 +1281,7 @@ export async function updateRow<O>(
 		const [row] = await transaction.run<O>(node, guard(context, unchanged ? 'SelectQueryNode' : 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
 			checkVersion(context, row)
+			await referenceUpdated(context, run, transaction, changes, row)
 			return row
 		}
 		return missingOrChanged(context, transaction, target, expectedVersion)
@@ -1410,7 +1472,7 @@ export function insertPrepared(context: TableContext, run: Runner, prepared: Pre
 		if (prepared.destination !== undefined) {
 			await lockDestination(transaction, context, prepared.destination)
 		}
-		return insertOnConflict(context, transaction, prepared.row, conflict)
+		return insertOnConflict(context, run, transaction, prepared.row, conflict)
 	})
 }
 
@@ -1839,6 +1901,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			jobs: jobLeases(() => runtimeOf(connection)),
 			forms: formAdmissions(() => runtimeOf(connection)),
 			formFiles: formFiles(() => runtimeOf(connection)),
+			files: storedFiles(() => runtimeOf(connection)),
 		}),
 		data: dataAccess({
 			models,

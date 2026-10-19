@@ -1,7 +1,17 @@
 // The table policies of the vocabulary form, `defineTables(vocabulary, columns)`: how an application writes them, with
 // containment taken from the vocabulary, and the normalized policies the kit and the handles read. Types only.
 
-import type { ColumnList, ColumnPolicies, InboxPolicy, RecordActions, ReferencePolicy, TableActions, Tables, VersionColumn } from './policy'
+import type {
+	ColumnList,
+	ColumnPolicies,
+	FilePolicies,
+	InboxPolicy,
+	RecordActions,
+	ReferencePolicy,
+	TableActions,
+	Tables,
+	VersionColumn,
+} from './policy'
 
 declare const databaseType: unique symbol
 
@@ -74,6 +84,8 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col, 
 	readonly version?: Ver
 	readonly createdBy?: Col
 	readonly columns?: ColumnPolicies<Col, A>
+	/** The file columns, each with the file kind it holds (`c.files`): a `uuid` foreign key to `fabrika_files`. */
+	readonly files?: FilePolicies<Col>
 }
 
 /**

@@ -13,6 +13,12 @@ export const FILE_STATUSES = ['pending', 'live', 'quarantined', 'rejected'] as c
 
 export const FILE_TABLE_PREFIX = 'fabrika_files_'
 
+/** Every stored file (`@fabrika/db`'s `0008_files.sql`): an application's file column is a foreign key to its `id`. */
+export const STORED_FILES_TABLE = 'fabrika_files'
+
+/** What an application's last adoption migration of a file collection calls, with the collection's name. */
+export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
+
 /** The columns the scan job keeps: the scanned object's version, and the retry count and time of a file without a verdict. */
 export const FILE_SCAN_COLUMNS = ['object_version TEXT', 'scan_attempts INTEGER NOT NULL DEFAULT 0', 'scan_after TIMESTAMPTZ'] as const
 

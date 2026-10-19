@@ -5,6 +5,7 @@
 import type { Selectable, Updateable } from 'kysely'
 import type { RowRef } from './capability'
 import type { ConditionTuple } from './description'
+import type { FileReference } from './file-references'
 import type {
 	ActionOf,
 	ApplicationTableName,
@@ -119,11 +120,11 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 	}
 	readonly appRead: AppActionsOf<P, T, 'appRead'>
 	readonly appCount: AppActionsOf<P, T, 'appCount'>
-	readonly row: RowType<DB[T]>
+	readonly row: WithFiles<RowType<DB[T]>, FileColumnsOf<P, T>>
 	readonly reads: ColumnReadsOf<P, T>
-	readonly insert: InsertValues<DB, P, T>
-	readonly update: UpdateValues<DB, P, T>
-	readonly writes: UpdatesOf<DB, P, T>
+	readonly insert: WithFiles<InsertValues<DB, P, T>, FileColumnsOf<P, T>>
+	readonly update: WithFiles<UpdateValues<DB, P, T>, FileColumnsOf<P, T>>
+	readonly writes: { readonly [A in keyof UpdatesOf<DB, P, T>]: WithFiles<UpdatesOf<DB, P, T>[A], FileColumnsOf<P, T>> }
 	readonly chain: ChainColumns<P, T, V>
 	readonly refs: DimensionOf<P, T> | ChainDimensions<P, T, V>
 	readonly reach: ReachOf<P, T, V>
@@ -165,6 +166,13 @@ type ReachOf<P, T, V> = [ContainerOf<P, T>] extends [never] ? DimensionOf<P, T> 
  * diagnostic names it (`DealsTable`), and Kysely's `Selectable` of it otherwise.
  */
 type RowType<R> = [R] extends [Selectable<R>] ? [Selectable<R>] extends [R] ? R : Selectable<R> : Selectable<R>
+
+/** The file columns of table `T`'s policy (`files: { <column>: '<kind>' }`). */
+type FileColumnsOf<P, T> = PolicyOf<P, T> extends { readonly files: infer F } ? keyof F & string : never
+
+/** A row or write of a table with file columns: each holds a file reference, `null` where the column is nullable. */
+type WithFiles<R, Files extends string> = [Files] extends [never] ? R
+	: { [K in keyof R]: K extends Files ? (null extends R[K] ? FileReference | null : FileReference) : R[K] }
 
 type ReferenceTableName<P> = { [K in keyof P]: P[K] extends { readonly scope: { readonly reference: string } } ? K : never }[keyof P] & string
 

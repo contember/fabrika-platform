@@ -57,6 +57,30 @@ describe('a paved migration', () => {
 		expect(classify(sql).refused).toEqual([])
 	})
 
+	test('a file column references fabrika_files, an adoption copies from a collection table, and the release is called by name', () => {
+		const sql = [
+			'CREATE TABLE deal_attachments (id uuid PRIMARY KEY, file uuid NOT NULL REFERENCES fabrika_files (id), name text);',
+			'CREATE INDEX deal_attachments_file ON deal_attachments (file);',
+			'ALTER TABLE products ADD COLUMN image uuid REFERENCES fabrika_files (id);',
+			'ALTER TABLE products ADD CONSTRAINT products_image FOREIGN KEY (image) REFERENCES fabrika_files (id);',
+			'INSERT INTO deal_attachments (deal_id, file, name) SELECT owner_id, id, original_name FROM fabrika_files_attachments WHERE deleted_at IS NULL;',
+			"SELECT fabrika_files_release('attachments');",
+		].join('\n')
+		expect(classify(sql)).toEqual({ file: FILE, refused: [], deviations: [], objects: [], changes: expect.any(Array) })
+		for (
+			const [refused, name] of [
+				['INSERT INTO fabrika_files_attachments (id) SELECT id FROM fabrika_files_other;', 'fabrika_files_attachments'],
+				["SELECT fabrika_files_release('attachments'), 1;", 'fabrika_files_release'],
+				['SELECT fabrika_files_release(name) FROM notes;', 'fabrika_files_release'],
+				['CREATE TABLE x (id uuid REFERENCES fabrika_files (id), y text REFERENCES fabrika_job_leases (job));', 'fabrika_job_leases'],
+				['INSERT INTO x (id) SELECT id FROM fabrika_files;', 'fabrika_files'],
+				['UPDATE fabrika_files SET legacy = null;', 'fabrika_files'],
+			] as const
+		) {
+			expect(refusal(refused)).toBe(`a reference to the framework's ${name}`)
+		}
+	})
+
 	test("the scan migration may replace a file table's status check and add its columns, in exactly the form fileScanSql writes", () => {
 		const widen = `${fileScanAlter('fabrika_files_attachments')};`
 		expect(classify(widen).refused).toEqual([])
@@ -151,6 +175,10 @@ describe('refused: what escapes the schema, the transaction or the platform', ()
 			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason })
 		}
 		expect(classifyMigration('UPDATE fabrika_job_leases SET holder = NULL', SCHEMA, { file: FILE, framework: true }).refused).toEqual([])
+		// The framework's own bundle reads the catalog and names a collection's table by value; an application's may not.
+		const release = "DO $$ BEGIN EXECUTE format('DROP TABLE %I', 'fabrika_files_x'); PERFORM count(*) FROM pg_constraint; END $$"
+		expect(classifyMigration(release, SCHEMA, { file: FILE, framework: true }).refused).toEqual([])
+		expect(refusal(release)).toBe('a dynamic EXECUTE in a body')
 	})
 
 	test('a body holds no dynamic EXECUTE, no statement off its allowlist and no name outside the schema, dollar- or single-quoted', () => {

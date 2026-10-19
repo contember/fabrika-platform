@@ -3,7 +3,7 @@
 // does not recognise: an allowlist at every level, so a form a later Postgres adds is refused, not executed.
 // Runtime-neutral: Control classifies a commit's migrations in a Worker, the runner before it applies them.
 
-import { FILE_TABLE_PREFIX, fileScanAlterTable, legacyStatusCheckName } from './file-table-ddl'
+import { FILE_TABLE_PREFIX, FILES_RELEASE_FUNCTION, fileScanAlterTable, legacyStatusCheckName, STORED_FILES_TABLE } from './file-table-ddl'
 import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
 import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
 import {
@@ -13,6 +13,7 @@ import {
 	dmlForeignSchema,
 	frameworkReference,
 	functionUse,
+	isFrameworkName,
 	isName,
 	isPunct,
 	nameReferences,
@@ -328,7 +329,9 @@ function literalBody(token: SqlToken | undefined): SqlToken[] | undefined {
 function checkBody(tokens: readonly SqlToken[], context: Context): void {
 	const unicode = unicodeIdentifier(tokens)
 	if (unicode !== undefined) throw new Refused('a Unicode-escaped identifier (U&"…")', unicode.line)
-	const framework = context.framework ? undefined : frameworkReference(tokens)
+	// The framework's own bundle is reviewed with the framework: its bodies read the catalog and name tables by value.
+	if (context.framework) return
+	const framework = frameworkReference(tokens)
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const execute = tokens.find((token) => upperWord(token) === 'EXECUTE')
 	if (execute !== undefined) throw new Refused('a dynamic EXECUTE in a body', execute.line)
@@ -883,11 +886,41 @@ function fileScanNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
 	return table === undefined ? new Set() : new Set([table, legacyStatusCheckName(table), `${table}_status`])
 }
 
+/**
+ * The tokens a statement's framework names are checked over: without each `REFERENCES fabrika_files`, the foreign key
+ * of a file column (`id`, the table's key, is what it references).
+ */
+function withoutFileReferences(tokens: readonly SqlToken[]): readonly SqlToken[] {
+	return tokens.filter((token, index) => !(nameText(token) === STORED_FILES_TABLE && upperWord(tokens[index - 1]) === 'REFERENCES'))
+}
+
+/**
+ * The framework names an `INSERT` may read: a file collection's table, which an adoption migration copies the owner
+ * mapping out of (`INSERT INTO deal_attachments (…) SELECT … FROM fabrika_files_attachments`). It never writes one.
+ */
+function adoptedTableNames(tokens: readonly SqlToken[]): ReadonlySet<string> {
+	const target = nameText(tokens[skipWords(tokens, 1, 'INTO')])
+	if (upperWord(tokens[0]) !== 'INSERT' || target === undefined || isFrameworkName(target)) return new Set()
+	return new Set(tokens.flatMap((token) => {
+		const name = nameText(token)
+		return name?.startsWith(FILE_TABLE_PREFIX) === true ? [name] : []
+	}))
+}
+
+/** `SELECT fabrika_files_release('<collection>');`: the one call of a framework function an application migration makes. */
+function isFileRelease(tokens: readonly SqlToken[]): boolean {
+	const [select, name, open, collection, close] = tokens
+	return tokens.length === 5 && upperWord(select) === 'SELECT' && nameText(name) === FILES_RELEASE_FUNCTION && isPunct(open, '(')
+		&& collection?.kind === 'string' && /^[a-z_][a-z0-9_]*$/.test(collection.text ?? '') && isPunct(close, ')')
+}
+
 function classifyStatement(tokens: readonly SqlToken[], context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
 	const unicode = unicodeIdentifier(tokens)
 	if (unicode !== undefined) throw new Refused('a Unicode-escaped identifier (U&"…")', unicode.line)
-	const framework = context.framework ? undefined : frameworkReference(tokens, fileTableNames(tokens))
+	if (!context.framework && isFileRelease(tokens)) return
+	const allowed = new Set([...fileTableNames(tokens), ...adoptedTableNames(tokens)])
+	const framework = context.framework ? undefined : frameworkReference(withoutFileReferences(tokens), allowed)
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const first = upperWord(tokens[0])
 	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') return checkQuery(tokens, context, first)
