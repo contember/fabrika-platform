@@ -104,7 +104,7 @@ describe('a stored artifact', () => {
 	test('without a format is the 0.5 one: kept as read, and upcast to this release', () => {
 		const { format: _format, ...older } = notesArtifact
 		const parsed = parseStoredArtifact(JSON.parse(JSON.stringify(older)))
-		expect(parsed.older).toEqual(older)
+		expect<unknown>(parsed.older).toEqual(older)
 		expect(parsed.contract.format).toBe(CONTRACT_FORMAT)
 	})
 
