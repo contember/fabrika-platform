@@ -1259,14 +1259,14 @@ function formFileChanges(name: string, before: FormFiles, after: FormFiles): Acc
 			// A required file refuses the submissions without one; no longer requiring it admits them.
 			changes.push(
 				file.required
-					? removal(`Form \`${name}\` requires its file \`${field}\``)
+					? narrowing(`Form \`${name}\` requires its file \`${field}\``)
 					: widening(`Form \`${name}\` no longer requires its file \`${field}\``),
 			)
 		}
 	}
 	for (const [field, file] of Object.entries(before)) {
 		if (after[field] === undefined) {
-			changes.push(removal(`Form \`${name}\` no longer takes a file \`${field}\` into files \`${file.collection}\``))
+			changes.push(narrowing(`Form \`${name}\` no longer takes a file \`${field}\` into files \`${file.collection}\``))
 		}
 	}
 	return changes
