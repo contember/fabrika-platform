@@ -362,8 +362,10 @@ describe('device authorization', () => {
 		expect(await startDeviceAuthorization(services, { ...setup.input, app: 'unregistered' }, null)).toEqual({ ok: false, reason: 'not_allowed' })
 		const capped = await startDeviceAuthorization(services, { ...setup.input, keyLifetimeSeconds: 9999999 }, null)
 		if (!capped.ok) throw new Error('start failed')
-		expect((await h.repositories.device.get(capped.attemptId))?.key_lifetime_seconds).toBe(2592000)
-		expect(capped.expiresAt - now()).toBe(600)
+		const cappedRow = await h.repositories.device.get(capped.attemptId)
+		expect(cappedRow?.key_lifetime_seconds).toBe(2592000)
+		// Measured against the attempt's own start, not a second clock read that can land in the next second.
+		expect(capped.expiresAt - (cappedRow?.created_at ?? 0)).toBe(600)
 		const burst = await Promise.all(Array.from({ length: 30 }, () => startDeviceAuthorization(services, setup.input, null)))
 		expect(burst.filter((result) => result.ok)).toHaveLength(18)
 		expect((await startDeviceAuthorization(services, setup.input, 'trusted-client')).ok).toBe(true)
