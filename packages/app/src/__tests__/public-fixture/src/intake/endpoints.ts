@@ -61,7 +61,7 @@ export const catalog = app.group({}, (r) => ({
 		output: Products,
 		access: { public: true },
 		actions: ['catalog.read'],
-		http: { method: 'GET' },
+		http: { method: 'GET', cache: { maxAgeSeconds: 60 } },
 	}).handle(async ({ input, ctx }) => ({
 		items: (await ctx.db.app('catalog.read').products.list({ limit: input.limit ?? 10 })).items
 			.filter((row) => (input.exact === true ? row.name === input.name : row.name.includes(input.name)))

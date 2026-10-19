@@ -58,7 +58,12 @@ describe('the artifact of files as values', () => {
 			output: { type: 'file', kind: 'attachments' },
 			response: 'file',
 		})
-		expect(artifact.endpoints.find((row) => row.id === 'api.shop.image')).toMatchObject({ kind: 'public', method: 'GET', response: 'file' })
+		expect(artifact.endpoints.find((row) => row.id === 'api.shop.image')).toMatchObject({
+			kind: 'public',
+			method: 'GET',
+			response: 'file',
+			cache: 'immutable',
+		})
 		expect(artifact.procedures?.['api.intake.register']?.rate.bytesPerHour).toBe(1048576)
 	})
 
@@ -290,7 +295,10 @@ if (postgres !== null) {
 			const image = await kit.fetch(`/api/shop.image?product=${id}&file=${row.image}`)
 			expect(image.status).toBe(200)
 			expect(image.headers.get('Content-Disposition')).toStartWith('inline')
-			expect((await kit.fetch(`/api/shop.image?product=${id}&file=${crypto.randomUUID()}`)).status).toBe(404)
+			expect(image.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+			const missing = await kit.fetch(`/api/shop.image?product=${id}&file=${crypto.randomUUID()}`)
+			expect(missing.status).toBe(404)
+			expect(missing.headers.get('Cache-Control')).toBe('private, no-store')
 		})
 
 		test('takes a photo after its challenge, quarantined until the scan job gives it a clean verdict', async () => {

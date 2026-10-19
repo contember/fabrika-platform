@@ -183,10 +183,21 @@ interface EndpointRowBase {
 	 * answer of it, a denial included, ADR-0022's file treatment. Absent otherwise, so every other row keeps its digest.
 	 */
 	readonly response?: EndpointResponse
+	/**
+	 * How long a browser or a CDN may reuse a successful answer: a public `GET` query only (`http.cache`). Absent for
+	 * every other row, which answers `no-store`, so every row without it keeps its digest.
+	 */
+	readonly cache?: EndpointCache
 }
 
 /** The answer profile of a row that answers a stored file. */
 export type EndpointResponse = 'file'
+
+/** A cacheable row's lifetime: `maxAgeSeconds`, or `immutable`, a year, for an input that names an immutable value. */
+export type EndpointCache = { readonly maxAgeSeconds: number } | 'immutable'
+
+/** The longest `maxAgeSeconds`: one year, the lifetime the proxy gives `immutable` too. */
+export const MAX_CACHE_AGE_SECONDS = 31_536_000
 
 /** The endpoint kinds whose row may answer a stored file: a procedure's. */
 export const FILE_RESPONSE_KINDS: readonly EndpointKind[] = ['query', 'mutation', 'public']

@@ -419,6 +419,28 @@ describe('contract apps — the endpoint table', () => {
 		})
 		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, spa] }] })).toBeNull()
 	})
+
+	test("reads a public GET query's cache, its digest covering it, and refuses it on any other row", () => {
+		const rules: Parameters<typeof anonymousRow>[0] = {
+			id: 'api.catalog.products',
+			kind: 'public',
+			method: 'GET',
+			path: '/api/catalog.products',
+			admission: null,
+		}
+		const products = anonymousRow(rules)
+		const cached = anonymousRow({ ...rules, cache: { maxAgeSeconds: 60 } })
+		expect(cached.digest).not.toBe(products.digest)
+		expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, cached] }] })?.apps[0]).toMatchObject({
+			endpoints: expect.arrayContaining([cached]),
+		})
+		const posted = anonymousRow({ ...rules, method: 'POST', cache: 'immutable' })
+		const form = anonymousRow({ id: 'signup', kind: 'form', method: 'POST', path: '/signup', admission: null, cache: 'immutable' })
+		const forever = anonymousRow({ ...rules, cache: { maxAgeSeconds: 31536001 } })
+		for (const row of [posted, form, forever]) {
+			expect(parseProxyManifest({ apps: [{ ...app, endpoints: [...app.endpoints, row] }] })).toBeNull()
+		}
+	})
 })
 
 describe('installation entries — the forms no application may declare', () => {

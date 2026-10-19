@@ -22,6 +22,7 @@ import {
 	type DimensionArtifact,
 	directoryReach,
 	displayNameProblem,
+	type EndpointCache,
 	type EndpointDirectory,
 	type EndpointRequirement,
 	type EndpointRow,
@@ -48,6 +49,7 @@ import {
 	type MailTemplate,
 	mailTemplateProblems,
 	type MailTemplates,
+	MAX_CACHE_AGE_SECONDS,
 	MESSAGE_KINDS,
 	type MessageKind,
 	type MountArtifact,
@@ -1106,6 +1108,7 @@ class ArtifactBuilder {
 			method: http.method,
 			body: http.body,
 			...(files === null ? {} : { filesOptional: files.optional }),
+			...(http.cache === undefined ? {} : { cache: http.cache }),
 		}
 	}
 
@@ -1168,7 +1171,7 @@ class ArtifactBuilder {
 		procedure: ProcedureDeclaration<SchemaShape, unknown>,
 		kind: 'public' | 'credentialed' | 'link',
 		files: InputFiles | null = null,
-	): { readonly method: 'GET' | 'POST'; readonly body: ProcedureBody | null; readonly query: SchemaShape | null } {
+	): { readonly method: 'GET' | 'POST'; readonly body: ProcedureBody | null; readonly query: SchemaShape | null; readonly cache?: EndpointCache } {
 		const fallback = { method: 'POST' as const, body: files === null ? ('json' as const) : ('multipart' as const), query: null }
 		const value = procedure.http
 		// A query that answers a file is a GET, so `<img src>` and `<a download>` reach it.
@@ -1184,10 +1187,7 @@ class ArtifactBuilder {
 			return fallback
 		}
 		this.#keys(`${where} http`, value, ['method', 'query', 'body', 'cache'])
-		if (value['cache'] !== undefined) {
-			this.#problem(where, 'declares http.cache, which this release does not serve yet (allowed: no cache; every answer is no-store)')
-		}
-		const method = value['method'] ?? 'POST'
+		const method = value['method'] ?? (value['cache'] !== undefined && procedure.type === 'query' ? 'GET' : 'POST')
 		if (method !== 'GET' && method !== 'POST') {
 			this.#problem(where, `http.method ${JSON.stringify(method)} is not a method (allowed: 'GET' or 'POST')`)
 			return fallback
@@ -1208,7 +1208,11 @@ class ArtifactBuilder {
 			if (!flat(procedure.input)) {
 				this.#problem(where, 'is GET, so its input is flat scalar fields the URL carries (allowed: strings, numbers, booleans, enums, literals, null)')
 			}
-			return { method, body: null, query: null }
+			const cache = this.#cache(where, value['cache'], kind === 'public' && procedure.type === 'query')
+			return { method, body: null, query: null, ...(cache === null ? {} : { cache }) }
+		}
+		if (value['cache'] !== undefined) {
+			this.#problem(where, 'declares http.cache, which only a public GET query does: every other answer is no-store')
 		}
 		if (body === 'multipart' && files !== null) {
 			const query = value['query']
@@ -1235,6 +1239,35 @@ class ArtifactBuilder {
 		}
 		this.#tokenFields(`${where} http.query`, query, true)
 		return { method, body, query }
+	}
+
+	/**
+	 * `http.cache` of a public GET query: `{ maxAgeSeconds }` (1 s to a year) or `'immutable'` (a year, for an input that
+	 * names an immutable value, such as a file id). `null` when it declares none or after a problem.
+	 */
+	#cache(where: string, value: unknown, cacheable: boolean): EndpointCache | null {
+		if (value === undefined) {
+			return null
+		}
+		if (!cacheable) {
+			this.#problem(where, 'declares http.cache, which only a public GET query does: every other answer is no-store')
+			return null
+		}
+		if (value === 'immutable') {
+			return value
+		}
+		const allowed = `allowed: http.cache: { maxAgeSeconds: 1 to ${MAX_CACHE_AGE_SECONDS} } or 'immutable'`
+		if (!isRecord(value)) {
+			this.#problem(where, `http.cache is neither a lifetime nor 'immutable' (${allowed})`)
+			return null
+		}
+		this.#keys(`${where} http.cache`, value, ['maxAgeSeconds'])
+		const seconds = value['maxAgeSeconds']
+		if (typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 1 || seconds > MAX_CACHE_AGE_SECONDS) {
+			this.#problem(where, `http.cache.maxAgeSeconds ${JSON.stringify(seconds)} is not a lifetime (${allowed})`)
+			return null
+		}
+		return { maxAgeSeconds: seconds }
 	}
 
 	/**
@@ -2923,6 +2956,8 @@ interface ProcedureRules {
 	readonly origins: AdmissionOrigins
 	/** A multipart procedure whose every file field may be left empty also takes a JSON body. */
 	readonly filesOptional?: boolean
+	/** A public GET query's `http.cache`. */
+	readonly cache?: EndpointCache
 }
 
 /** What a procedure's file fields add to its body: their bytes together, the largest one, and whether every kind scans. */
@@ -2991,12 +3026,12 @@ export function fileFieldsOf(input: SchemaShape | null): ReadonlyMap<string, Fil
 type AdmissionOrigins = 'same-origin' | 'listed' | 'any'
 
 /** The method and body admission of a procedure's row: POST with a JSON body, unlimited, for a `defineContract` one. */
-function rowWire(rules: ProcedureRules | null): Pick<EndpointRow, 'method' | 'admission'> {
+function rowWire(rules: ProcedureRules | null): Pick<EndpointRow, 'method' | 'admission' | 'cache'> {
 	if (rules === null) {
 		return { method: 'POST', admission: JSON_ADMISSION }
 	}
 	if (rules.body === null) {
-		return { method: rules.method, admission: null }
+		return { method: rules.method, admission: null, ...(rules.cache === undefined ? {} : { cache: rules.cache }) }
 	}
 	if (rules.body === 'multipart') {
 		const contentTypes: readonly [string, ...string[]] = rules.filesOptional === true

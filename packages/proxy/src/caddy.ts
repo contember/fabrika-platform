@@ -44,6 +44,7 @@ import {
 	appFileTreatment,
 	appHeaderPolicy,
 	BASE_HEADER_POLICY,
+	cacheControlOf,
 	type HeaderPolicy,
 	INLINE_FILE_TYPES,
 	REMOVED_RESPONSE_HEADERS,
@@ -482,7 +483,25 @@ function contractUpstream(
 			upstream({ set: headerValues(policy), delete: removedHeaders(app) }),
 		],
 	}
-	return [...(downloads.length === 0 ? [] : [download]), answer]
+	return [...cacheRoutes(app), ...(downloads.length === 0 ? [] : [download]), answer]
+}
+
+/**
+ * A cacheable row's successful answer (`http.cache`) gets its `Cache-Control` in place of the policy's `no-store`. Each
+ * route matches the rows of one lifetime by the endpoint the decision asserted and wraps the upstream that follows it:
+ * its deferred set runs after the upstream's own, and only on a 200.
+ */
+function cacheRoutes(app: ContractProxyApp): CaddyRoute[] {
+	const byValue = new Map<string, string[]>()
+	for (const row of app.endpoints) {
+		if (!('cache' in row) || row.cache === undefined) continue
+		const value = cacheControlOf(row.cache)
+		byValue.set(value, [...(byValue.get(value) ?? []), `${row.id}@*`])
+	}
+	return [...byValue].map(([value, endpoints]): CaddyRoute => ({
+		match: [{ header: { [ENDPOINT_HEADER]: endpoints } }],
+		handle: [{ handler: 'headers', response: { require: { status_code: [200] }, set: { 'Cache-Control': [value] } } }],
+	}))
 }
 
 /**

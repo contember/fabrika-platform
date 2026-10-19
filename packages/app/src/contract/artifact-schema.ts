@@ -16,6 +16,7 @@ import {
 	JOB_MAILERS,
 	LOCALES,
 	mailTemplateProblems,
+	MAX_CACHE_AGE_SECONDS,
 	type MessageKind,
 	type NumberShape,
 	type OutputShape,
@@ -142,6 +143,11 @@ const requirement = z.discriminatedUnion('kind', [
 	}),
 ])
 
+const endpointCacheSchema = z.union([
+	z.literal('immutable'),
+	z.strictObject({ maxAgeSeconds: z.int().min(1).max(MAX_CACHE_AGE_SECONDS) }),
+])
+
 const rowBase = {
 	id: name,
 	source: z.strictObject({ kind: z.enum(['mount', 'export', 'files']), name }),
@@ -177,7 +183,8 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		callers: z.tuple([]),
 		requirement: z.null(),
 		crossOrigin: z.enum(['environment', 'any']).optional(),
-	}),
+		cache: endpointCacheSchema.optional(),
+	}).refine((row) => row.cache === undefined || row.method === 'GET', 'only a GET answer is cached'),
 	// A public SPA is a fixed static row: GET only, no body, no schemas.
 	z.strictObject({
 		...rowBase,

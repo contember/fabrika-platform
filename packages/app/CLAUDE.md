@@ -813,7 +813,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   promise, so the publication that drops it is still held to it.
 - The header policy and the file treatment are ADR-0022's, defined once in
   `@fabrika/proxy-core/headers`; `headers.ts` and `files/treatment.ts` only apply them, and the
-  proxy applies the same definition. Never restate a header value here.
+  proxy applies the same definition. Never restate a header value here. A public GET query's `http.cache` turns its
+  200's `Cache-Control` into its lifetime (`applyAnswerCache`), in-process and in the proxy; the row carries it.
 
 ## File collections
 

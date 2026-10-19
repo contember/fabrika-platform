@@ -2,7 +2,7 @@
 // handler with `.handle(fn)` beside it. `.handle` returns the declaration without the handler's type, so a contract
 // of many endpoints stays cheap to type-check, and an endpoint without `.handle` is not a group member.
 
-import type { RpcCaller } from '@fabrika/auth-core'
+import type { EndpointCache, RpcCaller } from '@fabrika/auth-core'
 import type { AnyDbIndex, ReadOnlyUnscoped, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Snake } from '../from-row'
@@ -268,6 +268,11 @@ export interface HttpOption<Q> {
 	readonly method?: 'GET' | 'POST'
 	readonly query?: Q
 	readonly body?: 'json' | 'urlencoded'
+	/**
+	 * A public GET query's successful answers may be reused: `{ maxAgeSeconds }`, or `'immutable'` (a year) when its
+	 * input names an immutable value. Every other answer is `no-store`.
+	 */
+	readonly cache?: EndpointCache
 }
 
 /**

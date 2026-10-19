@@ -102,6 +102,8 @@ export const shop = app.group({}, (r) => ({
 		output: file('catalog'),
 		access: { public: true },
 		actions: ['catalog.read'],
+		// Its input names the file, so another image is another URL.
+		http: { cache: 'immutable' },
 	}).handle(async ({ input, ctx }) => {
 		const { image } = await ctx.db.app('catalog.read').products.get(input.product)
 		if (image === null || image.id !== input.file) throw new NotFoundError('image')

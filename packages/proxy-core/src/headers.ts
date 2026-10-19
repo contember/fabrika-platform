@@ -2,7 +2,7 @@
 // "Response headers"). The proxy sets them on every answer, its own denials included; the framework sets the same
 // definition in-process. Exported as `@fabrika/proxy-core/headers`, which imports nothing at runtime.
 
-import type { CspExtensions } from '@fabrika/auth-core'
+import type { CspExtensions, EndpointCache } from '@fabrika/auth-core'
 
 /** Every powerful feature off. ADR-0022 lists the same names; change both together. */
 export const PERMISSIONS_POLICY_FEATURES: readonly string[] = [
@@ -255,6 +255,21 @@ export function applyFileTreatment(headers: Headers, treatment: HeaderPolicy = F
 	applyHeaderPolicy(headers, treatment)
 	const parameters = headers.get('Content-Disposition')?.replace(/^[^;]*/, '') ?? ''
 	headers.set('Content-Disposition', `${fileDisposition(headers.get('Content-Type'))}${parameters}`)
+}
+
+/**
+ * A cacheable row's successful answer (`http.cache`): its `Cache-Control` replaces the `no-store` of the policy or the
+ * file treatment. Every other answer, an error or a redirect included, keeps `no-store`.
+ */
+export function applyAnswerCache(headers: Headers, row: { readonly cache?: EndpointCache }, status: number): void {
+	if (row.cache !== undefined && status === 200) {
+		headers.set('Cache-Control', cacheControlOf(row.cache))
+	}
+}
+
+/** The `Cache-Control` of a cacheable row's successful answer: `immutable` is reused for a year. */
+export function cacheControlOf(cache: EndpointCache): string {
+	return cache === 'immutable' ? 'public, max-age=31536000, immutable' : `public, max-age=${cache.maxAgeSeconds}`
 }
 
 /** A copy of `response` whose headers `apply` rewrote; status and body are unchanged. */

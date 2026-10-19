@@ -1,4 +1,4 @@
-import { answersFile, FABRIKA_HOP_HEADERS, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
+import { answersFile, type EndpointCache, FABRIKA_HOP_HEADERS, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
 import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
@@ -22,6 +22,7 @@ import {
 import {
 	appFileTreatment,
 	appHeaderPolicy,
+	applyAnswerCache,
 	applyCrossOriginHeaders,
 	applyFileTreatment,
 	applyHeaderPolicy,
@@ -122,7 +123,9 @@ function unavailable(manifest: ProxyManifest | null): ProxyFetch {
 	return (request) => {
 		const app = manifest === null ? null : findApp(manifest, new URL(request.url))
 		const answer = UNAVAILABLE.clone()
-		return Promise.resolve(app === null || !isApplicationEntry(app) ? answer : withResponseHeaders(answer, contractAnswerHeaders(app)(null)))
+		return Promise.resolve(
+			app === null || !isApplicationEntry(app) ? answer : withResponseHeaders(answer, contractAnswerHeaders(app)(null, answer.status)),
+		)
 	}
 }
 
@@ -165,7 +168,9 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		const upstream = env[app.upstream]
 		if (!isWorkerService(upstream)) {
 			const unavailable = UNAVAILABLE.clone()
-			return treatment === undefined ? unavailable : withResponseHeaders(unavailable, treatment(verification.headers.get(ENDPOINT_HEADER)))
+			return treatment === undefined
+				? unavailable
+				: withResponseHeaders(unavailable, treatment(verification.headers.get(ENDPOINT_HEADER), unavailable.status))
 		}
 
 		// Built from the ORIGINAL headers, so it is stripped again here — the set above was applied to the
@@ -192,7 +197,7 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// The treatment deleted the application's own `Access-Control-*`; only the origin the decision admitted is set.
 		const allowOrigin = verification.headers.get(ALLOW_ORIGIN_HEADER)
 		return withResponseHeaders(answer, (headers) => {
-			treatment(verification.headers.get(ENDPOINT_HEADER))(headers)
+			treatment(verification.headers.get(ENDPOINT_HEADER), answer.status)(headers)
 			if (allowOrigin !== null) applyCrossOriginHeaders(headers, crossOriginHeaders(allowOrigin))
 		})
 	}
@@ -205,17 +210,24 @@ const ALLOW_ORIGIN_HEADER = 'Access-Control-Allow-Origin'
  * treatment for the download endpoint the decision asserted, the policy otherwise. The decision's own answers carry
  * them already.
  */
-type AnswerHeaders = (endpoint: string | null) => (headers: Headers) => void
+type AnswerHeaders = (endpoint: string | null, status: number) => (headers: Headers) => void
 
 function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
 	const policy: HeaderPolicy = appHeaderPolicy(app)
 	const fileTreatment: HeaderPolicy = appFileTreatment(app)
 	const downloads = new Set(app.endpoints.filter(answersFile).map((row) => row.id))
-	const withPolicy = (headers: Headers) => applyHeaderPolicy(headers, policy)
-	const withFileTreatment = (headers: Headers) => applyFileTreatment(headers, fileTreatment)
-	return (endpoint) => {
-		const id = endpoint === null ? null : parseEndpointHeader(endpoint)?.id
-		return id !== undefined && id !== null && downloads.has(id) ? withFileTreatment : withPolicy
+	const cached = new Map<string, EndpointCache>()
+	for (const row of app.endpoints) {
+		if ('cache' in row && row.cache !== undefined) cached.set(row.id, row.cache)
+	}
+	return (endpoint, status) => {
+		const id = endpoint === null ? null : (parseEndpointHeader(endpoint)?.id ?? null)
+		return (headers) => {
+			if (id !== null && downloads.has(id)) applyFileTreatment(headers, fileTreatment)
+			else applyHeaderPolicy(headers, policy)
+			const cache = id === null ? undefined : cached.get(id)
+			if (cache !== undefined) applyAnswerCache(headers, { cache }, status)
+		}
 	}
 }
 

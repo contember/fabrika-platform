@@ -14,6 +14,7 @@ import {
 	type CrossOriginForm,
 	type DeclaredReach,
 	type DimensionArtifact,
+	type EndpointCache,
 	endpointDelegation,
 	type EndpointDirectory,
 	endpointMembers,
@@ -601,7 +602,7 @@ export function snapshotDeviations(snapshot: AccessSnapshot): DeviationSubjectDt
 function compareEndpoints(changes: Changes, baseline: ContractArtifact, candidate: ContractArtifact): ReadonlySet<string> {
 	compareKeyed(changes, endpointMap(baseline.endpoints), endpointMap(candidate.endpoints), {
 		added: (id, row) => {
-			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}`
+			const line = `New endpoint \`${id}\` (${route(row)}) ${audience(row)}${answersFile(row)}${callableFrom(row)}${reusedFor(row.cache)}`
 			// Code anyone can call gets a closer review than code a signed-in caller reaches.
 			const change = row.kind === 'public' ? closerWidening(line) : widening(line)
 			return row.crossOrigin === 'environment' ? { ...change, environmentOrigins: true } : change
@@ -823,6 +824,8 @@ const ADMITS_NO_MORE: { readonly [Field in keyof EndpointRow]-?: (after: Endpoin
 	crossOrigin: (after, before) => crossOriginRank(after.crossOrigin) <= crossOriginRank(before.crossOrigin),
 	// The file treatment the proxy gives every answer of a file procedure, denials included.
 	response: (after, before) => after.response === before.response,
+	// A cache keeps a copy of a public answer beyond a change: a row that caches where the removed one did not is shown.
+	cache: (after, before) => canonicalJson(after.cache ?? null) === canonicalJson(before.cache ?? null),
 	// The rows that answer the removed row's paths now were selected by its method; the paths are the removed row's.
 	method: (after, before) => after.method === before.method,
 	path: () => true,
@@ -873,6 +876,7 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): Access
 		...valueChange(`${name} requirement`, from.requirement, to.requirement),
 		...admissionChanges(name, from, to),
 		...crossOriginChanges(name, from.crossOrigin, to.crossOrigin),
+		...cacheChange(name, from.cache, to.cache),
 		...schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input),
 		...outputChanges(name, from.output, to.output),
 	]
@@ -898,6 +902,23 @@ function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to:
 		? narrowing(`${name} is callable only from ${crossOriginReach(to)}`)
 		: widening(`${name} becomes callable from ${crossOriginReach(to)}`)
 	return [to === 'environment' ? { ...line, environmentOrigins: true } : line]
+}
+
+/**
+ * `, whose answers … may reuse` for a public query that declares `http.cache`: a copy outlives a change the application
+ * makes, and `immutable` is right only when the input names a value that never changes, which the approver checks.
+ */
+function reusedFor(cache: EndpointCache | undefined): string {
+	if (cache === undefined) return ''
+	return cache === 'immutable'
+		? ', whose successful answers a browser or a CDN reuses for a year: its input must name a value that never changes'
+		: `, whose successful answers a browser or a CDN reuses for ${seconds(cache.maxAgeSeconds * 1000)}`
+}
+
+/** A changed `http.cache` reaches no data: the line shows how long a copy may outlive a change. */
+function cacheChange(name: string, from: EndpointCache | undefined, to: EndpointCache | undefined): AccessChange[] {
+	if (canonicalJson(from ?? null) === canonicalJson(to ?? null)) return []
+	return [neutral(to === undefined ? `${name} answers are no longer reused` : `${name}${reusedFor(to)}`)]
 }
 
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */

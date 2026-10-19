@@ -16,6 +16,7 @@ import {
 	type InstallationEndpointRow,
 	type InstallationEndpointTable,
 	isDigest,
+	MAX_CACHE_AGE_SECONDS,
 	parseAppEnvironmentId,
 	requirementDigest,
 } from '@fabrika/auth-core'
@@ -100,7 +101,7 @@ export type ProxyEndpointRow =
 	| (
 		& Pick<
 			Extract<EndpointRow, { requirement: null }>,
-			'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response'
+			'id' | 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'crossOrigin' | 'response' | 'cache'
 		>
 		& {
 			digest: string
@@ -207,6 +208,7 @@ export const proxyEndpointRowSchema = z.union([
 		delegation: z.null(),
 		crossOrigin: z.enum(['environment', 'any']).optional(),
 		response: z.literal('file').optional(),
+		cache: z.union([z.literal('immutable'), z.object({ maxAgeSeconds: z.number().int().min(1).max(MAX_CACHE_AGE_SECONDS) }).strict()]).optional(),
 	}).strict(),
 	// A public SPA is a fixed static row: it serves GET only and admits no body.
 	z.object({
@@ -224,6 +226,9 @@ export const proxyEndpointRowSchema = z.union([
 ).refine(
 	(row) => !('response' in row) || row.response === undefined || FILE_RESPONSE_KINDS.includes(row.kind),
 	'only a procedure answers a stored file',
+).refine(
+	(row) => !('cache' in row) || row.cache === undefined || (row.kind === 'public' && row.method === 'GET'),
+	'only a public GET query caches its answer',
 ).refine(
 	(row) => row.digest === requirementDigest(row),
 	'endpoint digest does not match its rules',
@@ -376,7 +381,8 @@ export function contractProxyTable(artifact: ContractArtifact, digest: string = 
 				...(row.response === undefined ? {} : { response: row.response }),
 			}
 			if (row.requirement === null) {
-				const anonymous = { ...rules, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
+				const cache = row.cache === undefined ? {} : { cache: row.cache }
+				const anonymous = { ...rules, ...cache, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
 				return { ...anonymous, digest: requirementDigest(anonymous) }
 			}
 			const credentialed = {

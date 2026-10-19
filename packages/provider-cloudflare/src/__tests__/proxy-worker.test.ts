@@ -576,12 +576,25 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		path: '/api/files.avatar/:fileId',
 		admission: null,
 	} satisfies EndpointRules & { id: string }
+	/** A public GET query whose successful answers a browser may reuse for a minute (`http.cache`). */
+	const products = {
+		id: 'api.catalog.products',
+		kind: 'public',
+		method: 'GET',
+		path: '/api/catalog.products',
+		callers: [],
+		requirement: null,
+		admission: null,
+		delegation: null,
+		cache: { maxAgeSeconds: 60 },
+	} satisfies EndpointRules & { id: string }
 	const csp = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [], scriptSrc: [], frameSrc: [], styleSrc: [], fontSrc: [] }
 	/** The application's own headers per path: a weaker policy than the proxy's, and downloads it labels itself. */
 	const answers: Record<string, Record<string, string>> = {
 		'/api/me': { 'Content-Security-Policy': 'default-src *', 'Cache-Control': 'public, max-age=60', 'X-App': 'kept' },
 		'/api/files.avatar/drawing': { 'Content-Type': 'image/svg+xml', 'Content-Disposition': "inline; filename*=UTF-8''a.svg" },
 		'/api/files.avatar/photo': { 'Content-Type': 'image/png', 'Content-Disposition': 'attachment' },
+		'/api/catalog.products': { 'Cache-Control': 'private, max-age=5' },
 	}
 	const contractEnvironment = (iam: FakeIam, seen: Request[], scheme: 'http' | 'https' = 'https'): CloudflareProxyEnv => ({
 		IAM: iam,
@@ -597,6 +610,7 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 					{ ...me, digest: requirementDigest(me) },
 					{ ...invite, digest: requirementDigest(invite) },
 					{ ...download, digest: requirementDigest(download) },
+					{ ...products, digest: requirementDigest(products) },
 				],
 				reservedPrefixes: ['/api'],
 				snapshot: `sha256:${'0'.repeat(64)}`,
@@ -630,6 +644,19 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		expect(response.headers.get('Content-Security-Policy')).toContain("connect-src 'self' https://operations.example.com https://api.maps.example;")
 		expect(response.headers.get('X-App')).toBe('kept')
 		expect(await response.text()).toBe('ok')
+	})
+
+	test("a cacheable row's 200 carries its lifetime; its 502 stays no-store", async () => {
+		const answer = await createCloudflareProxyHandler(contractEnvironment(await keyIam(), []))(new Request(`https://${HOST}/api/catalog.products`))
+		expect(answer.status).toBe(200)
+		expect(answer.headers.get('Cache-Control')).toBe('public, max-age=60')
+		const failing: CloudflareProxyEnv = {
+			...contractEnvironment(await keyIam(), []),
+			APP: { fetch: () => Promise.reject(new Error('upstream down')) },
+		}
+		const failed = await createCloudflareProxyHandler(failing)(new Request(`https://${HOST}/api/catalog.products`))
+		expect(failed.status).toBe(502)
+		expect(failed.headers.get('Cache-Control')).toBe('no-store')
 	})
 
 	test('a download endpoint gets the file treatment: only an inert image stays inline', async () => {

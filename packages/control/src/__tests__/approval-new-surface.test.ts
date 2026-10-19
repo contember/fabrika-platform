@@ -1,8 +1,16 @@
 // What the surface revision declares, in the conservative access diff (ADR-0050): a new token purpose, a site that
 // starts signing one and a longer lifetime widen; a GET mutation and a new egress origin widen with closer review; a
-// mount's promise of backward compatibility is shown and widens nothing.
+// mount's promise of backward compatibility and a public query's `http.cache` are shown and widen nothing.
 
-import type { ContractArtifact, DeclaredReach, MountArtifact, ProcedureArtifact, TokenPurposeArtifact } from '@fabrika/auth-core'
+import type {
+	ContractArtifact,
+	DeclaredReach,
+	EndpointCache,
+	EndpointRow,
+	MountArtifact,
+	ProcedureArtifact,
+	TokenPurposeArtifact,
+} from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { classifyAccess } from '../approval/diff'
@@ -97,6 +105,40 @@ describe('a mount promise in the approval diff', () => {
 		])
 		expect(classifyAccess(mounted({ ...unchecked, compatibility: 'backward' }), mounted(unchecked)).changes).toEqual([
 			{ effect: 'neutral', line: 'Mount `partners` no longer promises backward compatibility; this deploy is the last one held to it' },
+		])
+	})
+})
+
+describe('http.cache in the approval diff', () => {
+	const search = (cache?: EndpointCache): EndpointRow => ({
+		id: 'api.catalog.search',
+		source: { kind: 'mount', name: 'api' },
+		kind: 'public',
+		method: 'GET',
+		path: '/api/catalog.search',
+		admission: null,
+		input: null,
+		output: { type: 'object', fields: {} },
+		callers: [],
+		requirement: null,
+		...(cache === undefined ? {} : { cache }),
+	})
+	const serving = (rows: readonly EndpointRow[]): AccessSnapshot => ({
+		version: 1,
+		contract: { ...notesArtifact, endpoints: [...notesArtifact.endpoints, ...rows] },
+		migrations: [],
+		checker: '0.0.0',
+	})
+
+	test('a new cached endpoint says how long its answers are reused, and a changed lifetime is shown', () => {
+		expect(classifyAccess(serving([]), serving([search('immutable')])).changes.map((change) => change.line)).toEqual([
+			'New endpoint `api.catalog.search` (GET /api/catalog.search) for anyone, without signing in, whose successful answers a browser or a CDN reuses for a year: its input must name a value that never changes',
+		])
+		expect(classifyAccess(serving([search({ maxAgeSeconds: 60 })]), serving([search()])).changes).toEqual([
+			{ effect: 'neutral', line: 'Endpoint `api.catalog.search` answers are no longer reused' },
+		])
+		expect(classifyAccess(serving([search()]), serving([search({ maxAgeSeconds: 60 })])).changes).toEqual([
+			{ effect: 'neutral', line: 'Endpoint `api.catalog.search`, whose successful answers a browser or a CDN reuses for 60 s' },
 		])
 	})
 })

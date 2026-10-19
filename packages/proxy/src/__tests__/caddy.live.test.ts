@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { endpointRow, installationRow } from '../../../proxy-core/src/__tests__/helpers'
+import { anonymousRow, endpointRow, installationRow } from '../../../proxy-core/src/__tests__/helpers'
 import { buildCaddyConfig } from '../caddy'
 
 const CADDY = process.env['FABRIKA_TEST_CADDY_BIN'] ?? ''
@@ -37,6 +37,16 @@ const DOWNLOAD = endpointRow({
 	admission: null,
 })
 const DOWNLOAD_ENDPOINT = `${DOWNLOAD.id}@${DOWNLOAD.digest}`
+/** A public GET query whose successful answers a browser may reuse for a minute (`http.cache`). */
+const CACHED = anonymousRow({
+	id: 'api.catalog.products',
+	kind: 'public',
+	method: 'GET',
+	path: '/api/catalog.*',
+	admission: null,
+	cache: { maxAgeSeconds: 60 },
+})
+const CACHED_ENDPOINT = `${CACHED.id}@${CACHED.digest}`
 
 /** Headers that would send reports to an origin the policy never approved; the app sends them, the proxy drops them. */
 const REPORTING: [string, string][] = [
@@ -52,7 +62,9 @@ const EARLY_HINTS =
  * What the application answers per path, as raw fields so a field can repeat: a weaker policy than the proxy's,
  * reporting headers, an early hint, and downloads of every disposition.
  */
-const APP_ANSWERS: Record<string, { readonly fields: [string, string][]; readonly informational?: string }> = {
+const APP_ANSWERS: Record<string, { readonly fields: [string, string][]; readonly informational?: string; readonly status?: string }> = {
+	'/api/catalog.products': { fields: [['Cache-Control', 'private, max-age=5']] },
+	'/api/catalog.missing': { fields: [], status: '404 Not Found' },
 	'/api/me': {
 		fields: [
 			['Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'"],
@@ -76,7 +88,7 @@ const APP_ANSWERS: Record<string, { readonly fields: [string, string][]; readonl
 function rawAnswer(path: string): string {
 	const answer = APP_ANSWERS[path] ?? { fields: [] }
 	const fields = [...answer.fields, ['Content-Length', '2'], ['Connection', 'close']].map(([name, value]) => `${name}: ${value}\r\n`)
-	return `${answer.informational ?? ''}HTTP/1.1 200 OK\r\n${fields.join('')}\r\nok`
+	return `${answer.informational ?? ''}HTTP/1.1 ${answer.status ?? '200 OK'}\r\n${fields.join('')}\r\nok`
 }
 
 function headerBlock(block: string): { status: number; headers: Headers } {
@@ -146,10 +158,11 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		port: 0,
 		fetch(request) {
 			seenByAuth.push(request.headers)
-			const download = request.headers.get('X-Forwarded-Uri')?.startsWith('/api/files.avatar/') === true
+			const uri = request.headers.get('X-Forwarded-Uri') ?? ''
+			const endpoint = uri.startsWith('/api/files.avatar/') ? DOWNLOAD_ENDPOINT : uri.startsWith('/api/catalog.') ? CACHED_ENDPOINT : ENDPOINT
 			return new Response(null, {
 				status: 200,
-				headers: { 'X-Fabrika-Token': 'proxy-token', 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': download ? DOWNLOAD_ENDPOINT : ENDPOINT },
+				headers: { 'X-Fabrika-Token': 'proxy-token', 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': endpoint },
 			})
 		},
 	})
@@ -176,7 +189,7 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		hosts: ['127.0.0.1'],
 		upstream: `127.0.0.1:${app.port}`,
 		scheme: 'https',
-		endpoints: [DOWNLOAD],
+		endpoints: [DOWNLOAD, CACHED],
 		reservedPrefixes: [],
 		snapshot: `sha256:${'0'.repeat(64)}`,
 		csp: { ...NO_CSP_ORIGINS, connectSrc: ['https://api.maps.example'] },
@@ -280,6 +293,15 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		const answer = await rawRequest(port, { Connection: 'close, X-Fabrika-Token' })
 		expect(answer.status).toBe(400)
 		expect(answer.headers.get('Permissions-Policy')).toContain('camera=()')
+	})
+
+	test("a cacheable row's 200 carries its lifetime in place of no-store, and its error stays no-store", async () => {
+		const close = { Connection: 'close' }
+		expect((await rawRequest(port, close, '/api/catalog.products')).headers.get('Cache-Control')).toBe('public, max-age=60')
+		const missing = await rawRequest(port, close, '/api/catalog.missing')
+		expect(missing.status).toBe(404)
+		expect(missing.headers.get('Cache-Control')).toBe('no-store')
+		expect((await rawRequest(port, close)).headers.get('Cache-Control')).toBe('no-store')
 	})
 
 	test('a download endpoint gets the file treatment from the proxy, whatever disposition the app chose', async () => {

@@ -88,6 +88,10 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
   stateless, so never make it shared or persistent.
+- **A cacheable row's 200 replaces `no-store` with its lifetime** (`http.cache`, `cacheControlOf`): one
+  non-terminal route per lifetime, matched on the asserted endpoint like a download, holds a deferred
+  `headers` handler with `require: { status_code: [200] }` that wraps the upstream, so its set runs after the
+  upstream's own; every other answer of the row keeps `no-store`.
 - **A contract app's answer gets the header policy with `set`, never a default** (ADR-0022 "Response
   headers"): step 3's `reverse_proxy` `headers.response` runs on the upstream's headers before they are
   copied, so the app's own value is replaced, never doubled. A download endpoint is selected by the

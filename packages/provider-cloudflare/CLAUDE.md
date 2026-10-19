@@ -127,7 +127,8 @@ this one import.
   `FABRIKA_CONTRACT_DIGEST` into the application Worker. An IAM schema whose `contract: true` disagrees with the
   contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
   `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
-  the application's answer, or applies the file treatment for a download endpoint, deletes the reporting
+  the application's answer, or applies the file treatment for a download endpoint, sets a cacheable row's lifetime
+  on its 200 (`applyAnswerCache`), deletes the reporting
   headers, and answers a throwing `APP` binding with a fixed 502 and a missing one with a 503 under the same
   treatment; on an `https` entry both carry HSTS, and on `http` the application's own is dropped. A Worker that
   cannot initialize (no `IAM`, no issuer) answers its fixed 503 with the treatment of the host the manifest names

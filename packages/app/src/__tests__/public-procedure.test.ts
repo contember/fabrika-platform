@@ -5,7 +5,7 @@
 // requests run through the test kit and a REAL Postgres, and skip cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
 import type { App, KitTypes, PublicContext, Unavailable } from '@fabrika/app/contract'
-import { compileContract } from '@fabrika/app/contract'
+import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import { type AppCapability, serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { endpointAccessKit } from '@fabrika/app/testing/isolation'
@@ -38,6 +38,7 @@ export type PublicContextShape = [
 ]
 
 const Empty = z.strictObject({})
+const PUBLIC = { public: true }
 
 describe('the artifact of a public procedure', () => {
 	const artifact = compileContract(contract, tables)
@@ -74,7 +75,12 @@ describe('the artifact of a public procedure', () => {
 	})
 
 	test('carries the HTTP shape: a GET query reads its URL, a POST its urlencoded body and its query, a redirect its origins', () => {
-		expect(artifact.endpoints.find((row) => row.id === 'api.catalog.search')).toMatchObject({ method: 'GET', admission: null })
+		expect(artifact.endpoints.find((row) => row.id === 'api.catalog.search')).toMatchObject({
+			method: 'GET',
+			admission: null,
+			cache: { maxAgeSeconds: 60 },
+		})
+		expect(artifact.endpoints.find((row) => row.id === 'api.catalog.products')).not.toHaveProperty('cache')
 		const subscribe = artifact.endpoints.find((row) => row.id === 'api.intake.subscribe')
 		expect(subscribe).toMatchObject({
 			method: 'POST',
@@ -87,6 +93,33 @@ describe('the artifact of a public procedure', () => {
 	test('compiles into a proxy row the strict manifest parser accepts', () => {
 		const table = contractProxyTable(artifact)
 		expect(table.endpoints.find((row) => row.id === 'api.intake.register')).toMatchObject({ kind: 'public', callers: [], delegation: null })
+		expect(table.endpoints.find((row) => row.id === 'api.catalog.search')).toMatchObject({ cache: { maxAgeSeconds: 60 } })
+	})
+
+	test('caches only a public GET query, for 1 s to a year or as immutable', () => {
+		const refusal = (http: object, access: object): string => {
+			const build = (r: { query(def: object): { handle(handler: () => object): object } }) => ({
+				read: r.query({ output: Empty, access, ...(access === PUBLIC ? { actions: ['catalog.read'] } : {}), http }).handle(() => ({})),
+			})
+			try {
+				const group = Reflect.apply(app.group, app, [access === PUBLIC ? {} : { callers: ['human'] }, build])
+				const contractOf: unknown = Reflect.get(app, 'contract')
+				if (typeof contractOf !== 'function') throw new Error('the kit builds a contract')
+				const built: AnyContract = Reflect.apply(contractOf, app, [
+					(c: { rpc(prefix: string, groups: object): object }) => ({ api: c.rpc('/api', { group }) }),
+				])
+				compileContract(built, tables)
+			} catch (error) {
+				return error instanceof Error ? error.message : String(error)
+			}
+			return ''
+		}
+		expect(refusal({ cache: 'immutable' }, PUBLIC)).toBe('')
+		expect(refusal({ method: 'POST', cache: 'immutable' }, PUBLIC)).toContain('only a public GET query does')
+		expect(refusal({ cache: { maxAgeSeconds: 60 } }, { action: 'intake.read', app: true })).toContain('only a public GET query does')
+		expect(refusal({ cache: { maxAgeSeconds: 0 } }, PUBLIC)).toContain('http.cache.maxAgeSeconds 0 is not a lifetime')
+		expect(refusal({ cache: { maxAgeSeconds: 31536001 } }, PUBLIC)).toContain('is not a lifetime')
+		expect(refusal({ cache: 'forever' }, PUBLIC)).toContain("http.cache is neither a lifetime nor 'immutable'")
 	})
 
 	test('a group without callers holds public procedures only', () => {
@@ -187,8 +220,11 @@ if (postgres !== null) {
 			const get = (query: string) => kit.fetch(`/api/catalog.search?${query}`)
 			const found = await get('name=Desk&limit=50&exact=true')
 			expect(found.status).toBe(200)
+			expect(found.headers.get('Cache-Control')).toBe('public, max-age=60')
 			expect((await found.json()).result.items).toEqual([{ name: 'Desk' }])
-			expect((await get('name=Desk&name=Lamp')).status).toBe(400)
+			const duplicate = await get('name=Desk&name=Lamp')
+			expect(duplicate.status).toBe(400)
+			expect(duplicate.headers.get('Cache-Control')).toBe('no-store')
 			expect((await get('name=Desk&limit=05')).status).toBe(400)
 			expect((await get('name=Desk&color=red')).status).toBe(400)
 			expect((await kit.fetch('/api/catalog.search', { method: 'POST', body: '{}' })).status).toBe(403)
