@@ -404,13 +404,13 @@ class SurfaceReader {
 				const [path, optionsValue] = args(at, 'c.webhook', 2, 2)
 				const options = builderOptions(optionsValue, at, 'c.webhook')
 				const scheme = options.get('scheme')
-				if (scheme?.kind !== 'string' || scheme.value !== 'github-sha256') {
-					throw new Refused(scheme?.at ?? at.at, 'c.webhook needs a known scheme', "scheme: 'github-sha256'")
+				if (scheme === undefined) {
+					throw new Refused(at.at, 'c.webhook needs a scheme', "scheme: 'github-sha256', a preset, or { hmac: { … } }")
 				}
 				return {
 					kind: 'webhook',
 					path: text(path, at, 'the path'),
-					scheme: scheme.value,
+					scheme: plain(scheme),
 					boundTo: text(options.get('boundTo'), at, 'boundTo'),
 					actions: texts(options.get('actions'), at, 'actions'),
 					input: this.#schema(options.get('input'), at, 'input'),

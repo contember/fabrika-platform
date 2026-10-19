@@ -1,7 +1,7 @@
 // `defineContract`: the application's whole access surface as data. Browser-safe: it builds plain objects and
 // holds zod schemas; it validates nothing at runtime, `compileContract` does.
 
-import type { BuiltinRoleKey, ChallengeProvider, Locale, MailTemplates, RpcCaller } from '@fabrika/auth-core'
+import type { BuiltinRoleKey, ChallengeProvider, Locale, MailTemplates, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
 import {
 	type CronDeclaration,
@@ -410,7 +410,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 	webhook<const B extends D | 'app', const Acts extends readonly [A, ...A[]], I extends InputSchema>(
 		path: Path,
 		options: {
-			readonly scheme: 'github-sha256'
+			readonly scheme: WebhookScheme
 			readonly boundTo: B
 			readonly actions: Acts
 			readonly input: I & NotLoose<I>

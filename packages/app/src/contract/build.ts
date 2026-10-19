@@ -55,9 +55,11 @@ import {
 	type ScopeBinding,
 	tableActions,
 	type TablePolicyArtifact,
+	type WebhookScheme,
 } from '@fabrika/auth-core'
 import type { InboxColumns } from '@fabrika/db/tables'
 import { isPolicyOrigin, MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
+import { z } from 'zod/v4'
 import { contractArtifactSchema } from './artifact-schema'
 import {
 	type AccessDeclaration,
@@ -108,6 +110,7 @@ import {
 	WEBHOOKS_PREFIX,
 } from './defaults'
 import { ContractError, Problems } from './problems'
+import { hmacSchemeSchema, WEBHOOK_SCHEME_ALLOWED, webhookSchemeSchema } from './webhook-scheme'
 
 const APP_ID = /^[a-z0-9][a-z0-9-]*$/
 const NAME = /^[A-Za-z][A-Za-z0-9_]*$/
@@ -579,18 +582,21 @@ class ArtifactBuilder {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
 				const boundTo = this.#scopeBinding(where, 'boundTo', mount.boundTo)
-				const members = boundTo?.kind === 'dimension' ? this.#contract.dimensions[boundTo.dimension]?.members : undefined
-				if (boundTo?.kind === 'dimension' && members === undefined) {
-					this.#problem(where, `is bound to '${boundTo.dimension}', which declares no members: { manage, list } to create bindings with`)
+				// A GitHub webhook bound to a dimension keeps its generated binding endpoints; any other binds through `binds`.
+				const generated = boundTo?.kind === 'dimension' && mount.scheme === 'github-sha256' ? boundTo.dimension : null
+				const members = generated === null ? undefined : this.#contract.dimensions[generated]?.members
+				if (generated !== null && members === undefined) {
+					this.#problem(where, `is bound to '${generated}', which declares no members: { manage, list } to create bindings with`)
 				}
 				this.#actionList(where, mount.actions)
 				const path = joinPath(mount.path, `:${WEBHOOK_BINDING_PARAMETER}`)
 				this.#anonymous(name, 'webhook', 'POST', path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.webhookMaxBytes), mount.input)
 				this.#declare(where, name, mount.declared, { kind: 'webhook', readOnly: false })
-				if (boundTo?.kind === 'dimension' && members !== undefined) {
-					this.#webhookBindings(name, boundTo.dimension, members.manage)
+				if (generated !== null && members !== undefined) {
+					this.#webhookBindings(name, generated, members.manage)
 				}
-				return boundTo === null ? null : { kind: 'webhook', path: mount.path, scheme: mount.scheme, boundTo, actions: [...mount.actions] }
+				const scheme = this.#webhookScheme(where, mount.scheme)
+				return boundTo === null || scheme === null ? null : { kind: 'webhook', path: mount.path, scheme, boundTo, actions: [...mount.actions] }
 			}
 			default:
 				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
@@ -808,6 +814,20 @@ class ArtifactBuilder {
 				this.#problem(variable.where, `${variable.field} '${variable.name}' is the secret of form '${owner.form}'; a secret is never public`)
 			}
 		}
+	}
+
+	/** The webhook's verifier: a preset, or a framework-owned shape the runtime computes. */
+	#webhookScheme(where: string, value: unknown): WebhookScheme | null {
+		const parsed = z.safeParse(webhookSchemeSchema, value)
+		if (parsed.success) {
+			return parsed.data
+		}
+		// A union names no branch; an `hmac` shape is refused for its own first issue.
+		const shape = isRecord(value) && Object.hasOwn(value, 'hmac') ? z.safeParse(hmacSchemeSchema, value['hmac']) : null
+		const issue = shape?.success === false ? shape.error.issues[0] : undefined
+		const detail = issue === undefined ? '' : ` (hmac${issue.path.map((key) => `.${String(key)}`).join('')}: ${issue.message})`
+		this.#problem(where, `scheme ${JSON.stringify(value)} is not a verifier${detail} (allowed: ${WEBHOOK_SCHEME_ALLOWED})`)
+		return null
 	}
 
 	/** A holder of the dimension's `members.manage` there binds a provider account to one value, and unbinds it. */

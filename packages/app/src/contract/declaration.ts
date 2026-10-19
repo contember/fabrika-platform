@@ -284,7 +284,8 @@ export interface FormMountDeclaration<S> extends OptionsRecord {
 export interface WebhookMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'webhook'
 	readonly path: string
-	readonly scheme: 'github-sha256'
+	/** A preset or a verifier shape, as written; `buildArtifact` checks it. */
+	readonly scheme: unknown
 	/** A dimension, or `app` for the whole application. */
 	readonly boundTo: string
 	readonly actions: readonly string[]

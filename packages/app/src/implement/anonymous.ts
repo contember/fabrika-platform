@@ -1,6 +1,6 @@
 // What the anonymous kinds need beyond the request pipeline: a body read under its limit (the proxy never sees a
-// body, so the framework enforces it), the share SPA's fragment bootstrap and GitHub's delivery signature. A form's
-// admission is `form-admission.ts`.
+// body, so the framework enforces it) and the share SPA's fragment bootstrap. A form's admission is
+// `form-admission.ts`, a webhook's signature `verifiers.ts`.
 
 import { LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
@@ -88,41 +88,4 @@ export async function withBootstrap(response: Response, prefix: string): Promise
 	const headers = new Headers(response.headers)
 	headers.delete('Content-Length')
 	return new Response(injected, { status: response.status, statusText: response.statusText, headers })
-}
-
-const SIGNATURE_PREFIX = 'sha256='
-const HEX = /^[0-9a-f]{64}$/
-
-/** Whether `X-Hub-Signature-256` is GitHub's HMAC-SHA256 of the raw body under `secret`, compared in constant time. */
-export async function verifyGithubSignature(header: string | null, secret: string, body: Uint8Array<ArrayBuffer>): Promise<boolean> {
-	if (header === null || !header.startsWith(SIGNATURE_PREFIX)) {
-		return false
-	}
-	const hex = header.slice(SIGNATURE_PREFIX.length).toLowerCase()
-	if (!HEX.test(hex)) {
-		return false
-	}
-	const signature = new Uint8Array(32)
-	for (let index = 0; index < 32; index++) {
-		signature[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
-	}
-	const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
-	return crypto.subtle.verify('HMAC', key, signature, body)
-}
-
-/** The GitHub account a payload names, as a binding records it: `installation:<id>` or `repository:<id>`. */
-export function githubAccounts(payload: unknown): readonly string[] {
-	const accounts: string[] = []
-	for (const kind of ['installation', 'repository'] as const) {
-		const holder = ownField(payload, kind)
-		const id = ownField(holder, 'id')
-		if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
-			accounts.push(`${kind}:${id}`)
-		}
-	}
-	return accounts
-}
-
-function ownField(value: unknown, name: string): unknown {
-	return typeof value === 'object' && value !== null && Object.hasOwn(value, name) ? Reflect.get(value, name) : undefined
 }

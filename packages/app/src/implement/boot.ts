@@ -843,13 +843,15 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			const row = rows.get(name)
 			const bound = boundHandler(childAt(handlers, name), name, `webhook '${name}'`, 'mutation', artifact, problems)
 			const credential: WorkloadCredential | undefined = workloads.get(workloadSite('webhook', name))
+			const approved = artifact.mounts[name]
 			if (row === undefined || bound === null) {
 				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
-			} else if (credential !== undefined) {
+			} else if (credential !== undefined && approved?.kind === 'webhook') {
 				endpoints.set(name, {
 					kind: 'webhook',
 					row,
 					webhook: name,
+					scheme: approved.scheme,
 					dimension: mount.boundTo,
 					actions: mount.actions,
 					input: mount.input,

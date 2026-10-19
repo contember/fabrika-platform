@@ -469,9 +469,41 @@ export interface FormChallenge {
 export interface WebhookMountArtifact {
 	readonly kind: 'webhook'
 	readonly path: string
-	readonly scheme: 'github-sha256'
+	readonly scheme: WebhookScheme
 	readonly boundTo: ScopeBinding
 	readonly actions: readonly string[]
+}
+
+/** The providers whose signature the framework checks by name; every one signs the raw body with the binding's secret. */
+export const WEBHOOK_PRESETS = ['github-sha256', 'standard-webhooks', 'stripe'] as const
+
+export type WebhookPreset = (typeof WEBHOOK_PRESETS)[number]
+
+/**
+ * How a delivery proves it holds its binding's secret: a preset, an HMAC the framework computes in a declared shape,
+ * or the secret itself as a Basic password or a bearer token. A verifier is framework code, never the application's.
+ */
+export type WebhookScheme =
+	| WebhookPreset
+	| { readonly hmac: HmacScheme }
+	| { readonly basic: true }
+	| { readonly bearer: true }
+
+export type HmacAlgorithm = 'sha1' | 'sha256' | 'sha512'
+
+/**
+ * An HMAC of the binding's secret over the signed content, read from `header` as `prefix` and the encoded digest.
+ * `'timestamp.body'` signs `<timestamp>.<body>` with the `timestamp` header's Unix seconds, which must be within five
+ * minutes of now; `id` names a header whose value the signed content starts with, as `<id>.`.
+ */
+export interface HmacScheme {
+	readonly header: string
+	readonly algorithm: HmacAlgorithm
+	readonly encoding: 'hex' | 'base64'
+	readonly prefix?: string
+	readonly timestamp?: string
+	readonly signed: 'body' | 'timestamp.body'
+	readonly id?: string
 }
 
 /** Where a workload's authority applies: the whole application, or one value of a dimension per binding. */

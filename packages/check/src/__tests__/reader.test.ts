@@ -160,14 +160,13 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		])
 	})
 
-	test('a webhook with an unknown scheme and a link without its procedures callback', () => {
+	test('a webhook scheme is read as written, for the build to check, and a link without its procedures callback is refused', () => {
 		const contract = edited(
 			"health: c.health('/healthz'),",
-			"hook: c.webhook('/hook', { scheme: 'stripe', boundTo: 'app', actions: ['notes.write'], input: Note }),\n"
+			"hook: c.webhook('/hook', { scheme: 'acme', boundTo: 'app', actions: ['notes.write'], input: Note }),\n"
 				+ "\tshared: c.link('/s', { spa: 'dist/s', dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.write', maxDays: 7 }),",
 		)
 		expect(refusal(application(contract))).toEqual([
-			'fabrika.contract.ts:14:37 contract c.webhook needs a known scheme',
 			'fabrika.contract.ts:15:10 contract c.link needs procedures as a builder callback',
 		])
 	})

@@ -3,7 +3,7 @@
 // handlers beside their endpoints, in any module, type-check without a cycle. Browser-safe: it builds plain data and
 // holds each handler beside its site (`handled.ts`), never calling one.
 
-import type { JobMailer, RpcCaller } from '@fabrika/auth-core'
+import type { JobMailer, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Declared, JobKitContext, KickContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
@@ -120,7 +120,7 @@ export interface CronBuilder<
 export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never> =
 	& Owned<'kind' | 'path'>
 	& {
-		readonly scheme: 'github-sha256'
+		readonly scheme: WebhookScheme
 		readonly boundTo: B
 		readonly actions: Acts
 		readonly input: I & NotLoose<I>
@@ -432,7 +432,7 @@ interface CronSiteOptions extends DeclaredDeclaration {
 }
 
 interface WebhookSiteOptions extends DeclaredDeclaration {
-	readonly scheme: 'github-sha256'
+	readonly scheme: WebhookScheme
 	readonly boundTo: string
 	readonly actions: readonly string[]
 	readonly input: Schema

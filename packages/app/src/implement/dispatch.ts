@@ -31,6 +31,7 @@ import {
 	type SchemaShape,
 	scopedValues,
 	sha256Hex,
+	type WebhookScheme,
 } from '@fabrika/auth-core'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { DataAccess, FrameworkTables } from '@fabrika/db/framework'
@@ -63,16 +64,7 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import {
-	abortedBody,
-	bodyDeadlineMs,
-	bootstrapPath,
-	bootstrapResponse,
-	githubAccounts,
-	readBoundedBody,
-	verifyGithubSignature,
-	withBootstrap,
-} from './anonymous'
+import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
 import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -118,6 +110,7 @@ import { paramsObject, urlParams } from './params'
 import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
+import { githubAccounts, verifyDelivery } from './verifiers'
 import { deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
 import type { WorkloadCredential } from './workload'
 
@@ -221,6 +214,7 @@ export type ServedEndpoint =
 		readonly kind: 'webhook'
 		readonly row: EndpointRow
 		readonly webhook: string
+		readonly scheme: WebhookScheme
 		readonly dimension: string
 		readonly actions: readonly string[]
 		readonly input: Schema
@@ -1197,11 +1191,12 @@ export class ContractRuntime {
 		if (binding === null) {
 			throw new NotFoundError('Not found')
 		}
-		if (!(await verifyGithubSignature(request.headers.get('X-Hub-Signature-256'), binding.secret, body))) {
+		if (!(await verifyDelivery(served.scheme, request.headers, binding.secret, body, Date.now()))) {
 			throw new UnauthorizedError('The delivery signature does not verify with this binding')
 		}
 		const payload = parseJson(body)
-		if (!githubAccounts(payload).includes(binding.account)) {
+		// Only GitHub names the account in its payload; another provider's binding is its own secret.
+		if (served.scheme === 'github-sha256' && !githubAccounts(payload).includes(binding.account)) {
 			throw new ForbiddenError('The delivery names another account than its binding accepts')
 		}
 		const input = strictInput(served.row, served.input, stripped(served, payload))

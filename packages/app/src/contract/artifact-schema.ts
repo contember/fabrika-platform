@@ -26,6 +26,7 @@ import {
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { FORM_LIMITS, PROCEDURE_LIMITS } from './defaults'
+import { webhookSchemeSchema } from './webhook-scheme'
 
 const name = z.string().min(1)
 const nullableName = name.nullable()
@@ -223,7 +224,7 @@ const mount = z.discriminatedUnion('kind', [
 		then: name.optional(),
 		files: z.record(name, z.strictObject({ collection: name, required: z.boolean() })).optional(),
 	}),
-	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions }),
+	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: webhookSchemeSchema, boundTo: scopeBinding, actions }),
 ])
 
 const cspSource = z.strictObject({ origin: name, purpose: name })

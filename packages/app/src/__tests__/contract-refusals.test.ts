@@ -2,7 +2,7 @@
 // reader of source could produce. Every refusal names where it is and the allowed form.
 
 import { appSchemaSchema } from '@fabrika/auth'
-import { canonicalArtifactJson, type SchemaShape, type TablePolicyArtifact } from '@fabrika/auth-core'
+import { canonicalArtifactJson, type SchemaShape, type TablePolicyArtifact, type WebhookScheme } from '@fabrika/auth-core'
 import { MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -262,6 +262,27 @@ describe('compileContract refuses what the types let through', () => {
 		expect(compileProblems(contract, { countries: reference })).toEqual([
 			'artifact tables.countries.scope.reason: Too small: expected string to have >=1 characters',
 		])
+	})
+
+	test('a webhook verifier is a preset or a framework-owned shape, recorded as written', () => {
+		const hook = (scheme: WebhookScheme) =>
+			defineContract(vocabulary, (c) => ({ hook: c.webhook('/hooks/in', { scheme, boundTo: 'app', actions: ['tasks.write'], input: Id }) }))
+		const shopify: WebhookScheme = { hmac: { header: 'X-Shopify-Hmac-Sha256', algorithm: 'sha256', encoding: 'base64', signed: 'body' } }
+		for (const scheme of ['stripe', 'standard-webhooks', shopify, { basic: true }, { bearer: true }] satisfies WebhookScheme[]) {
+			expect(compileContract(hook(scheme), {}).mounts['hook']).toMatchObject({ kind: 'webhook', scheme })
+		}
+		const refused = (scheme: unknown) => {
+			const options = { scheme: 'stripe', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
+			Object.defineProperty(options, 'scheme', { value: scheme, enumerable: true })
+			return compileProblems(defineContract(vocabulary, (c) => ({ hook: c.webhook('/hooks/in', options) })))
+		}
+		expect(refused('acme')[0]).toStartWith(`mount 'hook': scheme "acme" is not a verifier (allowed: scheme: 'github-sha256'`)
+		expect(refused({ hmac: { header: 'X-Sig', algorithm: 'md5', encoding: 'hex', signed: 'body' } })[0]).toContain('(hmac.algorithm:')
+		expect(refused({ hmac: { header: 'X-Sig', algorithm: 'sha256', encoding: 'hex', signed: 'timestamp.body' } })[0]).toContain(
+			"signed: 'timestamp.body' names its timestamp header, and only it does",
+		)
+		expect(refused({ hmac: { header: 'X Sig', algorithm: 'sha256', encoding: 'hex', signed: 'body' } })[0]).toContain('is not a header name')
+		expect(refused({ basic: true, bearer: true })[0]).toContain('is not a verifier')
 	})
 
 	test('applies the defaults in one place', () => {
