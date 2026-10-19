@@ -27,13 +27,13 @@ Whatever it could not run — a backend without docker, the matrix replaced by a
 
 The release set is derived from workspace manifests and checked against an explicit inventory, so adding or removing a public package requires a deliberate release-tool update. A package ships when it is not private and declares `publishConfig.access: public`. Every public package must:
 
-- use the `@fabrika/*` scope;
+- use the `@fabrika/*` scope, except `agent-canvas`, which keeps its established unscoped npm name (`UNSCOPED_PUBLIC_PACKAGES`);
 - have the same source version as every other public package, and as the release tag (see [The source version](#the-source-version));
 - use `workspace:*` for every dependency on another workspace package;
 - depend only on public workspace packages at its published boundary; and
 - participate in an acyclic dependency graph.
 
-`scripts/release.ts` validates these rules and computes the dependency-first order. `release:validate` prints the set and its size; the inventory itself lives in the script.
+`scripts/release.ts` validates these rules and computes the dependency-first order. A package without a library entry, such as the `agent-canvas` command, is smoked by running its command instead of importing it (`COMMAND_ONLY_PACKAGES`). `release:validate` prints the set and its size; the inventory itself lives in the script.
 
 ## The source version
 
