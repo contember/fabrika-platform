@@ -1,0 +1,209 @@
+# Agent Canvas — Instruction Guide
+
+Canvas opens a rich, annotatable document in the user's browser. You write JSX, the user reviews and annotates it like Google Docs, and feedback comes back as markdown.
+
+Use it whenever structured visual communication beats inline chat: plans, reviews, decisions, explanations, discovery interviews.
+
+**Note**: Replace all `<session-id>` references below with the stable canvas
+session ID resolved by the skill.
+
+## Core Workflow
+
+### 1. Write JSX
+
+Use the **Write** tool to create `.jsx` files in `${TMPDIR:-/tmp}/agent-canvas/<session-id>/`:
+
+```jsx
+// ${TMPDIR:-/tmp}/agent-canvas/<session-id>/plan.jsx
+
+<Section title="Authentication Redesign">
+  A proposal to replace session-based auth with JWT tokens.
+
+  <Item id="current" label="Current state" badge="context" badgeVariant="info">
+    The app uses express-session with Redis store.
+    <FilePreview path="src/auth/session.ts" lines={[1, 45]} />
+  </Item>
+
+  <Item id="proposal" label="Proposed change" badge="proposal">
+    Switch to stateless JWT with refresh token rotation.
+    <Callout type="warning">This will invalidate all existing sessions.</Callout>
+  </Item>
+</Section>
+```
+
+Components are auto-available — no imports needed. The file can be a JSX fragment (just tags) or a full module with `export default`.
+
+**Content is JSX, not markdown.** Children of components are plain JSX text and nested components — NOT markdown. If you want to render markdown (lists, bold, headings, etc.), use the `<Markdown>` component explicitly. Raw `**bold**` or `- list items` in JSX children will render as literal text.
+
+**JSX escaping rules.** Content is in a JSX context. You MUST escape: `<` as `{'<'}` or `&lt;`, `>` as `{'>'}` or `&gt;`, `{` as `{'{'}`  and `}` as `{'}'}`. This is critical when writing code snippets, type signatures like `Option<String>`, or any text containing angle brackets. Alternatively, put such content inside `<CodeBlock>` or `<Markdown>` which handle escaping for you.
+
+### 2. Push
+
+Push the directory to open all canvases in the browser:
+
+```bash
+bunx agent-canvas push ${TMPDIR:-/tmp}/agent-canvas/<session-id>/ --session <session-id> --label "Implementation Plan"
+```
+
+All `*.jsx` files in the directory are pushed as a snapshot. Each file appears as a separate tab. **Always show the `browserUrl` from the output to the user.**
+
+Options:
+- `--label <text>` — revision label shown in the UI
+- `--response <text>` — short banner explaining how you addressed prior feedback (2-4 sentences, focus on "why" not "what")
+
+### 3. Watch for feedback
+
+Start watching immediately after every push:
+
+```bash
+bunx agent-canvas watch --session <session-id>
+```
+
+How to run the watcher depends on the host:
+
+- **Codex**: Keep the watcher attached to the current agent turn. Run it without
+  detaching or backgrounding it. If the shell tool yields a process/session
+  handle, call `write_stdin` on that same handle until the command returns the
+  feedback. Do not end the agent turn while the watcher is still running.
+- **Claude Code**: Run the watcher in the background using the Bash tool's
+  `run_in_background` parameter. You will be **automatically notified** when the
+  user submits feedback. Do NOT poll, sleep, or proactively check. Just stop and
+  wait.
+- **Other hosts**: Keep the watcher in the foreground unless the host explicitly
+  guarantees that background-process completion wakes the agent.
+
+In Codex, a wait may yield before feedback arrives. Continue waiting on the same
+process handle; do not start another watcher. Keep user-facing progress updates
+brief and no more than 60 seconds apart while waiting.
+
+If the watcher exits with `Canvas render failed`, treat it like a compilation
+error: fix the reported canvas file, push the corrected revision, and start a
+new watcher. The browser reports these failures automatically; do not ask the
+user to transcribe console output.
+
+**Important**: The push → watch sequence is atomic. Never push without starting
+the host-specific watcher immediately afterward. Do not continue with unrelated
+work while waiting for feedback.
+
+### 4. Iterate
+
+Use the **Edit** tool to modify existing JSX based on feedback — targeted edits, not full rewrites. Then push and watch again.
+
+### 5. Fetch (non-blocking alternative)
+
+If the user tells you they've already submitted feedback:
+
+```bash
+bunx agent-canvas fetch --session <session-id>
+```
+
+Returns immediately — prints feedback if available, otherwise no output.
+
+## Multiple Canvases
+
+Use different files for different phases or concerns:
+
+```
+${TMPDIR:-/tmp}/agent-canvas/<session-id>/
+  discovery.jsx    # Discovery interview
+  requirements.jsx # Requirements spec
+  plan.jsx         # Implementation plan
+```
+
+Write new files as phases progress, then push the directory. Previous files remain visible as context.
+
+## File Location
+
+All canvas files go in `${TMPDIR:-/tmp}/agent-canvas/<session-id>/`. This is a system temp directory — no `.gitignore` needed.
+
+## Components
+
+All components are globally available in canvas JSX — no imports needed. For inline styling use `style={{ ... }}` — Tailwind is NOT available.
+
+**Never hardcode hex colors** — use CSS variables: `var(--color-text-primary)`, `var(--color-bg-surface)`, `var(--color-accent-blue)`, etc.
+
+### Layout
+- **Section** — top-level collapsible grouping with serif heading. Props: `title`, `collapsed`
+
+### Content
+- **Item** — primary content block (tasks, findings, requirements). Props: `id`, `label`, `badge`, `badgeVariant`, `status`
+- **CodeBlock** — syntax-highlighted code. Props: `language`
+- **FilePreview** — project file preview. Props: `path`, `lines` ([start, end])
+- **Markdown** — renders markdown content. Props: `file` (path) or children (inline markdown string)
+- **ImageView** — displays an image. Props: `src`, `alt`, `caption`, `width`
+- **Diff** — side-by-side diff view. Props: `before`, `after`, `language`
+- **Table** — data table. Props: `headers`, `rows`
+- **Checklist** — checkbox list. Props: `items` ([{ label, checked }])
+- **Mermaid** — diagram rendering. Children: mermaid syntax string
+- **Callout** — alert box. Props: `type` (info/warning/danger/tip)
+- **Note** — soft aside for non-critical info
+- **Priority** — inline priority badge. Props: `level` (high/medium/low)
+
+### Interactive (User Input)
+- **Choice** — single-select radio group. Props: `id`, `label`, `options`, `required`
+- **MultiChoice** — multi-select checkboxes. Props: `id`, `label`, `options`, `required`
+- **UserInput** — free text input. Props: `id`, `label`, `placeholder`, `required`
+- **SecretInput** — local in-memory secret handoff. Props: `id`, `label`, `env`, `placeholder`, `required`
+- **RangeInput** — numeric slider. Props: `id`, `label`, `min`, `max`, `minLabel`, `maxLabel`, `required`
+
+### Advanced
+- **useFeedback** — hook for custom components to contribute computed data to feedback
+- **Custom components** — use `export default function Canvas()` module format to define helpers
+
+**Before using any component or flow, you MUST read its detailed instructions** by running:
+
+```bash
+bunx agent-canvas instructions <topic>
+```
+
+For example: `bunx agent-canvas instructions component-item`, `bunx agent-canvas instructions flow-feature`. Run `bunx agent-canvas instructions --list` to see all available topics.
+
+## Choosing a Flow
+
+```
+User wants something built/changed?
+├─ Vague request → FEATURE flow (discovery → requirements → plan → implement → summary)
+├─ Clear request with specifics → PLAN flow (plan → implement → summary)
+├─ Complete instructions → skip canvas, implement directly, optionally push summary
+
+User wants to understand something? → EXPLAIN flow
+User wants review/audit? → REVIEW flow
+User wants to make a decision? → DECISION flow
+Agent needs the user to complete manual steps? → RUNBOOK flow
+```
+
+**Adapt dynamically**: flows are guidelines, not rigid pipelines. Skip or combine phases when appropriate:
+
+| Situation | Action |
+|---|---|
+| User gave a detailed spec | Skip to PLAN (skip discovery + requirements) |
+| User said "just do it" with clear instructions | Implement directly, push summary after |
+| Simple change (< 3 files) | Probably skip canvas entirely |
+| User explicitly says "don't plan, just code" | Implement, push summary |
+| Mid-flow user says "looks good, go ahead" | Skip remaining review rounds |
+| Discovery reveals it's trivial | Collapse remaining phases into one canvas |
+
+**Always push a summary after implementation** unless the change was trivially small (1-2 file edit).
+
+## Flow Execution Pattern
+
+1. **Determine flow** from user intent
+2. **Announce** briefly: "I'll start with discovery, then create a detailed plan."
+3. **Write canvas JSX** with the Write tool
+4. **Push + show browserUrl** to the user
+5. **IMMEDIATELY watch using the host-specific strategy above** — the push → watch sequence is atomic
+6. **Read feedback** — check for annotations, answers, context files
+7. **Edit and re-push + watch**, or advance to next phase
+8. **After implementation**, push a summary canvas and **watch for feedback** — the user may want to respond
+
+## Important Rules
+
+- **Never `cd`** before running `bunx agent-canvas` commands. The daemon uses the current working directory to resolve project file paths (`<FilePreview>`, file browser). Always run commands from the project root. Since canvas files are in `${TMPDIR:-/tmp}`, use absolute paths to reference them — e.g. `bunx agent-canvas push ${TMPDIR:-/tmp}/agent-canvas/<session-id>/`.
+- **Write** canvas files using the Write tool. Never use bash heredocs.
+- **Edit** canvas files using the Edit tool. Never rewrite entire files.
+- Every `<Item>` and interactive component needs a unique `id`.
+- Use `<SecretInput>`, never `<UserInput>`, for credentials. Read `component-secretinput` and `flow-runbook` first.
+- `<FilePreview path="...">` paths are relative to project root.
+- Read any files the user added to context (listed under "Added context" in feedback).
+- Always push a summary canvas after implementation, even if brief.
+- When the user approves, confirm what you'll do next before proceeding.
