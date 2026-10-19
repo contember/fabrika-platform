@@ -251,10 +251,10 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
 // ── Steps off the paved road ────────────────────────────────────────────────────────────────────
 
 /**
- * The reach each site declares (`sql`, `unscoped`, `connect`, link issuing, a job's mail transport). A site is keyed by
- * its endpoint id or job, so a handler that moves keeps its site; each effect is compared on its own. A new site, table,
- * connector or mount and `read` → `write` widen with closer review; a removal and `write` → `read` narrow. A mutation's
- * kick (`then`) is shown and widens nothing.
+ * The reach each site declares (`sql`, `unscoped`, `connect`, link issuing, a job's mail transport, a public procedure's
+ * workload actions). A site is keyed by its endpoint id or job, so a handler that moves keeps its site; each effect is
+ * compared on its own. A new site, table, connector, mount or workload action and `read` → `write` widen with closer
+ * review; a removal and `write` → `read` narrow. A mutation's kick (`then`) is shown and widens nothing.
  */
 function compareDeclared(
 	changes: Changes,
@@ -272,7 +272,22 @@ function compareDeclared(
 	for (const site of union(Object.keys(sites), Object.keys(after))) {
 		changes.add(...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH))
 		changes.add(...endpointKickChange(site, sites[site]?.then, after[site]?.then))
+		changes.add(...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []))
 	}
+}
+
+/**
+ * A public procedure's workload actions: what its handler holds through the key Control issues for the endpoint, for
+ * anyone who calls it. A gained action widens with closer review; a lost one narrows. They are no step off the paved
+ * road, so `snapshotDeviations` does not list them.
+ */
+function workloadActionChanges(site: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+	const name = siteName(site)
+	return union(from, to).flatMap((action) => {
+		if (!from.includes(action)) return [closerWidening(`${name} runs as its own workload with \`${action}\`, for anyone who calls it`)]
+		if (!to.includes(action)) return [narrowing(`${name} no longer runs with \`${action}\``)]
+		return []
+	})
 }
 
 const NO_REACH: DeclaredReach = { sql: null, unscoped: {}, connect: [], issues: null }
