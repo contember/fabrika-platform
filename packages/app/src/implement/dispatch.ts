@@ -67,7 +67,7 @@ import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
-import { handlerSignal, readBoundedBytes } from './bounded'
+import { handlerSignal, readBoundedBytes, REQUEST_BUDGET_MS } from './bounded'
 import type { BrowserConfig } from './browser-config'
 import {
 	type AppCapability,
@@ -116,6 +116,7 @@ import {
 	APP_BINDING_SCOPE,
 	type BindableWebhook,
 	deliveryKey,
+	WEBHOOK_CLAIM_GRACE_MS,
 	WEBHOOK_REPLAY_RETENTION_MS,
 	webhookBindings,
 	webhookFiles,
@@ -1249,15 +1250,18 @@ export class ContractRuntime {
 			throw new ServerFault('workload_unauthorized', `the token IAM signed for the key of webhook '${served.webhook}' does not carry '${unheld}'`, 503)
 		}
 		const key = await deliveryKey(binding.id, body)
+		const budgetMs = REQUEST_BUDGET_MS
 		const now = Date.now()
-		if (!(await tables.recordDelivery(binding.id, key, now, now - WEBHOOK_REPLAY_RETENTION_MS))) {
+		const claim = await tables.claimDelivery(binding.id, key, now, budgetMs + WEBHOOK_CLAIM_GRACE_MS, now - WEBHOOK_REPLAY_RETENTION_MS)
+		if (claim === null) {
 			return jsonResponse({ result: { received: true } }, 200)
 		}
 		const frame = new RequestFrame(crypto.randomUUID())
 		const site = served.site
-		// A staged-kit delivery is one transaction; the delivery record above stays outside it, so a failure forgets it.
+		// The claim stays outside the delivery's transaction, and its completion commits inside it, with the work.
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), false)
 		const kicks = kickRecorder(`webhook '${served.webhook}'`, site?.kicks ?? [])
+		const signal = handlerSignal(request, budgetMs)
 		try {
 			try {
 				await runInRequest(frame, async () => {
@@ -1272,7 +1276,6 @@ export class ContractRuntime {
 							db: siteData(handles, (action) => handles.app(reach.app(action))),
 							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
 						}
-					const signal = handlerSignal(request)
 					const client = requestClient(request, this.#parts.clientVouched)
 					await served.handler({
 						input,
@@ -1292,14 +1295,18 @@ export class ContractRuntime {
 			} finally {
 				frame.end()
 			}
-			await invocation?.commit(null)
+			const using = invocation === null ? undefined : await invocation.frameworkSite('the delivery claim').session()
+			if (!(await tables.completeDelivery(claim, using))) {
+				throw new ServerFault('webhook_claim_lost', `the claim of a delivery to '${served.webhook}' expired and another copy took it over`)
+			}
+			await invocation?.commit(signal)
 			this.#kickAll(kicks.kicked(), exec)
 		} catch (error) {
 			await invocation?.rollback()
-			// The provider redelivers a failed delivery; forgetting its key lets the redelivery run. The unsigned
+			// The provider redelivers a failed delivery; giving the claim back lets the redelivery run at once. The unsigned
 			// delivery header is the caller's word, so the log names only the endpoint.
 			console.error(`fabrika: ${served.row.id}: delivery_failed; the provider's redelivery runs it again`)
-			await tables.forgetDelivery(binding.id, key)
+			await tables.releaseDelivery(claim)
 			throw error
 		}
 		return jsonResponse({ result: { received: true } }, 200)

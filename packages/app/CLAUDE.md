@@ -698,12 +698,16 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **Replay protection keys on authenticated content only**: the delivery key is
   `sha256(bindingId ‖ raw body)`, kept per binding for `WEBHOOK_REPLAY_RETENTION_MS`
   (30 days). `X-GitHub-Delivery` is unsigned, the caller's word: it decides nothing and reaches no log line. A redelivery of one event therefore has the same key and is ignored.
-- **A webhook handler is at-least-once.** The key is recorded before the handler runs, outside any transaction of the
-  handler, and forgotten when it throws, so GitHub's redelivery runs a failed delivery again. The handler gets the key
-  as `ctx.delivery.key`; idempotent writes key on it. A staged-kit delivery's writes are one invocation transaction,
-  rolled back before the key is forgotten, so the redelivery starts from nothing (a framework test's `implement` tree
-  has no invocation transaction). Never move the record into the handler's transaction: a concurrent copy of the delivery would
-  wait on it, and a failure would roll the record back with the work.
+- **A webhook handler is at-least-once, and a delivery is recoverable.** The key is claimed before the handler runs,
+  outside its transaction, under a lease of the handler's time limit plus `WEBHOOK_CLAIM_GRACE_MS`; a copy that finds
+  the claim held is answered as received at once, without waiting. The handler's transaction completes the claim
+  (clears the lease, fenced by it) right before it commits, so the work and the completion commit together. A failure
+  gives the claim back, so the provider's redelivery runs it again; a crash before the commit leaves the claim to expire,
+  and the next redelivery takes it over. A completion that finds its claim taken over fails the delivery
+  (`webhook_claim_lost`) and commits nothing. A row without a lease is a completed delivery, as every row an older
+  release recorded is. The handler gets the key as `ctx.delivery.key`; idempotent writes key on it (or use
+  `insert(…, { onConflict })`). Never move the claim into the handler's transaction (a concurrent copy would wait on
+  it), and never complete it outside that transaction (a crash between the two would lose the delivery).
 - **A staged-kit site runs in its invocation's transaction** (`invocation.ts`). `serve` puts each site
   into the handler tree as `siteHandler(handler, declared)`; `boot` parses the leaf's declaration (a query's `'write'`, a
   table outside `src/db/tables.ts` and a `fabrika_*` table are `BootError`s) and runs the site with the approved

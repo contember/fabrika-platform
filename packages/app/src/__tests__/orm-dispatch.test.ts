@@ -14,6 +14,7 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { siteHandler } from '../implement/invocation'
+import { deliveryKey } from '../implement/webhook'
 import { bootApp, grant, resultOf, send, type Sent, token } from './fixtures/implement/harness'
 import { ormApp, type OrmHooks, ormHooks } from './orm-fixture/app'
 import { migration } from './orm-fixture/migration'
@@ -295,6 +296,30 @@ describe.skipIf(!hasPostgres)('a webhook delivery is one transaction', () => {
 		expect(await companies('refs/heads/once')).toBe(1)
 		expect((await deliver(app, binding, 'refs/heads/once')).status).toBe(200)
 		expect(hooks.deliveries).toHaveLength(2)
+	})
+
+	test('a claim a crashed copy left is answered as received while it holds, then the redelivery takes it over once', async () => {
+		const { app, hooks } = start()
+		const binding = await bind(app)
+		const ref = 'refs/heads/crashed'
+		const key = await deliveryKey(binding.id, new TextEncoder().encode(JSON.stringify({ ref, repository: { id: 42 } })))
+		const now = Date.now()
+		await admin((sql) =>
+			sql.unsafe(`insert into ${schema}.fabrika_webhook_deliveries (binding_id, delivery_id, received_at, lease_until) values ($1, $2, $3, $4)`, [
+				binding.id,
+				key,
+				now,
+				now + 60_000,
+			])
+		)
+		expect((await deliver(app, binding, ref)).status).toBe(200)
+		expect(hooks.deliveries).toEqual([])
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_webhook_deliveries set lease_until = $1 where delivery_id = $2`, [now - 1, key]))
+		expect((await deliver(app, binding, ref)).status).toBe(200)
+		expect(hooks.deliveries).toEqual([`${ref} 0`])
+		expect(await companies(ref)).toBe(1)
+		expect((await deliver(app, binding, ref)).status).toBe(200)
+		expect(hooks.deliveries).toHaveLength(1)
 	})
 })
 

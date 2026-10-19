@@ -43,6 +43,12 @@ export function webhookSubject(bindingId: string): string {
 export const WEBHOOK_REPLAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
+ * How long a delivery's claim outlasts its handler's time limit: a copy that arrives later finds the claim held and is
+ * answered as received; once the lease passed without a completion (a crash, a lost connection), the redelivery runs.
+ */
+export const WEBHOOK_CLAIM_GRACE_MS = 30_000
+
+/**
  * `sha256:<hex>` of the binding id and the signed body: what replay protection and an idempotent handler key on.
  * A redelivery of one event has the same key, whatever its `X-GitHub-Delivery` says.
  */

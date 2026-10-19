@@ -1,11 +1,12 @@
 // The framework's side of its own tables (`@fabrika/db/migrations`): webhook bindings and the delivery keys that
 // make a replay a no-op. A delivery key is derived from authenticated content (`@fabrika/app` hashes the binding
-// and the signed body), never from a header; the `delivery_id` column holds it. Only `@fabrika/app`'s webhook runtime reaches them, through `frameworkTablesOf`. Every
+// and the signed body), never from a header; the `delivery_id` column holds it, claimed under a lease and completed
+// in the handler's transaction. Only `@fabrika/app`'s webhook runtime reaches them, through `frameworkTablesOf`. Every
 // statement is a guarded tree like a store's, keyed by equalities on the framework table itself.
 
 import { BinaryOperationNode, type OperationNode, OperatorNode, ValueNode } from 'kysely'
-import { type Session, sessionOf } from './database'
-import { DatabaseError, QueryRefusedError } from './errors'
+import { runFixedStatement, type Session, sessionOf } from './database'
+import { QueryRefusedError } from './errors'
 import type { GuardContext } from './guard'
 import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
 import { acknowledgement, allOf, column, deleteNode, equals, insertNode, locateNode, scopedWhere } from './nodes'
@@ -35,16 +36,43 @@ export interface WebhookTables {
 	/** Removes the binding when it belongs to `webhook` and `scope`, in `using` when given; `false` when there was none. */
 	removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }, using?: Session): Promise<boolean>
 	/**
-	 * Records a delivery key; `false` when the binding already received it within the retention window. Keys of the
-	 * binding older than `retainedSince` are dropped first, so the table stays bounded.
+	 * Claims a delivery key for `leaseMs`: `null` when the binding completed it within the retention window, or another
+	 * copy holds an unexpired claim. A claim whose lease expired is taken over. Keys of the binding older than
+	 * `retainedSince` are dropped first, so the table stays bounded.
 	 */
-	recordDelivery(bindingId: string, deliveryKey: string, receivedAt: number, retainedSince: number): Promise<boolean>
-	/** Forgets a delivery whose handler failed, so the provider's redelivery runs it again. */
-	forgetDelivery(bindingId: string, deliveryKey: string): Promise<void>
+	claimDelivery(bindingId: string, deliveryKey: string, now: number, leaseMs: number, retainedSince: number): Promise<DeliveryClaim | null>
+	/**
+	 * Completes a claimed delivery in `using`, the transaction its handler wrote in, so the work and the completion
+	 * commit together; `false` when another copy took the claim over meanwhile, and that transaction must not commit.
+	 * Without `using` (a handler with no transaction) it completes on its own.
+	 */
+	completeDelivery(claim: DeliveryClaim, using?: Session): Promise<boolean>
+	/** Gives a claim back after its handler failed, so the provider's redelivery runs it again at once. */
+	releaseDelivery(claim: DeliveryClaim): Promise<void>
 }
 
+/** One copy's claim on a delivery: its lease end fences the completion against a copy that took the claim over. */
+export interface DeliveryClaim {
+	readonly bindingId: string
+	readonly key: string
+	readonly leaseUntil: number
+}
+
+const D = WEBHOOK_DELIVERIES_TABLE
+
+/** A new key, or one whose claim expired without completion; a completed one (no lease) is never taken. */
+const SQL_CLAIM = `insert into ${D} (binding_id, delivery_id, received_at, lease_until) values ($1, $2, $3::bigint, $4::bigint)
+on conflict (binding_id, delivery_id) do update set received_at = excluded.received_at, lease_until = excluded.lease_until
+where ${D}.lease_until is not null and ${D}.lease_until < excluded.received_at
+returning delivery_id`
+
+const SQL_COMPLETE = `update ${D} set lease_until = null
+where binding_id = $1 and delivery_id = $2 and lease_until = $3::bigint
+returning delivery_id`
+
+const SQL_RELEASE = `delete from ${D} where binding_id = $1 and delivery_id = $2 and lease_until = $3::bigint returning delivery_id`
+
 const BINDING_COLUMNS = ['id', 'webhook', 'scope_type', 'scope_value', 'account', 'secret']
-const UNIQUE_VIOLATION = '23505'
 
 function guard(root: GuardContext['root'], table: string, scope: OperationNode | undefined): GuardContext {
 	return { root, table, joins: {}, scope }
@@ -56,10 +84,6 @@ function text(row: Readonly<Record<string, unknown>>, column: string): string {
 		throw new QueryRefusedError('unexpected_row', `${WEBHOOK_BINDINGS_TABLE}.${column} came back as ${typeof value}`)
 	}
 	return value
-}
-
-function isUniqueViolation(error: unknown): boolean {
-	return error instanceof DatabaseError && error.sqlState === UNIQUE_VIOLATION
 }
 
 export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
@@ -112,7 +136,7 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 			return removed.length > 0
 		},
 
-		async recordDelivery(bindingId: string, deliveryKey: string, receivedAt: number, retainedSince: number): Promise<boolean> {
+		async claimDelivery(bindingId: string, deliveryKey: string, now: number, leaseMs: number, retainedSince: number): Promise<DeliveryClaim | null> {
 			const binding = equals(WEBHOOK_DELIVERIES_TABLE, 'binding_id', bindingId)
 			const expired = BinaryOperationNode.create(
 				column(WEBHOOK_DELIVERIES_TABLE, 'received_at'),
@@ -123,26 +147,19 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 				deleteNode(WEBHOOK_DELIVERIES_TABLE, scopedWhere(expired, binding), 'delivery_id'),
 				guard('DeleteQueryNode', WEBHOOK_DELIVERIES_TABLE, binding),
 			)
-			const values = new Map<string, string | number>([['binding_id', bindingId], ['delivery_id', deliveryKey], ['received_at', receivedAt]])
-			const node = insertNode(WEBHOOK_DELIVERIES_TABLE, values, acknowledgement(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', undefined))
-			try {
-				await session().run(node, guard('InsertQueryNode', WEBHOOK_DELIVERIES_TABLE, undefined))
-				return true
-			} catch (error) {
-				// The primary key decides between two concurrent copies of one delivery: exactly one insert wins.
-				if (isUniqueViolation(error)) {
-					return false
-				}
-				throw error
-			}
+			const leaseUntil = now + leaseMs
+			// The primary key decides between concurrent copies of one delivery: exactly one inserts or takes over.
+			const claimed = await runFixedStatement(session(), SQL_CLAIM, [bindingId, deliveryKey, now, leaseUntil])
+			return claimed.length === 0 ? null : Object.freeze({ bindingId, key: deliveryKey, leaseUntil })
 		},
 
-		async forgetDelivery(bindingId: string, deliveryKey: string): Promise<void> {
-			const predicate = allOf([equals(WEBHOOK_DELIVERIES_TABLE, 'binding_id', bindingId), equals(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', deliveryKey)])
-			await session().run(
-				deleteNode(WEBHOOK_DELIVERIES_TABLE, scopedWhere(undefined, predicate), 'delivery_id'),
-				guard('DeleteQueryNode', WEBHOOK_DELIVERIES_TABLE, predicate),
-			)
+		async completeDelivery(claim: DeliveryClaim, using?: Session): Promise<boolean> {
+			const completed = await runFixedStatement(using ?? session(), SQL_COMPLETE, [claim.bindingId, claim.key, claim.leaseUntil])
+			return completed.length > 0
+		},
+
+		async releaseDelivery(claim: DeliveryClaim): Promise<void> {
+			await runFixedStatement(session(), SQL_RELEASE, [claim.bindingId, claim.key, claim.leaseUntil])
 		},
 	})
 }

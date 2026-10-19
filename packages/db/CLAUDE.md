@@ -36,7 +36,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`), its DDL (`fileTableSql`) and the scan migration (`fileScanSql`); pure.                                |
 | `file-tables.ts`       | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                                          |
 | `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                                |
-| `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                                          |
+| `framework-tables.ts`  | The webhook bindings (guarded trees) and the delivery claims (fixed statements: claim under a lease, complete in the handler's transaction, give back).        |
 | `job-leases.ts`        | `fabrika_job_leases` and `fabrika_job_kicks`: a job run's lease, its generations and deadlines, a kick's pending run, the last run; `fencedTransaction`.       |
 | `form-admissions.ts`   | `fabrika_form_admissions` and `fabrika_form_challenges`: a form's per-minute buckets and accepted challenge tokens, one statement each.                        |
 | `form-files.ts`        | `fabrika_form_files`: a form's received files, pending before their object, held in the inbox row's transaction, claimed by `attach`; one statement each.      |

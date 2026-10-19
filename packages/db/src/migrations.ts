@@ -130,4 +130,12 @@ CREATE TABLE ${FORM_BYTES_TABLE} (
 );
 `,
 	}),
+	Object.freeze({
+		name: '0007_webhook_delivery_claims.sql',
+		sql: `-- A delivery is claimed with a lease and completed in its handler's transaction, which clears the lease. A claim
+-- whose lease expired without completion is taken over by the provider's redelivery. Every row recorded before has
+-- no lease, so it stays a completed delivery, as does one an older framework release records during a rollout.
+ALTER TABLE ${WEBHOOK_DELIVERIES_TABLE} ADD COLUMN lease_until BIGINT;
+`,
+	}),
 ])

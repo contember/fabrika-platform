@@ -16,6 +16,7 @@ export const SERVER_FAULTS = {
 	output_refused: 'the handler returned a value its output schema refuses',
 	contract_inconsistent: 'the compiled endpoint misses what its kind needs (a path parameter, a body limit or a capability kind)',
 	webhook_binding_mismatch: "a webhook binding reaches another dimension than the webhook's",
+	webhook_claim_lost: "a delivery's claim expired and another copy of the delivery took it over before this one committed; nothing it wrote is kept",
 	workload_unauthorized: "the workload's key or token does not carry the authority its declaration needs",
 	request_cancelled: 'the request was cancelled or outlived its budget before its transaction committed; nothing it wrote is kept',
 	file_object_missing: "a file's object is missing from storage",

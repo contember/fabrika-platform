@@ -34,7 +34,7 @@ export type {
 } from './file-tables'
 export type { FormAdmissions, InboxQuota } from './form-admissions'
 export type { ClaimedFormFile, FormFiles, HeldFormFiles, RemovableFormFile, StagedFormFile, WrittenFormFile } from './form-files'
-export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
+export type { DeliveryClaim, NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { DataAccess, DataHandles, DataSite } from './orm'
 export type { FrameworkTables, Locator } from './registry'
