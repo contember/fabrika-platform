@@ -2,10 +2,12 @@ import { contractDigest } from '@fabrika/auth-core'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { schemaFromContract } from '../../../../app/src/contract/platform'
 import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { FABRIKA_CHECK_VERSION } from '../../execution'
 
-/** What Control sends once it approved the contract of the commit it read (ADR-0050). */
+/** What Control sends once it approved the contract of the commit it read (ADR-0050), for an application on this release. */
 export const approvedContract = (contract = notesArtifact): ProviderApprovedAccess => ({
 	contract,
 	contractDigest: contractDigest(contract),
 	schema: schemaFromContract(contract),
+	framework: FABRIKA_CHECK_VERSION,
 })

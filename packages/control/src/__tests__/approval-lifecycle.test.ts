@@ -3,8 +3,10 @@
 // approves, an approval holds only for its baseline, a lost publication classifies again, and a removal runs through.
 
 import type { AuthContext } from '@fabrika/auth'
-import { contractDigest, permits, type Scope } from '@fabrika/auth-core'
-import { readContractSource } from '@fabrika/check/contract'
+import { CONTRACT_FORMAT, contractDigest, permits, type Scope } from '@fabrika/auth-core'
+import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
+import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
+import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
@@ -23,6 +25,7 @@ import {
 	setEnvironmentProtectionUseCase,
 } from '../approval/api'
 import { parseClassification } from '../approval/publish'
+import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { InstallationMail } from '../mail-transport'
@@ -32,7 +35,7 @@ import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '
 import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'
 import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
-import { memoryCommits } from './helpers/commits'
+import { frameworkLockfile, memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { kitFiles } from './helpers/kit-contract'
@@ -987,6 +990,53 @@ describe('the membership transport key from the approved contract', () => {
 			quiet.mockRestore()
 		}
 		expect(w.deploys).toEqual([])
+	})
+})
+
+describe('the framework release an application pins (ADR-0062)', () => {
+	test('a release below the window fails its run with one line, and the published contract keeps running', async () => {
+		const w = world()
+		await seed(w)
+		const first = await deploy(w, 'stage')
+		expect(first.status).toBe('succeeded')
+		const before = await published(w, 'stage')
+
+		w.files['bun.lock'] = frameworkLockfile('0.4.2')
+		const refused = await deploy(w, 'stage')
+		expect(refused.status).toBe('failed')
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain(
+			`access: the application pins @fabrika/app 0.4.2, outside this platform's window; the oldest release it deploys is 0.5.0. Raise the pin as ${MIGRATION_GUIDE} describes`,
+		)
+		expect(await published(w, 'stage')).toEqual(before)
+		expect(w.deploys).toHaveLength(1)
+	})
+
+	test('a release newer than the platform fails its run: the platform is upgraded first', async () => {
+		const w = world()
+		await seed(w)
+		w.files['bun.lock'] = frameworkLockfile('9.0.0')
+		const refused = await deploy(w, 'stage')
+		expect(refused.status).toBe('failed')
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain(
+			`access: the application pins @fabrika/app 9.0.0, newer than this platform's ${CHECKER_VERSION}; upgrade the platform first`,
+		)
+		expect(w.deploys).toEqual([])
+	})
+
+	test('a 0.5 application is read by the 0.5 reader, and its deploy carries its own release, digest and contract upcast', async () => {
+		const w = world()
+		await seed(w)
+		w.files['bun.lock'] = frameworkLockfile('0.5.2')
+		expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		const snapshot = approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))
+		expect(snapshot?.checker).toBe('0.5.4')
+		expect(snapshot?.framework).toBe('0.5.2')
+		expect(snapshot?.older).toBeDefined()
+		const access = w.deploys[0]?.environment.access
+		expect(access?.framework).toBe('0.5.2')
+		expect(access?.contract.format).toBe(CONTRACT_FORMAT)
+		expect(access?.contractDigest).toBe(contractDigest05(readContractSource05(new Map([['fabrika.contract.ts', BASE]]))))
+		expect(access?.contractDigest).not.toBe(DIGEST)
 	})
 })
 

@@ -1,4 +1,4 @@
-import { type AppEnvironment, type ContractArtifact, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
@@ -111,9 +111,9 @@ export const readApprovedAccess = async (path: string | undefined): Promise<Runn
 	return access.data
 }
 
-/** The approved access as the deployer takes it: the contract Control read at the commit. */
-const approvedRun = (access: RunnerApprovedAccess | undefined): { readonly contract?: ContractArtifact } =>
-	access === undefined ? {} : { contract: access.contract }
+/** The approved access as the deployer takes it: the contract Control read at the commit, and its application's digest. */
+const approvedRun = (access: RunnerApprovedAccess | undefined): { readonly approved?: RunnerApprovedAccess } =>
+	access === undefined ? {} : { approved: access }
 
 export interface LoadedCloudflareCommandConfig {
 	readonly config: CloudflareAppConfig

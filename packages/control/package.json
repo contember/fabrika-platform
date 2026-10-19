@@ -88,9 +88,12 @@
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",
+		"@fabrika/app-0.5": "npm:@fabrika/app@0.5.4",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/auth-core-0.5": "npm:@fabrika/auth-core@0.5.4",
 		"@fabrika/check": "workspace:*",
+		"@fabrika/check-0.5": "npm:@fabrika/check@0.5.4",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/email": "workspace:*",
 		"@fabrika/github-app": "workspace:*",
@@ -107,6 +110,7 @@
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
+		"@fabrika/proxy-core-0.5": "npm:@fabrika/proxy-core@0.5.4",
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@types/bun": "latest",
 		"lopata": "^0.21.0",

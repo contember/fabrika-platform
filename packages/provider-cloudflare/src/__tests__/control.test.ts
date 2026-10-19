@@ -37,7 +37,12 @@ const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelop
 const reported = (schemaJson: string): RunnerIamReconcile => ({ app: 'api', schemaJson })
 
 /** The contract Control approved for the environment: its schema is the one IAM gets. */
-const APPROVED = { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) }
+const APPROVED = {
+	contract: notesArtifact,
+	contractDigest: contractDigest(notesArtifact),
+	schema: schemaFromContract(notesArtifact),
+	framework: '0.5.4',
+}
 
 const RUN_ID = '0192f0c9-4d5e-7a10-9c3b-1f2e3d4c5b6a'
 const COMMIT_SHA = 'abcdef1234567890abcdef1234567890abcdef12'
@@ -849,7 +854,7 @@ describe('Cloudflare control provider', () => {
 			cancelRun: async () => {},
 		})
 		const { environment: { access: _approved, ...environment }, ...input } = deployInput()
-		const access = { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) }
+		const access = APPROVED
 		const outcome = await provider.deploy({ ...input, dryRun: false, environment: { ...environment, access } })
 
 		expect(outcome).toMatchObject({ state: 'succeeded' })
@@ -887,7 +892,7 @@ describe('Cloudflare control provider', () => {
 		expect(accepted).toEqual([])
 	})
 
-	test('the runner boundary refuses a non-dry job without approved access, or with a contract its digest does not describe', () => {
+	test('the runner boundary refuses a non-dry job without approved access, without a contract, or without a digest', () => {
 		const job = {
 			runId: RUN_ID,
 			repoUrl: 'https://github.com/example/api.git',
@@ -902,8 +907,14 @@ describe('Cloudflare control provider', () => {
 			cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: digest } }).success,
 		)
 			.toBe(true)
-		const narrowed = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
-		expect(cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: narrowed, contractDigest: digest } }).success)
+		// The digest is the application's own release's, which Control computed before it upcast the contract (ADR-0062).
+		const upcast = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
+		expect(cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: upcast, contractDigest: digest } }).success)
+			.toBe(true)
+		expect(
+			cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: 'sha256:other' } })
+				.success,
+		)
 			.toBe(false)
 		expect(
 			cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: { endpoints: [] }, contractDigest: digest } }).success,

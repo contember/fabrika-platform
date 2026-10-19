@@ -143,6 +143,8 @@ const deploy = (
 		 * a schema gets its `schemaFromContract`; a platform component (`allow`) gets none.
 		 */
 		readonly contract?: ContractArtifact
+		/** The digest Control sends with `contract`: the application's own release's; `contractDigest(contract)` by default. */
+		readonly contractDigest?: string
 		readonly installationApps?: readonly AppEnvironment[]
 		readonly platformIam?: PlatformIamTarget
 	} = {},
@@ -178,7 +180,9 @@ const deploy = (
 		secrets: options.secrets ?? {},
 		vars: {},
 		managedEnvironment: options.managedEnvironment ?? {},
-		...(contract === undefined ? {} : { contract }),
+		...(contract === undefined
+			? {}
+			: { approved: { kind: 'contract' as const, contract, contractDigest: options.contractDigest ?? contractDigest(contract) } }),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
@@ -1047,7 +1051,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			secrets: {},
 			vars: {},
 			managedEnvironment: {},
-			contract: notesArtifact,
+			approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 			dryRun: true,
 			signal: new AbortController().signal,
 			log: () => {},
@@ -1067,6 +1071,16 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
 		])
 		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+	})
+
+	test("an application on an older framework release starts with its own release's digest, which no upcast contract recomputes", async () => {
+		const older = `sha256:${'5'.repeat(64)}`
+		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, contractDigest: older })
+		expect(result.status).toBe('succeeded')
+		const { root, app } = provisioned()
+		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps[0]).toMatchObject({ snapshot: older })
+		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(older)
 	})
 
 	test("a contract proxy admits the origin of the application's Operations DSN in its policy, never the key", async () => {

@@ -48,7 +48,6 @@ import {
 	zeropsProcessConnections,
 } from './database-budget'
 import {
-	FABRIKA_CHECK_VERSION,
 	PLATFORM_TYPESCRIPT_VERSION,
 	renderLockedExecutionDescriptor,
 	zeropsJobProcesses,
@@ -930,7 +929,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 				? overlayRelease(contents, artifact.target.zeropsSetup, release)
 				: renderLockedExecutionDescriptor(contents, artifact.target.zeropsSetup, release, sizedExecution(locked, attempt))
 			if (locked !== null) {
-				log(`  generated run section; build checks @fabrika/check@${FABRIKA_CHECK_VERSION}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
+				log(`  generated run section; build checks @fabrika/check@${locked.checkRelease}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
 				if (locked.sourceMaps !== null) log(`  the build uploads the source maps of ${locked.sourceMaps.assetRoots.length} asset root(s)`)
 			}
 			assertRunning(signal)

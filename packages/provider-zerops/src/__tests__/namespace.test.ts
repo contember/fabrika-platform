@@ -25,6 +25,7 @@ import {
 } from '../api'
 import { withoutSensitiveContent } from '../api/service-env-response'
 import { useSharedPostgres } from '../authoring'
+import { FABRIKA_CHECK_VERSION } from '../execution'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
@@ -1371,7 +1372,12 @@ describe('Zerops namespace lifecycle', () => {
 			env: 'prod',
 			domain: 'notes.example.test',
 			artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
-			access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) },
+			access: {
+				contract: notesArtifact,
+				contractDigest: contractDigest(notesArtifact),
+				schema: schemaFromContract(notesArtifact),
+				framework: FABRIKA_CHECK_VERSION,
+			},
 		}
 		const events = { checkpoint: async () => {}, boundary: async () => {} }
 

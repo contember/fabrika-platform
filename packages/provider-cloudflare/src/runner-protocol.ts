@@ -1,5 +1,5 @@
 import { contractArtifactSchema } from '@fabrika/app/contract'
-import { type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import { type ContractArtifact, isDigest } from '@fabrika/auth-core'
 import { z } from 'zod'
 
 export const runnerStateSchema = z.enum(['pending', 'cloning', 'installing', 'deploying', 'succeeded', 'failed'])
@@ -26,8 +26,10 @@ export const INSTALLATION_APPS_ENV = 'FABRIKA_INSTALLATION_APPS'
 export const CROSS_ORIGINS_ENV = 'FABRIKA_CROSS_ORIGINS'
 
 /**
- * The access Control approved for a run (ADR-0050): the contract it read at the commit. The proxy table and
- * `FABRIKA_CONTRACT_DIGEST` follow this, never the checkout.
+ * The access Control approved for a run (ADR-0050): the contract it read at the commit, in this release's model, and
+ * the digest the application's own framework release computes for it. The proxy table and `FABRIKA_CONTRACT_DIGEST`
+ * follow this, never the checkout. The digest is not `contractDigest(contract)` when Control upcast the contract from
+ * an older release's artifact (ADR-0062), so the executor cannot recompute it and takes Control's.
  */
 export interface RunnerApprovedAccess {
 	readonly kind: 'contract'
@@ -35,11 +37,16 @@ export interface RunnerApprovedAccess {
 	readonly contractDigest: string
 }
 
-export const runnerApprovedAccessSchema = z.object({ kind: z.literal('contract'), contract: z.unknown(), contractDigest: z.string() }).strict()
+export const runnerApprovedAccessSchema = z.object({
+	kind: z.literal('contract'),
+	contract: z.unknown(),
+	contractDigest: z.string().refine(isDigest),
+})
+	.strict()
 	.transform((access, context): RunnerApprovedAccess => {
 		const contract = contractArtifactSchema.safeParse(access.contract)
-		if (!contract.success || contractDigest(contract.data) !== access.contractDigest) {
-			context.addIssue({ code: z.ZodIssueCode.custom, message: 'not a contract artifact its digest describes' })
+		if (!contract.success) {
+			context.addIssue({ code: z.ZodIssueCode.custom, message: 'not a contract artifact' })
 			return z.NEVER
 		}
 		return { kind: 'contract', contract: contract.data, contractDigest: access.contractDigest }

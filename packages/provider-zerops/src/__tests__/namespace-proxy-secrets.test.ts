@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { defineApp } from '../authoring'
+import { FABRIKA_CHECK_VERSION } from '../execution'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
 import { compileNamespaceProxyManifest } from '../namespace/manifest'
 import { namespaceProxySecrets } from '../namespace/proxy-secrets'
@@ -31,7 +32,9 @@ const member = (appId: string, options: { routed: boolean; proxySecret?: string 
 		env: 'prod',
 		domain: `${appId}.example.com`,
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
-		...(options.routed ? { access: { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract) } } : {}),
+		...(options.routed
+			? { access: { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), framework: FABRIKA_CHECK_VERSION } }
+			: {}),
 		...(options.proxySecret === undefined ? {} : { proxySecret: options.proxySecret }),
 	}
 }

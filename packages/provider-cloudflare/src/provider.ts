@@ -29,6 +29,7 @@ import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './
 import { configSchema } from './config-schema'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker } from './proxy'
+import type { RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 
 const CANCELLED = 'deploy cancelled'
@@ -127,10 +128,16 @@ const withConnectorBindings = (authored: Worker, bindings: Readonly<Record<strin
 	return replaceApplicationWorker(authored, configured)
 }
 
+/** The contract a deployment serves, and the digest the application's own framework release computes for it. */
+interface ServedContract {
+	readonly contract: ContractArtifact
+	readonly digest: string
+}
+
 /** A contract application starts only as the contract it was deployed with (ADR-0022 rule 5), so the platform writes its digest. */
-const contractEnvironment = (managed: ProviderManagedEnvironment, contract: ContractArtifact | null): ProviderManagedEnvironment => {
-	if (contract === null) return managed
-	const digest = contractDigest(contract)
+const contractEnvironment = (managed: ProviderManagedEnvironment, served: ServedContract | null): ProviderManagedEnvironment => {
+	if (served === null) return managed
+	const { digest } = served
 	const sent = managed[FABRIKA_CONTRACT_DIGEST]
 	if (sent !== undefined && sent !== null && sent !== digest) {
 		throw new Error(`cloudflare: ${FABRIKA_CONTRACT_DIGEST} is \`${sent}\`, but the contract this deployment serves has digest \`${digest}\``)
@@ -156,7 +163,7 @@ const assertContractSchema = (schema: AppSchema | null, contract: ContractArtifa
  * The proxy Worker is the platform's (ADR-0048): built here, from this package's own entrypoint, around the
  * application Worker the config returns, never taken from the checkout. A config that returns a proxy is refused.
  */
-const platformProxied = (authored: Worker, contract: ContractArtifact, run: CloudflareDeployRun): Worker => {
+const platformProxied = (authored: Worker, served: ServedContract, run: CloudflareDeployRun): Worker => {
 	if (authored.options.bindings?.['APP'] !== undefined) {
 		throw new Error(
 			`cloudflare: \`resources\` returns the Worker \`${authored.options.name}\` binding \`APP\`, a proxy of its own; return the application Worker, and the platform builds the proxy Worker from its contract`,
@@ -173,7 +180,7 @@ const platformProxied = (authored: Worker, contract: ContractArtifact, run: Clou
 		appHost: run.domain ?? 'localhost',
 		...(run.domain === undefined ? {} : { domain: run.domain }),
 		...(run.crossOrigins === undefined ? {} : { crossOrigins: run.crossOrigins }),
-		endpoints: contractProxyTable(contract),
+		endpoints: contractProxyTable(served.contract, served.digest),
 		...operationsOrigin(run.managedEnvironment),
 		iamUrl: run.managedEnvironment[FABRIKA_IAM_ISSUER] ?? '',
 	})
@@ -427,10 +434,10 @@ export interface CloudflareDeployRun {
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
 	/**
-	 * The contract Control approved for this run (ADR-0050). Absent outside Control (a local deploy), the deployer reads
-	 * `fabrika.contract.ts` from the checkout, as Control does.
+	 * The contract Control approved for this run (ADR-0050), with the digest the application's release computes. Absent
+	 * outside Control (a local deploy), the deployer reads `fabrika.contract.ts` from the checkout, as Control does.
 	 */
-	readonly contract?: ContractArtifact
+	readonly approved?: RunnerApprovedAccess
 	/** Every Cloudflare deployment of the installation in Control's registry; a name of another application is refused. */
 	readonly installationApps?: readonly AppEnvironment[]
 	readonly dryRun: boolean
@@ -445,8 +452,15 @@ export interface CloudflareDeployResult {
 	readonly steps: readonly DeployStepResult[]
 }
 
-const servedContract = async (cf: CloudflareCollaborators, cwd: string, approved: ContractArtifact | undefined): Promise<ContractArtifact | null> =>
-	approved === undefined ? cf.readContract(cwd) : approved
+const servedContract = async (
+	cf: CloudflareCollaborators,
+	cwd: string,
+	approved: RunnerApprovedAccess | undefined,
+): Promise<ServedContract | null> => {
+	if (approved !== undefined) return { contract: approved.contract, digest: approved.contractDigest }
+	const read = await cf.readContract(cwd)
+	return read === null ? null : { contract: read, digest: contractDigest(read) }
+}
 
 export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => async (run: CloudflareDeployRun): Promise<CloudflareDeployResult> => {
 	const cf = options.collaborators ?? defaultCloudflareCollaborators
@@ -455,9 +469,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 	}
 	const platformResources = options.platformResources ?? 'refuse'
-	const contract = await servedContract(cf, loaded.cwd, run.contract)
+	const served = await servedContract(cf, loaded.cwd, run.approved)
+	const contract = served?.contract ?? null
 	// Fabrika's own components (`allow`) are its trusted installation path; an application needs a contract.
-	if (platformResources === 'refuse' && contract === null) {
+	if (platformResources === 'refuse' && served === null) {
 		throw new Error('cloudflare: the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract')
 	}
 	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's schema.
@@ -465,11 +480,11 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	assertContractSchema(schema, contract)
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Fabrika's own components compose their own proxies; every application gets the platform's.
-	const served = platformResources === 'refuse' && contract !== null ? platformProxied(authored, contract, run) : authored
-	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(served), run)
+	const proxied = platformResources === 'refuse' && served !== null ? platformProxied(authored, served, run) : authored
+	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(proxied), run)
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
 	const worker = withConnectorBindings(
-		withManagedEnvironment(loaded.config, served, run, contractEnvironment(run.managedEnvironment, contract)),
+		withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served)),
 		connectors,
 	)
 	const dir = workerDir(loaded.config, loaded.cwd)
@@ -480,11 +495,11 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		platformResources,
 		iamAppId: appEnvironmentId(run.appId, run.env),
 		installation: run.installationApps ?? [],
-		proxy: served === authored ? null : `${run.env}-${run.appId}-proxy`,
+		proxy: proxied === authored ? null : `${run.env}-${run.appId}-proxy`,
 		connectors: Object.fromEntries(Object.entries(connectors).map(([binding, owner]) => [binding, remoteName(run.env, owner)])),
 		frameworkVariables: {
 			application: frameworkValues(applicationWorker(worker).options.vars),
-			proxy: served === authored ? null : frameworkValues(worker.options.vars),
+			proxy: proxied === authored ? null : frameworkValues(worker.options.vars),
 		},
 	}
 	assertStateNamespace(stateNamespace(loaded.config, run), platformResources)

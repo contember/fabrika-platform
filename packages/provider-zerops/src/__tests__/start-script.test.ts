@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dropApplicationDatabase } from '../../../platform-node/src/application-postgres-migrations'
-import { generatedBuildCommands, type ZeropsLockedExecution } from '../execution'
+import { FABRIKA_CHECK_VERSION, generatedBuildCommands, type ZeropsLockedExecution } from '../execution'
 
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 const hasPostgres = url !== ''
@@ -48,6 +48,7 @@ const generatedApplication = async (appId: string): Promise<string> => {
 		contract: { digest: `sha256:${'0'.repeat(64)}`, readinessPath: '/healthz', jobs: [] },
 		databaseUrl: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
 		databaseConnections: 2,
+		checkRelease: FABRIKA_CHECK_VERSION,
 		storageHostname: null,
 		runtimePackages: [],
 		sourceMaps: null,

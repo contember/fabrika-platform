@@ -4,6 +4,7 @@
  * Worker, and check what oblaka generates.
  */
 
+import { contractDigest } from '@fabrika/auth-core'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { cp, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -61,7 +62,7 @@ const deployCheckout = async (
 		vars: {},
 		managedEnvironment: { FABRIKA_IAM_ISSUER: 'https://iam.example.test' },
 		installationApps: [{ app: 'otherapp', env: 'stage' }],
-		contract: notesArtifact,
+		approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 		dryRun: false,
 		signal: new AbortController().signal,
 		log: () => {},

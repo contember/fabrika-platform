@@ -1,4 +1,4 @@
-import { canonicalArtifactJson, type ContractArtifact } from '@fabrika/auth-core'
+import { canonicalArtifactJson, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -295,7 +295,7 @@ describe('a contract application is refused at compile time', () => {
 
 	test('without a health endpoint for the readiness check', () => {
 		const withoutHealth: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.filter((row) => row.kind !== 'health') }
-		expect(() => zeropsContractRun(withoutHealth)).toThrow("c.health('/healthz')")
+		expect(() => zeropsContractRun(withoutHealth, contractDigest(withoutHealth))).toThrow("c.health('/healthz')")
 	})
 
 	test('for a contract of another application', async () => {

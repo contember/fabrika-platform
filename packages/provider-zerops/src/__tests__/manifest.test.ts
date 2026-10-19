@@ -1,3 +1,4 @@
+import { contractDigest } from '@fabrika/auth-core'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -154,7 +155,11 @@ describe('Zerops static artifact', () => {
 		expect(() =>
 			parseFabrikaManifest({
 				...manifest,
-				target: { ...manifest.target, contract: zeropsContractRun(notesArtifact), proxy: { upstream: 'other:3000', ...table } },
+				target: {
+					...manifest.target,
+					contract: zeropsContractRun(notesArtifact, contractDigest(notesArtifact)),
+					proxy: { upstream: 'other:3000', ...table },
+				},
 			})
 		).toThrow('not owned')
 		// An application is protected by its contract's endpoint table; gates are refused, never ignored.
@@ -163,7 +168,11 @@ describe('Zerops static artifact', () => {
 		expect(() =>
 			parseFabrikaManifest({
 				...manifest,
-				target: { ...manifest.target, contract: zeropsContractRun(notesArtifact), proxy: { upstream: 'notes:3000', ...table, gates: { rules: [] } } },
+				target: {
+					...manifest.target,
+					contract: zeropsContractRun(notesArtifact, contractDigest(notesArtifact)),
+					proxy: { upstream: 'notes:3000', ...table, gates: { rules: [] } },
+				},
 			})
 		).toThrow('invalid fabrika manifest proxy: `gates` is gone')
 		expect(() =>

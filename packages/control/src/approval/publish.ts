@@ -9,6 +9,7 @@ import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { type AccessChange, type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
+import { FrameworkReleaseRefused } from './readers'
 import { type AccessSnapshot, type ActiveSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from './snapshot'
 
 /** What a run stores after classification: the diff, and the two digests an approval is bound to. */
@@ -173,6 +174,8 @@ async function readCandidate(
 	} catch (error) {
 		invocation.signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)
+		// Its line names only versions the release pattern admitted and fixed file names, never other checkout text.
+		if (error instanceof FrameworkReleaseRefused) input.log(`access: ${error.message}`)
 		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; ${refusalHint(error)}`)
 		if (error instanceof SourceRateLimited) input.log(`access: the commit's files cannot be read: ${error.message}`)
 		else if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)

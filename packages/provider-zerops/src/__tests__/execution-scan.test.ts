@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseZeropsDescriptor } from '../descriptor'
 import {
+	FABRIKA_CHECK_VERSION,
 	renderLockedExecutionDescriptor,
 	ZEROPS_FILE_SCAN_JOB,
 	ZEROPS_FILE_SWEEP_JOB,
@@ -103,10 +104,15 @@ describe('a scanning contract on Zerops', () => {
 		)
 		await expect(compile(app(SCANNING, 1))).rejects.toThrow('needs 2 GB of RAM')
 		const plain = await compile(app(notesArtifact, null))
-		expect(zeropsContractRun(SCANNING).scan).toBe(true)
+		expect(zeropsContractRun(SCANNING, contractDigest(SCANNING)).scan).toBe(true)
 		expect(() =>
 			lockedExecutionFor(plain, {
-				access: { contract: SCANNING, contractDigest: contractDigest(SCANNING), schema: { scopes: [], actions: [], roles: {} } },
+				access: {
+					contract: SCANNING,
+					contractDigest: contractDigest(SCANNING),
+					schema: { scopes: [], actions: [], roles: {} },
+					framework: FABRIKA_CHECK_VERSION,
+				},
 			}, false)
 		).toThrow(
 			'needs 2 GB of RAM',

@@ -41,16 +41,26 @@ export interface ProviderDeploymentNamespace {
 	readonly target: ProviderEnvelope
 }
 
+/** A framework release as npm publishes it; the only form one may take before it reaches a generated build command. */
+export const FRAMEWORK_RELEASE_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+
 /**
  * The access Control approved for one application environment (ADR-0050): the contract the proxy enforces and the
  * IAM vocabulary compiled from it. A provider publishes a contract application's endpoint table and reconciles its
  * IAM schema from this, never from the artifact or a runner's report.
  */
 export interface ProviderApprovedAccess {
+	/** The contract in this platform release's model, upcast from the application's own release's artifact (ADR-0062). */
 	readonly contract: ContractArtifact
-	/** `contractDigest(contract)`, which the application compares with `FABRIKA_CONTRACT_DIGEST` at startup. */
+	/**
+	 * The digest the application's own framework release computes for its contract, which it compares with
+	 * `FABRIKA_CONTRACT_DIGEST` at startup. It is `contractDigest(contract)` only when the application is on this
+	 * release's artifact format, so a provider never derives it from `contract`.
+	 */
 	readonly contractDigest: string
 	readonly schema: AppSchema
+	/** The `@fabrika/app` release the application pins (`FRAMEWORK_RELEASE_PATTERN`); its build checks with that release. */
+	readonly framework: string
 }
 
 /** Persisted deploy data for one app environment. */

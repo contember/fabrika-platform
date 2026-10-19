@@ -4,14 +4,13 @@
 
 import {
 	type ContractArtifact,
-	contractDigest,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_SOURCE_MAP_UPLOAD,
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	type FrameworkVariableName,
 } from '@fabrika/auth-core'
 import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
-import type { JsonValue } from '@fabrika/provider-contract'
+import { FRAMEWORK_RELEASE_PATTERN, type JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
 import { renderYaml } from './compile'
 import { parseZeropsDescriptor, type PreparedZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
@@ -24,9 +23,9 @@ export const ZEROPS_APPLICATION_PORT = 3000
 export const ZEROPS_APPLICATION_RUNTIME = 'alpine/bun@1.3'
 
 /**
- * The checker every build runs, pinned to this package's own version. Control runs the git checkout of its release
- * tag, so this reads the source version, which `release:validate` holds equal to the tag; the public packages are
- * released together, so it is the checker of the installation that renders the build.
+ * This package's own version. Control runs the git checkout of its release tag, so this reads the source version,
+ * which `release:validate` holds equal to the tag; the public packages are released together, so it is the checker
+ * release of the installation. A build checks with the application's own release instead (`checkRelease`).
  */
 export const FABRIKA_CHECK_VERSION: string = packageManifest.version
 
@@ -91,6 +90,11 @@ export interface ZeropsContractRun {
 export interface ZeropsLockedExecution {
 	readonly appId: string
 	readonly contract: ZeropsContractRun
+	/**
+	 * The framework release the application pins (`ProviderApprovedAccess.framework`): the build runs `fabrika-check`
+	 * and `fabrika-source-maps` of `@fabrika/check` at this release, whose rules the application was written against.
+	 */
+	readonly checkRelease: string
 	/** A `${host_…}` reference to the application's PostgreSQL service, or null when it has none. */
 	readonly databaseUrl: string | null
 	/**
@@ -112,8 +116,11 @@ export const CONTRACT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
 const byName = <T extends { readonly name: string }>(left: T, right: T): number => left.name < right.name ? -1 : left.name > right.name ? 1 : 0
 
-/** The run facts of a contract. A contract without a health endpoint has nothing a readiness check can request. */
-export function zeropsContractRun(artifact: ContractArtifact): ZeropsContractRun {
+/**
+ * The run facts of a contract, with the digest the application's own release computes for it. A contract without a
+ * health endpoint has nothing a readiness check can request.
+ */
+export function zeropsContractRun(artifact: ContractArtifact, digest: string): ZeropsContractRun {
 	const health = artifact.endpoints.filter((row) => row.kind === 'health').sort((left, right) => left.id < right.id ? -1 : 1)[0]
 	if (health === undefined) {
 		throw new Error(
@@ -121,7 +128,7 @@ export function zeropsContractRun(artifact: ContractArtifact): ZeropsContractRun
 		)
 	}
 	return {
-		digest: contractDigest(artifact),
+		digest,
 		readinessPath: health.path,
 		jobs: Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule })).sort(byName),
 		...(Object.keys(artifact.files).length > 0 ? { files: true } : {}),
@@ -295,7 +302,7 @@ const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
 // After every check: a map is uploaded only for a build that can deploy. A failed upload never fails the build; the
 // provider reads the state from the report line.
-const SOURCE_MAP_UPLOAD = `cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-source-maps ${SOURCE_ROOT} || true`
+const sourceMapUpload = (release: string): string => `cd /tmp && bun x --bun -p @fabrika/check@${release} fabrika-source-maps ${SOURCE_ROOT} || true`
 
 /**
  * The upload's build variables: the destination and asset roots as a literal, and the bearer lifted from the service
@@ -315,18 +322,19 @@ const sourceMapBuildVariables = (upload: OperationsSourceMapBuildUpload): Record
  */
 export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
+	if (!FRAMEWORK_RELEASE_PATTERN.test(execution.checkRelease)) throw new Error('zerops: the checker release must be a release version')
 	const database = execution.databaseUrl !== null
 	return [
 		INSTALL,
 		'bun test --isolate --pass-with-no-tests',
 		`rm -rf node_modules && ${INSTALL}`,
 		`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
-		`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check ${SOURCE_ROOT}`,
+		`cd /tmp && bun x --bun -p @fabrika/check@${execution.checkRelease} fabrika-check ${SOURCE_ROOT}`,
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
 		...(database ? [writeFileCommand(MIGRATE_SCRIPT, migrateScript(execution.appId))] : []),
 		writeFileCommand(START_SCRIPT, startScript(execution.appId, database)),
-		...(execution.sourceMaps === null ? [] : [SOURCE_MAP_UPLOAD]),
+		...(execution.sourceMaps === null ? [] : [sourceMapUpload(execution.checkRelease)]),
 	]
 }
 

@@ -349,8 +349,10 @@ export const proxyAppSchema = z.union([contractProxyAppSchema, installationProxy
 /**
  * The manifest form of a compiled contract: every endpoint's rules with their digest and delegation, the reserved
  * prefixes, the contract digest and the named CSP origins. Producers call this; they never assemble rows by hand.
+ * `digest` is the one the application's own release computes; Control passes it for an artifact it upcast from an
+ * older release's (ADR-0062).
  */
-export function contractProxyTable(artifact: ContractArtifact): ContractProxyTable {
+export function contractProxyTable(artifact: ContractArtifact, digest: string = contractDigest(artifact)): ContractProxyTable {
 	return {
 		endpoints: artifact.endpoints.map((row): ProxyEndpointRow => {
 			const rules = {
@@ -374,7 +376,7 @@ export function contractProxyTable(artifact: ContractArtifact): ContractProxyTab
 			return { ...credentialed, digest: requirementDigest(credentialed) }
 		}),
 		reservedPrefixes: [...artifact.reservedPrefixes],
-		snapshot: contractDigest(artifact),
+		snapshot: digest,
 		csp: cspOrigins(artifact.csp),
 	}
 }

@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { defineApp } from '../authoring'
+import { FABRIKA_CHECK_VERSION } from '../execution'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { compileNamespaceProxyManifest } from '../namespace/manifest'
 
@@ -22,6 +23,7 @@ const approved = (artifact: ContractArtifact): ProviderApprovedAccess => ({
 	contract: artifact,
 	contractDigest: contractDigest(artifact),
 	schema: schemaFromContract(artifact),
+	framework: FABRIKA_CHECK_VERSION,
 })
 
 /** A member whose artifact is a contract application behind its table; Control approved that contract unless `access: null`. */

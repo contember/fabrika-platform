@@ -1,5 +1,5 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import { type AppSchema, type ContractArtifact, isDigest } from '@fabrika/auth-core'
+import { type AppSchema, type ContractArtifact, contractDigest, isDigest } from '@fabrika/auth-core'
 import type { OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
 import type { JsonValue, ProviderCodec, ProviderDeployInput, ProviderEnvironment } from '@fabrika/provider-contract'
 import { proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
@@ -9,6 +9,7 @@ import { assertOwnRunWhenExtending, executionZeropsDocument, parseZeropsDescript
 import {
 	assertScanMemory,
 	CONTRACT_DIGEST_PATTERN,
+	FABRIKA_CHECK_VERSION,
 	LOCKED_APP_ID_PATTERN,
 	lockedAuthoredBuild,
 	ZEROPS_RUNTIME_PACKAGES,
@@ -456,13 +457,17 @@ const applicationStorageHostname = (services: FabrikaManifestImportDocument['ser
 	return own[0] ?? null
 }
 
-/** What the platform renders a contract application's execution descriptor from, or null for any other application. */
+/**
+ * What the platform renders a contract application's execution descriptor from, or null for any other application.
+ * The manifest is the one this release's `fabrika app build` wrote, so its build checks with this release.
+ */
 export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecution | null => {
 	const { contract } = manifest.target
 	if (contract === undefined) return null
 	return {
 		appId: manifest.app.id,
 		contract,
+		checkRelease: FABRIKA_CHECK_VERSION,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		databaseConnections: null,
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
@@ -490,11 +495,12 @@ export function lockedExecutionFor(
 		throw new Error('zerops: Control approved no access for this environment')
 	}
 	if (!LOCKED_APP_ID_PATTERN.test(manifest.app.id)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
-	const contract = zeropsContractRun(access.contract)
+	const contract = zeropsContractRun(access.contract, access.contractDigest)
 	assertScanMemory(manifest.target.importDocument.services, manifest.target.deployService, contract)
 	return {
 		appId: manifest.app.id,
 		contract,
+		checkRelease: access.framework,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		databaseConnections: null,
 		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
@@ -658,7 +664,9 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string, sou
 				zeropsSetup: config.target.zeropsSetup,
 				proxy: config.target.proxy,
 				namespaceResources: config.target.namespaceResources,
-				contract: config.target.contract === undefined ? undefined : zeropsContractRun(config.target.contract),
+				contract: config.target.contract === undefined
+					? undefined
+					: zeropsContractRun(config.target.contract, contractDigest(config.target.contract)),
 				runtimePackages: config.target.runtimePackages,
 			},
 		}

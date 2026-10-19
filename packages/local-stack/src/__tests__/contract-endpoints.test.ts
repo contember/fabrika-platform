@@ -66,7 +66,7 @@ const proxyManifest = compileNamespaceProxyManifest('apps-prod', [{
 	domain: HOST,
 	artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
 	// Control's approved snapshot of the commit (ADR-0050): the proxy table comes from it, never from the artifact.
-	access: { contract: artifact, contractDigest: contractDigest(artifact), schema: schemaFromContract(artifact) },
+	access: { contract: artifact, contractDigest: contractDigest(artifact), schema: schemaFromContract(artifact), framework: '0.6.0' },
 }])
 
 const inW1 = (action: string): PermissionEntry => grant(action, { type: 'workspace', value: 'w1' })

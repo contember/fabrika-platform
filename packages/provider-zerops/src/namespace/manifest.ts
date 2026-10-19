@@ -47,7 +47,7 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 			// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
 			// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0022).
 			scheme: 'https',
-			...contractProxyTable(access.contract),
+			...contractProxyTable(access.contract, access.contractDigest),
 			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 			...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
 		})
