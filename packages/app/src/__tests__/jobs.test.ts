@@ -176,7 +176,7 @@ describe('boot binds every job or does not start', () => {
 		])
 		const noExchange = { database: connection, environment: environment(frameworkEnvFor(jobsApp(passing))), workloadTokens: undefined }
 		expect(problemsOf(() => bootApp(jobsApp(passing), noExchange))).toEqual([
-			'the contract declares jobs or webhooks, and the runtime adapter supplies no IAM token exchange for their keys',
+			'the contract declares jobs, webhooks or public procedures, and the runtime adapter supplies no IAM token exchange for their keys',
 		])
 	})
 
