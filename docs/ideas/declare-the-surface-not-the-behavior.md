@@ -65,17 +65,18 @@ encoding. Public access is an access form, not a kind, as `c.spa(…, { access: 
 
 ### Terms
 
-| Term           | Meaning                                                                                                                           |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| capability     | a request-bound value the runtime mints for one action on one object or dimension (`Ref`, `Within`, `AppCapability`)              |
-| workload       | an identity that is no person: a job, a webhook or a public procedure. IAM signs its key; its declared `actions` are all it holds |
-| site           | one place code runs: a procedure, a webhook handler or a job                                                                      |
-| off-road       | `sql` or `unscoped`: reach outside the table policies, listed in the approval as such                                             |
-| row mode       | how the proxy treats one manifest row: credentialed, link, protocol, or (new) public                                              |
-| file kind      | a declared class of stored files: allowed types, size bound, scan policy. It has no owner                                         |
-| file reference | the request-bound value a file column holds when read through the data layer; the only handle that serves or opens a file         |
-| pending grace  | how long an unreferenced, pending file may live before the sweep deletes it (one hour today)                                      |
-| constant work  | a public handler does the same work for a new and a known visitor, so its timing reveals nothing                                  |
+| Term           | Meaning                                                                                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| capability     | a request-bound value the runtime mints for one action on one object or dimension (`Ref`, `Within`, `AppCapability`)                                        |
+| workload       | an identity that is no person: a job, a webhook or a public procedure. Control issues its key, IAM signs its token; its declared `actions` are all it holds |
+| site           | one place code runs: a procedure, a webhook handler or a job                                                                                                |
+| off-road       | `sql` or `unscoped`: reach outside the table policies, listed in the approval as such                                                                       |
+| row mode       | how the proxy treats one manifest row: credentialed, link, protocol, (new) public, and `form` until ADR-0062's window retires it                            |
+| endpoint id    | `<mount>.<group>.<procedure>`, for example `api.intake.register`, served at `<prefix>/<group>.<procedure>` (`POST /api/intake.register`)                    |
+| file kind      | a declared class of stored files: allowed types, size bound, scan policy. It has no owner                                                                   |
+| file reference | the request-bound value a file column holds when read through the data layer; the only handle that serves or opens a file                                   |
+| pending grace  | how long an unreferenced file is safe from the sweep (one hour today); past it, the next sweep may delete it                                                |
+| constant work  | a public handler does the same work for a new and a known visitor, so neither its answer nor its work depends on what exists                                |
 
 ## The catalog
 
@@ -91,14 +92,15 @@ Every procedure is `r.query` / `r.mutation` (or `l.…` in a link mount) with an
 | Export procedure | `app.export(name, { version, consumers, audience, procedures })`                   | `POST /__fabrika/connect/<export>.v<n>.<path>` and the description                | `app:<consumer>`                                             |
 
 A group's `callers` applies to its credentialed procedures; a public procedure in the group discards every credential.
+A group whose procedures are all public declares no `callers`: `app.group({}, (r) => …)`.
 
 ### Platform surfaces and verified entries
 
-| Kind    | Declared by                                                                                         | Serves                                                                                                    |
-| ------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| SPA     | `c.spa(prefix, { dir, access, browserConfig? })`                                                    | `GET <prefix>/*`, `GET <prefix>` (308), `__fabrika-config.json`, `__fabrika-me.json`. No handler          |
-| Webhook | `app.webhook(path, { scheme, boundTo, actions, input, limits?, kicks?, egress?, sql?, unscoped? })` | `POST <path>/:bindingId`: signature, account and replay claim, then the handler as the webhook's workload |
-| Health  | `c.health(path)`                                                                                    | `GET <path>`, a fixed answer, the one row served without the proxy secret                                 |
+| Kind    | Declared by                                                                                                 | Serves                                                                                                    |
+| ------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| SPA     | `c.spa(prefix, { dir, access, browserConfig? })`                                                            | `GET <prefix>/*`, `GET <prefix>` (308), `__fabrika-config.json`, `__fabrika-me.json`. No handler          |
+| Webhook | `app.webhook(path, { scheme, boundTo, actions, input, limits?, kicks?, signs?, egress?, sql?, unscoped? })` | `POST <path>/:bindingId`: signature, account and replay claim, then the handler as the webhook's workload |
+| Health  | `c.health(path)`                                                                                            | `GET <path>`, a fixed answer, the one row served without the proxy secret                                 |
 
 SPA `access`: `{ member: true }` | `{ action, over }` | `{ action, app: true }` | `{ public: true }`. `browserConfig`
 (today's `public` list) names the variables the browser config exposes; the rename ends the two meanings of `public` on
@@ -114,35 +116,41 @@ procedures.
 ### Resources
 
 - **File kind**: `c.files({ types, maxBytes, scan? })` under `files: { <kind>: … }`. No owner, no actions, no endpoint.
-- **Tables**: the table policy gains `files: { <column>: '<kind>' }`. Its actions are the file's authority.
+- **Token purpose**: `c.token(Claims, { maxDays })` under `tokens: { <purpose>: … }`. The claims schema and the longest
+  lifetime of one kind of signed token ("Signed tokens").
+- **Tables**: the table policy gains `files: { <column>: '<kind>' }` (its actions are the file's authority) and
+  `queue: { attempts, due, maxAttempts? }` ("Kicks and claims"); a file column or a queue table needs a `version`
+  column for the second. Every action of a table policy accepts a list.
 - **Imports, `csp`, vocabulary**: unchanged.
 - **Framework jobs**: the file sweep and the file scan.
 
 ### Procedure options
 
-| Option         | Values                                                                                                                                                                                                           | Allowed on                                                                                  | Default                                    |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `input`        | a strict zod schema; `file('<kind>')` or `z.array(file(k)).max(n)` at the top level; `signedToken('<purpose>', Claims)` as a field                                                                               | files: mutations                                                                            | none                                       |
-| `output`       | a schema \| `file('<kind>', { cache? })` \| `sheet(Row, …)` (today's `attachment()`) \| `redirect({ origins? })`                                                                                                 | `file` on a query or a mutation; `redirect` not on exports                                  | required                                   |
-| `access`       | `{ member: true }` \| `{ action, on, from }` \| `{ action, in, from }` \| `{ action, over }` \| `{ action, creates }` \| `{ action, app: true }` \| `{ capabilities: { <name>: <form> } }` \| `{ public: true }` | `public` on RPC only; link: `{ action }`                                                    | required                                   |
-| `actions`      | the workload's actions                                                                                                                                                                                           | public procedures, required there                                                           | —                                          |
-| `http`         | `{ method?: 'GET' \| 'POST', query?: Schema, body?: 'json' \| 'urlencoded' }`                                                                                                                                    | see "The HTTP shape"                                                                        | `POST`, JSON; multipart derived from files |
-| `limits`       | `{ maxBytes?, timeoutMs? }`                                                                                                                                                                                      | every procedure, webhook and job (`timeoutMs` only on jobs)                                 | see "Defaults and ceilings"                |
-| `admission`    | `{ origins?, rate?: { perClient?, perCaller?, perEndpoint?, bytesPerHour? }, challenge? }`                                                                                                                       | `perClient`, `challenge`, `origins: 'any'`: public only; `perCaller`: credentialed and link | see "Defaults and ceilings"                |
-| declared reach | `sql`, `unscoped`, `connect`, `issues`, `binds`, `signs`, `kicks`, `egress`                                                                                                                                      | see each block; a public procedure takes only `kicks` and `signs`                           | none                                       |
+| Option         | Values                                                                                                                                                                                                           | Allowed on                                                                                                         | Default                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `input`        | a strict zod schema; `file('<kind>')` or `z.array(file(k)).max(n)` at the top level; `signedToken('<purpose>')` as a field, also of `http.query`                                                                 | files: mutations                                                                                                   | none                                                                                          |
+| `output`       | a schema \| `file('<kind>')` \| `sheet(Row, …)` (today's `attachment()`) \| `redirect({ origins? })`                                                                                                             | `file` on a query or a POST mutation; `redirect` not on exports; a `GET` mutation answers `redirect()` or a schema | required                                                                                      |
+| `access`       | `{ member: true }` \| `{ action, on, from }` \| `{ action, in, from }` \| `{ action, over }` \| `{ action, creates }` \| `{ action, app: true }` \| `{ capabilities: { <name>: <form> } }` \| `{ public: true }` | `public` on RPC only; link: `{ action }`                                                                           | required                                                                                      |
+| `actions`      | the workload's actions                                                                                                                                                                                           | public procedures, required there                                                                                  | —                                                                                             |
+| `http`         | `{ method?: 'GET' \| 'POST', query?: Schema, body?: 'json' \| 'urlencoded', cache?: { maxAgeSeconds } \| 'immutable' }`                                                                                          | see "The HTTP shape"; exports are always `POST`; `cache` on a public `GET` query only                              | `POST` (`GET` for a query with a file output), JSON; multipart derived from files; `no-store` |
+| `limits`       | `{ maxBytes?, timeoutMs? }`                                                                                                                                                                                      | every procedure, webhook and job                                                                                   | see "Defaults and ceilings"                                                                   |
+| `admission`    | `{ origins?, rate?: { perClient?, perCaller?, perEndpoint?, bytesPerHour? }, challenge? }`                                                                                                                       | `perClient`, `challenge`, `origins: 'any'`: public only; `perCaller`: credentialed and link                        | see "Defaults and ceilings"                                                                   |
+| declared reach | `sql`, `unscoped`, `connect`, `issues`, `binds`, `signs`, `kicks`, `egress`                                                                                                                                      | see each block; a public procedure takes only `kicks` and `signs`                                                  | none                                                                                          |
 
 ### Defaults and ceilings
 
-| Bound                         | Default                                                                                       | Ceiling                                  |
-| ----------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `limits.maxBytes`, no files   | 64 KiB                                                                                        | 1 MiB                                    |
-| `limits.maxBytes`, files      | 64 KiB + Σ (the schema's file count × the kind's `maxBytes`)                                  | 48 MiB                                   |
-| body deadline (derived)       | `max(30 s, maxBytes ÷ 16 KiB/s)`: a 10 MiB body gets about 11 min                             | 51 min, below the one-hour pending grace |
-| `limits.timeoutMs`            | 10 s on a procedure and a webhook (`REQUEST_BUDGET_MS`); the job's default today              | 60 s on a procedure and a webhook        |
-| file count per request        | the schema's `.max(n)`                                                                        | 20                                       |
-| `admission.rate`              | public: `perClient` 10/min, `perEndpoint` 100/min (today's `FORM_LIMITS`); credentialed: none | —                                        |
-| `admission.rate.bytesPerHour` | required with a public file field                                                             | 64 GiB                                   |
-| public in-flight share        | a quarter of the instance's connection pool, shared by all public procedures                  | —                                        |
+| Bound                         | Default                                                                                                                                                                                         | Ceiling                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `limits.maxBytes`, no files   | 64 KiB                                                                                                                                                                                          | 1 MiB                                    |
+| `limits.maxBytes`, files      | 64 KiB + Σ (the schema's file count × the kind's `maxBytes`)                                                                                                                                    | 48 MiB                                   |
+| body deadline (derived)       | `max(30 s, maxBytes ÷ 16 KiB/s)`: a 10 MiB body gets about 11 min                                                                                                                               | 51 min, below the one-hour pending grace |
+| `limits.timeoutMs`            | 10 s on a procedure and a webhook (`REQUEST_BUDGET_MS`); the job's default today                                                                                                                | 60 s on a procedure and a webhook        |
+| file count per request        | the schema's `.max(n)`                                                                                                                                                                          | 20                                       |
+| `admission.rate`              | public mutation: `perClient` 10/min, `perEndpoint` 100/min (today's `FORM_LIMITS`); public query and credentialed: none. A declared `rate` merges into the default; `null` turns one bucket off | —                                        |
+| `admission.rate.bytesPerHour` | required with a public file field                                                                                                                                                               | 64 GiB                                   |
+| public in-flight share        | a quarter of the instance's connection pool, shared by all public procedures                                                                                                                    | —                                        |
+| `admission.origins`           | `'same-origin'`; `'listed'` admits the environment's listed origins (bearer only when credentialed); `'any'` public only                                                                        | —                                        |
+| `queue.maxAttempts`           | 10; the backoff starts at one cron tick and doubles                                                                                                                                             | —                                        |
 
 The approval prints the effective value of every bound, derived ones included.
 
@@ -164,7 +172,7 @@ change that.
 ### Public procedures
 
 ```ts
-const stats = app.group({ callers: ['human'] }, (r) => ({
+const stats = app.group({}, (r) => ({
 	cta: r.mutation({
 		input: CtaClick,
 		output: Empty,
@@ -177,8 +185,8 @@ const stats = app.group({ callers: ['human'] }, (r) => ({
 ```
 
 **Who calls versus what the code reaches.** `access: { public: true }` says anyone may call; top-level `actions` say
-what the handler may do, as on a job and a webhook. The approval keeps the two apart: "Anyone may call `api.cta`
-(POST /api/cta); it runs with `stats.click`."
+what the handler may do, as on a job and a webhook. The approval keeps the two apart: "Anyone may call
+`api.stats.cta` (POST /api/stats.cta); it runs with `stats.click`."
 
 **The compiled row.** A public procedure is its own row mode: no callers, no requirement, no delegation, and every
 credential discarded, on any mount. Its endpoint kind is new, so an older proxy's strict manifest parser refuses it
@@ -194,6 +202,9 @@ a webhook do:
 3. `boot` exchanges it at IAM's workload token path, verifies `ptype: 'public'` and the workload name, and caches it
    until shortly before it expires (`WorkloadCredential`). A flood costs IAM one exchange per token lifetime.
 4. `ctx.app`, `ctx.within` and `ctx.ref` mint only for a declared action the token carries, bound to the request.
+   On a workload site (a public procedure, a job, a webhook) `ctx.app('<action>')` mints, and `ctx.db.app('<action>')`
+   is the data layer over it. On a credentialed `{ action, app: true }` endpoint `ctx.app` stays today's capability
+   value.
 5. `callerOf` maps the token to no caller; IAM refuses every membership, link and admin operation for it.
 
 **Bounding the reach.** Any action a table names admits `get(id)` and `getForUpdate(id)` today
@@ -202,8 +213,12 @@ a webhook do:
 - An insert writes and reads nothing back. The handler knows the new row's id, because ids are generated caller-side.
   A file field of the input goes straight into a file column of that insert.
 - A read needs the table's `read` action, and the approval lists the columns that action reads.
+- An update or a delete needs its action and takes only a row id that a verified signed token of this request
+  carries, with `expectVersion`; it reads back nothing but the new version. That is how a public link manages one
+  booking: the token names the booking.
 - `sql`, `unscoped`, `issues`, `connect`, `egress`, `binds`, mail and members are refused.
-- A public action may not be granted by any role, so a role change cannot widen it unseen.
+- A public action may not be granted by any role, so a role change cannot widen it unseen. A table that staff and a
+  public procedure both read names both actions: `actions: { read: ['crm.read', 'catalog.read'], … }`.
 
 **`ctx.client`.** Every request context gains `{ ip, userAgent }`. `ip` is `X-Fabrika-Client-Ip`, the one address
 header the proxy sets, or `null` where the provider cannot supply the visitor's address (Zerops until backlog 05).
@@ -216,14 +231,15 @@ kicks nothing. The challenge, which runs before the handler, refuses most bots e
 
 1. The proxy: the row, the body codec, the origin rule (403).
 2. The proxy secret and the endpoint header (403).
-3. The client bucket and the in-flight share, in a short admission transaction of their own, because a query's data
-   transaction is `READ ONLY` (429, 503).
-4. The bounded body and the strict input (413, 400).
+3. The in-flight share (503), then every bucket the procedure has (`perClient`, `perEndpoint`, and `bytesPerHour`
+   charged from the declared body length), in one short admission transaction that commits whatever the handler later
+   does (429). A public query has no bucket unless it declares one: a bucket is a database write per call.
+4. The bounded body and the strict input, signed tokens verified by the application's framework as it parses them
+   (413, 400).
 5. The workload token, before the challenge spends a token (503 when IAM is down and the cached token expired).
 6. The challenge (403).
 7. The file parts, staged as pending files ("Files as values").
-8. The invocation: a mutation takes `perEndpoint` and `bytesPerHour` in its transaction (429), then the handler, the
-   output, the commit, and the kicks.
+8. The invocation: the handler, the output, the commit, and the kicks.
 
 ### Several capabilities
 
@@ -262,7 +278,7 @@ const contract = app.contract((c) => ({
 	files: {
 		attachments: c.files({
 			types: ['application/pdf', 'image/png'],
-			maxBytes: 10 * 1024 * 1024,
+			maxBytes: 10485760,
 			scan: true,
 		}),
 	},
@@ -285,36 +301,61 @@ The application's migration writes `file uuid not null references fabrika_files 
 verifies both for every declared file column.
 
 **The storage.** One framework table, `fabrika_files`: id, kind, status (`pending`, `quarantined`, `live`,
-`rejected`), size, SHA-256, sniffed type, name, object key, the scope value of its first reference, the creating
-request, created time. Bytes live in the object store under the object key, as today.
+`rejected`), size, SHA-256, sniffed type, name, object key, the scanned object version and verdict (as today's
+collection rows keep them), the scope value of its first dimensional reference, the creating request, created time,
+and a `legacy` marker for migrated files ("Existing files"). Bytes live in the object store under the object key, as
+today; no two rows share an object.
 
-**Writing.** A file column accepts three values, and the data layer refuses anything else, a string id included:
+**Writing.** A file column accepts four values, and the data layer refuses anything else, a string id included:
 
 - an incoming file of this request's input (`file('<kind>')`);
 - a file a `ctx.files.put('<kind>', bytes, { type, name })` of this request created;
-- a file reference this request read from another file column.
+- a file reference this request read from another file column under that table's `read` action;
+- `null`, which clears a nullable column.
 
-Every value must be of the column's kind. The first reference sets the file's scope value; a reference from another
-top-level scope is refused.
+Every file must be of the column's kind, and its row is locked `FOR SHARE` while the write checks its status, so a
+file being deleted cannot gain a reference. The first reference from a table scoped by a dimension sets the file's
+scope value (its top-level value, an organization for example) with a conditional update; a reference from a table
+with `app` scope sets none. A reference from another top-level scope is then refused.
 
 **Staging.** The same for an incoming file and a `put`:
 
-1. A `pending` row is committed in its own statement before any byte is written. That row is the cleanup intent.
+1. A `pending` row is committed on a connection of its own, never the handler's transaction, before any byte is
+   written. That row is the cleanup intent. So `put` works inside a transaction too; its connection counts against the
+   pool and, on a public procedure, against the in-flight share. A job puts a large file before its transaction.
 2. The object is written, sniffed and bounded by the kind's `maxBytes`; size and SHA-256 are recorded.
 3. The first write of the file into a column, in the handler's transaction, claims it: still `pending`, of this request
    and kind, not past the grace. It becomes `quarantined` (a scanning kind) or `live`.
 4. After a known rollback the request deletes its unclaimed rows and objects. After an uncertain outcome (a lost commit
    answer, a crash) it deletes nothing; the sweep decides from the database.
 
-**Reading and serving.** A row read through the data layer carries a file reference in each file column. The handler
-passes it on: `ctx.files.info(ref)` (name, type, size, scan status), `ctx.files.open(ref)` (the bytes, in a job or a
-handler), or it returns it from a procedure whose output is `file('<kind>')`. A file list is a query of the table that
-holds the column.
+**Reading and serving.** A row read through the data layer carries a file reference in each file column, with its
+metadata (`id`, `name`, `type`, `size`, `status`). The data layer loads the metadata of every row in one query per
+read, so a list shows it without a call per file. A reference read under an action other than the table's `read` (a
+`getForUpdate` under `update`) carries the metadata only. The handler passes a readable reference on:
+`ctx.files.open(ref)` gives the bytes (in a job or a handler), and a procedure whose output is `file('<kind>')` returns
+it. A file list is a query of the table that holds the column.
 
-**Removing.** Clearing the column or deleting the row removes the reference. The sweep deletes a file that no declared
-column references and that is past the grace, together with its object. The foreign key keeps that race-free: an
-insert that references the file holds a share lock on its row, so the sweep's delete waits or fails. The sweep also
-deletes a `pending` file past the grace.
+Every byte consumer (a file answer, `open`, a mail attachment) keeps today's checks: only a `live` file is read, by
+its scanned object version. A `pending` or `quarantined` file answers 409 `file_not_ready`, a `rejected` one 409
+`file_rejected`, and a reference whose file the sweep has deleted since the read answers 404. The framework applies
+these from the reference's status; the handler writes no check.
+
+**Removing.** Clearing the column or deleting the row removes the reference. The sweep finds files that no declared
+column references and that are past the grace, and pending files past the grace, in bounded batches over an indexed
+column per file column. It deletes each in three steps:
+
+1. In one transaction, it deletes the file's row and records the object key in `fabrika_file_deletions`. The foreign
+   key refuses the delete while any reference exists, and a reference write that holds the row `FOR SHARE` makes the
+   delete wait, so a file that gains a reference survives.
+2. After that commit, it deletes the object.
+3. It deletes the deletion record. A crash between the steps leaves the record, and the next sweep finishes it.
+
+The grace counts from the file's creation, so an old file goes at the next sweep once nothing references it. A legacy
+file is never swept.
+
+**Rule: a handover writes the new reference before it deletes the old one, in one transaction.** Written in two
+transactions, the sweep can delete the file between them, and the second write fails on the foreign key.
 
 **What this covers without new operations:** a file shared by two records (two columns hold one reference), an
 attachment reused by many e-mails, versioned documents (a versions table with a file column), a thumbnail (a second
@@ -333,9 +374,9 @@ endpoint digest, so the proxy and the application apply ADR-0022's file treatmen
 `stream()`, `save()`). A link holder's key is a bearer in a closure, so a link page uses `download`; the key never goes
 into a URL. `download` replaces today's attachment helper and the proposed `fetchFile`.
 
-**Caching.** `file('<kind>', { cache: 'immutable' })` is allowed on a public query only: `Cache-Control: public,
-immutable`, with the file's id in the URL, for a logo or a catalog image, in a page or in an e-mail. The default is
-`no-store`. Inline display stays limited to inert images.
+**Caching** is a field of the HTTP shape, for any public `GET` query ("The HTTP shape"). A file answer may be
+`'immutable'`, for a logo or a catalog image in a page or an e-mail: its input names the file, so the URL changes with
+the file. Inline display stays limited to inert images.
 
 **What the approval sees.** File reach follows from table reach: "`deals.write` writes `deal_attachments.file`
 (attachments)". A file kind adds no authority of its own.
@@ -345,20 +386,21 @@ column; the scaffold samples a file per declared type for a file input.
 
 ### The HTTP shape
 
-`http: { method?, query?, body? }` describes the wire independently of the output.
+`http: { method?, query?, body?, cache? }` describes the wire independently of the output.
 
-| Field    | Rule                                                                                                                                                                                                                                                                                                                                                                                                      |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `method` | `POST` by default. A query may declare `GET`, and is `GET` by default when its output is a file; its input is then read from flat scalar query parameters. A mutation is `GET` only when it is public and its input holds a `signedToken`; the approval reads "changes state on GET; link scanners may trigger it". A session mutation is never `GET`: a top-level navigation carries the session cookie. |
-| `query`  | a POST only: a flat schema for the URL's parameters, passed to the handler as `query`, beside the body's `input`                                                                                                                                                                                                                                                                                          |
-| `body`   | `json` by default; multipart when the input has a file field; `urlencoded` for flat scalar fields without files                                                                                                                                                                                                                                                                                           |
+| Field    | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `method` | `POST` by default. A query may declare `GET`, and is `GET` by default when its output is a file; its input is then read from flat scalar query parameters. A mutation is `GET` only when it is public and its input holds a `signedToken`, and it answers `redirect()` or a schema, never a file; the approval reads "changes state on GET; link scanners may trigger it". A session mutation is never `GET`: a top-level navigation carries the session cookie. |
+| `query`  | a POST only: a flat schema for the URL's parameters, passed to the handler as `query`, beside the body's `input`                                                                                                                                                                                                                                                                                                                                                 |
+| `body`   | `json` by default; multipart when the input has a file field; `urlencoded` for flat scalar fields without files                                                                                                                                                                                                                                                                                                                                                  |
+| `cache`  | a public `GET` query only. `{ maxAgeSeconds }` answers `Cache-Control: public, max-age=<n>`; `'immutable'` answers `public, max-age=31536000, immutable`; that the input names an immutable value (a file id) is the author's responsibility, shown in the approval. The default, and every other procedure, is `no-store`. A browser, or a CDN in front of the installation, answers a repeat without reaching the application                                  |
 
 `redirect({ origins? })` is an output: the handler returns `{ to }` and the framework answers 303 after a POST and
 302 after a GET. A target is a path of the application's own origin, a URL of a listed origin, or a URL that a verified
 signed token of this request carries. Anything else is a 500 and a log line, never an open redirect. A native form can
 then POST, redirect and GET; a tracked link can redirect to its signed target.
 
-**Browser admission matrix**, enforced in the proxy:
+**Browser admission matrix**. The proxy enforces every row but the last, which needs the application's token key:
 
 | Request                                          | Rule                                                                                                                               |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -366,16 +408,20 @@ then POST, redirect and GET; a tracked link can redirect to its signed target.
 | Session, `GET`                                   | a query only                                                                                                                       |
 | Bearer, cross-origin                             | the proxy's preflight for `origins: 'listed'`; never a session                                                                     |
 | Public, multipart or `urlencoded` (no preflight) | `Origin` must be the application's own, a listed origin (`'listed'`) or any (`'any'`); no `Origin` passes, `Origin: null` does not |
-| Public, `GET` mutation                           | a valid signed token in the input, checked before the workload token                                                               |
+| Public, `GET` mutation                           | in the application: a valid signed token in the input, verified as the input is parsed                                             |
 
 ### Admission and limits
 
 - **One `admission` object** on every procedure holds origins, rate buckets and the challenge. `perClient` counts by
   the client address and exists on public procedures; `perCaller` counts by principal or link key and exists on
-  credentialed and link procedures; `perEndpoint` counts every call. On Zerops `perClient` counts one client until
+  credentialed and link procedures; `perEndpoint` counts every call. Every bucket is charged in the admission
+  transaction, before the body is read, and stays charged whatever the handler does. On Zerops `perClient` counts one client until
   backlog 05, and the approval says so.
+- **A bucket is a database write.** A public mutation has buckets by default; a public query has none unless it
+  declares one, and is bounded by the in-flight share and by its cache. A catalog page with twenty images then costs no
+  write.
 - **A public file field** requires `bytesPerHour`, a challenge and a scanning kind.
-- **`limits`** holds only `maxBytes` and `timeoutMs`. The file count comes from the schema, the per-file size from the
+- **`limits`** holds only `maxBytes` and `timeoutMs`, on every procedure, webhook and job. The file count comes from the schema, the per-file size from the
   kind, the body deadline from `maxBytes`. The handler budget starts after the last body byte, so a large upload over a
   phone connection still commits.
 - **The in-flight share** bounds a local resource: all public procedures of an instance together hold at most a
@@ -384,7 +430,7 @@ then POST, redirect and GET; a tracked link can redirect to its signed target.
 ### Kicks and claims
 
 ```ts
-const intake = app.group({ callers: ['human'] }, (r) => ({
+const intake = app.group({}, (r) => ({
 	register: r.mutation({
 		input: Register,
 		output: Empty,
@@ -411,11 +457,27 @@ const intake = app.group({ callers: ['human'] }, (r) => ({
 - A new kick edge on a public procedure widens: it adds no data reach, but lets anyone cause job runs.
 
 **Claims** are the data-layer operation every outbox drain writes in raw SQL today. A table policy declares
-`queue: { attempts: '<column>', due: '<column>' }`; a job calls `ctx.db.app(cap).<table>.claim({ where, limit })`:
+`queue: { attempts: '<column>', due: '<column>', maxAttempts? }` and a `version` column. The migration gives `<due>` a
+default of `now()` and allows `null`. A job claims through the capability it would read the table with:
+`ctx.db.app('<action>').<table>.claim(…)` for an application table, `ctx.db.over(ctx.within('<action>', '<dimension>'))`
+for a dimension-scoped one.
 
-- it selects due rows (`<due> <= now()`) `for update skip locked`, in the job's transaction;
-- it increments the attempts and moves `<due>` by the framework's backoff, so a crash or a failure retries later;
-- it needs the table's `update` action; the job marks a row done by its own update or delete.
+- **`<due>` is the queue state.** A row is waiting while `<due>` is set, and done when it is `null`.
+- **A claim is a lease.** It runs in a short transaction of its own and commits: it selects rows with `<due> <= now()`
+  and attempts below `maxAttempts`, `for update skip locked`, increments the attempts and moves `<due>` by the backoff
+  (one cron tick, doubling). The job attempt's fence covers it, as every job write. It answers the claimed rows, each
+  with its new version and `row.ref`, a capability bound to that row for the table's `update` action.
+- **The job finishes a row through `tx.db.on(row.ref)`**, for an application table and a dimension-scoped one alike:
+  `.update(values, { expectVersion, done: true })` writes and clears `<due>` in one statement, `.remove({ expectVersion })`
+  deletes the row. `.requeue({ at? })` sets `<due>` (now by default) and the attempts to zero, for a row past
+  `maxAttempts` or a reminder moved later.
+- **The work runs after the lease, one transaction per row.** A failure or a crash leaves the row as the claim left it,
+  due again after the backoff; nothing retries at once. Attempts count claims, so claim only what the run will reach.
+  One job run at a time (ADR-0060's lease) keeps two runs off one row.
+- `claim` is refused inside `ctx.transaction`: there a failure would roll back the lease and retry the row at once,
+  while its locks stayed held through the work.
+- A row past `maxAttempts` stays in the table, not due, for the application to show or requeue.
+- `claim` and `requeue` need the table's `update` action; `remove` needs its `delete` action.
 
 One recipe then covers an outbox, a per-record reminder (`due` is the reminder time) and asynchronous work: a mutation
 inserts a `report_requests` row and kicks; the job claims it, renders, writes the result with `put` into a file column
@@ -437,6 +499,10 @@ and sets its state; the page polls the row and downloads the file.
   (`implement/dispatch.ts:827`), so a crash between the record and the commit loses the delivery. The claim becomes
   recoverable: the key is claimed with a lease and marked complete in the handler's transaction; an expired claim
   without completion lets the redelivery run.
+- **Idempotent writes.** Delivery stays at-least-once, so a handler must write idempotently without `sql`. The data
+  layer gains `insert(values, { onConflict: { columns, do: 'nothing' | 'update' } })`: `columns` must name a unique
+  index the migrations create (the checker verifies it), `'nothing'` needs the `insert` action, and `'update'` also
+  needs the `update` action and writes only the table's update columns. It answers whether the row was inserted.
 - **Not covered:** a provider that validates the URL with a `GET`, or that needs a custom response body.
 
 ### Outbound calls and e-mail
@@ -445,7 +511,8 @@ and sets its state; the page polls the row and downloads the file.
 declares the HTTPS origins its code calls; no wildcard. Boot installs a guard on the global `fetch` of the serving
 process that refuses an undeclared origin for a site that runs; the approval lists every origin. This stops mistakes
 and makes a bypass conspicuous; it is not a sandbox (ADR-0012 §8). A public, link or export procedure takes no egress.
-Destinations a customer configures (outbound webhooks to customer URLs) are not covered.
+Destinations a customer configures (outbound webhooks to customer URLs) are not covered. The checker's
+`cross-app-fetch` rule, which refuses every `fetch` of an absolute URL today, accepts a site's declared origins.
 
 **E-mail.** `ctx.mail.send` in a mailer job gains two fields:
 
@@ -455,14 +522,28 @@ Destinations a customer configures (outbound webhooks to customer URLs) are not 
 - `unsubscribe: { url }`: the framework writes `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
   (RFC 8058). There are no free headers.
 
+A site builds a link to one of its own procedures with `ctx.url('<endpoint id>', { input?, query? })`: the
+environment's canonical origin, the endpoint's path, and the parameters its HTTP shape reads from the URL (`input` of a
+`GET`, `query` of a `POST`). An unknown endpoint id is refused by the checker. The canonical origin is a new
+`FABRIKA_APP_ORIGIN` variable that a deploy writes, an additive protocol change under ADR-0062.
+
 ### Signed tokens
 
-`signedToken('<purpose>', Claims)` is an input field type: the framework verifies an HMAC over the purpose and the
-claims with a key of the application environment (a `FABRIKA_*` variable; after a rotation the previous key verifies
-for an overlap), checks the expiry, and the handler receives the typed claims. A site that issues tokens declares
-`signs: ['<purpose>']` and calls `ctx.tokens.sign('<purpose>', claims, { days })`. Any site but an export may sign: a
-booking procedure answers its own management link. A token is single-purpose and no credential: it opens no mount.
-Single use and revocation are the application's state.
+A contract declares each purpose once: `tokens: { unsubscribe: c.token(Recipient, { maxDays: 400 }) }`. The claims
+schema and the longest lifetime live there, not at each use.
+
+- **Verifying.** `signedToken('<purpose>')` is an input field type: the framework verifies an HMAC over the purpose
+  and the claims, checks the expiry, and the handler receives the typed claims.
+- **Signing.** A site that issues tokens declares `signs: ['<purpose>']` and calls
+  `ctx.tokens.sign('<purpose>', claims, { days })`, with `days` at most the purpose's `maxDays`. Any site but an export
+  may sign: a booking procedure answers its own management link.
+- **Keys and rotation.** The key is an application environment's (a `FABRIKA_*` variable that Control generates). A
+  token carries its key's id. A rotation is an operation on one application environment, applied by its next deploy,
+  never by a platform upgrade. Control records for each key the latest expiry any token signed with it can have (its
+  retirement plus the largest `maxDays` the contract had while the key signed), and keeps the key verifying until then.
+  A 400-day unsubscribe link survives a rotation, and a later shorter `maxDays` cannot cut it off.
+- A token is single-purpose and no credential: it opens no mount. Single use and revocation are the application's
+  state.
 
 A token fits one action without a session (unsubscribe, a tracked click, manage one booking). A link mount fits a
 holder who works over an object across visits, with a share SPA.
@@ -470,16 +551,17 @@ holder who works over an object across visits, with a share SPA.
 **One-click unsubscribe**:
 
 ```ts
-const mail = app.group({ callers: ['human'] }, (r) => ({
+const mail = app.group({}, (r) => ({
 	unsubscribe: r.mutation({
 		input: z.strictObject({ 'List-Unsubscribe': z.literal('One-Click') }),
 		output: Empty,
 		access: { public: true },
 		actions: ['mailing.unsubscribe'],
 		http: {
-			query: z.strictObject({ t: signedToken('unsubscribe', Recipient) }),
+			query: z.strictObject({ t: signedToken('unsubscribe') }),
 			body: 'urlencoded',
 		},
+		admission: { rate: { perClient: null } }, // mailbox providers post from few addresses
 	}).handle(({ query, ctx }) => unsubscribe(ctx, query.t)),
 }))
 ```
@@ -509,7 +591,7 @@ behavior comes from a helper**. A helper adds no reach: the capability it uses c
 The recipe keeps a submission table, so the public handler does constant work and reads no existing row:
 
 ```ts
-const intake = app.group({ callers: ['human'] }, (r) => ({
+const intake = app.group({}, (r) => ({
 	register: r.mutation({
 		input: Register, // …, website (the honeypot), photo: z.optional(file('photos'))
 		output: Empty,
@@ -533,9 +615,10 @@ const intake = app.group({ callers: ['human'] }, (r) => ({
 }))
 ```
 
-`submissions.photo` and `records.photo` are both file columns of kind `photos`. The job claims submissions, creates
-or updates the record with the same file reference in `records.photo`, and deletes the submission row, in one
-transaction. A rolled-back job leaves both rows as they were. The file is never copied or moved; the sweep deletes it
+`submissions.photo` and `records.photo` are both file columns of kind `photos`. The job claims submissions; for each
+one, in one transaction, it creates or updates the record with the same file reference in `records.photo`, then
+deletes the submission row. A rolled-back transaction leaves both rows as they were, and the claim retries the
+submission after its backoff. The file is never copied or moved; the sweep deletes it
 only when no column references it. The application's retention removes an unprocessed submission; there is no
 framework timer on business data.
 
@@ -585,6 +668,457 @@ const portal = app.link('/p', {
 
 `documentFile` reads the document row under the capability and returns its file reference; the framework serves it.
 
+## A worked example
+
+One CRM-class application written against the whole revision. `examples/crm` would grow into it. To keep it short it
+leaves out the tables, actions and groups the revision does not change (`deals`, `records`, the vocabulary,
+`partnerDeals`, the `portal` link mount shown above), and helpers that are the application's own or the skill's
+(`renderPdf`, `upsertRecord`, `withTrackedLinks`, `honeypot`). Numbers are literals, as the reader requires.
+
+**The contract and the tables.**
+
+```ts
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { attachments, reports, intake, catalog, mail, billing }),
+	partners: c.rpc('/api/v1', { partnerDeals }, { compatibility: 'backward' }),
+	portal,
+	site: c.spa('/', {
+		dir: 'dist/web',
+		access: { action: 'crm.read', over: 'org' },
+	}),
+	join: c.spa('/join', {
+		dir: 'dist/join',
+		access: { public: true },
+		browserConfig: ['TURNSTILE_SITE_KEY'],
+	}),
+	files: {
+		attachments: c.files({
+			types: ['application/pdf', 'image/png', 'image/jpeg'],
+			maxBytes: 10485760,
+			scan: true,
+		}),
+		documents: c.files({
+			types: ['application/pdf'],
+			maxBytes: 10485760,
+			scan: true,
+		}),
+		photos: c.files({
+			types: ['image/jpeg', 'image/png'],
+			maxBytes: 8388608,
+			scan: true,
+		}),
+		catalog: c.files({ types: ['image/png', 'image/webp'], maxBytes: 2097152 }),
+		reports: c.files({ types: ['application/pdf'], maxBytes: 20971520 }),
+	},
+	tokens: {
+		unsubscribe: c.token(Recipient, { maxDays: 400 }),
+		click: c.token(Click, { maxDays: 90 }),
+	},
+	webhooks: { stripe },
+	jobs: { renderReports, sendMail, intakeDrain },
+	health: c.health('/healthz'),
+}))
+
+export const tables = defineTables(vocabulary, columns)({
+	deal_attachments: {
+		scope: { child: 'deals' },
+		actions: { read: 'crm.read', insert: 'deals.write', delete: 'crm.delete' },
+		insert: ['file', 'name', 'category'],
+		files: { file: 'attachments' },
+		createdBy: 'created_by',
+	},
+	report_requests: {
+		scope: { child: 'deals' },
+		actions: {
+			read: 'crm.read',
+			insert: 'reports.request',
+			update: 'reports.render',
+		},
+		insert: ['kind'],
+		update: ['result'],
+		files: { result: 'reports' },
+		queue: { attempts: 'attempts', due: 'next_attempt_at' },
+		version: 'version',
+	},
+	products: {
+		scope: { app: true, reason: 'one catalog per application' },
+		actions: {
+			read: ['crm.read', 'catalog.read'],
+			insert: 'catalog.write',
+			update: 'catalog.write',
+		},
+		insert: ['name', 'price', 'image'],
+		update: ['name', 'price', 'image'],
+		files: { image: 'catalog' },
+		version: 'version',
+	},
+	submissions: {
+		scope: { app: true, reason: 'anonymous intake before a record exists' },
+		actions: {
+			read: 'intake.drain',
+			insert: 'intake.register',
+			update: 'intake.drain',
+			delete: 'intake.drain',
+		},
+		insert: ['name', 'email', 'note', 'photo', 'client_ip', 'user_agent'],
+		files: { photo: 'photos' },
+		queue: { attempts: 'attempts', due: 'next_attempt_at' },
+		version: 'version',
+	},
+	outbox: {
+		scope: {
+			app: true,
+			reason: 'mail of every organization goes out through one job',
+		},
+		actions: { read: 'mail.send', insert: 'mail.queue', update: 'mail.send' },
+		insert: ['to', 'subject', 'text', 'html', 'campaign', 'attachment'],
+		files: { attachment: 'attachments' },
+		queue: { attempts: 'attempts', due: 'next_attempt_at' },
+		version: 'version',
+	},
+	unsubscribes: {
+		scope: { app: true, reason: 'a recipient opts out of a campaign' },
+		actions: { read: 'mail.send', insert: 'mailing.unsubscribe' },
+		insert: ['email', 'campaign'], // unique (email, campaign)
+	},
+	clicks: {
+		scope: { app: true, reason: 'campaign statistics' },
+		actions: { read: 'crm.read', insert: 'stats.click' },
+		insert: ['campaign'],
+	},
+	payments: {
+		scope: { app: true, reason: 'provider events' },
+		actions: {
+			read: 'crm.read',
+			insert: 'billing.record',
+			update: 'billing.record',
+		},
+		insert: ['stripe_id', 'state'], // unique (stripe_id)
+		update: ['state'],
+		version: 'version',
+	},
+})
+```
+
+**Signed-in staff: attachments and an asynchronous report.**
+
+```ts
+export const attachments = app.group({ callers: ['human'] }, (r) => ({
+	upload: r.mutation({
+		input: z.strictObject({
+			dealId: z.uuid(),
+			name: Name,
+			category: Category,
+			file: file('attachments'),
+		}),
+		output: Saved,
+		access: { action: 'deals.write', on: 'deal', from: 'dealId' },
+	}).handle(({ input, ctx }) =>
+		ctx.db.target.deal_attachments.insert({
+			file: input.file,
+			name: input.name,
+			category: input.category,
+		})
+	),
+
+	list: r.query({
+		input: DealPage,
+		output: AttachmentPage,
+		access: { action: 'crm.read', on: 'deal', from: 'dealId' },
+	})
+		.handle(async ({ input, ctx }) =>
+			fromPage(
+				Attachment,
+				await ctx.db.target.deal_attachments.list({ after: input.after }),
+			)
+		),
+
+	download: r.query({
+		input: z.strictObject({ dealId: z.uuid(), id: z.uuid() }),
+		output: file('attachments'),
+		access: { action: 'crm.read', on: 'deal', from: 'dealId' },
+	}).handle(async ({ input, ctx }) =>
+		(await ctx.db.target.deal_attachments.get(input.id)).file
+	),
+
+	copyToDeal: r.mutation({
+		input: z.strictObject({
+			id: z.uuid(),
+			fromDealId: z.uuid(),
+			toDealId: z.uuid(),
+		}),
+		output: Saved,
+		access: {
+			capabilities: {
+				from: { action: 'crm.read', on: 'deal', from: 'fromDealId' },
+				to: { action: 'deals.write', on: 'deal', from: 'toDealId' },
+			},
+		},
+	}).handle(async ({ input, ctx }) => {
+		const source = await ctx.db.on(ctx.capabilities.from).deal_attachments.get(
+			input.id,
+		)
+		return ctx.db.on(ctx.capabilities.to).deal_attachments.insert({
+			file: source.file,
+			name: source.name,
+			category: source.category,
+		})
+	}),
+}))
+
+export const reports = app.group({ callers: ['human'] }, (r) => ({
+	request: r.mutation({
+		input: z.strictObject({ dealId: z.uuid(), kind: ReportKind }),
+		output: Saved,
+		access: { action: 'reports.request', on: 'deal', from: 'dealId' },
+		admission: { rate: { perCaller: 20 } },
+		kicks: ['renderReports'],
+	}).handle(async ({ input, ctx }) => {
+		const saved = await ctx.db.target.report_requests.insert({ kind: input.kind })
+		ctx.kick('renderReports')
+		return saved
+	}),
+
+	file: r.query({
+		input: z.strictObject({ dealId: z.uuid(), id: z.uuid() }),
+		output: file('reports'),
+		access: { action: 'crm.read', on: 'deal', from: 'dealId' },
+	}).handle(async ({ input, ctx }) => {
+		const { result } = await ctx.db.target.report_requests.get(input.id)
+		if (result === null) throw new NotFoundError('the report is not rendered yet')
+		return result
+	}),
+}))
+```
+
+**Anyone: the intake, the catalog, unsubscribe and a tracked click.**
+
+```ts
+export const intake = app.group({}, (r) => ({
+	register: r.mutation({
+		input: z.strictObject({
+			name: Name,
+			email: Email,
+			note: OptionalText,
+			website: Honeypot,
+			photo: z.optional(file('photos')),
+		}),
+		output: Empty,
+		access: { public: true },
+		actions: ['intake.register'],
+		admission: {
+			challenge: {
+				provider: 'turnstile',
+				secret: 'TURNSTILE_SECRET',
+				siteKey: 'TURNSTILE_SITE_KEY',
+			},
+			rate: { perClient: 20, perEndpoint: 200, bytesPerHour: 536870912 },
+		},
+		kicks: ['intakeDrain'],
+	}).handle(async ({ input, ctx }) => {
+		if (honeypot(input.website)) return {}
+		await ctx.db.app('intake.register').submissions.insert({
+			name: input.name,
+			email: input.email,
+			note: input.note ?? null,
+			photo: input.photo ?? null,
+			client_ip: ctx.client.ip,
+			user_agent: ctx.client.userAgent,
+		})
+		ctx.kick('intakeDrain')
+		return {}
+	}),
+}))
+
+export const catalog = app.group({}, (r) => ({
+	products: r.query({
+		input: Page,
+		output: ProductPage,
+		access: { public: true },
+		actions: ['catalog.read'],
+		http: { method: 'GET', cache: { maxAgeSeconds: 60 } },
+	}).handle(async ({ input, ctx }) =>
+		fromPage(
+			Product,
+			await ctx.db.app('catalog.read').products.list({ after: input.after }),
+		)
+	),
+
+	image: r.query({
+		input: z.strictObject({ product: z.uuid(), file: z.uuid() }),
+		output: file('catalog'),
+		access: { public: true },
+		actions: ['catalog.read'],
+		http: { cache: 'immutable' },
+	}).handle(async ({ input, ctx }) => {
+		const { image } = await ctx.db.app('catalog.read').products.get(input.product)
+		if (image === null || image.id !== input.file) {
+			throw new NotFoundError('image')
+		}
+		return image
+	}),
+}))
+
+export const mail = app.group({}, (r) => ({
+	unsubscribe: r.mutation({
+		input: z.strictObject({ 'List-Unsubscribe': z.literal('One-Click') }),
+		output: Empty,
+		access: { public: true },
+		actions: ['mailing.unsubscribe'],
+		http: {
+			query: z.strictObject({ t: signedToken('unsubscribe') }),
+			body: 'urlencoded',
+		},
+		admission: { rate: { perClient: null } },
+	}).handle(async ({ query, ctx }) => {
+		await ctx.db.app('mailing.unsubscribe').unsubscribes.insert(
+			{ email: query.t.email, campaign: query.t.campaign },
+			{ onConflict: { columns: ['email', 'campaign'], do: 'nothing' } },
+		)
+		return {}
+	}),
+
+	click: r.mutation({
+		input: z.strictObject({ t: signedToken('click') }),
+		output: redirect(),
+		access: { public: true },
+		actions: ['stats.click'],
+		http: { method: 'GET' },
+		admission: { rate: { perClient: 60 } }, // perEndpoint keeps its default of 100/min
+	}).handle(async ({ input, ctx }) => {
+		await ctx.db.app('stats.click').clicks.insert({ campaign: input.t.campaign })
+		return { to: input.t.target }
+	}),
+}))
+```
+
+The image's input names the file as well as the product: a new image changes the URL, which is what makes
+`'immutable'` safe. `join` is the public page that holds the intake form and the challenge's site key.
+
+**A provider: Stripe events and the binding.**
+
+```ts
+export const stripe = app.webhook('/hooks/stripe', {
+	scheme: 'stripe',
+	boundTo: 'app',
+	actions: ['billing.record'],
+	input: StripeEvent,
+}).handle(({ input, ctx }) =>
+	ctx.db.app('billing.record').payments.insert(
+		{ stripe_id: input.data.object.id, state: input.type },
+		{ onConflict: { columns: ['stripe_id'], do: 'update' } },
+	)
+)
+
+export const billing = app.group({ callers: ['human'] }, (r) => ({
+	connectStripe: r.mutation({
+		input: z.strictObject({ account: z.string() }),
+		output: WebhookSecret,
+		access: { action: 'billing.manage', app: true },
+		binds: 'stripe',
+	}).handle(({ input, ctx }) =>
+		ctx.webhooks('stripe').bind(ctx.app, input.account)
+	),
+}))
+```
+
+**Jobs: a claim, then one transaction per row.**
+
+```ts
+export const renderReports = app.cron('*/5 * * * *', {
+	actions: ['reports.render', 'crm.read'],
+	limits: { timeoutMs: 900000 },
+}).handle(async ({ ctx }) => {
+	const queue = ctx.db.over(ctx.within('reports.render', 'deal')).report_requests
+	for (const request of await queue.claim({ limit: 5 })) {
+		const pdf = await renderPdf(ctx, request)
+		const result = await ctx.files.put('reports', pdf, {
+			type: 'application/pdf',
+			name: `report-${request.id}.pdf`,
+		})
+		await ctx.transaction(async (tx) => {
+			await tx.db.on(request.ref).update({ result }, {
+				expectVersion: request.version,
+				done: true,
+			})
+		})
+	}
+})
+
+export const intakeDrain = app.cron('* * * * *', {
+	actions: ['intake.drain', 'records.write'],
+}).handle(async ({ ctx }) => {
+	for (
+		const submission of await ctx.db.app('intake.drain').submissions.claim({
+			limit: 20,
+		})
+	) {
+		await ctx.transaction(async (tx) => {
+			await upsertRecord(tx, submission) // writes records.photo = submission.photo before the submission goes
+			await tx.db.on(submission.ref).remove({ expectVersion: submission.version })
+		})
+	}
+})
+
+export const sendMail = app.cron('* * * * *', {
+	actions: ['mail.send'],
+	mailer: 'own',
+	signs: ['unsubscribe', 'click'],
+}).handle(async ({ ctx }) => {
+	const outbox = ctx.db.app('mail.send').outbox
+	for (const message of await outbox.claim({ limit: 50 })) {
+		const unsubscribe = ctx.tokens.sign('unsubscribe', {
+			email: message.to,
+			campaign: message.campaign,
+		}, { days: 400 })
+		await ctx.mail.send({
+			to: message.to,
+			subject: message.subject,
+			text: message.text,
+			html: withTrackedLinks(
+				message.html,
+				(target) =>
+					ctx.tokens.sign('click', { campaign: message.campaign, target }, {
+						days: 90,
+					}),
+			),
+			attachments: message.attachment === null ? [] : [message.attachment],
+			unsubscribe: {
+				url: ctx.url('api.mail.unsubscribe', { query: { t: unsubscribe } }),
+			},
+			idempotencyKey: message.id,
+		})
+		await ctx.transaction((tx) =>
+			tx.db.on(message.ref).update({}, {
+				expectVersion: message.version,
+				done: true,
+			})
+		)
+	}
+})
+```
+
+A crash between `send` and the update claims the message again after the backoff and sends it with freshly signed links;
+the transport drops it by its idempotency key, which today's mail contract already requires to be unique per message
+within the environment. A large report is put before its transaction, so the upload holds no row lock.
+
+**The client.**
+
+```tsx
+await api.attachments.upload({ dealId, name: 'Contract', category: 'legal', file: picked })
+
+<a href={api.attachments.download.url({ dealId, id })} download>Download</a>
+<img src={api.catalog.image.url({ product: product.id, file: product.image.id })} />
+
+const { id } = await api.reports.request({ dealId, kind: 'summary' })
+// poll the report row until its result is set, then:
+const report = await download(api.reports.file, { dealId, id })
+report.save()
+```
+
+In the browser `api.<group>.<procedure>.url(input)` gives a `GET` URL; on the server `ctx.url('<endpoint id>', …)`
+gives an absolute one ("Outbound calls and e-mail").
+
 ## Decisions
 
 | #  | Decision                           | Chosen                                                                                       | Rejected, and when it would win                                                                                                                                                                                                                                                                       |
@@ -604,6 +1138,13 @@ const portal = app.link('/p', {
 | 13 | Egress                             | declared static origins and a guard on `fetch`                                               | undeclared (today); a provider network policy (stronger, later); dynamic destinations (needs approved destination bindings)                                                                                                                                                                           |
 | 14 | E-mail links                       | single-purpose signed tokens with typed claims                                               | a link key in the URL: a credential in logs and referrers                                                                                                                                                                                                                                             |
 | 15 | Presigned uploads                  | not now                                                                                      | wins for large media, resumable uploads and high volume; it hands a credential to a client and moves the sniff and the size bound out of the framework                                                                                                                                                |
+| 16 | The claim's transaction            | a lease committed on its own; one transaction per row after it                               | the claim inside the work's transaction: simpler, but a failure rolls back the backoff and retries the row at once, with its locks held through the work                                                                                                                                              |
+| 17 | Rate buckets on public reads       | none by default; the in-flight share and `http.cache` bound a read                           | the mutation defaults on every public procedure: a database write per image of a page                                                                                                                                                                                                                 |
+| 18 | Staff and anyone reading one table | a list of actions per table action                                                           | letting a role hold a public action: a role change would widen the public reach unseen                                                                                                                                                                                                                |
+| 19 | Token claims and lifetime          | declared once per purpose (`c.token`), keys kept until the longest `maxDays` passed          | a schema at each use and a short rotation overlap: two uses may disagree, and a rotation breaks year-long unsubscribe links                                                                                                                                                                           |
+| 20 | When a queue row is done           | `<due>` set to `null`, written with `done: true`                                             | a `done` state declared per table: one more column name in the policy, and the claim would still need `<due>`                                                                                                                                                                                         |
+| 21 | Deleting an unreferenced file      | delete the row and record the object in one transaction, then delete the object              | delete the object first (today): a reference written between the check and the row delete points at lost bytes                                                                                                                                                                                        |
+| 22 | Migrating today's collections      | copies marked `legacy`, adopted by the application, released by its own migration            | a view the next release drops: an application that skips that release loses the owner mapping, and the sweep deletes every migrated file                                                                                                                                                              |
 
 ## Coverage
 
@@ -671,9 +1212,19 @@ drains held files into `fabrika_files` and drops both tables.
 
 ### Existing files
 
-A framework migration creates `fabrika_files`, moves every row of the `fabrika_files_<collection>` tables into it, and
-leaves a view per collection with `(file_id, owner_id, name)`. The application's own migration fills its attachment
-table from that view (the CRM example: `deal_attachments`). The following release drops the views and the old tables.
+Nothing the framework migrates is dropped by a framework release, so an application may skip releases:
+
+1. A framework migration creates `fabrika_files` and copies every row of each `fabrika_files_<collection>` table into
+   it, with the same id, object key, status and scan state, marked `legacy` with its collection. The old tables stay
+   as they are; they hold the owner mapping.
+2. The sweep never deletes a legacy file. A legacy file that a declared file column references loses the marker at
+   the next sweep.
+3. The application's own migration fills its new table from the old one by id (the CRM example:
+   `insert into deal_attachments (deal_id, file, name) select owner_id, id, name from fabrika_files_attachments`).
+4. Its last adoption migration calls `fabrika_files_release('<collection>')`. The function copies the rows an older
+   version wrote during the switch, refuses while one of them is unreferenced (the application then adds one more
+   adoption migration), clears the marker of the rest, which the sweep may then delete, and drops the old table.
+
 Pre-1.0 installations may instead be reinstalled.
 
 ### Order of work
@@ -683,11 +1234,12 @@ Pre-1.0 installations may instead be reinstalled.
 1. Workload kind `public` in auth-core, IAM and Control; `ctx.app` for workloads; `capabilities`.
 2. Public procedures, `admission`, `limits`, `http`, `redirect`, `ctx.client`, `kicks` (job edges included); the
    reader, the artifact schema, the proxy table and admission matrix, the approval diff, the test kit.
-3. Files as values: `fabrika_files`, file columns in table policies and the checker, staging, `put`, `info`, `open`,
+3. Files as values: `fabrika_files`, file columns in table policies and the checker, staging, `put`, `open`, the deletion protocol,
    file outputs, the sweep over declared columns, the data migration; the typed client's codec, `url` and `download`.
-4. `claim` in the data layer.
+4. `claim` and `insert(…, { onConflict })` in the data layer; a list of actions per table action.
 5. Webhook verifiers, `boundTo: 'app'`, `binds`, `put` in webhooks, the recoverable replay claim.
-6. `egress`, mail attachments and `unsubscribe`, signed tokens, `compatibility`.
+6. `egress`, mail attachments and `unsubscribe`, `ctx.url`, token purposes and signed tokens with key rotation,
+   `compatibility`, `http.cache`.
 7. Delete `c.form`, the inbox scope, `then`, `ack()`, the generated file and webhook endpoints and the collection
    options from the framework. The platform keeps serving their side (the form row mode and its admission, the
    generated file and webhook rows, the old artifact format's upcast) until no framework release in its window
@@ -704,7 +1256,7 @@ to notice. No generated installation file changes.
 ### The one application on the framework
 
 1. Four public procedures replace the four forms, with one action each that no role holds. Paths move under the RPC
-   prefix (`/register` → `/api/register`); its pages switch to the typed client in the same release, and the
+   prefix (`/register` → `/api/intake.register`); its pages switch to the typed client in the same release, and the
    challenge's action name follows the endpoint id.
 2. One migration turns the four inbox tables into application tables (an `id`, `client_ip`, `user_agent`) and keeps
    their rows.
@@ -712,7 +1264,7 @@ to notice. No generated installation file changes.
    outbox drains move from raw `sql: 'write'` to `claim`.
 4. Documents become a table with a file column; upload, list and download become link procedures and an HR query.
 5. The completion request takes its document as a file field and writes it in the same call; its scan status comes
-   from `ctx.files.info`.
+   with the file reference of every read.
 6. Offer and bulk e-mails get attachments (a file column on the draft) and the one-click unsubscribe headers.
 7. The cross-dimension handover moves from `sql` + `unscoped` to `capabilities` where it only needed the second
    capability.
