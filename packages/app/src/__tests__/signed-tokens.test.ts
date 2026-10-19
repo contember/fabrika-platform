@@ -3,6 +3,7 @@
 // claims, its key, its expiry. The artifact half and the keys run everywhere; the requests run through the test kit and
 // a REAL Postgres, and skip cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
+import { createClient } from '@fabrika/app/client'
 import type { App, KitTypes, TokenSigning } from '@fabrika/app/contract'
 import { compileContract, signedToken, token } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
@@ -221,6 +222,14 @@ if (postgres !== null) {
 			expect((await kit.fetch(`/api/mail.click?t=${signed.slice(0, -2)}xx`, { redirect: 'manual' })).status).toBe(400)
 			// A target the token does not carry is no redirect at all, and nothing the handler wrote is kept.
 			expect((await kit.fetch(`/api/mail.elsewhere?t=${signed}`, { redirect: 'manual' })).status).toBe(500)
+			expect(await clicks()).toBe(before + 1)
+		})
+
+		test('the typed client receives the target of a redirect() procedure instead of following it', async () => {
+			const before = await clicks()
+			const signed = kit.signToken('click', { campaign: 'spring', target: 'https://shop.example/offer?id=8' }, { days: 90 })
+			const api = createClient(contract, 'api', { fetch: kit.fetch })
+			expect(await api.mail.click({ t: signed })).toEqual({ to: 'https://shop.example/offer?id=8' })
 			expect(await clicks()).toBe(before + 1)
 		})
 

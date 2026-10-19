@@ -478,6 +478,24 @@ const cases: readonly RuleCase[] = [
 		good: { ...CLEAN_APPLICATION, 'src/links.ts': "export const link = (ctx: { url(id: string): string }) => ctx.url('api.get')\n" },
 	},
 	{
+		rule: 'on-conflict-index',
+		bad: {
+			...CLEAN_APPLICATION,
+			'db/migrations/20261019120000_notes.sql':
+				'CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL);\nCREATE INDEX notes_title ON notes (title);\n',
+			'src/notes/save.ts': 'export const save = (db: { notes: { insert(row: object, options: object): void } }) =>\n'
+				+ "\tdb.notes.insert({ title: 'a' }, { onConflict: { columns: ['title'], do: 'nothing' } })\n",
+		},
+		expected: ['src/notes/save.ts:2:2'],
+		good: {
+			...CLEAN_APPLICATION,
+			'db/migrations/20261019120000_notes.sql':
+				'CREATE TABLE notes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, UNIQUE (workspace_id, title));\n',
+			'src/notes/save.ts': 'export const save = (db: { notes: { insert(row: object, options: object): void } }) =>\n'
+				+ "\tdb.notes.insert({ title: 'a' }, { onConflict: { columns: ['title', 'workspace_id'], do: 'nothing' } })\n",
+		},
+	},
+	{
 		rule: 'key-literal',
 		bad: { 'src/a.ts': "export const key = 'px_live_4f2a'\nexport const cookie = `__Host-px_session`\n" },
 		expected: ['src/a.ts:1:20', 'src/a.ts:2:24'],

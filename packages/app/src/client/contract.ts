@@ -121,7 +121,7 @@ export function clientNodeOf(value: unknown): ClientNode | null {
 /** A GET call: its input travels in the URL, its credential as a POST's does. */
 function getRequestOf(options: ClientOptions): () => RequestInit {
 	return () => {
-		const headers = new Headers()
+		const headers = new Headers({ Accept: 'application/json' })
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
@@ -133,7 +133,8 @@ function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 	return () => {
 		const files = fileValues(input)
 		// A multipart body's boundary is the one `fetch` writes, so its Content-Type is left to it.
-		const headers = new Headers(files === null ? { 'Content-Type': 'application/json' } : {})
+		// `Accept` asks a `redirect()` procedure for its target as JSON instead of a redirect the fetch would follow.
+		const headers = new Headers(files === null ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' })
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
@@ -197,12 +198,16 @@ function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: 
 	return call
 }
 
-/** The method a procedure's `http` declares: `GET` where written, and for a query that answers a file; `POST` otherwise. */
+/**
+ * The method a procedure's `http` declares: `GET` where written, and for a query that answers a file or declares
+ * `http.cache`; `POST` otherwise.
+ */
 function httpMethodOf(http: unknown, type: ProcedureType, output: Schema): 'GET' | 'POST' {
 	if (typeof http === 'object' && http !== null && Reflect.get(http, 'method') !== undefined) {
 		return Reflect.get(http, 'method') === 'GET' ? 'GET' : 'POST'
 	}
-	return type === 'query' && fileOf(output) !== null ? 'GET' : 'POST'
+	const caches = typeof http === 'object' && http !== null && Reflect.get(http, 'cache') !== undefined
+	return type === 'query' && (fileOf(output) !== null || caches) ? 'GET' : 'POST'
 }
 
 interface TreeAt {

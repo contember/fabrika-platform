@@ -1935,7 +1935,17 @@ function redirectResponse(row: EndpointRow, shape: RedirectShape, output: unknow
 			`'${row.id}' redirected to a target that is neither its own origin's path, a listed origin's URL nor a URL a verified token carries`,
 		)
 	}
+	// The typed client reads the target and decides whether to navigate; a browser's form or link follows the redirect.
+	if (asksForJson(request)) {
+		return jsonResponse({ result: { to } }, 200)
+	}
 	return new Response(null, { status: request.method === 'GET' ? 302 : 303, headers: { Location: to } })
+}
+
+/** A request whose `Accept` names JSON and not HTML: the typed client's, never a browser navigation's. */
+function asksForJson(request: Request): boolean {
+	const accept = (request.headers.get('Accept') ?? '').toLowerCase()
+	return accept.includes('application/json') && !accept.includes('text/html')
 }
 
 /** A canonical path's segments all decode; a value that does not is no id of anything. */

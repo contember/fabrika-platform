@@ -281,3 +281,108 @@ function depthZeroWords(tokens: readonly SqlToken[]): string[] {
 	}
 	return words
 }
+
+/** An `insert(values, { onConflict: { columns } })` the source makes, with the finding it gets when no index fits. */
+export interface ConflictInsert {
+	readonly table: string
+	readonly columns: readonly string[]
+	readonly finding: Finding
+}
+
+/**
+ * `onConflict.columns` must name a unique index the migrations create, or Postgres refuses the insert at run time: the
+ * set of columns of a `UNIQUE` or `PRIMARY KEY` constraint, or of a `CREATE UNIQUE INDEX` without `WHERE` or expression,
+ * minus a later `DROP INDEX`. Order does not matter, as for Postgres. Only a table `src/db/tables.ts` declares is
+ * checked: another receiver of `insert` is no table of the data layer.
+ */
+export const checkConflictIndexes = (
+	files: ReadonlyMap<string, string>,
+	tables: ReadonlySet<string>,
+	inserts: readonly ConflictInsert[],
+): Finding[] => {
+	const checked = inserts.filter((insert) => tables.has(insert.table))
+	if (checked.length === 0) {
+		return []
+	}
+	const unique: UniqueIndex[] = []
+	const migrations = [...files.entries()]
+		.filter(([path]) => path.startsWith(MIGRATIONS_DIR) && path.endsWith('.sql'))
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+	for (const [, sql] of migrations) {
+		for (const statement of topLevelStatements(sql)) {
+			readUniqueIndexes(statement.tokens, unique)
+		}
+	}
+	const keyOf = (columns: readonly string[]): string => [...new Set(columns)].sort().join(',')
+	const present = new Set(unique.map((index) => `${index.table}(${keyOf(index.columns)})`))
+	return checked.filter((insert) => !present.has(`${insert.table}(${keyOf(insert.columns)})`)).map((insert) => insert.finding)
+}
+
+interface UniqueIndex {
+	readonly name: string | undefined
+	readonly table: string
+	readonly columns: readonly string[]
+}
+
+function readUniqueIndexes(tokens: readonly SqlToken[], unique: UniqueIndex[]): void {
+	const verb = upperWord(tokens[0])
+	const object = upperWord(tokens[1])
+	if (verb === 'CREATE' && object === 'TABLE') {
+		const at = skipWords(tokens, 2, 'IF', 'NOT', 'EXISTS')
+		const table = objectNameAt(tokens, at)?.name
+		const open = afterName(tokens, at)
+		const close = open === undefined ? undefined : closingParenthesis(tokens, open)
+		if (table === undefined || open === undefined || close === undefined) return
+		for (const element of splitAtCommas(tokens.slice(open + 1, close))) {
+			readUniqueElement(table, element, unique)
+		}
+	} else if (verb === 'ALTER' && object === 'TABLE') {
+		const at = skipWords(tokens, skipWords(tokens, 2, 'IF', 'EXISTS'), 'ONLY')
+		const table = objectNameAt(tokens, at)?.name
+		const end = afterName(tokens, at)
+		if (table === undefined || end === undefined) return
+		for (const action of splitAtCommas(tokens.slice(end))) {
+			if (upperWord(action[0]) !== 'ADD') continue
+			readUniqueElement(table, action.slice(skipWords(action, skipWords(action, 1, 'COLUMN'), 'IF', 'NOT', 'EXISTS')), unique)
+		}
+	} else if (verb === 'CREATE' && object === 'UNIQUE' && upperWord(tokens[2]) === 'INDEX') {
+		const rest = tokens.slice(3)
+		let at = skipWords(rest, skipWords(rest, 0, 'CONCURRENTLY'), 'IF', 'NOT', 'EXISTS')
+		const name = upperWord(rest[at]) === 'ON' ? undefined : objectNameAt(rest, at)?.name
+		at = name === undefined ? at : (afterName(rest, at) ?? at)
+		if (upperWord(rest[at]) !== 'ON') return
+		at = skipWords(rest, at + 1, 'ONLY')
+		const table = objectNameAt(rest, at)?.name
+		const after = afterName(rest, at)
+		if (table === undefined || after === undefined) return
+		const list = columnList(rest, upperWord(rest[after]) === 'USING' ? after + 2 : after)
+		const columns = list?.columns.filter((column) => column !== undefined) ?? []
+		if (list === undefined || columns.length !== list.columns.length || depthZeroWords(rest.slice(list.end)).includes('WHERE')) return
+		unique.push({ name, table, columns })
+	} else if (verb === 'DROP' && object === 'INDEX') {
+		const at = skipWords(tokens, skipWords(tokens, 2, 'CONCURRENTLY'), 'IF', 'EXISTS')
+		const dropped = new Set(splitAtCommas(tokens.slice(at)).map((part) => objectNameAt(part, 0)?.name))
+		const kept = unique.filter((index) => index.name === undefined || !dropped.has(index.name))
+		unique.splice(0, unique.length, ...kept)
+	}
+}
+
+/** A column with `UNIQUE` or `PRIMARY KEY`, or a `UNIQUE (…)` or `PRIMARY KEY (…)` table constraint. */
+function readUniqueElement(table: string, element: readonly SqlToken[], unique: UniqueIndex[]): void {
+	const head = upperWord(element[0])
+	if (head !== undefined && TABLE_CONSTRAINTS.has(head)) {
+		const constraint = head === 'CONSTRAINT' ? element.slice(2) : element
+		const kind = upperWord(constraint[0])
+		const open = kind === 'PRIMARY' ? 2 : kind === 'UNIQUE' ? afterNullsClause(constraint) : undefined
+		const list = open === undefined ? undefined : columnList(constraint, open)
+		const columns = list?.columns.filter((column) => column !== undefined) ?? []
+		if (list !== undefined && columns.length > 0 && columns.length === list.columns.length) {
+			unique.push({ name: undefined, table, columns })
+		}
+		return
+	}
+	const column = nameText(element[0])
+	if (column !== undefined && depthZeroWords(element.slice(1)).some((word) => word === 'UNIQUE' || word === 'PRIMARY')) {
+		unique.push({ name: undefined, table, columns: [column] })
+	}
+}

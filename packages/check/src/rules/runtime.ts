@@ -32,6 +32,8 @@ export interface SourceContext {
 	readonly absoluteFetch: (node: AstNode, target: string) => void
 	/** A `ctx.url('<endpoint id>', …)` with a literal id: refused once the contract shows that it names no procedure. */
 	readonly appUrl: (node: AstNode, endpoint: string) => void
+	/** A `<table>.insert(values, { onConflict: { columns } })`: refused once the migrations show no unique index of them. */
+	readonly conflictInsert: (node: AstNode, table: string, columns: readonly string[]) => void
 }
 
 /** The global objects and `Bun`: a server module reaches the platform through the framework only. */
@@ -141,6 +143,35 @@ const checkAppUrl = (node: AstNode, context: SourceContext): void => {
 	if (path === undefined || path.length < 2 || path[path.length - 1] !== 'url' || path[path.length - 2] !== 'ctx') return
 	const endpoint = staticString(argumentAt(node, 0))
 	if (endpoint !== undefined) context.appUrl(node, endpoint)
+}
+
+/**
+ * `<…>.<table>.insert(values, { onConflict: { columns: ['a', 'b'] } })` with literal columns: the receiver's last name
+ * is the table, as `ctx.db.<…>.<table>` names it. Anything else (an alias, computed columns) is the runtime's to refuse.
+ */
+const checkConflictInsert = (node: AstNode, context: SourceContext): void => {
+	const callee = child(node, 'callee')
+	const path = callee === undefined ? undefined : memberSuffix(callee)
+	const table = path !== undefined && path.length >= 2 && path[path.length - 1] === 'insert' ? path[path.length - 2] : undefined
+	const options = argumentAt(node, 1)
+	if (table === undefined || options?.type !== 'ObjectExpression') return
+	const onConflict = propertyValue(options, 'onConflict')
+	const columns = onConflict?.type === 'ObjectExpression' ? propertyValue(onConflict, 'columns') : undefined
+	if (columns?.type !== 'ArrayExpression') return
+	const names = children(columns, 'elements').map((element) => (element === null ? undefined : staticString(unwrap(element))))
+	const literal = names.filter((name): name is string => name !== undefined)
+	if (literal.length > 0 && literal.length === names.length) context.conflictInsert(node, table, literal)
+}
+
+/** The value of an object literal's property `name`, written with a static key. */
+const propertyValue = (object: AstNode, name: string): AstNode | undefined => {
+	for (const property of children(object, 'properties')) {
+		if (property?.type === 'Property' && staticKey(property, 'key') === name) {
+			const value = child(property, 'value')
+			return value === undefined ? undefined : unwrap(value)
+		}
+	}
+	return undefined
 }
 
 /** The finding of a `fetch` of an absolute URL whose origin no site of the contract declares. */
@@ -307,6 +338,8 @@ const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: Source
 	const callee = child(node, 'callee')
 	const path = callee === undefined ? undefined : globalPath(callee)
 	if (node.type === 'CallExpression') checkIndirectLoad(node, path, context)
+	// A data-layer handle is reached through calls (`ctx.db.app('…')`), so its insert has no global path.
+	if (node.type === 'CallExpression') checkConflictInsert(node, context)
 	if (path === undefined) return
 	checkDynamicCode(node, path, context)
 	if (node.type !== 'CallExpression') return

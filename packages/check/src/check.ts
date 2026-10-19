@@ -31,7 +31,14 @@ import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
-import { checkFileColumnMigrations, checkMigrationNames, checkScanMigrations, type FileColumn } from './rules/migrations'
+import {
+	checkConflictIndexes,
+	checkFileColumnMigrations,
+	checkMigrationNames,
+	checkScanMigrations,
+	type ConflictInsert,
+	type FileColumn,
+} from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
@@ -84,6 +91,8 @@ interface ContractDependent {
 	readonly fetches: { readonly target: string; readonly finding: Finding }[]
 	/** Each `ctx.url` with a literal endpoint id. */
 	readonly urls: { readonly endpoint: string; readonly finding: Finding }[]
+	/** Each insert with literal `onConflict.columns`, checked against the migrations' unique indexes. */
+	readonly inserts: ConflictInsert[]
 }
 
 const checkSourceModule = async (
@@ -99,7 +108,7 @@ const checkSourceModule = async (
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
-	const deferred = (at: AstNode, rule: 'cross-app-fetch' | 'url-endpoint', message: string, allowed: string): Finding[] => {
+	const deferred = (at: AstNode, rule: 'cross-app-fetch' | 'url-endpoint' | 'on-conflict-index', message: string, allowed: string): Finding[] => {
 		const found: Finding[] = []
 		reporter(module.file, found)(at, rule, message, allowed)
 		return found
@@ -116,6 +125,11 @@ const checkSourceModule = async (
 		appUrl: (node: AstNode, endpoint: string) => {
 			const message = `ctx.url names '${endpoint}', which is no procedure of the contract`
 			for (const finding of deferred(node, 'url-endpoint', message, URL_ENDPOINT_ALLOWED)) dependent.urls.push({ endpoint, finding })
+		},
+		conflictInsert: (node: AstNode, table: string, columns: readonly string[]) => {
+			const message = `${table}.insert names onConflict columns (${columns.join(', ')}) that no unique index of a migration covers`
+			const allowed = `a migration with create unique index ${table}_${columns.join('_')} on ${table} (${columns.join(', ')}), or the columns of one`
+			for (const finding of deferred(node, 'on-conflict-index', message, allowed)) dependent.inserts.push({ table, columns, finding })
 		},
 	}
 	const trusted = trustedBindings(module.file, module.program, mappings)
@@ -189,7 +203,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const findings: Finding[] = []
 	const modules = new Map<string, ParsedModule>()
 	const references = new Map<string, readonly ModuleReference[]>()
-	const dependent: ContractDependent = { fetches: [], urls: [] }
+	const dependent: ContractDependent = { fetches: [], urls: [], inserts: [] }
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
 	const trust = checkTrustedResolution(tree.files)
@@ -253,7 +267,9 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
 	findings.push(...contractDependentFindings(dependent, read?.ok === true ? compiledReach(read.contract, declaredTables) : null))
 	if (declaredTables !== null) {
-		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(tablePolicies(declaredTables))))
+		const policies = tablePolicies(declaredTables)
+		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(policies)))
+		findings.push(...checkConflictIndexes(tree.files, new Set(Object.keys(policies)), dependent.inserts))
 	}
 	const bunfig = tree.files.get(BUNFIG_FILE)
 	if (bunfig !== undefined) findings.push(...checkTestSuiteConfig(bunfig))
