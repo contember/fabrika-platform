@@ -65,7 +65,6 @@ describe("the kit's builders", () => {
 			schedule: '0 3 * * *',
 			actions: ['crm.read', 'deals.write'],
 			scope: 'app',
-			timeout: undefined,
 			retries: undefined,
 			declared: { sql: 'write' },
 			unknownOptions: [],

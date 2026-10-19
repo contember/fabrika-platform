@@ -266,6 +266,7 @@ export const notesArtifact: ContractArtifact = {
 			path: '/hooks/github',
 			scheme: 'github-sha256',
 			boundTo: { kind: 'dimension', dimension: 'workspace' },
+			timeoutMs: 10000,
 			actions: ['notes.write'],
 		},
 		contact: { kind: 'form', path: '/contact', appendTo: 'contact_messages' },
@@ -284,7 +285,7 @@ export const notesArtifact: ContractArtifact = {
 		},
 	},
 	jobs: {
-		purgeDeleted: { schedule: '0 3 * * *', actions: ['notes.delete'], scope: { kind: 'app' }, timeout: '10m', retries: 2 },
+		purgeDeleted: { schedule: '0 3 * * *', actions: ['notes.delete'], scope: { kind: 'app' }, timeoutMs: 600000, retries: 2 },
 	},
 	exports: {
 		products: { version: 1, consumers: ['shop'], audience: 'any consumer user' },

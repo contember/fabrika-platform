@@ -3,7 +3,7 @@ import type { ContractArtifact } from '../contract'
 import { contractWorkloads, isOwnWorkloadName } from '../workloads'
 
 const artifact: Pick<ContractArtifact, 'jobs' | 'mounts' | 'declared'> = {
-	jobs: { nightly: { schedule: '0 3 * * *', actions: ['notes.purge', 'notes.read'], scope: { kind: 'app' }, timeout: null, retries: 0 } },
+	jobs: { nightly: { schedule: '0 3 * * *', actions: ['notes.purge', 'notes.read'], scope: { kind: 'app' }, timeoutMs: 900000, retries: 0 } },
 	mounts: {
 		api: { kind: 'rpc', prefix: '/api', callers: ['human'] },
 		github: {
@@ -11,6 +11,7 @@ const artifact: Pick<ContractArtifact, 'jobs' | 'mounts' | 'declared'> = {
 			path: '/hooks/github',
 			scheme: 'github-sha256',
 			boundTo: { kind: 'dimension', dimension: 'repo' },
+			timeoutMs: 10000,
 			actions: ['repos.sync'],
 		},
 	},

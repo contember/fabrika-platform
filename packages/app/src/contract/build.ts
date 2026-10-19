@@ -98,6 +98,7 @@ import {
 	FORM_INPUT_PART,
 	FORM_LIMITS,
 	FORM_MULTIPART_TYPE,
+	JOB_LIMITS,
 	joinPath,
 	JSON_ADMISSION,
 	LINK_API_SEGMENT,
@@ -106,6 +107,7 @@ import {
 	spaPrefixRowId,
 	WEBHOOK_ACCOUNT_PATTERN,
 	WEBHOOK_BINDING_PARAMETER,
+	WEBHOOK_LIMITS,
 	WEBHOOK_SCOPE_FIELD,
 	WEBHOOKS_PREFIX,
 } from './defaults'
@@ -120,7 +122,6 @@ const ACTION = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/
 const LITERAL_PATH = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
 const MIME_TYPE = /^[a-z]+\/[a-z0-9][a-z0-9.+-]*$/
 const CRON_FIELD = /^[0-9*/,-]+$/
-const TIMEOUT = /^[1-9][0-9]*[smh]$/
 const DIGEST = /^sha256:[0-9a-f]+$/
 const FRAMEWORK_PREFIX = '/__fabrika'
 /** A fixed name a header carries as it is: no path, no quoting, no extension but the format's. */
@@ -590,13 +591,16 @@ class ArtifactBuilder {
 				}
 				this.#actionList(where, mount.actions)
 				const path = joinPath(mount.path, `:${WEBHOOK_BINDING_PARAMETER}`)
-				this.#anonymous(name, 'webhook', 'POST', path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.webhookMaxBytes), mount.input)
+				const limits = this.#limits(where, mount.limits, WEBHOOK_LIMITS)
+				this.#anonymous(name, 'webhook', 'POST', path, { contentTypes: ['application/json'], maxBytes: limits.maxBytes }, mount.input)
 				this.#declare(where, name, mount.declared, { kind: 'webhook', readOnly: false })
 				if (generated !== null && members !== undefined) {
 					this.#webhookBindings(name, generated, members.manage)
 				}
 				const scheme = this.#webhookScheme(where, mount.scheme)
-				return boundTo === null || scheme === null ? null : { kind: 'webhook', path: mount.path, scheme, boundTo, actions: [...mount.actions] }
+				return boundTo === null || scheme === null
+					? null
+					: { kind: 'webhook', path: mount.path, scheme, boundTo, actions: [...mount.actions], timeoutMs: limits.timeoutMs }
 			}
 			default:
 				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
@@ -1062,7 +1066,7 @@ class ArtifactBuilder {
 			}
 			return null
 		}
-		const limits = this.#limits(where, procedure.limits)
+		const limits = this.#limits(where, procedure.limits, PROCEDURE_LIMITS)
 		const admission = this.#admission(id, procedure, kind)
 		const http = this.#http(where, procedure)
 		this.#procedureRules[id] = {
@@ -1138,8 +1142,12 @@ class ArtifactBuilder {
 		return { method, body, query }
 	}
 
-	#limits(where: string, value: unknown): { readonly maxBytes: number; readonly timeoutMs: number } {
-		const defaults = { maxBytes: PROCEDURE_LIMITS.maxBytes, timeoutMs: PROCEDURE_LIMITS.timeoutMs }
+	/** A procedure's or a webhook's `limits`, each bound within a procedure's ceiling; `defaults` for what it leaves out. */
+	#limits(
+		where: string,
+		value: unknown,
+		defaults: { readonly maxBytes: number; readonly timeoutMs: number },
+	): { readonly maxBytes: number; readonly timeoutMs: number } {
 		if (value === undefined) {
 			return defaults
 		}
@@ -1728,12 +1736,28 @@ class ArtifactBuilder {
 					schedule: job.schedule,
 					actions: [...job.actions],
 					scope,
-					timeout: job.timeout ?? null,
+					timeoutMs: this.#jobLimits(where, job.limits),
 					retries: job.retries ?? CONTRACT_DEFAULTS.jobRetries,
 				}
 			}
 		}
 		return jobs
+	}
+
+	/** A job's `limits`: its attempt's time only, since a job reads no body. */
+	#jobLimits(where: string, value: unknown): number {
+		if (value === undefined) {
+			return JOB_LIMITS.timeoutMs
+		}
+		if (!isRecord(value)) {
+			this.#problem(where, 'limits is not an object (allowed: limits: { timeoutMs? })')
+			return JOB_LIMITS.timeoutMs
+		}
+		if (value['maxBytes'] !== undefined) {
+			this.#problem(where, 'declares limits.maxBytes, and a job reads no body (allowed: limits: { timeoutMs? })')
+		}
+		this.#keys(`${where} limits`, value, ['maxBytes', 'timeoutMs'])
+		return this.#bounded(where, 'limits.timeoutMs', value['timeoutMs'], JOB_LIMITS.timeoutMs, JOB_LIMITS.maxTimeoutMs, 'ms')
 	}
 
 	#job(where: string, job: CronDeclaration): ScopeBinding | null {
@@ -1743,9 +1767,6 @@ class ArtifactBuilder {
 			this.#problem(where, `schedule '${job.schedule}' is not five cron fields separated by single spaces (allowed: '0 3 * * *')`)
 		}
 		this.#actionList(where, job.actions)
-		if (job.timeout !== undefined && !TIMEOUT.test(job.timeout)) {
-			this.#problem(where, `timeout '${job.timeout}' is not a duration (allowed: '30s', '10m', '1h')`)
-		}
 		if (job.retries !== undefined && (!Number.isInteger(job.retries) || job.retries < 0)) {
 			this.#problem(where, `retries ${job.retries} is not a whole number of at least 0`)
 		}

@@ -156,11 +156,12 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: fileChanges,
 	})
 	compareKeyed(changes, record(baseline.jobs), record(candidate.jobs), {
-		added: (name, job) => `New job \`${name}\` with ${listOf(job.actions, 'no actions')}`,
+		added: (name, job) => `New job \`${name}\` with ${listOf(job.actions, 'no actions')}, running at most ${seconds(job.timeoutMs)}`,
 		removed: (name) => `Job \`${name}\` is removed`,
 		changed: (name, from, to) => [
 			...setChanges(`Job \`${name}\``, from.actions, to.actions, 'gains action', 'loses action'),
 			...valueChange(`Job \`${name}\` scope`, from.scope, to.scope),
+			...timeLimitChange(`Job \`${name}\``, from.timeoutMs, to.timeoutMs),
 		],
 	})
 	compareKeyed(changes, record(baseline.exports), record(candidate.exports), {
@@ -263,6 +264,12 @@ function seconds(ms: number): string {
 	return ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`
 }
 
+/** A longer time limit widens: the site holds its connection, its lease or its claim longer. */
+function timeLimitChange(name: string, before: number, after: number): AccessChange[] {
+	if (before === after) return []
+	return [(after > before ? widening : narrowing)(`${name} time limit changes from ${seconds(before)} to ${seconds(after)}`)]
+}
+
 function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureArtifact): AccessChange[] {
 	const buckets = BUCKETS.flatMap(([bucket, words]): AccessChange[] => {
 		const before = from.rate[bucket]
@@ -279,9 +286,7 @@ function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureAr
 		: from.challenge === null
 		? [narrowing(`${name} asks for a ${to.challenge.provider} challenge`)]
 		: valueChange(`${name} challenge`, from.challenge, to.challenge)
-	const time = from.timeoutMs === to.timeoutMs
-		? []
-		: [(to.timeoutMs > from.timeoutMs ? widening : narrowing)(`${name} time limit changes from ${seconds(from.timeoutMs)} to ${seconds(to.timeoutMs)}`)]
+	const time = timeLimitChange(name, from.timeoutMs, to.timeoutMs)
 	const query = schemaChanges({ endpoint: `${name} URL query`, side: 'input', path: '' }, from.query ?? null, to.query ?? null)
 	return [...buckets, ...challenge, ...time, ...query]
 }
@@ -1376,11 +1381,11 @@ function takenFiles(mount: MountArtifact): string {
 		: `, taking files from anyone: ${files.map(([field, file]) => `\`${field}\` into files \`${file.collection}\``).join(', ')}`
 }
 
-/** How a new webhook verifies a delivery, and what one binding of it reaches. */
+/** How a new webhook verifies a delivery, what one binding of it reaches, and how long its handler runs. */
 function webhookPhrase(mount: MountArtifact): string {
 	if (mount.kind !== 'webhook') return ''
 	const bound = mount.boundTo.kind === 'app' ? 'once for the whole application' : `to one \`${mount.boundTo.dimension}\` each`
-	return `, verified by ${schemeName(mount.scheme)}, its bindings ${bound}`
+	return `, verified by ${schemeName(mount.scheme)}, its bindings ${bound}, running at most ${seconds(mount.timeoutMs)}`
 }
 
 function schemeName(scheme: WebhookScheme): string {
@@ -1406,6 +1411,11 @@ function servedNames(mount: MountArtifact): readonly string[] {
  * get a line each, by name. The rest of a mount is compared as a value.
  */
 function mountChanges(name: string, from: MountArtifact, to: MountArtifact): AccessChange[] {
+	if (from.kind === 'webhook' && to.kind === 'webhook') {
+		const { timeoutMs: before, ...fromRest } = from
+		const { timeoutMs: after, ...toRest } = to
+		return [...valueChange(`Mount \`${name}\``, fromRest, toRest), ...timeLimitChange(`Webhook \`${name}\``, before, after)]
+	}
 	if (from.kind === 'spa' && to.kind === 'spa') {
 		const { public: before = [], ...fromRest } = from
 		const { public: after = [], ...toRest } = to

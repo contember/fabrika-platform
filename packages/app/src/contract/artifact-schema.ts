@@ -25,7 +25,7 @@ import {
 	type TupleShape,
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
-import { FORM_LIMITS, PROCEDURE_LIMITS } from './defaults'
+import { FORM_LIMITS, JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
 import { webhookSchemeSchema } from './webhook-scheme'
 
 const name = z.string().min(1)
@@ -224,7 +224,14 @@ const mount = z.discriminatedUnion('kind', [
 		then: name.optional(),
 		files: z.record(name, z.strictObject({ collection: name, required: z.boolean() })).optional(),
 	}),
-	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: webhookSchemeSchema, boundTo: scopeBinding, actions }),
+	z.strictObject({
+		kind: z.literal('webhook'),
+		path: name,
+		scheme: webhookSchemeSchema,
+		boundTo: scopeBinding,
+		actions,
+		timeoutMs: z.int().positive().max(PROCEDURE_LIMITS.maxTimeoutMs),
+	}),
 ])
 
 const cspSource = z.strictObject({ origin: name, purpose: name })
@@ -300,7 +307,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		schedule: name,
 		actions,
 		scope: scopeBinding,
-		timeout: nullableName,
+		timeoutMs: z.int().positive().max(JOB_LIMITS.maxTimeoutMs),
 		retries: z.int().nonnegative(),
 	})),
 	exports: record(z.strictObject({ version: z.int().positive(), consumers: names, audience: name })),

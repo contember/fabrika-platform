@@ -102,7 +102,7 @@ describe('compileContract refuses what the types let through', () => {
 					types: ['image/*'],
 				}),
 			},
-			jobs: { nightly: c.cron('@daily', { actions: ['tasks.write'], scope: 'app', timeout: 'ten minutes' }) },
+			jobs: { nightly: c.cron('@daily', { actions: ['tasks.write'], scope: 'app', limits: { timeoutMs: 600 } }) },
 			imports: {
 				catalog: { app: 'catalog', export: 'products', version: 1, digest: 'sha256:00', procedures: ['get'], usedBy: ['api.missing'] },
 			},
@@ -115,7 +115,6 @@ describe('compileContract refuses what the types let through', () => {
 			"files 'attachments': 'image/*' is not an exact media type (allowed: 'image/png'; no wildcards or parameters)",
 			"files 'attachments': its owner 'tasks' is not a table with a dimension scope in src/db/tables.ts",
 			"job 'nightly': schedule '@daily' is not five cron fields separated by single spaces (allowed: '0 3 * * *')",
-			"job 'nightly': timeout 'ten minutes' is not a duration (allowed: '30s', '10m', '1h')",
 			"import 'catalog': usedBy 'api.missing' is not a procedure of this contract (allowed: an id such as 'api.products.show')",
 			"csp connectSrc: 'https://maps.example.com/tiles' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
 			"csp frameAncestors: 'https://*.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
@@ -181,7 +180,7 @@ describe('compileContract refuses what the types let through', () => {
 			"mount 'hook': 'kind' is set by c.webhook itself and cannot be an option; remove it",
 			"mount 'hook': 'path' is set by c.webhook itself and cannot be an option; remove it",
 			"job 'nightly': 'schedule' is set by c.cron itself and cannot be an option; remove it",
-			"job 'nightly': 'retry' is not an option of c.cron (allowed: actions, scope, timeout, retries)",
+			"job 'nightly': 'retry' is not an option of c.cron (allowed: actions, scope, limits, retries)",
 		])
 	})
 
@@ -298,7 +297,7 @@ describe('compileContract refuses what the types let through', () => {
 			schedule: '0 3 * * *',
 			actions: ['tasks.write'],
 			scope: { kind: 'dimension', dimension: 'workspace' },
-			timeout: null,
+			timeoutMs: 900000,
 			retries: 0,
 		})
 		expect(artifact.endpoints[0]?.admission).toEqual({ contentTypes: ['application/json'], maxBytes: 1048576 })
@@ -308,7 +307,28 @@ describe('compileContract refuses what the types let through', () => {
 			scheme: 'github-sha256',
 			boundTo: { kind: 'app' },
 			actions: ['tasks.write'],
+			timeoutMs: 10000,
 		})
+	})
+
+	test('a webhook and a job bound their time, and a webhook its body, within their ceilings', () => {
+		const bounded = (limits: object, jobLimits: object) => {
+			const hook = { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
+			const job = { actions: ['tasks.write'], scope: 'app' } as const
+			Object.defineProperty(hook, 'limits', { value: limits, enumerable: true })
+			Object.defineProperty(job, 'limits', { value: jobLimits, enumerable: true })
+			return defineContract(vocabulary, (c) => ({ hook: c.webhook('/hooks/github', hook), jobs: { nightly: c.cron('0 3 * * *', job) } }))
+		}
+		const artifact = compileContract(bounded({ maxBytes: 4096, timeoutMs: 30000 }, { timeoutMs: 3600000 }), {})
+		expect(artifact.mounts['hook']).toMatchObject({ timeoutMs: 30000 })
+		expect(artifact.endpoints.find((row) => row.id === 'hook')?.admission).toEqual({ contentTypes: ['application/json'], maxBytes: 4096 })
+		expect(artifact.jobs['nightly']?.timeoutMs).toBe(3600000)
+		expect(compileProblems(bounded({ maxBytes: 2097152, timeoutMs: 120000 }, { timeoutMs: 172800000, maxBytes: 1 }))).toEqual([
+			"mount 'hook': limits.maxBytes 2097152 is not a whole number of bytes from 1 to 1048576",
+			"mount 'hook': limits.timeoutMs 120000 is not a whole number of ms from 1 to 60000",
+			"job 'nightly': declares limits.maxBytes, and a job reads no body (allowed: limits: { timeoutMs? })",
+			"job 'nightly': limits.timeoutMs 172800000 is not a whole number of ms from 1 to 86400000",
+		])
 	})
 })
 

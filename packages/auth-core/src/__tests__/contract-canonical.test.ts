@@ -60,9 +60,9 @@ describe('canonicalArtifactJson', () => {
 
 describe('table actions', () => {
 	test('a table whose every operation names one action keeps the digest it had before a table action took a list', () => {
-		// The digest the fixture had before lists existed, with its `format`. A 0.5 application's digest is computed by
-		// its own release (ADR-0062); `endpoint-digest.test.ts` pins the same value.
-		expect(contractDigest(notesArtifact)).toBe('sha256:dad8ca49edae6e5d84b9ea45fde5657e53385301b917efbf68e659457c178940')
+		// The digest the fixture had before lists existed, with its `format` and its time limits in ms. A 0.5 application's
+		// digest is computed by its own release (ADR-0062); `endpoint-digest.test.ts` pins the same value.
+		expect(contractDigest(notesArtifact)).toBe('sha256:a42e54f5fe0388ba60aabbbebc1ad9f8be595e81b65c914d6aea8b28f90e0bfa')
 	})
 
 	test('a list of actions is sorted, and one action stays its text', () => {

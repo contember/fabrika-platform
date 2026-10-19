@@ -870,6 +870,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					webhook: name,
 					scheme: approved.scheme,
 					boundTo: approved.boundTo,
+					timeoutMs: approved.timeoutMs,
 					actions: mount.actions,
 					input: mount.input,
 					handler: bound.handler,

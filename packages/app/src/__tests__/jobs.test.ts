@@ -148,7 +148,7 @@ describe('boot binds every job or does not start', () => {
 			health: c.health('/healthz'),
 			jobs: {
 				nightly: c.cron('0 3 * * *', { actions: ['notes.read'], scope: 'workspace' }),
-				hourly: c.cron('0 * * * *', { actions: ['notes.read'], scope: 'app', timeout: '5m' }),
+				hourly: c.cron('0 * * * *', { actions: ['notes.read'], scope: 'app', limits: { timeoutMs: 300000 } }),
 			},
 		}))
 		const loose = implement(contract, {

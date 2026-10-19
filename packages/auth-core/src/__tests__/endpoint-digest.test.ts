@@ -105,9 +105,9 @@ describe('an application row keeps its digest byte for byte', () => {
 
 	test('every endpoint of the notes artifact, and the contract digest', () => {
 		expect(Object.fromEntries(notesArtifact.endpoints.map((endpoint) => [endpoint.id, endpointDigest(notesArtifact, endpoint)]))).toEqual(RECORDED)
-		// Recorded again when the artifact gained `format` (ADR-0062). A 0.5 application keeps the digest its own release
-		// computes; Control's `formats.test.ts` holds that one.
-		expect(contractDigest(notesArtifact)).toBe('sha256:dad8ca49edae6e5d84b9ea45fde5657e53385301b917efbf68e659457c178940')
+		// Recorded again when the artifact gained `format` (ADR-0062), and when a job's and a webhook's time limit became
+		// `timeoutMs`. A 0.5 application keeps the digest its own release computes; Control's `formats.test.ts` holds that one.
+		expect(contractDigest(notesArtifact)).toBe('sha256:a42e54f5fe0388ba60aabbbebc1ad9f8be595e81b65c914d6aea8b28f90e0bfa')
 	})
 })
 

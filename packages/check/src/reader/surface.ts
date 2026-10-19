@@ -414,7 +414,7 @@ class SurfaceReader {
 					boundTo: text(options.get('boundTo'), at, 'boundTo'),
 					actions: texts(options.get('actions'), at, 'actions'),
 					input: this.#schema(options.get('input'), at, 'input'),
-					maxBytes: optionalNumber(options.get('maxBytes'), 'maxBytes'),
+					...limitsOption(options),
 					unknownOptions: optionKeys(options, 'webhook'),
 				}
 			}
@@ -626,7 +626,7 @@ class SurfaceReader {
 			schedule: text(schedule, at, 'the schedule'),
 			actions: texts(options.get('actions'), at, 'actions'),
 			scope: text(options.get('scope'), at, 'scope'),
-			timeout: optionalText(options.get('timeout'), 'timeout'),
+			...limitsOption(options),
 			retries: optionalNumber(options.get('retries'), 'retries'),
 			unknownOptions: optionKeys(options, 'cron'),
 		}
@@ -756,6 +756,12 @@ function declared(options: Entries): DeclaredDeclaration {
 		kicks: plain(options.get('kicks')),
 		binds: plain(options.get('binds')),
 	})
+}
+
+/** A webhook's or a job's `limits` as the plain value the builder copies, only when written. */
+function limitsOption(options: Entries): { readonly limits?: unknown } {
+	const limits = options.get('limits')
+	return limits === undefined ? {} : { limits: plain(limits) }
 }
 
 /** The procedure options that hold plain values, each only when written, as the kit copies them. */

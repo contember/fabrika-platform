@@ -44,7 +44,7 @@ describe('webhooks in the approval diff', () => {
 	test('a new webhook names its verifier and that one binding serves the whole application', () => {
 		const lines = classifyAccess(snapshot('plain', false), snapshot('plain')).changes.map((change) => change.line)
 		expect(lines).toContain(
-			'New webhook mount `ledger`, verified by an HMAC-SHA256 in `X-Ledger-Signature`, its bindings once for the whole application',
+			'New webhook mount `ledger`, verified by an HMAC-SHA256 in `X-Ledger-Signature`, its bindings once for the whole application, running at most 10 s',
 		)
 	})
 
@@ -60,5 +60,28 @@ describe('webhooks in the approval diff', () => {
 			line: 'Endpoint `api.ledgers.connect` no longer binds webhook `ledger`',
 		})
 		expect(snapshotDeviations(snapshot('binding'))).toEqual([])
+	})
+
+	test("a webhook's and a job's longer time limit widens, a shorter one narrows", () => {
+		const hook = (timeoutMs: number) =>
+			app.webhook('/hooks/ledger', {
+				scheme: { hmac: { header: 'X-Ledger-Signature', algorithm: 'sha256', encoding: 'hex', signed: 'body' } },
+				boundTo: 'app',
+				actions: ['crm.write'],
+				input: Push,
+				limits: { timeoutMs },
+			}).handle(async () => {})
+		const job = (timeoutMs: number) => app.cron('0 3 * * *', { actions: ['crm.read'], scope: 'app', limits: { timeoutMs } }).handle(async () => {})
+		const timed = (hookMs: number, jobMs: number): AccessSnapshot => {
+			const contract = app.contract((c) => ({ api: c.rpc('/api', { ledgers: GROUPS.plain }), ledger: hook(hookMs), jobs: { nightly: job(jobMs) } }))
+			return { version: 1, contract: compileContract(contract, tables), migrations: [], checker: '0.0.0' }
+		}
+		expect(classifyAccess(timed(10_000, 60_000), timed(30_000, 3_600_000)).changes).toEqual([
+			{ effect: 'widens', line: 'Webhook `ledger` time limit changes from 10 s to 30 s' },
+			{ effect: 'widens', line: 'Job `nightly` time limit changes from 60 s to 3600 s' },
+		])
+		expect(classifyAccess(timed(30_000, 3_600_000), timed(30_000, 60_000)).changes).toEqual([
+			{ effect: 'narrows', line: 'Job `nightly` time limit changes from 3600 s to 60 s' },
+		])
 	})
 })

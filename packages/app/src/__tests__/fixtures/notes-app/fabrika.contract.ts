@@ -82,7 +82,7 @@ export const contract = defineContract({
 		}),
 	},
 	jobs: {
-		purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
+		purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
 	},
 	exports: {
 		products: c.export({

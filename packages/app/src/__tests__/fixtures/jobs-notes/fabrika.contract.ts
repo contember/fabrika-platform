@@ -31,8 +31,8 @@ export const contract = defineContract({
 	}),
 	health: c.health('/healthz'),
 	jobs: {
-		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
-		sweep: c.cron('*/15 * * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '1m' }),
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
+		sweep: c.cron('*/15 * * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 60000 } }),
 		flaky: c.cron('0 * * * *', { actions: ['notes.read'], scope: 'app', retries: 1 }),
 	},
 }))
@@ -59,7 +59,7 @@ export const startingContract = defineContract({
 	}),
 	health: c.health('/healthz'),
 	jobs: {
-		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
 	},
 }))
 
@@ -87,6 +87,6 @@ export const filesContract = defineContract({
 	},
 	health: c.health('/healthz'),
 	jobs: {
-		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 600000 }, retries: 2 }),
 	},
 }))

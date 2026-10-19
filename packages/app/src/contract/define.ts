@@ -26,6 +26,11 @@ import {
 
 export type Path = `/${string}`
 
+/** A job attempt's time limit: 15 minutes by default, at most a day. A job reads no body, so it has no `maxBytes`. */
+export interface JobLimitsOption {
+	readonly timeoutMs?: number
+}
+
 /** Any zod 4 schema. `compileContract` refuses every form outside the contract subset. */
 export type Schema = z.core.$ZodType
 
@@ -414,7 +419,8 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly boundTo: B
 			readonly actions: Acts
 			readonly input: I & NotLoose<I>
-			readonly maxBytes?: number
+			/** A delivery's body (1 MiB by default and at most) and its handler's time (10 s by default, at most 60 s). */
+			readonly limits?: { readonly maxBytes?: number; readonly timeoutMs?: number }
 		} & Owned<'kind' | 'path'>,
 	): WebhookMount<B, Acts[number], I>
 	files<const L extends boolean | readonly [string, ...string[]] = false>(
@@ -434,7 +440,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 	): FileCollection<A, L>
 	cron<const Acts extends readonly [A, ...A[]], const Sc extends D | 'app'>(
 		schedule: string,
-		options: { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number } & Owned<'kind' | 'schedule'>,
+		options: { readonly actions: Acts; readonly scope: Sc; readonly limits?: JobLimitsOption; readonly retries?: number } & Owned<'kind' | 'schedule'>,
 	): CronJob<Acts[number], Sc>
 	export<const T extends QueryTree>(
 		definition: {
@@ -536,7 +542,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			boundTo: options.boundTo,
 			actions: options.actions,
 			input: options.input,
-			maxBytes: options.maxBytes,
+			...(options.limits === undefined ? {} : { limits: options.limits }),
 			unknownOptions: unknownOptions(options, 'webhook'),
 		}),
 		files: (collection) => ({
@@ -557,7 +563,7 @@ export function surfaceKit<A extends string, D extends string, CD extends string
 			schedule,
 			actions: options.actions,
 			scope: options.scope,
-			timeout: options.timeout,
+			...(options.limits === undefined ? {} : { limits: options.limits }),
 			retries: options.retries,
 			unknownOptions: unknownOptions(options, 'cron'),
 		}),

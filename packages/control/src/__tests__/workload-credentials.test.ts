@@ -261,7 +261,7 @@ describe('declaredWorkloads', () => {
 	test('refuses two workloads whose keys would travel under one variable', () => {
 		const clashing: ContractArtifact = {
 			...notesArtifact,
-			jobs: { ...notesArtifact.jobs, purge_deleted: { schedule: '0 4 * * *', actions: [], scope: { kind: 'app' }, timeout: null, retries: 0 } },
+			jobs: { ...notesArtifact.jobs, purge_deleted: { schedule: '0 4 * * *', actions: [], scope: { kind: 'app' }, timeoutMs: 900000, retries: 0 } },
 		}
 		expect(() => declaredWorkloads(clashing)).toThrow('FABRIKA_JOB_PURGE_DELETED_KEY')
 	})

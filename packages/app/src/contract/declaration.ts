@@ -52,9 +52,9 @@ export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
 	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
 	spa: { options: ['dir', 'access', 'public'], owned: ['kind', 'prefix'] },
 	form: { options: ['input', 'appendTo', 'maxBytes', 'rate', 'honeypot', 'challenge', 'then', 'crossOrigin', 'files'], owned: ['kind', 'path'] },
-	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
+	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'limits'], owned: ['kind', 'path'] },
 	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link', 'scan'], owned: ['kind'] },
-	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
+	cron: { options: ['actions', 'scope', 'limits', 'retries'], owned: ['kind', 'schedule'] },
 	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
 	attachment: { options: ['format', 'filename', 'row', 'maxBytes', 'maxRows'], owned: [] },
 }
@@ -292,7 +292,8 @@ export interface WebhookMountDeclaration<S> extends OptionsRecord {
 	readonly boundTo: string
 	readonly actions: readonly string[]
 	readonly input: S
-	readonly maxBytes?: number
+	/** `{ maxBytes?, timeoutMs? }`, as written; `buildArtifact` checks each against its ceiling. */
+	readonly limits?: unknown
 	/** What a webhook of the staged kit declares off the paved road. */
 	readonly declared?: unknown
 }
@@ -318,7 +319,8 @@ export interface CronDeclaration extends OptionsRecord {
 	readonly actions: readonly string[]
 	/** A dimension, or `app` for the whole application. */
 	readonly scope: string
-	readonly timeout?: string
+	/** `{ timeoutMs? }`, as written; `buildArtifact` checks it against its ceiling. */
+	readonly limits?: unknown
 	readonly retries?: number
 	/** What a job of the staged kit declares off the paved road. */
 	readonly declared?: unknown

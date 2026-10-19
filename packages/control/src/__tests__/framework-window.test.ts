@@ -107,10 +107,36 @@ describe('a stored artifact', () => {
 	})
 
 	test('without a format is the 0.5 one: kept as read, and upcast to this release', () => {
-		const { format: _format, ...older } = notesArtifact
+		// The notes artifact as 0.5 wrote it: a job's timeout as a duration, a webhook without its time limit.
+		const { format: _format, jobs, mounts, ...rest } = notesArtifact
+		const older = {
+			...rest,
+			jobs: Object.fromEntries(Object.entries(jobs).map(([name, { timeoutMs: _timeoutMs, ...job }]) => [name, { ...job, timeout: '10m' }])),
+			mounts: Object.fromEntries(
+				Object.entries(mounts).map(([name, mount]) => {
+					if (mount.kind !== 'webhook') return [name, mount]
+					const { timeoutMs: _timeoutMs, ...webhook } = mount
+					return [name, webhook]
+				}),
+			),
+		}
 		const parsed = parseStoredArtifact(JSON.parse(JSON.stringify(older)))
 		expect<unknown>(parsed.older).toEqual(older)
 		expect(parsed.contract.format).toBe(CONTRACT_FORMAT)
+		// A job ran for its timeout, and a webhook handler for the 10 s every 0.5 request had.
+		expect(parsed.contract).toEqual(notesArtifact)
+	})
+
+	test('a 0.5 job without a timeout ran for 15 minutes', () => {
+		const { format: _format, jobs, mounts, ...rest } = notesArtifact
+		const older = {
+			...rest,
+			mounts: Object.fromEntries(Object.entries(mounts).filter(([, mount]) => mount.kind !== 'webhook')),
+			endpoints: rest.endpoints.filter((row) => row.kind !== 'webhook'),
+			jobs: Object.fromEntries(Object.entries(jobs).map(([name, { timeoutMs: _timeoutMs, ...job }]) => [name, { ...job, timeout: null }])),
+		}
+		const upcast = parseStoredArtifact(JSON.parse(JSON.stringify(older))).contract
+		expect(Object.values(upcast.jobs).map((job) => job.timeoutMs)).toEqual([900_000])
 	})
 
 	test('of a format outside the window is refused', () => {

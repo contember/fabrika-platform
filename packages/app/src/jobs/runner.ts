@@ -45,8 +45,6 @@ import type { OperationsReporter } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
 import type { AppMail, JobContext, JobPrincipal } from './types'
 
-/** An attempt of a job without a `timeout` is cancelled after this long. */
-export const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000
 /**
  * The lease outlives an attempt's deadline by this much: the runner renews or finishes a timed-out attempt's lease,
  * and no other run takes it over meanwhile. The attempt's writes stop at its deadline regardless.
@@ -56,8 +54,6 @@ export const LEASE_GRACE_MS = 60_000
 export const JOB_CHECK_INTERVAL_MS = 60_000
 const BACKOFF_BASE_MS = 1_000
 const BACKOFF_MAX_MS = 5 * 60_000
-const DURATION = /^([1-9][0-9]*)([smh])$/
-const UNIT_MS: Readonly<Record<string, number>> = { s: 1_000, m: 60_000, h: 3_600_000 }
 
 /**
  * Why a run failed. Fixed codes only: an application error's name and message may carry a secret, so neither is
@@ -248,15 +244,6 @@ function ownChild(node: unknown, key: string): unknown {
 	return typeof node === 'object' && node !== null && Object.hasOwn(node, key) ? Reflect.get(node, key) : undefined
 }
 
-function durationMs(timeout: string | null): number | null {
-	if (timeout === null) {
-		return DEFAULT_JOB_TIMEOUT_MS
-	}
-	const match = DURATION.exec(timeout)
-	const unit = match?.[2] === undefined ? undefined : UNIT_MS[match[2]]
-	return match?.[1] === undefined || unit === undefined ? null : Number.parseInt(match[1], 10) * unit
-}
-
 /** Binds every declared job to its handler, or adds why it cannot run to `problems`. */
 export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs {
 	const entries = Object.entries(input.artifact.jobs)
@@ -276,10 +263,6 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		if (schedule === null) {
 			problems.push(`${where} has the schedule '${artifact.schedule}', which is not a cron expression (allowed: '0 3 * * *', '*/15 * * * *')`)
 		}
-		const timeoutMs = durationMs(artifact.timeout)
-		if (timeoutMs === null) {
-			problems.push(`${where} has the timeout '${artifact.timeout}', which is not a duration (allowed: '30s', '10m', '1h')`)
-		}
 		const node = ownChild(tree, name)
 		const handler = isSiteHandler(node) ? node.handler : node
 		const site = isSiteHandler(node) ? approvedDeclaration(where, `${JOB_SITE_PREFIX}${name}`, node.declared, 'job', input.artifact, problems) : null
@@ -290,12 +273,12 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			problems.push(`${where} has no handler; add it to handlers.jobs`)
 		} else if (site !== null && input.data === null) {
 			problems.push(`${where} reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
-		} else if (schedule !== null && timeoutMs !== null && credential !== undefined) {
+		} else if (schedule !== null && credential !== undefined) {
 			bound.set(name, {
 				name,
 				artifact,
 				schedule,
-				timeoutMs,
+				timeoutMs: artifact.timeoutMs,
 				handler: (args) => Reflect.apply(handler, undefined, [args]),
 				credential,
 				site,

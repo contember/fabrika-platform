@@ -684,6 +684,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   or an `{ hmac }` shape, over the raw body, a signed timestamp within `WEBHOOK_TIMESTAMP_TOLERANCE_MS`. `buildArtifact`
   refuses `{ basic }` and `{ bearer }`: the proxy removes `Authorization` from an anonymous endpoint's request (ADR-0022
   rule 3), so they could never verify. Only `github-sha256` checks the account the payload names.
+- **A webhook's `limits` bound its body and its handler** (`WEBHOOK_LIMITS`): `maxBytes` (1 MiB by default and at most)
+  is its row's body limit, read within the deadline `bodyDeadlineMs` derives from it; `timeoutMs` (10 s, at most 60 s)
+  is its handler's, which the artifact records on the mount and the delivery claim's lease outlasts.
 - **A binding is written by a procedure that declares `binds: '<webhook>'`** (`webhookBindings`): `ctx.webhooks('<name>')`
   names only that webhook, `.bind(capability, account)` and `.unbind(capability, id)` take a capability of this
   request on the bound value (a `Ref` of the webhook's dimension, an `AppCapability` for `'app'`) and run in the
@@ -1029,6 +1032,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   handles) reads each statement on its own and refuses every write; `ctx.transaction((tx) => …)` is one transaction
   fenced by the attempt's lease (`DataAccess.transaction`), refused outside the attempt, whose `tx.db` writes and whose
   handles refuse once it returned.
-- An attempt without a `timeout` is cancelled after `DEFAULT_JOB_TIMEOUT_MS` (15 min); the lease lasts the timeout
+- An attempt is cancelled after its `limits.timeoutMs` (`JOB_LIMITS`: 15 min by default, at most a day), which the artifact
+  records as the job's `timeoutMs`; the lease lasts the timeout
   plus `LEASE_GRACE_MS`. Retries back off exponentially from one second, capped at five minutes, half jittered.
 - The type witnesses live in `src/__tests__/job-mistakes/`, compiled by `job-types.test.ts`.

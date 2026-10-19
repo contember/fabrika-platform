@@ -7,7 +7,6 @@ export const CONTRACT_DEFAULTS = {
 	/** A failed job run is not retried unless the job asks for it: a retry repeats work. */
 	jobRetries: 0,
 	formMaxBytes: 16 * 1024,
-	webhookMaxBytes: 1024 * 1024,
 	fileMaxPerOwner: null,
 	fileLink: false,
 	importTimeoutMs: null,
@@ -35,6 +34,21 @@ export const PROCEDURE_LIMITS = {
 	maxTimeoutMs: 60_000,
 	maxPerMinute: 10_000,
 	maxBytesPerHour: 64 * 1024 * 1024 * 1024,
+} as const
+
+/**
+ * A webhook's bounds: a provider's body, by default the most a procedure without files takes, since providers send
+ * whole objects; and its handler's time, a procedure's.
+ */
+export const WEBHOOK_LIMITS = {
+	maxBytes: PROCEDURE_LIMITS.maxMaxBytes,
+	timeoutMs: PROCEDURE_LIMITS.timeoutMs,
+} as const
+
+/** A job attempt's time limit (`limits.timeoutMs`) and its ceiling, which keeps a lease and a timer within a day. */
+export const JOB_LIMITS = {
+	timeoutMs: 15 * 60_000,
+	maxTimeoutMs: 24 * 60 * 60_000,
 } as const
 
 /** A public mutation's buckets unless it declares its own: today's form limits, per client and for the endpoint. */

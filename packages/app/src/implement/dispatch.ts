@@ -67,7 +67,7 @@ import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, readBoundedBody, withBootstrap } from './anonymous'
 import { attachmentResponse } from './attachment'
-import { handlerSignal, readBoundedBytes, REQUEST_BUDGET_MS } from './bounded'
+import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
 import {
 	type AppCapability,
@@ -229,6 +229,8 @@ export type ServedEndpoint =
 		readonly webhook: string
 		readonly scheme: WebhookScheme
 		readonly boundTo: ScopeBinding
+		/** How long a delivery's handler runs after the last body byte; its claim's lease outlasts it. */
+		readonly timeoutMs: number
 		readonly actions: readonly string[]
 		readonly input: Schema
 		readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
@@ -1213,7 +1215,8 @@ export class ContractRuntime {
 		exec: RequestExecutionContext | undefined,
 	): Promise<Response> {
 		admitContentType(served.row, request)
-		const body = await readBoundedBody(request, maxBytesOf(served.row))
+		const limit = maxBytesOf(served.row)
+		const body = await readBoundedBody(request, limit, AbortSignal.timeout(bodyDeadlineMs(limit)))
 		const tables = this.#framework().webhooks
 		const bindingId = params[WEBHOOK_BINDING_PARAMETER] ?? ''
 		const binding = BINDING_ID.test(bindingId) ? await tables.binding(served.webhook, bindingId) : null
@@ -1250,7 +1253,7 @@ export class ContractRuntime {
 			throw new ServerFault('workload_unauthorized', `the token IAM signed for the key of webhook '${served.webhook}' does not carry '${unheld}'`, 503)
 		}
 		const key = await deliveryKey(binding.id, body)
-		const budgetMs = REQUEST_BUDGET_MS
+		const budgetMs = served.timeoutMs
 		const now = Date.now()
 		const claim = await tables.claimDelivery(binding.id, key, now, budgetMs + WEBHOOK_CLAIM_GRACE_MS, now - WEBHOOK_REPLAY_RETENTION_MS)
 		if (claim === null) {

@@ -46,9 +46,37 @@ export function from04(artifact: ContractArtifact04): SnapshotContract {
 /**
  * The 0.5 artifact in this release's model. A release that changes the model adds its rule here, so that the approval
  * diff compares like with like and a 0.5 application's next deploy shows only what it changed itself.
+ *
+ * - 0.6: a job's `timeout` (`'30s'`, `'10m'`, `'1h'`, or `null`) is its effective `timeoutMs`, and a webhook carries
+ *   its handler's `timeoutMs`; each is what a 0.5 release ran with.
  */
 function upcast05(artifact: ContractArtifact05): ContractArtifact {
-	return { ...artifact, format: CONTRACT_FORMAT }
+	const jobs = Object.fromEntries(
+		Object.entries(artifact.jobs).map(([name, { timeout, ...job }]) => [name, { ...job, timeoutMs: release05JobTimeoutMs(timeout) }]),
+	)
+	const mounts = Object.fromEntries(
+		Object.entries(artifact.mounts).map((
+			[name, mount],
+		) => [name, mount.kind === 'webhook' ? { ...mount, timeoutMs: RELEASE_05_WEBHOOK_TIMEOUT_MS } : mount]),
+	)
+	return { ...artifact, format: CONTRACT_FORMAT, jobs, mounts }
+}
+
+/** A 0.5 job without a `timeout` ran for 15 minutes; a 0.5 webhook handler, as every request, for 10 seconds. */
+const RELEASE_05_JOB_TIMEOUT_MS = 15 * 60_000
+const RELEASE_05_WEBHOOK_TIMEOUT_MS = 10_000
+const RELEASE_05_DURATION = /^([1-9][0-9]*)([smh])$/
+const RELEASE_05_UNIT_MS: Readonly<Record<string, number>> = { s: 1_000, m: 60_000, h: 3_600_000 }
+
+/** A 0.5 job's `timeout` in ms. Its release's reader admitted only this form, so another value is a corrupt artifact. */
+function release05JobTimeoutMs(timeout: string | null): number {
+	if (timeout === null) return RELEASE_05_JOB_TIMEOUT_MS
+	const match = RELEASE_05_DURATION.exec(timeout)
+	const unit = match?.[2] === undefined ? undefined : RELEASE_05_UNIT_MS[match[2]]
+	if (match?.[1] === undefined || unit === undefined) {
+		throw new TypeError(`a 0.5 job's timeout '${timeout}' is not a duration its release admits`)
+	}
+	return Number.parseInt(match[1], 10) * unit
 }
 
 /**

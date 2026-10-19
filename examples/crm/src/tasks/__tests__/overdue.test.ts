@@ -13,7 +13,7 @@ const postgres = await testDatabase({ migrations: new URL('../../../db/migration
 
 /** More than the job's page of 100, so the run takes a second page. */
 const TASKS = 130
-/** The job's `timeout: '5m'`. */
+/** The job's `limits: { timeoutMs: 300000 }`. */
 const TIMEOUT_MS = 300_000
 
 if (postgres !== null) {

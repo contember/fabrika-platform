@@ -472,6 +472,8 @@ export interface WebhookMountArtifact {
 	readonly scheme: WebhookScheme
 	readonly boundTo: ScopeBinding
 	readonly actions: readonly string[]
+	/** How long a delivery's handler may run after the last body byte, in ms; its body limit is its row's `admission`. */
+	readonly timeoutMs: number
 }
 
 /** The providers whose signature the framework checks by name; every one signs the raw body with the binding's secret. */
@@ -536,7 +538,8 @@ export interface JobArtifact {
 	readonly schedule: string
 	readonly actions: readonly string[]
 	readonly scope: ScopeBinding
-	readonly timeout: string | null
+	/** How long one attempt may run, in ms, every default applied. */
+	readonly timeoutMs: number
 	readonly retries: number
 }
 

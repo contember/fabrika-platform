@@ -30,7 +30,7 @@ export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
 }))
 
 /** Deletes every note in the trash, nightly. A retried attempt lists again, so it deletes no note twice. */
-export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '5m', retries: 2 })
+export const purge = app.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', limits: { timeoutMs: 300000 }, retries: 2 })
 	.handle(async ({ ctx }) => {
 		const trashed = await ctx.db.over(ctx.within('notes.read', 'workspace')).notes.list({ where: [['trashed', '=', true]], limit: 200 })
 		await ctx.transaction(async (tx) => {

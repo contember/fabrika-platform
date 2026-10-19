@@ -39,6 +39,7 @@ import {
 	type FormMount,
 	type FormOptions,
 	type InputSchema,
+	type JobLimitsOption,
 	type Kit,
 	type LinkMount,
 	type NotLoose,
@@ -61,6 +62,7 @@ import type {
 	GroupInput,
 	GroupKit,
 	KicksField,
+	LimitsOption,
 	LinkGroupKit,
 	ListOf,
 	PendingIn,
@@ -88,7 +90,7 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 
 export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = never> =
 	& Owned<'kind' | 'schedule'>
-	& { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number }
+	& { readonly actions: Acts; readonly scope: Sc; readonly limits?: JobLimitsOption; readonly retries?: number }
 	& DeclaredFields<S, U, never, Is, Ix>
 	& MailerField<M>
 	& KicksField<Ks>
@@ -124,7 +126,8 @@ export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never> 
 		readonly boundTo: B
 		readonly actions: Acts
 		readonly input: I & NotLoose<I>
-		readonly maxBytes?: number
+		/** A delivery's body (1 MiB by default and at most) and its handler's time (10 s by default, at most 60 s). */
+		readonly limits?: LimitsOption
 	}
 	& DeclaredFields<S, U, never, never, Ix>
 	& KicksField<Ks>
@@ -430,7 +433,7 @@ interface RuntimeGroup extends GroupDeclaration {
 interface CronSiteOptions extends DeclaredDeclaration {
 	readonly actions: readonly string[]
 	readonly scope: string
-	readonly timeout?: string
+	readonly limits?: object
 	readonly retries?: number
 }
 
@@ -439,7 +442,7 @@ interface WebhookSiteOptions extends DeclaredDeclaration {
 	readonly boundTo: string
 	readonly actions: readonly string[]
 	readonly input: Schema
-	readonly maxBytes?: number
+	readonly limits?: object
 }
 
 interface LinkSiteOptions {
@@ -503,7 +506,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 				schedule,
 				actions: options.actions,
 				scope: options.scope,
-				timeout: options.timeout,
+				...(options.limits === undefined ? {} : { limits: options.limits }),
 				retries: options.retries,
 				declared: declaredOf(options),
 				unknownOptions: kitUnknownOptions(options, 'cron'),
@@ -518,7 +521,7 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefine
 				boundTo: options.boundTo,
 				actions: options.actions,
 				input: options.input,
-				maxBytes: options.maxBytes,
+				...(options.limits === undefined ? {} : { limits: options.limits }),
 				declared: declaredOf(options),
 				unknownOptions: kitUnknownOptions(options, 'webhook'),
 			}

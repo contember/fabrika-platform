@@ -124,6 +124,7 @@ describe('binds in the artifact', () => {
 			scheme: 'stripe',
 			boundTo: { kind: 'app' },
 			actions: ['positions.manage'],
+			timeoutMs: 10000,
 		})
 		// Only a GitHub webhook bound to a dimension keeps its generated binding endpoints.
 		expect(artifact.endpoints.map((row) => row.id).filter((id) => id.startsWith('webhooks.'))).toEqual([])

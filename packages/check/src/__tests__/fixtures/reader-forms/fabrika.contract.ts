@@ -56,7 +56,7 @@ export const contract = defineContract({
 		boundTo: 'project',
 		actions: ['tasks.write'],
 		input: Push,
-		maxBytes: 2097152,
+		limits: { maxBytes: 524288, timeoutMs: 30000 },
 	}) satisfies object,
 	app: c.spa('/', { dir: 'dist/app', access: { member: true } }),
 	files: {
@@ -72,7 +72,7 @@ export const contract = defineContract({
 		}),
 	},
 	jobs: {
-		cleanup: c.cron(nightly, { actions: ['tasks.delete'], scope: 'app', timeout: '15m', retries: 1 }),
+		cleanup: c.cron(nightly, { actions: ['tasks.delete'], scope: 'app', limits: { timeoutMs: 900000 }, retries: 1 }),
 		digest: c.cron('0 7 * * 1', { actions: ['tasks.read'], scope: 'project' }),
 	},
 	exports: {
