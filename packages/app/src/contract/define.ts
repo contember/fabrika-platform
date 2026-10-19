@@ -190,12 +190,27 @@ export type InputOf<I> = [I] extends [InputSchema] ? z.output<I> : Record<never,
 /** Input fields of string type: the only fields a scope value can be read from. */
 export type StringField<In> = { [K in keyof In]-?: In[K] extends string ? K : never }[keyof In] & string
 
+/** One of several capabilities: an action listed over a dimension, or held on or in the value an input field names. */
+export type CapabilityAccess<A extends string, D extends string, In> =
+	| OverAccess<A, D>
+	| InAccess<A, D, StringField<In>>
+	| OnAccess<A, D, StringField<In>>
+
+/**
+ * Several capabilities, by the name the handler reads each under (`ctx.capabilities.<name>`): an operation that reads
+ * one dimension and writes another holds both, each checked and minted as its own access form would be.
+ */
+export interface CapabilitiesAccess<C> {
+	readonly capabilities: C
+}
+
 export type QueryAccess<A extends string, D extends string, In> =
 	| MemberAccess
 	| OverAccess<A, D>
 	| InAccess<A, D, StringField<In>>
 	| OnAccess<A, D, StringField<In>>
 	| AppAccess<A>
+	| CapabilitiesAccess<{ readonly [name: string]: CapabilityAccess<A, D, In> }>
 
 export type MutationAccess<A extends string, D extends string, CD extends string, In> = QueryAccess<A, D, In> | CreatesAccess<A, CD>
 

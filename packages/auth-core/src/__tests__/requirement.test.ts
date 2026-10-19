@@ -9,6 +9,13 @@ const workspace = (value: string): Scope => ({ type: 'workspace', value })
 const member: EndpointRequirement = { kind: 'member' }
 const deleteNote: EndpointRequirement = { kind: 'action', action: 'notes.delete', access: { form: 'on', dimension: 'note', from: 'id' } }
 const manageLists: EndpointRequirement = { kind: 'action', action: 'codelists.manage', access: { form: 'app' } }
+const handover: EndpointRequirement = {
+	kind: 'capabilities',
+	capabilities: {
+		request: { action: 'requests.handover', access: { form: 'on', dimension: 'request', from: 'requestId' } },
+		records: { action: 'records.read', access: { form: 'over', dimension: 'record' } },
+	},
+}
 
 describe('satisfies refuses', () => {
 	test.each<[string, EndpointRequirement, PermissionEntry[]]>([
@@ -19,6 +26,7 @@ describe('satisfies refuses', () => {
 		['the app form, with the action held in one scope only', manageLists, [grant('codelists.manage', workspace('w1'))]],
 		['the app form, with a wildcard held in one scope only', manageLists, [grant('*', workspace('w1')), grant('codelists.manage', workspace('w2'))]],
 		['the app form, with another action held globally', manageLists, [grant('codelists.read')]],
+		['several capabilities, with one action held and the other not', handover, [grant('requests.handover', workspace('w1'))]],
 		['an action that only shares a string prefix', { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } }, [
 			grant('notes.readall'),
 		]],
@@ -39,6 +47,7 @@ describe('satisfies admits', () => {
 		['the universal wildcard', deleteNote, [grant('*')]],
 		['the app form, with the action held globally', manageLists, [grant('codelists.read', workspace('w1')), grant('codelists.manage')]],
 		['the app form, with a wildcard held globally', manageLists, [grant('codelists.*')]],
+		['several capabilities, each action held in some scope', handover, [grant('requests.handover', workspace('w1')), grant('records.read')]],
 	])('%s', (_name, requirement, perms) => {
 		expect(satisfies(requirement, perms)).toBe(true)
 	})

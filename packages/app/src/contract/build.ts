@@ -9,6 +9,8 @@ import {
 	BUILTIN_ROLE_KEYS,
 	type Caller,
 	canonicalizeArtifact,
+	type CapabilityAccessForm,
+	type CapabilityRequirement,
 	type ChallengeProvider,
 	type ContractArtifact,
 	type CrossOriginForm,
@@ -57,6 +59,7 @@ import {
 	type AccessDeclaration,
 	type Builder,
 	BUILDER_FIELDS,
+	type CapabilityDeclaration,
 	type ContractDeclaration,
 	type CronDeclaration,
 	type CspDeclaration,
@@ -1019,6 +1022,9 @@ class ArtifactBuilder {
 
 	#requirement(where: string, procedure: ProcedureDeclaration<SchemaShape>): EndpointRequirement | null {
 		const access: AccessDeclaration = procedure.access
+		if ('capabilities' in access) {
+			return this.#capabilities(where, procedure, access)
+		}
 		const form = accessForm(access)
 		if (form === null) {
 			this.#problem(
@@ -1055,6 +1061,42 @@ class ArtifactBuilder {
 			}
 		}
 		return { kind: 'action', action: form.action, access: form.access }
+	}
+
+	/**
+	 * Several capabilities, each an action `over` a dimension or `on` or `in` the value an input field names: at least two,
+	 * by names the handler reads (`ctx.capabilities.<name>`). Several fields may name one value.
+	 */
+	#capabilities(
+		where: string,
+		procedure: ProcedureDeclaration<SchemaShape>,
+		access: { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> },
+	): EndpointRequirement | null {
+		const allowed = '{ capabilities: { <name>: { action, over } | { action, in, from } | { action, on, from }, … } }, at least two'
+		if (!hasExactKeys(access, ['capabilities']) || !isRecord(access.capabilities) || Object.keys(access.capabilities).length < 2) {
+			this.#problem(where, `access ${JSON.stringify(access)} is not several capabilities (allowed: ${allowed})`)
+			return null
+		}
+		const capabilities: Record<string, CapabilityRequirement> = {}
+		for (const [name, declared] of Object.entries(access.capabilities)) {
+			const at = `${where} capability '${name}'`
+			const form = accessForm(declared)
+			if (!this.#name(at, name) || form === null || form.form !== 'action' || !isCapabilityForm(form.access)) {
+				if (form !== null) this.#problem(at, `is not one capability (allowed: { action, over }, { action, in, from }, { action, on, from })`)
+				else {this.#problem(
+						at,
+						`${JSON.stringify(declared)} is not one access form (allowed: { action, over }, { action, in, from }, { action, on, from })`,
+					)}
+				continue
+			}
+			this.#knownAction(at, form.action)
+			this.#knownDimension(at, form.access.dimension)
+			if (form.access.form !== 'over') {
+				this.#fromField(at, procedure.input, form.access.from)
+			}
+			capabilities[name] = { action: form.action, access: form.access }
+		}
+		return { kind: 'capabilities', capabilities }
 	}
 
 	#linkRequirement(where: string, access: LinkAccessDeclaration, mount: LinkMountDeclaration<SchemaShape>): EndpointRequirement | null {
@@ -1438,11 +1480,15 @@ class ArtifactBuilder {
 			// `#exports` refused the app form already: a description needs one dimension.
 			return null
 		}
+		if (first.kind === 'capabilities') {
+			// `#exports` refused several capabilities already: a consumer's key holds one action.
+			return null
+		}
 		const description: EndpointRequirement = first.kind === 'member' || dimension === null
 			? first
 			: { kind: 'action', action: first.action, access: { form: 'over', dimension } }
 		const same = requirements.every((requirement) =>
-			requirement !== null && (requirement.kind === 'member'
+			requirement !== null && requirement.kind !== 'capabilities' && (requirement.kind === 'member'
 				? description.kind === 'member'
 				: description.kind === 'action' && requirement.action === description.action && dimensionOf(requirement) === dimension)
 		)
@@ -2015,6 +2061,10 @@ type DeclaringSite =
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 type ResolvedAccess = { readonly form: 'member' } | { readonly form: 'action'; readonly action: string; readonly access: AccessForm }
+
+function isCapabilityForm(access: AccessForm): access is CapabilityAccessForm {
+	return access.form === 'over' || access.form === 'in' || (access.form === 'on' && access.from !== null)
+}
 
 /** The one access form the declaration spells, with exactly its keys; a mixture of two forms is none. */
 function accessForm(access: AccessDeclaration): ResolvedAccess | null {

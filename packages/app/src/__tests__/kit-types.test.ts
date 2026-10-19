@@ -69,6 +69,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'51-form-file-that-is-no-inbox-column.ts':
 		'the inbox registrations has no column selfie: each input and file field is named like its column (columns: ',
 	'52-app-capability-in-a-bound-webhook.ts': 'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)',
+	'53-target-of-several-capabilities.ts': 'an endpoint of several capabilities binds each: ctx.db.on(ctx.capabilities.<name>), .in or .over',
 }
 
 /**

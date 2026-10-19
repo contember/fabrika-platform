@@ -24,7 +24,7 @@ import type { FileCollectionHandle, FileCollectionJobHandle, FileCollectionReadH
 import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, ServicePrincipal } from '../implement/principal'
-import type { ConnectCall, RequestContext } from '../implement/types'
+import type { CapabilityOf, ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
 import type { AppMail, JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
@@ -164,6 +164,9 @@ type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true
  */
 export type CheckedAccess<Acc> = true extends IsUnion<Acc> ? InvalidAccess : Acc
 
+/** Every action several capabilities name. */
+type CapabilityActions<C> = { [N in keyof C]: C[N] extends { readonly action: infer A extends string } ? A : never }[keyof C]
+
 /** The capability an access form hands, and what the other forms do not have. */
 export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
 		readonly target: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
@@ -173,6 +176,11 @@ export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
 	: Acc extends MemberAccess ? {
 			readonly target: Unavailable<'a member endpoint holds no capability: declare access with on or in for ctx.target'>
 			readonly within: Unavailable<'a member endpoint holds no capability: declare access with over for ctx.within'>
+		}
+	: Acc extends { readonly capabilities: infer C } ? {
+			readonly capabilities: { readonly [N in keyof C]: CapabilityOf<C[N]> }
+			readonly target: Unavailable<'an endpoint of several capabilities holds each in ctx.capabilities.<name>'>
+			readonly within: Unavailable<'an endpoint of several capabilities holds each in ctx.capabilities.<name>'>
 		}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
 			readonly within: Within<D, A>
@@ -252,6 +260,13 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 	: Acc extends MemberAccess ? {
 			readonly target: Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>
 		}
+	: Acc extends { readonly capabilities: infer C } ?
+			& CapabilityData<Ix, K, CapabilityActions<C>>
+			& {
+				readonly target: Unavailable<'an endpoint of several capabilities binds each: ctx.db.on(ctx.capabilities.<name>), .in or .over'>
+				readonly within: Unavailable<'an endpoint of several capabilities binds each: ctx.db.on(ctx.capabilities.<name>), .in or .over'>
+				readonly app: Unavailable<'an endpoint of several capabilities binds each: ctx.db.on(ctx.capabilities.<name>), .in or .over'>
+			}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
 			readonly within: WithinData<Ix, D, A, K>
 			readonly app: ScopedAppData<Ix, A>

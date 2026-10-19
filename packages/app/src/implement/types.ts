@@ -30,6 +30,13 @@ export type AccessContext<Acc> = Acc extends MemberAccess ? unknown
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? { readonly target: Ref<D, A> }
 	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Ref<D, A> }
 	: Acc extends { readonly action: infer A extends string; readonly app: true } ? { readonly app: AppCapability<A> }
+	: Acc extends { readonly capabilities: infer C } ? { readonly capabilities: { readonly [N in keyof C]: CapabilityOf<C[N]> } }
+	: never
+
+/** The capability one of several hands: a `Within` for `over`, a `Ref` for `on` and `in`. */
+export type CapabilityOf<F> = F extends { readonly action: infer A extends string; readonly over: infer D extends string } ? Within<D, A>
+	: F extends { readonly action: infer A extends string; readonly in: infer D extends string } ? Ref<D, A>
+	: F extends { readonly action: infer A extends string; readonly on: infer D extends string } ? Ref<D, A>
 	: never
 
 type DimensionsOf<C> = C extends { readonly dimensions: infer Dims } ? Dims : never

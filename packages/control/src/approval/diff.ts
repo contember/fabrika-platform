@@ -951,6 +951,12 @@ function audience(row: EndpointRow): string {
 /** What a credentialed caller must hold: `who are members`, or `` with `notes.read` (on `note`) ``. */
 export function requirementPhrase(requirement: EndpointRequirement): string {
 	if (requirement.kind === 'member') return 'who are members'
+	if (requirement.kind === 'capabilities') {
+		const each = Object.entries(requirement.capabilities).map(([name, { action, access }]) =>
+			`\`${action}\` (${access.form} \`${access.dimension}\`, as \`${name}\`)`
+		)
+		return `with each of ${andList(each)}`
+	}
 	const { action, access } = requirement
 	return access.form === 'app' ? `with \`${action}\` (app-wide: a global grant)` : `with \`${action}\` (${access.form} \`${access.dimension}\`)`
 }

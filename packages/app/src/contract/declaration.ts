@@ -128,12 +128,22 @@ export type AccessDeclaration =
 	| { readonly action: string; readonly on: string; readonly from: string }
 	| { readonly action: string; readonly creates: string }
 	| { readonly action: string; readonly app: true }
+	| { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> }
+
+/** One of several capabilities: an action in a dimension, listed `over` it or read from an input field. */
+export type CapabilityDeclaration =
+	| { readonly action: string; readonly over: string }
+	| { readonly action: string; readonly in: string; readonly from: string }
+	| { readonly action: string; readonly on: string; readonly from: string }
 
 /**
  * An export procedure's access: an action in a dimension, never `member`, because the consumer's key holds exactly the
- * actions, and never `app`, because a v1 export declares one dimension.
+ * actions, never `app`, because a v1 export declares one dimension, and never several capabilities.
  */
-export type ExportAccessDeclaration = Exclude<AccessDeclaration, { readonly member: true } | { readonly app: true }>
+export type ExportAccessDeclaration = Exclude<
+	AccessDeclaration,
+	{ readonly member: true } | { readonly app: true } | { readonly capabilities: Readonly<Record<string, CapabilityDeclaration>> }
+>
 
 export interface LinkAccessDeclaration {
 	readonly action: string

@@ -156,9 +156,19 @@ const accessFormSchema = z.discriminatedUnion('form', [
 	z.object({ form: z.literal('creates'), dimension: nameSchema }).strict(),
 	z.object({ form: z.literal('app') }).strict(),
 ])
+const capabilityFormSchema = z.discriminatedUnion('form', [
+	z.object({ form: z.literal('over'), dimension: nameSchema }).strict(),
+	z.object({ form: z.literal('in'), dimension: nameSchema, from: nameSchema }).strict(),
+	z.object({ form: z.literal('on'), dimension: nameSchema, from: nameSchema }).strict(),
+])
+const capabilitySchema = z.object({ action: nameSchema, access: capabilityFormSchema }).strict()
 const requirementSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('member') }).strict(),
 	z.object({ kind: z.literal('action'), action: nameSchema, access: accessFormSchema }).strict(),
+	z.object({
+		kind: z.literal('capabilities'),
+		capabilities: z.record(nameSchema, capabilitySchema).refine((capabilities) => Object.keys(capabilities).length >= 2, 'at least two capabilities'),
+	}).strict(),
 ])
 const admissionSchema = z.object({
 	contentTypes: z.array(nameSchema).nonempty(),

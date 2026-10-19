@@ -251,9 +251,9 @@ const policyTestBody = (
 	return { body, cases: [...isolation, ...hidden].map((item) => item.name) }
 }
 
-/** Whether an endpoint gets endpoint access cases: a procedure with an access form, for a person or a machine. */
+/** Whether an endpoint gets endpoint access cases: a procedure with an access form or several, for a person or a machine. */
 const isAccessTested = (row: EndpointRow): boolean => {
-	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind !== 'action') return false
+	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind === 'member') return false
 	return row.callers.some((caller) => caller === 'human' || caller === 'machine')
 }
 
@@ -406,6 +406,29 @@ const endpointCases = (row: EndpointRow, artifact: ContractArtifact, policies: P
 }
 
 /**
+ * An endpoint of several capabilities: one denied case per capability, each refused while every other one passes. An
+ * object of another scope is 404 (`on`), a value of another scope 403 (`in`), and a caller without the action 403 (`over`).
+ */
+const capabilityCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly Case[] => {
+	if (row.requirement?.kind !== 'capabilities' || !row.callers.some((caller) => caller === 'human' || caller === 'machine')) return []
+	const input = inputOf(row, fixtures)
+	if (input === undefined) return []
+	const seed = fixtures.seeds[row.id]
+	return Object.entries(row.requirement.capabilities).map(([name, { action, access }]) => {
+		const args = `${quote(row.id)}, ${quote(name)}, ${renderSample(input)}${seed === undefined ? '' : `, ${renderSample(seed)}`}`
+		const call = `await kit.capability(${args})`
+		if (access.form === 'over') {
+			return testCase(`${row.id}: a caller without ${action} (capability ${name}) is 403`, `expect(${call}).toEqual({ status: 403 })`)
+		}
+		const status = access.form === 'on' ? 404 : 403
+		return testCase(
+			`${row.id}: the ${access.dimension} of another scope as capability ${name} is ${status}`,
+			`expect(${call}).toEqual({ status: ${status} })`,
+		)
+	})
+}
+
+/**
  * A file endpoint's own cases, over a file the kit seeds in each scope. Their names carry the collection's actions, so a
  * change of one makes the committed test stale; a read action that also writes or removes loses its refusal case.
  */
@@ -450,7 +473,7 @@ const endpointTestBody = (
 ): { readonly body: string; readonly cases: readonly string[] } | undefined => {
 	const cases = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).flatMap((
 		row,
-	) => [...endpointCases(row, artifact, policies, fixtures), ...fileCases(row, artifact)])
+	) => [...endpointCases(row, artifact, policies, fixtures), ...capabilityCases(row, fixtures), ...fileCases(row, artifact)])
 	if (cases.length === 0) return undefined
 	const body = [
 		'// The endpoint access tests of this application, written by fabrika db test-scaffold from fabrika.contract.ts and',
@@ -546,7 +569,9 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 	)
 	for (const id of Object.keys(fixtures.inputs).sort()) {
 		if (!tested.some((row) => row.id === id)) {
-			findings.push(at(`${id} is no endpoint with an on, in, over, app or creates access form`, 'a fixture of a tested endpoint, or none'))
+			findings.push(
+				at(`${id} is no endpoint with an on, in, over, app or creates access form, or several capabilities`, 'a fixture of a tested endpoint, or none'),
+			)
 		}
 	}
 	for (const [id, fields] of Object.entries(fixtures.members).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {

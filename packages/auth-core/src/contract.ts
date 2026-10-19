@@ -147,7 +147,7 @@ export interface BodyAdmission {
  * `action` is that action in some scope, global included, and only globally under the `app` form. The access form is
  * what the framework then resolves.
  */
-export type EndpointRequirement = MemberRequirement | ActionRequirement
+export type EndpointRequirement = MemberRequirement | ActionRequirement | CapabilitiesRequirement
 
 export interface MemberRequirement {
 	readonly kind: 'member'
@@ -158,6 +158,26 @@ export interface ActionRequirement {
 	readonly action: string
 	readonly access: AccessForm
 }
+
+/**
+ * Several capabilities (`access: { capabilities }`), by the name the handler reads each under (`ctx.capabilities.<name>`):
+ * the token must carry every action, and the access form of each narrows it as it narrows a single one. At least two.
+ */
+export interface CapabilitiesRequirement {
+	readonly kind: 'capabilities'
+	readonly capabilities: Readonly<Record<string, CapabilityRequirement>>
+}
+
+/** One capability of several: an action in a dimension, its value read from an input field or listed `over` it. */
+export interface CapabilityRequirement {
+	readonly action: string
+	readonly access: CapabilityAccessForm
+}
+
+export type CapabilityAccessForm =
+	| { readonly form: 'over'; readonly dimension: string }
+	| { readonly form: 'in'; readonly dimension: string; readonly from: string }
+	| { readonly form: 'on'; readonly dimension: string; readonly from: string }
 
 /** `from` names an input field or a path parameter of the endpoint. */
 export type AccessForm =

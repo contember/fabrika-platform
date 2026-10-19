@@ -6,6 +6,7 @@
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import {
+	type CapabilitiesRequirement,
 	type CompiledEndpointTable,
 	type CredentialedEndpoint,
 	DELEGATION_HEADER,
@@ -60,7 +61,7 @@ import { abortedBody, bootstrapPath, bootstrapResponse, githubAccounts, readBoun
 import { attachmentResponse } from './attachment'
 import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
-import { CapabilityLimitError, type CapabilityMint, RequestFrame, runInRequest } from './capability'
+import { CapabilityLimitError, type CapabilityMint, type Ref, RequestFrame, runInRequest, type Within } from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
 import type { FailureReports } from './failures'
@@ -270,7 +271,15 @@ function mediaType(header: string | null): string | null {
 }
 
 function describeRequirement(row: CredentialedEndpoint): string {
-	return row.requirement.kind === 'member' ? 'a permission in this application' : `'${row.requirement.action}' in some scope`
+	const { requirement } = row
+	switch (requirement.kind) {
+		case 'member':
+			return 'a permission in this application'
+		case 'action':
+			return `'${requirement.action}' in some scope`
+		case 'capabilities':
+			return `each of ${Object.values(requirement.capabilities).map((capability) => `'${capability.action}'`).join(', ')} in some scope`
+	}
 }
 
 export class ContractRuntime {
@@ -665,46 +674,23 @@ export class ContractRuntime {
 		if (row.requirement.kind === 'member') {
 			return { context: {}, input }
 		}
+		if (row.requirement.kind === 'capabilities') {
+			return await this.#capabilities(row.requirement, caller, input, frame)
+		}
 		const { action, access } = row.requirement
 		switch (access.form) {
-			case 'over': {
-				const direct = scopedValues(caller.perms, action, access.dimension)
-				if (direct === null) {
-					return { context: { within: this.#parts.mint.within(frame, access.dimension, action, caller.subject, 'all') }, input }
-				}
-				const held = this.#heldContainers(caller.perms, action, access.dimension)
-				if (direct.length === 0 && held.length === 0) {
-					throw new ForbiddenError(`The caller holds '${action}' in no ${access.dimension}`)
-				}
-				return { context: { within: this.#parts.mint.within(frame, access.dimension, action, caller.subject, direct, held) }, input }
-			}
+			case 'over':
+				return { context: { within: this.#within(caller, action, access.dimension, frame) }, input }
 			case 'in': {
 				const { value, rest } = takeField(input, access.from)
-				const direct = permits(caller.perms, action, { type: access.dimension, value })
-				// Without a grant on the value or on a container of its dimension, nothing is read: 403 whether it exists or not.
-				if (!direct && this.#heldContainers(caller.perms, action, access.dimension).length === 0) {
-					throw new ForbiddenError(`The caller does not hold '${action}' in this ${access.dimension}`)
-				}
-				const chain = await this.#chain(access.dimension, value)
-				if (!holdsOnChain(caller.perms, action, access.dimension, value, chain ?? new Map())) {
-					throw new ForbiddenError(`The caller does not hold '${action}' in this ${access.dimension}`)
-				}
-				if (chain === null) {
-					throw new NotFoundError('Not found')
-				}
-				return { context: { target: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
+				return { context: { target: await this.#inRef(caller, action, access.dimension, value, frame) }, input: rest }
 			}
 			case 'on': {
 				if (access.from === null) {
 					return await this.#linkTarget(row, caller, action, access.dimension, input, frame)
 				}
 				const { value, rest } = takeField(input, access.from)
-				const chain = await this.#chain(access.dimension, value)
-				// An object the caller may not act on is indistinguishable from a missing one.
-				if (chain === null || !holdsOnChain(caller.perms, action, access.dimension, value, chain)) {
-					throw new NotFoundError('Not found')
-				}
-				return { context: { target: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
+				return { context: { target: await this.#onRef(caller, action, access.dimension, value, frame) }, input: rest }
 			}
 			case 'creates': {
 				if (membership === null) {
@@ -718,6 +704,71 @@ export class ContractRuntime {
 				return { context: { app: this.#parts.mint.app(frame, action, caller.subject) }, input }
 			}
 		}
+	}
+
+	/** The values of `dimension` in which the caller holds `action`, directly or through a container; all for a global grant. */
+	#within(caller: Caller, action: string, dimension: string, frame: RequestFrame): Within<string, string> {
+		const direct = scopedValues(caller.perms, action, dimension)
+		if (direct === null) {
+			return this.#parts.mint.within(frame, dimension, action, caller.subject, 'all')
+		}
+		const held = this.#heldContainers(caller.perms, action, dimension)
+		if (direct.length === 0 && held.length === 0) {
+			throw new ForbiddenError(`The caller holds '${action}' in no ${dimension}`)
+		}
+		return this.#parts.mint.within(frame, dimension, action, caller.subject, direct, held)
+	}
+
+	/** A scope value the caller acts in: without a grant on it or on a container of it, 403 whether it exists or not. */
+	async #inRef(caller: Caller, action: string, dimension: string, value: string, frame: RequestFrame): Promise<Ref<string, string>> {
+		const direct = permits(caller.perms, action, { type: dimension, value })
+		if (!direct && this.#heldContainers(caller.perms, action, dimension).length === 0) {
+			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
+		}
+		const chain = await this.#chain(dimension, value)
+		if (!holdsOnChain(caller.perms, action, dimension, value, chain ?? new Map())) {
+			throw new ForbiddenError(`The caller does not hold '${action}' in this ${dimension}`)
+		}
+		if (chain === null) {
+			throw new NotFoundError('Not found')
+		}
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
+	}
+
+	/** An object the caller acts on; one it may not act on is indistinguishable from a missing one. */
+	async #onRef(caller: Caller, action: string, dimension: string, value: string, frame: RequestFrame): Promise<Ref<string, string>> {
+		const chain = await this.#chain(dimension, value)
+		if (chain === null || !holdsOnChain(caller.perms, action, dimension, value, chain)) {
+			throw new NotFoundError('Not found')
+		}
+		return this.#parts.mint.ref(frame, dimension, action, caller.subject, value, chain)
+	}
+
+	/**
+	 * Several capabilities, each minted as its single access form mints it, in their declared order, so the first one
+	 * refused answers. Each reads its value from the input as the caller sent it; the fields they read are removed after.
+	 */
+	async #capabilities(
+		requirement: CapabilitiesRequirement,
+		caller: Caller,
+		input: Readonly<Record<string, unknown>>,
+		frame: RequestFrame,
+	): Promise<Access> {
+		const minted: Record<string, unknown> = {}
+		const read = new Set<string>()
+		for (const [name, { action, access }] of Object.entries(requirement.capabilities)) {
+			if (access.form === 'over') {
+				minted[name] = this.#within(caller, action, access.dimension, frame)
+				continue
+			}
+			const { value } = takeField(input, access.from)
+			read.add(access.from)
+			minted[name] = access.form === 'in'
+				? await this.#inRef(caller, action, access.dimension, value, frame)
+				: await this.#onRef(caller, action, access.dimension, value, frame)
+		}
+		const rest = Object.freeze(Object.fromEntries(Object.entries(input).filter(([field]) => !read.has(field))))
+		return { context: { capabilities: Object.freeze(minted) }, input: rest }
 	}
 
 	/**
@@ -1063,7 +1114,7 @@ function siteContext(
 	principal: string,
 	access: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-	const form = row.requirement.kind === 'member' ? 'member' : row.requirement.access.form
+	const form = row.requirement.kind === 'member' ? 'member' : row.requirement.kind === 'capabilities' ? 'capabilities' : row.requirement.access.form
 	const db = endpointData(invocation.handles(site.kind, site.declaration, principal), form, {
 		target: access['target'],
 		within: access['within'],

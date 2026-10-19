@@ -297,14 +297,24 @@ export interface AccessCapabilities {
 	readonly app?: unknown
 }
 
-/** `ctx.db` of an endpoint, by its access form: the API matrix of `docs/reference/application-runtime.md`. */
+/**
+ * `ctx.db` of an endpoint, by its access form: the API matrix of `docs/reference/application-runtime.md`. An endpoint of
+ * several capabilities binds each, as a job binds what it minted: `ctx.db.on(ref)`, `.in(ref)`, `.over(within)`.
+ */
 export function endpointData(
 	handles: DataHandles,
-	form: 'on' | 'in' | 'over' | 'creates' | 'app' | 'member',
+	form: 'on' | 'in' | 'over' | 'creates' | 'app' | 'member' | 'capabilities',
 	access: AccessCapabilities,
 ): object {
 	const shared = { reference: handles.reference, ...(handles.unscoped === undefined ? {} : { unscoped: handles.unscoped }) }
 	switch (form) {
+		case 'capabilities':
+			return Object.freeze({
+				on: (ref: unknown) => handles.target(ref, 'on'),
+				in: (ref: unknown) => handles.target(ref, 'in'),
+				over: (within: unknown) => handles.within(within),
+				...shared,
+			})
 		case 'on':
 			return Object.freeze({ target: handles.target(access.target, 'on'), app: handles.app(access.target), ...shared })
 		case 'in':

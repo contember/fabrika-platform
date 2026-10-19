@@ -77,6 +77,21 @@ const CODELISTS = endpointRow({
 	requirement: { kind: 'action', action: 'codelists.manage', access: { form: 'app' } },
 	admission: JSON_BODY,
 })
+const HANDOVER = endpointRow({
+	id: 'api.requests.handover',
+	kind: 'mutation',
+	method: 'POST',
+	path: '/api/requests.handover',
+	callers: ['human'],
+	requirement: {
+		kind: 'capabilities',
+		capabilities: {
+			request: { action: 'requests.handover', access: { form: 'on', dimension: 'request', from: 'requestId' } },
+			records: { action: 'records.read', access: { form: 'over', dimension: 'record' } },
+		},
+	},
+	admission: JSON_BODY,
+})
 const SHARED = endpointRow({
 	id: 'shared.note',
 	kind: 'query',
@@ -115,7 +130,7 @@ const CONTACT = anonymousRow({
 	admission: { contentTypes: ['application/x-www-form-urlencoded'], maxBytes: 4096 },
 })
 
-const TABLE = [ME, REMOVE, INVITE, IMPORT, CODELISTS, SHARED, EXPORTED, PARTNER, SPA, HEALTH, CONTACT]
+const TABLE = [ME, REMOVE, INVITE, IMPORT, CODELISTS, HANDOVER, SHARED, EXPORTED, PARTNER, SPA, HEALTH, CONTACT]
 const RESERVED = ['/api', '/machine', '/s/api', '/__fabrika/connect', '/partner']
 
 const grant = (action: string, scope: PermissionEntry['scope'] = null): PermissionEntry => ({ action, scope, source: 'grant' })
@@ -351,6 +366,18 @@ describe('step 5 — the requirement', () => {
 	test('the app form admits a global grant of the action', async () => {
 		const { verify } = service({ mintToken: await minted('user', [grant('codelists.manage')]) })
 		expect((await verify(verifyRequest({ ...JSON_POST, path: '/api/codelists.save', cookie: SESSION }))).status).toBe(204)
+	})
+
+	test('several capabilities need every action: one of them alone is a 403 at the proxy', async () => {
+		const { verify } = service({ mintToken: await minted('user', [grant('requests.handover', { type: 'request', value: 'r1' })]) })
+		expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/api/requests.handover', cookie: SESSION })), 403)
+	})
+
+	test('several capabilities admit a token that carries each action in some scope', async () => {
+		const { verify } = service({
+			mintToken: await minted('user', [grant('requests.handover', { type: 'request', value: 'r1' }), grant('records.read')]),
+		})
+		expect((await verify(verifyRequest({ ...JSON_POST, path: '/api/requests.handover', cookie: SESSION }))).status).toBe(204)
 	})
 })
 

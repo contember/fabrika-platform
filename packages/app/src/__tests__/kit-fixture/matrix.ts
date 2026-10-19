@@ -75,6 +75,15 @@ type Issues = Context<
 	{ readonly action: 'deals.share'; readonly on: 'deal'; readonly from: 'id' },
 	Declared<never, never, never, 'shared'>
 >
+type Several = Context<
+	'mutation',
+	{
+		readonly capabilities: {
+			readonly deal: { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }
+			readonly orgs: { readonly action: 'deals.write'; readonly over: 'org' }
+		}
+	}
+>
 
 /** The API matrix: what each access form puts on `ctx` and `ctx.db`, and what it refuses with a message. */
 export type Matrix = [
@@ -255,6 +264,9 @@ export type Sites = [
 	Expect<Equal<Parameters<JobCtx['app']>[0], 'crm.read' | 'deals.write'>>,
 	Expect<Equal<Parameters<JobCtx['db']['app']>[0], 'crm.read' | 'deals.write'>>,
 	Expect<Equal<HookCtx['app'], Unavailable<'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)'>>>,
+	// Several capabilities are held by name and bound one at a time.
+	Expect<Equal<Several['capabilities'], { readonly deal: Ref<'deal', 'crm.read'>; readonly orgs: Within<'org', 'deals.write'> }>>,
+	Expect<Equal<Several['target'], Unavailable<'an endpoint of several capabilities holds each in ctx.capabilities.<name>'>>>,
 ]
 
 type Get = typeof deals.endpoints.get

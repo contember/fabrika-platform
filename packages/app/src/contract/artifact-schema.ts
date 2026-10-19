@@ -115,9 +115,22 @@ const accessForm = z.discriminatedUnion('form', [
 	z.strictObject({ form: z.literal('app') }),
 ])
 
+const capabilityForm = z.discriminatedUnion('form', [
+	z.strictObject({ form: z.literal('over'), dimension: name }),
+	z.strictObject({ form: z.literal('in'), dimension: name, from: name }),
+	z.strictObject({ form: z.literal('on'), dimension: name, from: name }),
+])
+
 const requirement = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('member') }),
 	z.strictObject({ kind: z.literal('action'), action, access: accessForm }),
+	z.strictObject({
+		kind: z.literal('capabilities'),
+		capabilities: record(z.strictObject({ action, access: capabilityForm })).refine(
+			(capabilities) => Object.keys(capabilities).length >= 2,
+			'several capabilities are at least two',
+		),
+	}),
 ])
 
 const rowBase = {

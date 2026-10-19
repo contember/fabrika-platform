@@ -84,6 +84,13 @@ export interface EndpointAccessKit {
 	 * `answered` unless the answer is a 401, a 403 or a 5xx.
 	 */
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
+	/**
+	 * One capability of an endpoint of several, refused while every other one passes: the caller holds each other one's
+	 * action in a scope of its own and addresses its object or value there (or, for `over`, holds the action globally).
+	 * For an `on` or `in` capability it also holds the named one's action in its own scope and addresses the other's
+	 * object (404) or value (403); for `over` it holds the named action nowhere (403). `seed` is the named one's.
+	 */
+	capability(endpoint: string, capability: string, input: Readonly<Record<string, unknown>>, seed?: Seed): Promise<DeniedOutcome>
 }
 
 export type FileOperation = 'upload' | 'download' | 'remove'
@@ -325,6 +332,30 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action && (issues === undefined || issues === name)
 				? [{ mount: name, grants: mount.grants }]
 				: []
+		)
+	}
+
+	/** An endpoint of several capabilities, as one `ActionEndpoint` per capability, by its name. */
+	const capabilitiesEndpointOf = (id: string): ReadonlyMap<string, ActionEndpoint> => {
+		const row = kit.artifact.endpoints.find((candidate) => candidate.id === id)
+		const requirement = row?.requirement
+		if (row === undefined || requirement?.kind !== 'capabilities') {
+			throw new Error(`${id} is not an endpoint of the contract with several capabilities`)
+		}
+		return new Map(
+			Object.entries(requirement.capabilities).map(([name, capability]) => [name, {
+				id: row.id,
+				link: null,
+				method: row.method,
+				path: row.path,
+				callers: row.callers,
+				action: capability.action,
+				access: capability.access,
+				input: row.input,
+				directory: null,
+				manages: null,
+				links: [],
+			}]),
 		)
 	}
 
@@ -810,6 +841,34 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 			// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 			return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 		},
+		async capability(endpoint, capability, input, seed = {}) {
+			const capabilities = capabilitiesEndpointOf(endpoint)
+			const named = capabilities.get(capability)
+			if (named === undefined) {
+				throw new Error(`${endpoint} has no capability '${capability}' (capabilities: ${[...capabilities.keys()].join(', ')})`)
+			}
+			const grants: Grant[] = []
+			const global: { readonly action: string }[] = []
+			let asked = input
+			for (const [name, other] of capabilities) {
+				if (name === capability) continue
+				if (other.access.form === 'over') {
+					global.push({ action: other.action })
+				} else if (other.access.form === 'on' || other.access.form === 'in') {
+					const { own } = await scopesOf(other.action, other.access.dimension, fieldOf(other.input, other.access.from), {}, input)
+					asked = addressing(asked, other.access.from, own)
+					grants.push(...own.grants)
+				}
+			}
+			const { access } = named
+			if (access.form === 'on' || access.form === 'in') {
+				const scopes = await scopesOf(named.action, access.dimension, fieldOf(named.input, access.from), seed, input)
+				asked = addressing(asked, access.from, scopes.other)
+				grants.push(...scopes.own.grants)
+			}
+			const { status } = await askAs(named, callerFor(named, grants, global).fetch, asked)
+			return { status }
+		},
 	}
 	// Each case waits for the runs its requests kicked, so the suite's teardown never closes the database under one.
 	const drained = <A extends readonly unknown[], R>(method: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
@@ -826,5 +885,6 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		file: drained(accessKit.file),
 		scoped: drained(accessKit.scoped),
 		global: drained(accessKit.global),
+		capability: drained(accessKit.capability),
 	})
 }

@@ -8,6 +8,7 @@ import {
 	type AnyMount,
 	attachmentOutput,
 	type Builder,
+	type CapabilityDeclaration,
 	type CronJob,
 	type CspDeclaration,
 	type DeclaredDeclaration,
@@ -74,7 +75,9 @@ const CONTRACT_ALLOWED = 'export const contract = app.contract((c) => ({ … }))
 
 /** Which builders a surface is written with: `defineContract`'s `c`, or the staged kit's (`app.*` and its `c`). */
 type Form = 'surface' | 'kit'
-const ACCESS_ALLOWED = '{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates } or { action, app: true }'
+const ACCESS_ALLOWED =
+	'{ member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates }, { action, app: true } or { capabilities: { <name>: … } }'
+const CAPABILITY_ALLOWED = '{ action, over }, { action, in, from } or { action, on, from }'
 
 type Entries = ReadonlyMap<string, LiteralValue>
 
@@ -985,7 +988,29 @@ function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): A
 	if (isApp(fields)) {
 		return { action: field('action'), app: true }
 	}
+	if (hasKeys(fields, ['capabilities'])) {
+		return { capabilities: capabilityDeclarations(fields.get('capabilities'), value ?? at) }
+	}
 	throw new Refused(value?.at ?? at.at, 'access is not one access form', ACCESS_ALLOWED)
+}
+
+/** `capabilities: { <name>: <form>, … }`: each one capability's form, by its name; `buildArtifact` checks the rest. */
+function capabilityDeclarations(value: LiteralValue | undefined, owner: Owner): Readonly<Record<string, CapabilityDeclaration>> {
+	const declared: Record<string, CapabilityDeclaration> = {}
+	for (const [name, form] of entries(value, owner, 'access.capabilities')) {
+		const fields = entries(form, owner, `access.capabilities.${name}`)
+		const field = (key: string): string => text(fields.get(key), form, `access.capabilities.${name}.${key}`)
+		if (hasKeys(fields, ['action', 'over'])) {
+			declared[name] = { action: field('action'), over: field('over') }
+		} else if (hasKeys(fields, ['action', 'in', 'from'])) {
+			declared[name] = { action: field('action'), in: field('in'), from: field('from') }
+		} else if (hasKeys(fields, ['action', 'on', 'from'])) {
+			declared[name] = { action: field('action'), on: field('on'), from: field('from') }
+		} else {
+			throw new Refused(form.at, `capability '${name}' is not one capability`, CAPABILITY_ALLOWED)
+		}
+	}
+	return declared
 }
 
 /**
@@ -999,6 +1024,9 @@ function exportAccessDeclaration(value: LiteralValue | undefined, at: BuilderVal
 	}
 	if ('app' in access) {
 		throw new Refused(value?.at ?? at.at, 'an export procedure reads in one dimension', '{ action, over } (or in, on)')
+	}
+	if ('capabilities' in access) {
+		throw new Refused(value?.at ?? at.at, 'an export procedure names one action', '{ action, over } (or in, on)')
 	}
 	return access
 }
