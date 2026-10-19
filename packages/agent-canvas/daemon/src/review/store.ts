@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { PROJECT_RE, type ReviewAnchor, type ReviewAuthor, type ReviewThread, reviewThreadsFileSchema, type ReviewThreadState } from './model'
 
@@ -8,23 +8,25 @@ export class ReviewError extends Error {
 	}
 }
 
-/** Review threads of each project, one JSON file per project under `directory`. */
+/** Review threads of each project: `<directory>/<project>/threads.json`, attached screenshots beside it. */
 export class ReviewStore {
 	constructor(private readonly directory: string, private readonly now: () => Date = () => new Date()) {}
 
 	list(project: string): readonly ReviewThread[] {
-		const path = this.path(project)
+		const path = join(this.projectDirectory(project), 'threads.json')
 		if (!existsSync(path)) return []
 		return reviewThreadsFileSchema.parse(JSON.parse(readFileSync(path, 'utf-8'))).threads
 	}
 
-	create(project: string, anchor: ReviewAnchor, body: string, send: boolean): ReviewThread {
+	create(project: string, anchor: ReviewAnchor, body: string, send: boolean, screenshot?: Uint8Array): ReviewThread {
 		const createdAt = this.timestamp()
+		const id = Bun.randomUUIDv7()
 		const thread: ReviewThread = {
-			id: Bun.randomUUIDv7(),
+			id,
 			anchor,
 			state: send ? 'queued' : 'open',
 			comments: [{ id: Bun.randomUUIDv7(), author: 'user', body, createdAt }],
+			...(screenshot === undefined ? {} : { screenshot: this.writeScreenshot(project, id, screenshot) }),
 			createdAt,
 			updatedAt: createdAt,
 		}
@@ -53,8 +55,10 @@ export class ReviewStore {
 
 	delete(project: string, threadId: string): void {
 		const threads = this.list(project)
-		if (!threads.some((thread) => thread.id === threadId)) throw new ReviewError(`No thread ${threadId}`, 404)
-		this.save(project, threads.filter((thread) => thread.id !== threadId))
+		const thread = threads.find((candidate) => candidate.id === threadId)
+		if (thread === undefined) throw new ReviewError(`No thread ${threadId}`, 404)
+		this.save(project, threads.filter((candidate) => candidate.id !== threadId))
+		if (thread.screenshot !== undefined) rmSync(thread.screenshot, { force: true })
 	}
 
 	/** Hands every queued thread to the agent: they become `working` and are returned in creation order. */
@@ -87,17 +91,26 @@ export class ReviewStore {
 		return { ...thread, comments: [...thread.comments, { id: Bun.randomUUIDv7(), author, body, createdAt }], updatedAt: createdAt }
 	}
 
+	private writeScreenshot(project: string, threadId: string, png: Uint8Array): string {
+		const directory = join(this.projectDirectory(project), 'screenshots')
+		mkdirSync(directory, { recursive: true })
+		const path = join(directory, `${threadId}.png`)
+		writeFileSync(path, png)
+		return path
+	}
+
 	private save(project: string, threads: readonly ReviewThread[]): void {
-		mkdirSync(this.directory, { recursive: true })
-		const path = this.path(project)
+		const directory = this.projectDirectory(project)
+		mkdirSync(directory, { recursive: true })
+		const path = join(directory, 'threads.json')
 		const temporary = `${path}.${process.pid}.tmp`
 		writeFileSync(temporary, `${JSON.stringify({ threads }, null, '\t')}\n`)
 		renameSync(temporary, path)
 	}
 
-	private path(project: string): string {
+	private projectDirectory(project: string): string {
 		if (!PROJECT_RE.test(project)) throw new ReviewError(`Invalid project name ${project}`, 400)
-		return join(this.directory, `${project}.json`)
+		return join(this.directory, project)
 	}
 
 	private timestamp(): string {

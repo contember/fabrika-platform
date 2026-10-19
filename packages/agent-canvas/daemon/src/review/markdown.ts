@@ -1,16 +1,29 @@
 import type { ReviewAnchor, ReviewThread } from './model'
 
-function describeAnchor(anchor: ReviewAnchor): string[] {
+function fence(language: string, text: string): string {
+	const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((match) => match[0].length))
+	const marker = '`'.repeat(longest + 1)
+	return `${marker}${language}\n${text}\n${marker}`
+}
+
+function describeAnchor(anchor: ReviewAnchor, screenshot: string | undefined): string[] {
 	const lines = [`- Page: ${anchor.url}`]
+	if (anchor.context !== undefined) lines.push(`- Where: ${anchor.context}`)
 	const accessible = [anchor.role, anchor.name === undefined ? undefined : `"${anchor.name}"`].filter((part) => part !== undefined).join(' ')
 	if (accessible !== '') lines.push(`- Element: ${accessible}`)
 	if (anchor.selector !== '') lines.push(`- Selector: \`${anchor.selector}\``)
 	if (anchor.components !== undefined && anchor.components.length > 0) lines.push(`- Components: ${anchor.components.join(' › ')}`)
+	if (anchor.sources !== undefined && anchor.sources.length > 0) {
+		lines.push('- Source, innermost first:')
+		for (const source of anchor.sources) lines.push(`  - ${source.label}: \`${source.file}:${source.line}:${source.column}\``)
+	}
 	if (anchor.quote !== undefined) {
 		lines.push(`- Selected text: …${anchor.quote.before}**${anchor.quote.exact}**${anchor.quote.after}…`)
 	} else if (anchor.text !== undefined && anchor.text !== '') {
 		lines.push(`- Text: "${anchor.text}"`)
 	}
+	if (screenshot !== undefined) lines.push(`- Screenshot, the element outlined in red: \`${screenshot}\` (read the file to see it)`)
+	if (anchor.html !== undefined) lines.push('- Markup, trimmed:', '', fence('html', anchor.html))
 	return lines
 }
 
@@ -22,7 +35,7 @@ function quoteBody(body: string): string {
 export function renderReviewRequests(project: string, threads: readonly ReviewThread[]): string {
 	const sections = threads.map((thread, index) => {
 		const conversation = thread.comments.map((comment) => `**${comment.author === 'user' ? 'Reviewer' : 'You'}:**\n${quoteBody(comment.body)}`)
-		return [`## ${index + 1}. Thread ${thread.id}`, '', ...describeAnchor(thread.anchor), '', ...conversation].join('\n')
+		return [`## ${index + 1}. Thread ${thread.id}`, '', ...describeAnchor(thread.anchor, thread.screenshot), '', ...conversation].join('\n')
 	})
 	return [
 		`# Review requests for ${project}`,

@@ -97,6 +97,7 @@
         "@fabrika/annotations": "workspace:*",
         "@fabrika/canvas-kernel": "workspace:*",
         "@fabrika/daemon-kit": "workspace:*",
+        "@jridgewell/trace-mapping": "^0.3.31",
         "marked": "^17.0.4",
         "mermaid-parser-bundle": "^0.1.2",
         "preact": "^10.25.0",

@@ -218,6 +218,15 @@ textarea:focus {
 	flex-wrap: wrap;
 }
 
+.option {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text-muted);
+	font-size: 12px;
+	cursor: pointer;
+}
+
 .hint {
 	color: var(--text-muted);
 	font-size: 11px;

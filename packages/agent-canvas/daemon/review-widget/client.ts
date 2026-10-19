@@ -63,8 +63,8 @@ export class ReviewClient {
 		this.socket?.close()
 	}
 
-	createThread(anchor: ReviewAnchor, body: string, send: boolean): Promise<unknown> {
-		return this.request('POST', '/threads', { anchor, body, send })
+	createThread(anchor: ReviewAnchor, body: string, send: boolean, screenshot?: string): Promise<unknown> {
+		return this.request('POST', '/threads', { anchor, body, send, ...(screenshot === undefined ? {} : { screenshot }) })
 	}
 
 	comment(threadId: string, body: string, send: boolean): Promise<unknown> {
