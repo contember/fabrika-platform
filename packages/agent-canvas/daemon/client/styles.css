@@ -1,0 +1,5 @@
+/* agent-canvas's Tailwind entry.
+   The kernel's stylesheet brings Tailwind, the theme and the kernel's own
+   @source glob; this adds the globs for the chrome that lives in this host. */
+@import "@fabrika/canvas-kernel/styles.css";
+@source "./**/*.{tsx,ts,jsx,js}";
