@@ -11,7 +11,7 @@ export interface BrowserConfig {
 	/** `FABRIKA_ENVIRONMENT`, which the page's error reports carry, or `null` when unset. */
 	readonly environment: string | null
 	/**
-	 * Every form challenge's site key, and the variables the mount lists in `public`, by variable name. Absent when
+	 * Every public procedure challenge's site key, and the variables the mount lists in `public`, by variable name. Absent when
 	 * there is none, so the file of an application without them holds the three Operations values only.
 	 */
 	readonly public?: Readonly<Record<string, string>>
@@ -33,11 +33,11 @@ export function browserConfigs(
 		return typeof value === 'string' && value.trim() !== '' ? value : null
 	}
 	const siteKeys: Record<string, string> = {}
-	for (const [form, mount] of Object.entries(artifact.mounts)) {
-		const challenge = mount.kind === 'form' ? mount.challenge : undefined
+	for (const [id, procedure] of Object.entries(artifact.procedures ?? {})) {
+		const challenge = procedure.challenge
 		if (challenge?.siteKey === undefined) continue
 		const value = valueOf(challenge.siteKey)
-		if (value === null) problems.push(`form '${form}' names its ${challenge.provider} site key in ${challenge.siteKey}, which is not set`)
+		if (value === null) problems.push(`procedure '${id}' names its ${challenge.provider} site key in ${challenge.siteKey}, which is not set`)
 		else siteKeys[challenge.siteKey] = value
 	}
 	const configs = new Map<string, BrowserConfig>()
