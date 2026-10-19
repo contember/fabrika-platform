@@ -351,8 +351,10 @@ describeDb('the migration of a collection', () => {
 				where deleted_at is null and status <> 'pending'`,
 			)
 		)
-		await release()
+		// The sweep adopts a migrated file a declared column references: it is an ordinary file from then on.
+		expect(await files.adoptReferenced([{ table: 'deal_attachments', column: 'file' }])).toBe(1)
 		expect(await fileRow('01900000-0000-7000-8000-000000000001')).toEqual({ status: 'live', scope: null, legacy: null })
+		await release()
 		const deletions: { object_key: string }[] = await admin((sql) =>
 			sql.unsafe(`select object_key from ${schema}.fabrika_file_deletions order by object_key`)
 		)
