@@ -21,6 +21,8 @@ For editing an application from Claude or ChatGPT through MCP, see [MCP authorin
 
 ## Active sprints
 
+[Declare the surface](sprints/sprint-2026-10-19-declare-the-surface.md) is active: the revision of the contract kinds in [the idea](ideas/declare-the-surface-not-the-behavior.md), with the platform serving framework 0.5 ([ADR-0062](decisions/0062-a-platform-release-serves-older-framework-releases.md)).
+
 [MCP application authoring](sprints/sprint-2026-10-07-mcp-authoring.md) is active: MCP in Control, IAM OAuth for Claude/ChatGPT, Git workspaces, stage deploys and pull requests on Zerops ([ADR-0049](decisions/0049-author-applications-through-mcp-in-control.md)).
 
 The application framework plan shipped and its idea documents were deleted; the contract is
