@@ -36,6 +36,8 @@ export interface SiteDeclaration {
 	readonly binds: string | null
 	/** The token purposes `ctx.tokens.sign` may sign. */
 	readonly signs: readonly string[]
+	/** The HTTPS origins the global `fetch` reaches while the site's handler runs. */
+	readonly egress: readonly string[]
 }
 
 /** A public procedure's reach: the texts the verified signed tokens of its request carry, which name the rows it changes. */
@@ -78,6 +80,7 @@ const NO_DECLARATION: SiteDeclaration = Object.freeze({
 	kicks: Object.freeze([]),
 	binds: null,
 	signs: Object.freeze([]),
+	egress: Object.freeze([]),
 })
 
 function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -169,6 +172,11 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 	if (signsField !== undefined && (!Array.isArray(signsField) || signs.length !== signsField.length)) {
 		problems.push(`${where}: signs is not a list of token purposes`)
 	}
+	const egressField = ownField(declared, 'egress')
+	const egress = Array.isArray(egressField) ? egressField.filter((origin): origin is string => typeof origin === 'string') : []
+	if (egressField !== undefined && (!Array.isArray(egressField) || egress.length !== egressField.length)) {
+		problems.push(`${where}: egress is not a list of origins`)
+	}
 	return Object.freeze({
 		sql: sql === 'read' || sql === 'write' ? sql : null,
 		unscoped: Object.freeze(unscoped),
@@ -179,6 +187,7 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		kicks: Object.freeze([...new Set(kicks)].sort()),
 		binds: typeof binds === 'string' ? binds : null,
 		signs: Object.freeze([...new Set(signs)].sort()),
+		egress: Object.freeze([...new Set(egress)].sort()),
 	})
 }
 
@@ -224,6 +233,7 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			kicks: Object.freeze([...(reach.kicks ?? [])]),
 			binds: reach.binds ?? null,
 			signs: Object.freeze([...(reach.signs ?? [])]),
+			egress: Object.freeze([...(reach.egress ?? [])]),
 		})
 }
 
@@ -243,6 +253,7 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 		...(declaration.kicks.length === 0 ? {} : { kicks: declaration.kicks }),
 		...(declaration.binds === null ? {} : { binds: declaration.binds }),
 		...(declaration.signs.length === 0 ? {} : { signs: declaration.signs }),
+		...(declaration.egress.length === 0 ? {} : { egress: declaration.egress }),
 	})
 }
 

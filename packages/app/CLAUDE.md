@@ -158,6 +158,7 @@ src/
     verifiers.ts      a delivery's signature: the presets and the hmac shape, constant-time
     tokens.ts         signed tokens: FABRIKA_TOKEN_KEYS, ctx.tokens.sign, the verification of each token field
     urls.ts           ctx.url: an absolute link to a procedure, on FABRIKA_APP_ORIGIN, with the parameters its URL carries
+    egress.ts         the guard on the global fetch: a site's handler reaches only its declared egress origins
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
@@ -693,6 +694,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   `FABRIKA_TOKEN_KEYS`, the signing key first; a retired key stays there while a token it signed may live (Control).
   The texts a verified token carries are the only absolute redirect targets a request may name besides the listed
   origins. A token is no credential: it opens no mount.
+- **While a staged-kit site's handler runs, the global `fetch` reaches only its `egress`** (`implement/egress.ts`):
+  `boot` wraps `fetch` once, and `runAsSite` scopes each handler. A framework facility a handler calls (mail, a
+  connector, IAM, the object store, the JWKS) runs through `platformCall`/`platformFacility`, outside the site's scope;
+  a new facility that makes its own requests must too, or every site that uses it needs an egress it never declared.
+  It is no sandbox: code that kept the `fetch` it found before boot, or opens sockets, escapes it.
 - **A webhook's `limits` bound its body and its handler** (`WEBHOOK_LIMITS`): `maxBytes` (1 MiB by default and at most)
   is its row's body limit, read within the deadline `bodyDeadlineMs` derives from it; `timeoutMs` (10 s, at most 60 s)
   is its handler's, which the artifact records on the mount and the delivery claim's lease outlasts.

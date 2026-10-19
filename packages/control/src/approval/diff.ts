@@ -379,7 +379,7 @@ function compareDirectories(changes: Changes, baseline: ContractArtifact, candid
 
 /**
  * The reach each site declares (`sql`, `unscoped`, `connect`, link issuing, a job's mail transport, a public procedure's
- * workload actions). A site is keyed by its endpoint id or job, so a handler that moves keeps its site; each effect is
+ * workload actions, the token purposes it signs, the origins it calls). A site is keyed by its endpoint id or job, so a handler that moves keeps its site; each effect is
  * compared on its own. A new site, table, connector, mount or workload action and `read` → `write` widen with closer
  * review; a removal and `write` → `read` narrow. A mutation's kick (`then`) is shown and widens nothing.
  */
@@ -403,7 +403,21 @@ function compareDeclared(
 		changes.add(...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []))
 		changes.add(...bindsChange(site, sites[site]?.binds, after[site]?.binds))
 		changes.add(...signsChanges(site, sites[site]?.signs ?? [], after[site]?.signs ?? []))
+		changes.add(...egressChanges(site, sites[site]?.egress ?? [], after[site]?.egress ?? []))
 	}
+}
+
+/**
+ * The origins a site's code calls (`egress`): a new one is a place the site's data may go, so it widens with closer
+ * review; a dropped one narrows.
+ */
+function egressChanges(site: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+	const name = siteName(site)
+	return union(from, to).flatMap((origin) => {
+		if (!from.includes(origin)) return [closerWidening(`${name} calls ${origin}`)]
+		if (!to.includes(origin)) return [narrowing(`${name} no longer calls ${origin}`)]
+		return []
+	})
 }
 
 /**

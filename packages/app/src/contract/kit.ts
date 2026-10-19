@@ -55,6 +55,7 @@ import {
 } from './define'
 import type {
 	DeclaredFields,
+	EgressField,
 	Endpoint,
 	ExportKit,
 	Group,
@@ -99,6 +100,7 @@ export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never, Ks
 	& MailerField<M>
 	& KicksField<Ks>
 	& SignsField<Sg, Purposes>
+	& EgressField
 
 /** The mail transport a job reaches, inferred from its optional field and then required, like a declared field. */
 type MailerField<M> =
@@ -140,6 +142,7 @@ export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never, 
 	& DeclaredFields<S, U, never, never, Ix>
 	& KicksField<Ks>
 	& SignsField<Sg, Purposes>
+	& EgressField
 
 /** A webhook of the kit, handled. */
 export interface KitWebhook<B extends string, Acts extends string, I extends Schema, D> extends WebhookMount<B, Acts, I> {
@@ -370,29 +373,33 @@ export function defineApp<V extends AnyAppVocabulary, DB, P>(
 	tables: Tables<DB, P>,
 ): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>>>
 /**
- * Options that may be absent are no overload: the contract's type would promise an imports section it may not have. An
- * option field left out is empty, so the contract has a section only for a field the options carry.
+ * Options that may be absent are no overload, and neither is an option field that may be absent: the contract's type
+ * would promise an imports section, or token purposes, it may not have. Each overload requires the fields it infers.
  */
-export function defineApp<
-	V extends AnyAppVocabulary,
-	DB,
-	P,
-	const Imp extends KitImports = Record<never, never>,
-	const Tk extends TokenPurposes = Record<never, never>,
->(
+export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports, const Tk extends TokenPurposes>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options: KitOptions<Imp, Tk>,
+	options: { readonly imports: Imp; readonly tokens: Tk },
 ): App<KitOf<V, DbIndex<DB, P, V>, Imp, Tk>>
-export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: KitOptions<KitImports, TokenPurposes>): object {
+export function defineApp<V extends AnyAppVocabulary, DB, P, const Tk extends TokenPurposes>(
+	vocabulary: V,
+	tables: Tables<DB, P>,
+	options: { readonly tokens: Tk },
+): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Tk>>
+export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports>(
+	vocabulary: V,
+	tables: Tables<DB, P>,
+	options: { readonly imports: Imp },
+): App<KitOf<V, DbIndex<DB, P, V>, Imp>>
+export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: KitOptions): object {
 	return runtimeApp(vocabulary, options, tables !== undefined)
 }
 
 /** What `defineApp`'s options carry: the connectors the kit imports, and the purposes of the tokens it signs. */
-export interface KitOptions<Imp extends KitImports, Tk extends TokenPurposes> {
-	readonly imports?: Imp
+export interface KitOptions {
+	readonly imports?: KitImports
 	/** `{ <purpose>: token(Claims, { maxDays }) }`: each kind of signed token, declared once. */
-	readonly tokens?: Tk
+	readonly tokens?: TokenPurposes
 }
 
 // ── The runtime ─────────────────────────────────────────────────────────────────────────────────
@@ -519,7 +526,7 @@ interface RuntimeApp {
  * `options` is what `defineApp`'s options carry; the contract has an imports or a tokens section exactly when they carry
  * one. `tables` is whether the kit was given tables: a contract of a kit without them is served without a database.
  */
-function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions<KitImports, TokenPurposes> | undefined, tables: boolean): RuntimeApp {
+function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefined, tables: boolean): RuntimeApp {
 	const imports = options?.imports
 	const tokens = options?.tokens
 	return {

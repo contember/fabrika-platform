@@ -124,6 +124,14 @@ export type SignsField<Sg, Purposes extends string> =
 	& { readonly signs?: Sg }
 	& ([Sg] extends [never] ? unknown : { readonly signs: Sg & NoInfer<KnownPurposes<Sg, Purposes>> })
 
+/**
+ * The HTTPS origins a site's code calls (`fetch`): each an exact origin, no path or wildcard. A guard on the global
+ * `fetch` refuses any other while the site runs; a public procedure declares none.
+ */
+export interface EgressField {
+	readonly egress?: readonly `https://${string}`[]
+}
+
 /** Each purpose `signs` names is one of `defineApp`'s `tokens`. */
 type KnownPurposes<Sg, Purposes extends string> = Sg extends readonly (infer P extends string)[]
 	? [Exclude<P, Purposes>] extends [never] ? LiteralList<Sg>
@@ -329,7 +337,8 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 			& PublicFields<Acc, Acts>
 			& HttpField<Q>
 			& NoKick
-			& SignsField<Sg, keyof K['tokens'] & string>,
+			& SignsField<Sg, keyof K['tokens'] & string>
+			& EgressField,
 	): EndpointBuilder<
 		'query',
 		I,
@@ -362,7 +371,8 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 			& KickField<Th>
 			& KicksField<Ks>
 			& BindsField<Bs>
-			& SignsField<Sg, keyof K['tokens'] & string>,
+			& SignsField<Sg, keyof K['tokens'] & string>
+			& EgressField,
 	): EndpointBuilder<
 		'mutation',
 		I,

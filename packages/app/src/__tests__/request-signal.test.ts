@@ -7,6 +7,7 @@ import { testKit } from '@fabrika/app/testing'
 import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { handlerSignal } from '../implement/bounded'
+import { platformCall } from '../implement/egress'
 
 const vocabulary = defineVocabulary({
 	app: 'signals',
@@ -34,7 +35,7 @@ const upstream = (() => {
 		},
 	})
 	return {
-		url: `http://127.0.0.1:${server.port}/send`,
+		local: `http://127.0.0.1:${server.port}/send`,
 		reached: reached.promise,
 		dropped: dropped.promise,
 		stop: () => server.stop(true),
@@ -43,11 +44,14 @@ const upstream = (() => {
 
 afterAll(() => upstream.stop())
 
+/** The provider's public address, which the handler declares in `egress`; the fetch below `boot`'s guard routes it locally. */
+const PROVIDER = 'https://provider.example'
+
 const projects = app.group({ callers: ['human'] }, (r) => ({
-	call: r.mutation({ output: Called, access: { action: 'projects.read', over: 'project' } })
+	call: r.mutation({ output: Called, access: { action: 'projects.read', over: 'project' }, egress: [PROVIDER] })
 		.handle(async ({ ctx }) => {
 			try {
-				const response = await fetch(upstream.url, { method: 'POST', signal: ctx.signal })
+				const response = await fetch(`${PROVIDER}/send`, { method: 'POST', signal: ctx.signal })
 				return { status: response.status }
 			} finally {
 				seen.aborted = ctx.signal.aborted
@@ -60,6 +64,13 @@ const contract = app.contract((c) => ({ api: c.rpc('/api', { projects }), health
 describe('ctx.signal of a request handler', () => {
 	test('a cancelled request aborts it, and the fetch the handler passed it to stops at the provider', async () => {
 		// The provider was reached, so the signal was live until the cancel.
+		const direct = fetch
+		const routed = spyOn(globalThis, 'fetch').mockImplementation(
+			// Routed outside the site's scope: an earlier suite's guard may sit beneath this stub.
+			Object.assign((_input: string | URL | Request, init?: RequestInit) => platformCall(() => direct(upstream.local, init)), {
+				preconnect: direct.preconnect,
+			}),
+		)
 		const kit = testKit(serve(contract, { database: null }))
 		const reader = kit.testCaller([{ action: 'projects.read', scope: { type: 'project', value: 'p1' } }])
 		const cancel = new AbortController()
@@ -77,6 +88,7 @@ describe('ctx.signal of a request handler', () => {
 			await answer
 		} finally {
 			log.mockRestore()
+			routed.mockRestore()
 		}
 		expect(seen).toEqual({ aborted: true, reason: 'AbortError' })
 	})

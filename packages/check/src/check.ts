@@ -1,7 +1,9 @@
-import { type TablePolicies, tablePolicies } from '@fabrika/db/tables'
+import { type AnyContract, compileContract, ContractError } from '@fabrika/app/contract'
+import type { ContractArtifact } from '@fabrika/auth-core'
+import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { type ParsedModule, parseModule, walk } from './ast'
+import { type AstNode, type ParsedModule, parseModule, walk } from './ast'
 import { contractModules, readContractModule } from './contract'
 import { compareFindings, type Finding, reporter } from './finding'
 import { ModuleGraph } from './graph'
@@ -32,7 +34,7 @@ import { checkLiteralGraph } from './rules/literal'
 import { checkFileColumnMigrations, checkMigrationNames, checkScanMigrations, type FileColumn } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
-import { checkRuntimeNode, rawSqlBindings } from './rules/runtime'
+import { checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
 import { checkStructureNode, checkStructureReferences, structurePlace } from './rules/structure'
 import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
@@ -76,6 +78,14 @@ export const readApplicationTree = async (root: string): Promise<ApplicationTree
 	return { files, links }
 }
 
+/** The findings a module rule leaves until the contract is read: they depend on what it declares. */
+interface ContractDependent {
+	/** Each `fetch` of an absolute URL, with its static prefix. */
+	readonly fetches: { readonly target: string; readonly finding: Finding }[]
+	/** Each `ctx.url` with a literal endpoint id. */
+	readonly urls: { readonly endpoint: string; readonly finding: Finding }[]
+}
+
 const checkSourceModule = async (
 	module: ParsedModule,
 	references: readonly ModuleReference[],
@@ -83,12 +93,31 @@ const checkSourceModule = async (
 	mappings: ImportMappings,
 	files: ReadonlyMap<string, string>,
 	findings: Finding[],
+	dependent: ContractDependent,
 ): Promise<void> => {
 	const exists = (path: string): boolean => files.has(path)
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
-	const context = { report, isGeneratedEntry, rawSql: rawSqlBindings(module.program), isServerModule: isServerModule(module.file) }
+	const deferred = (at: AstNode, rule: 'cross-app-fetch' | 'url-endpoint', message: string, allowed: string): Finding[] => {
+		const found: Finding[] = []
+		reporter(module.file, found)(at, rule, message, allowed)
+		return found
+	}
+	const context = {
+		report,
+		isGeneratedEntry,
+		rawSql: rawSqlBindings(module.program),
+		isServerModule: isServerModule(module.file),
+		absoluteFetch: (node: AstNode, target: string) => {
+			const { message, allowed } = crossAppFetchMessage(target)
+			for (const finding of deferred(node, 'cross-app-fetch', message, allowed)) dependent.fetches.push({ target, finding })
+		},
+		appUrl: (node: AstNode, endpoint: string) => {
+			const message = `ctx.url names '${endpoint}', which is no procedure of the contract`
+			for (const finding of deferred(node, 'url-endpoint', message, URL_ENDPOINT_ALLOWED)) dependent.urls.push({ endpoint, finding })
+		},
+	}
 	const trusted = trustedBindings(module.file, module.program, mappings)
 	const place = structurePlace(module.file, isGeneratedEntry)
 	walk(module.program, (node, ancestors) => {
@@ -113,12 +142,54 @@ const shellModule = (module: ParsedModule, text: string): { readonly module: Par
 	return { module: parsed?.ok === true ? parsed.module : module, refusals }
 }
 
+const URL_ENDPOINT_ALLOWED = "the id of a procedure of the contract: ctx.url('<mount>.<group>.<procedure>', { input?, query? })"
+
+/** What the module rules that wait for the contract compare against: its procedure ids and every declared origin. */
+interface CompiledReach {
+	readonly procedures: ReadonlySet<string>
+	readonly origins: readonly string[]
+}
+
+/** The contract's procedures and origins, or `null` when it does not compile, which its own rule reports. */
+const compiledReach = (contract: AnyContract, tables: Tables<unknown, unknown> | null): CompiledReach | null => {
+	let artifact: ContractArtifact
+	try {
+		artifact = compileContract(contract, tables ?? {})
+	} catch (error) {
+		if (error instanceof ContractError) return null
+		throw error
+	}
+	const procedures = artifact.endpoints.filter((row) =>
+		(row.kind === 'query' || row.kind === 'mutation' || row.kind === 'public') && row.source.kind === 'mount'
+	)
+	return {
+		procedures: new Set(procedures.map((row) => row.id)),
+		origins: Object.values(artifact.declared ?? {}).flatMap((reach) => reach.egress ?? []),
+	}
+}
+
+/**
+ * A `fetch` of an absolute URL stands when no site declares its origin (a static prefix that ends inside the host is
+ * not accepted), and every one stands when the contract does not compile. A `ctx.url` stands when the contract
+ * compiles and names no such procedure. The runtime guard on `fetch` still checks the site that runs.
+ */
+const contractDependentFindings = (dependent: ContractDependent, reach: CompiledReach | null): Finding[] => [
+	...dependent.fetches.filter(({ target }) => reach === null || !reach.origins.some((origin) => isWithinOrigin(target, origin))).map(({ finding }) =>
+		finding
+	),
+	...(reach === null ? [] : dependent.urls.filter(({ endpoint }) => !reach.procedures.has(endpoint)).map(({ finding }) => finding)),
+]
+
+const isWithinOrigin = (target: string, origin: string): boolean =>
+	target.startsWith(`${origin}/`) || target.startsWith(`${origin}?`) || target.startsWith(`${origin}#`)
+
 /** Runs every rule over one application and returns the findings in file, line and column order. */
 export const checkApplication = async (input: CheckInput): Promise<Finding[]> => {
 	const tree: ApplicationTree = input.files === undefined ? await readApplicationTree(input.root) : { files: input.files, links: [] }
 	const findings: Finding[] = []
 	const modules = new Map<string, ParsedModule>()
 	const references = new Map<string, readonly ModuleReference[]>()
+	const dependent: ContractDependent = { fetches: [], urls: [] }
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
 	const trust = checkTrustedResolution(tree.files)
@@ -148,7 +219,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		modules.set(path, parsed.module)
 		const referencesOfModule = moduleReferences(parsed.module.program)
 		references.set(path, referencesOfModule)
-		await checkSourceModule(parsed.module, referencesOfModule, text, mappings, tree.files, findings)
+		await checkSourceModule(parsed.module, referencesOfModule, text, mappings, tree.files, findings, dependent)
 	}
 	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [] }
 	for (const path of modules.keys()) {
@@ -180,6 +251,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		findings.push(...checkScanMigrations(tree.files, scanning))
 	}
 	const declaredTables = tables !== undefined && literal.length === 0 ? readTablesValue(graph, tables, new ReaderProblems()) : null
+	findings.push(...contractDependentFindings(dependent, read?.ok === true ? compiledReach(read.contract, declaredTables) : null))
 	if (declaredTables !== null) {
 		findings.push(...checkFileColumnMigrations(tree.files, fileColumns(tablePolicies(declaredTables))))
 	}

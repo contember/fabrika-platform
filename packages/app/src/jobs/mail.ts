@@ -22,6 +22,7 @@ import {
 import { z } from 'zod/v4'
 import { HttpError } from '../errors'
 import type { OpenedFile } from '../files/handle'
+import { platformCall } from '../implement/egress'
 import type { ApplicationEnvironment } from '../implement/implement'
 import type { AppMail, AppMailMessage } from './types'
 
@@ -105,7 +106,8 @@ export function jobMail(input: JobMailInput): AppMail {
 				...(attachments.length === 0 ? {} : { attachments }),
 			}
 			try {
-				return await sender.send(transported, signal === undefined ? attempt : AbortSignal.any([attempt, signal]))
+				// The transport's request is the platform's, which the job's egress does not cover.
+				return await platformCall(() => sender.send(transported, signal === undefined ? attempt : AbortSignal.any([attempt, signal])))
 			} catch (error) {
 				if (error instanceof EmailDeliveryError) {
 					throw error

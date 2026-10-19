@@ -42,6 +42,20 @@ describe('signed tokens in the approval diff', () => {
 	})
 })
 
+describe('egress in the approval diff', () => {
+	const calling = (egress: readonly string[]): AccessSnapshot => {
+		const contract: ContractArtifact = { ...notesArtifact, declared: { 'job:sync': { ...reach, egress } } }
+		return { version: 1, contract, migrations: [], checker: '0.0.0' }
+	}
+
+	test('a new origin widens with closer review, and a dropped one narrows', () => {
+		expect(classifyAccess(calling(['https://api.example.com']), calling(['https://api.example.com', 'https://hooks.example.com'])).changes)
+			.toEqual([{ effect: 'widens', line: 'Job `sync` calls https://hooks.example.com', review: 'closer' }])
+		expect(classifyAccess(calling(['https://api.example.com', 'https://hooks.example.com']), calling(['https://api.example.com'])).changes)
+			.toEqual([{ effect: 'narrows', line: 'Job `sync` no longer calls https://hooks.example.com' }])
+	})
+})
+
 describe('a GET mutation in the approval diff', () => {
 	const rules: ProcedureArtifact = {
 		rate: { perClient: 10, perCaller: null, perEndpoint: 100, bytesPerHour: null },

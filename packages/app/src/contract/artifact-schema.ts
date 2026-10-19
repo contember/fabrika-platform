@@ -25,6 +25,7 @@ import {
 	type TablePolicyArtifact,
 	type TupleShape,
 } from '@fabrika/auth-core'
+import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { z } from 'zod/v4'
 import { FORM_LIMITS, JOB_LIMITS, PROCEDURE_LIMITS } from './defaults'
 import { TOKEN_MAX_DAYS } from './token'
@@ -366,6 +367,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		kicks: z.array(name).nonempty().optional(),
 		binds: name.optional(),
 		signs: z.array(name).nonempty().optional(),
+		egress: z.array(z.string().refine((origin) => isPolicyOrigin(origin))).nonempty().optional(),
 	})).superRefine((declared, context) => {
 		for (const [site, reach] of Object.entries(declared)) {
 			if (reach.actions !== undefined && !isOwnWorkloadName('public', site)) {

@@ -683,6 +683,11 @@ export interface DeclaredReach {
 	 */
 	readonly signs?: readonly string[]
 	/**
+	 * The HTTPS origins this site's code calls (`fetch`), sorted: a credentialed procedure, a webhook or a job. Absent
+	 * unless declared, so the digest stays.
+	 */
+	readonly egress?: readonly string[]
+	/**
 	 * A public procedure's workload actions, sorted: all its handler holds, through the key Control issues for the
 	 * endpoint (`contractWorkloads`). Present only on a public procedure's entry, so every other digest stays.
 	 */

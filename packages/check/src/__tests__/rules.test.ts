@@ -472,6 +472,12 @@ const cases: readonly RuleCase[] = [
 		},
 	},
 	{
+		rule: 'url-endpoint',
+		bad: { ...CLEAN_APPLICATION, 'src/links.ts': "export const link = (ctx: { url(id: string): string }) => ctx.url('api.notes.missing')\n" },
+		expected: ['src/links.ts:1:59'],
+		good: { ...CLEAN_APPLICATION, 'src/links.ts': "export const link = (ctx: { url(id: string): string }) => ctx.url('api.get')\n" },
+	},
+	{
 		rule: 'key-literal',
 		bad: { 'src/a.ts': "export const key = 'px_live_4f2a'\nexport const cookie = `__Host-px_session`\n" },
 		expected: ['src/a.ts:1:20', 'src/a.ts:2:24'],

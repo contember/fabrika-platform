@@ -87,6 +87,7 @@ import {
 } from './capability'
 import { CHALLENGE_LIMITS, type ChallengeVerifier } from './challenge'
 import { connectContext, type ImportWire } from './connect'
+import { runAsSite } from './egress'
 import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { ACCEPTED_BUCKET, clientBucket, type Submission, type SubmissionFields, submissionOf } from './form-admission'
@@ -178,6 +179,8 @@ export type ServedEndpoint =
 		readonly connect?: readonly ImportWire[]
 		/** A staged-kit site, which gets `ctx.db`; a handler `implement` bound has none. */
 		readonly site?: ServedSite
+		/** The origins a staged-kit site's `fetch` reaches while its handler runs; absent for a handler `implement` bound. */
+		readonly egress?: readonly string[]
 		/** The cron job this mutation kicks once its transaction committed; absent without `then`. */
 		readonly then?: string
 		/** Its buckets and time limit; without them (a generated endpoint) no bucket and the request budget. */
@@ -616,7 +619,11 @@ export class ContractRuntime {
 						...this.#signing(`'${served.row.id}'`, site?.declaration.signs ?? []),
 						kick: kicks.kick,
 					})
-					return await served.handler({ input: access.input, ctx, ...(query === undefined ? {} : { query }) })
+					const args = { input: access.input, ctx, ...(query === undefined ? {} : { query }) }
+					const egress = served.egress
+					return egress === undefined
+						? await served.handler(args)
+						: await runAsSite(`'${served.row.id}'`, egress, async () => await served.handler(args))
 				})
 			} finally {
 				frame.end()
@@ -1317,7 +1324,8 @@ export class ContractRuntime {
 						}),
 						kick: kicks.kick,
 					})
-					return await served.handler({ input, ctx, ...(query === undefined ? {} : { query }) })
+					const args = { input, ctx, ...(query === undefined ? {} : { query }) }
+					return await runAsSite(`'${served.row.id}'`, served.site.declaration.egress, async () => await served.handler(args))
 				})
 			} finally {
 				frame.end()
@@ -1421,7 +1429,7 @@ export class ContractRuntime {
 							sql: site.sql === null ? undeclaredSql(served.row.id, 'mutation') : invocation.sql(site.sql),
 						}
 					const client = requestClient(request, this.#parts.clientVouched)
-					await served.handler({
+					const args = {
 						input,
 						ctx: Object.freeze({
 							principal,
@@ -1440,7 +1448,12 @@ export class ContractRuntime {
 							kick: kicks.kick,
 							...data,
 						}),
-					})
+					}
+					if (site === undefined) {
+						await served.handler(args)
+					} else {
+						await runAsSite(`webhook '${served.webhook}'`, site.egress, async () => await served.handler(args))
+					}
 				})
 			} finally {
 				frame.end()

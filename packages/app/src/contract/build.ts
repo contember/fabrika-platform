@@ -141,8 +141,10 @@ const AUDIENCE = 'any consumer user'
 const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'usedBy', 'timeoutMs']
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
+/** The most origins one site calls: a site that reaches more is an integration hub, which a connector import serves. */
+const MAX_EGRESS_ORIGINS = 16
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>']"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>'], binds: '<webhook>', signs: ['<token purpose>'], egress: ['https://<host>']"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -2344,6 +2346,7 @@ class ArtifactBuilder {
 		const kicks = this.#kicks(where, value['kicks'], place)
 		const binds = this.#binds(where, value['binds'], place)
 		const signs = this.#signs(where, value['signs'], place)
+		const egress = this.#egress(where, value['egress'], place)
 		const reach: DeclaredReach = {
 			sql: this.#sqlMode(where, value['sql'], place.readOnly),
 			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
@@ -2359,6 +2362,7 @@ class ArtifactBuilder {
 			...(kicks.length === 0 ? {} : { kicks }),
 			...(binds === undefined ? {} : { binds }),
 			...(signs.length === 0 ? {} : { signs }),
+			...(egress.length === 0 ? {} : { egress }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -2369,7 +2373,7 @@ class ArtifactBuilder {
 		if (
 			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
 			|| reach.mailer !== undefined || reach.actions !== undefined || reach.kicks !== undefined || reach.binds !== undefined
-			|| reach.signs !== undefined
+			|| reach.signs !== undefined || reach.egress !== undefined
 		) {
 			this.#declared[site] = reach
 		}
@@ -2555,6 +2559,43 @@ class ArtifactBuilder {
 			this.#knownPurpose(where, purpose)
 		}
 		return [...new Set(purposes)].sort()
+	}
+
+	/**
+	 * The HTTPS origins a site's code calls: a credentialed procedure of an RPC mount, a webhook or a job, never a public,
+	 * export or link procedure. Each is an exact origin with no path or wildcard, once; `[]` when it declares none or after
+	 * a problem.
+	 */
+	#egress(where: string, value: unknown, place: DeclaringSite): string[] {
+		if (value === undefined) {
+			return []
+		}
+		const refusedBy = place.kind === 'export'
+			? 'an export procedure'
+			: place.kind === 'link'
+			? 'a link procedure'
+			: place.kind === 'rpc' && place.actions !== null
+			? 'a public procedure'
+			: null
+		if (refusedBy !== null) {
+			this.#problem(where, `declares egress, which ${refusedBy} never does: a credentialed procedure, a webhook or a job calls out`)
+			return []
+		}
+		if (!Array.isArray(value) || value.length === 0 || !value.every((origin) => typeof origin === 'string')) {
+			this.#problem(where, "egress is not a list of origins (allowed: egress: ['https://api.example.com'])")
+			return []
+		}
+		const origins: string[] = value.filter((origin) => typeof origin === 'string')
+		if (origins.length > MAX_EGRESS_ORIGINS) {
+			this.#problem(where, `${origins.length} egress origins exceed the limit of ${MAX_EGRESS_ORIGINS}`)
+		}
+		for (const origin of origins) {
+			if (!isPolicyOrigin(origin)) {
+				this.#problem(where, `egress '${origin}' is not an https origin (allowed: 'https://api.example.com', no path or wildcard)`)
+			}
+		}
+		this.#unique(where, 'egress', origins)
+		return [...new Set(origins)].sort()
 	}
 
 	/** The cron job a mutation kicks once its transaction committed; `undefined` when it declares none or after a problem. */

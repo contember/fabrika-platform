@@ -22,6 +22,7 @@ import {
 	runInRequest,
 	type Within,
 } from '../implement/capability'
+import { runAsSite } from '../implement/egress'
 import { failureCode, type FailureReason, failureReason } from '../implement/failures'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase } from '../implement/implement'
@@ -695,7 +696,12 @@ async function attemptOnce(
 	const ctx = { ...jobContext(job, frame, attempt, signal, context, authority.perms), kick: kicks.kick }
 	try {
 		const ran = runInRequest(frame, async () => {
-			await job.handler({ ctx })
+			const site = job.site
+			if (site === null) {
+				await job.handler({ ctx })
+			} else {
+				await runAsSite(`job '${job.name}'`, site.egress, async () => await job.handler({ ctx }))
+			}
 			kicked.push(...kicks.kicked())
 		}).then(() => null, (error: unknown) => {
 			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))

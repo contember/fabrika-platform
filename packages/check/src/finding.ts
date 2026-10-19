@@ -20,6 +20,7 @@ export const REFUSAL_RULE_IDS = [
 	'env-read',
 	'public-env',
 	'cross-app-fetch',
+	'url-endpoint',
 	'key-literal',
 	'client-identity',
 	'sensitive-log',

@@ -28,6 +28,10 @@ export interface SourceContext {
 	readonly rawSql: ReadonlySet<string>
 	/** A module under `src/` that is not a test: it reaches no global object and no `Bun` at all. */
 	readonly isServerModule: boolean
+	/** A `fetch` of an absolute URL: refused once the contract shows that no site declares its origin in `egress`. */
+	readonly absoluteFetch: (node: AstNode, target: string) => void
+	/** A `ctx.url('<endpoint id>', …)` with a literal id: refused once the contract shows that it names no procedure. */
+	readonly appUrl: (node: AstNode, endpoint: string) => void
 }
 
 /** The global objects and `Bun`: a server module reaches the platform through the framework only. */
@@ -127,13 +131,23 @@ const LOCAL_SCHEMES = /^(?:data|blob):/i
 const checkFetch = (node: AstNode, path: readonly string[], context: SourceContext): void => {
 	const target = staticPrefix(invokedArgument(node, path, 'fetch'))
 	if (target === undefined || !ABSOLUTE_URL.test(target) || LOCAL_SCHEMES.test(target)) return
-	context.report(
-		node,
-		'cross-app-fetch',
-		`fetch to the absolute origin '${target}' is a hand-written integration`,
-		'a same-origin path to a declared endpoint, or another application through a connector import',
-	)
+	context.absoluteFetch(node, target)
 }
+
+/** `ctx.url('<endpoint id>', …)`, also on a `ctx` reached through a member (`args.ctx.url`). */
+const checkAppUrl = (node: AstNode, context: SourceContext): void => {
+	const callee = child(node, 'callee')
+	const path = callee === undefined ? undefined : memberPath(callee)
+	if (path === undefined || path.length < 2 || path[path.length - 1] !== 'url' || path[path.length - 2] !== 'ctx') return
+	const endpoint = staticString(argumentAt(node, 0))
+	if (endpoint !== undefined) context.appUrl(node, endpoint)
+}
+
+/** The finding of a `fetch` of an absolute URL whose origin no site of the contract declares. */
+export const crossAppFetchMessage = (target: string): { readonly message: string; readonly allowed: string } => ({
+	message: `fetch to the absolute origin '${target}' is a hand-written integration`,
+	allowed: "a same-origin path to a declared endpoint, another application through a connector import, or egress: ['<origin>'] on the site",
+})
 
 const checkDynamicCode = (node: AstNode, path: readonly string[], context: SourceContext): void => {
 	const isConstructor = pathIs(path, 'Function') || pathIs(path, 'Function', 'call') || pathIs(path, 'Function', 'apply')
@@ -297,6 +311,7 @@ const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: Source
 	checkDynamicCode(node, path, context)
 	if (node.type !== 'CallExpression') return
 	checkFetch(node, path, context)
+	checkAppUrl(node, context)
 	checkConsole(node, path, ancestors, context)
 	checkPrototypeCall(node, path, context)
 	const [name] = path

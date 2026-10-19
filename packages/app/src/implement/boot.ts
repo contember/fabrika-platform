@@ -68,6 +68,7 @@ import {
 	type ServedSite,
 	type SpaAssets,
 } from './dispatch'
+import { installEgressGuard, platformCall, platformFacility } from './egress'
 import type { CapturedEnvironment } from './environment'
 import { FailureReports } from './failures'
 import { ServerFault } from './faults'
@@ -436,6 +437,11 @@ function boundHandler(
 	return null
 }
 
+/** The origins a staged-kit site's handler reaches, a kit without tables included; nothing for a bare handler. */
+function egressOf(bound: BoundHandler): { readonly egress?: readonly string[] } {
+	return !bound.site || bound.declaration === null ? {} : { egress: bound.declaration.egress }
+}
+
 /** A staged-kit contract's endpoint gets `ctx.links` only for the link mount it declares it `issues`. */
 function siteFacilities(facilities: Facilities, declaration: SiteDeclaration | null): Facilities {
 	if (declaration === null) {
@@ -739,6 +745,11 @@ function runtimePurposes(contract: AnyContract, artifact: ContractArtifact): Rea
 
 export function boot(app: ContractImplementation, options: BootOptions): ContractApp {
 	const problems: string[] = []
+	installEgressGuard()
+	// What a handler reaches through these is the platform's own request, which no site's egress covers.
+	const objects = options.files === undefined ? undefined : platformFacility(options.files)
+	const membershipRpc = options.membership === undefined ? undefined : platformFacility(options.membership)
+	const workloadTokens = options.workloadTokens === undefined ? undefined : platformFacility(options.workloadTokens)
 	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
@@ -760,26 +771,30 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	unservable(artifact, options.assets, owned, containers, problems)
 	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
 	const issuer = createCapabilityIssuer()
-	const files = fileCollections(artifact, app.database, options.files, issuer.authority, issuer.mint, problems)
-	const fileKinds = storedFileKinds(artifact, app.database, options.files, problems)
+	const files = fileCollections(artifact, app.database, objects, issuer.authority, issuer.mint, problems)
+	const fileKinds = storedFileKinds(artifact, app.database, objects, problems)
 	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
 	const database = files === null || bound === null ? (bound?.database ?? null) : files.locating(bound.database)
-	const verifier = new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: variables.issuer })
+	const verifier = new TokenVerifier({ getJwks: () => platformCall(() => options.iam.getJwks()), issuer: variables.issuer })
 	const workloads = workloadCredentials({
 		artifact,
 		framework: options.environment.framework,
 		audience: variables.iamAppId,
-		source: options.workloadTokens,
+		source: workloadTokens,
 		verifier,
 	}, problems)
 	const connect = wireImports({
 		artifact,
 		snapshots: app.connect ?? {},
 		framework: options.environment.framework,
-		bindings: options.connectBindings ?? {},
-		fallback: (request) => fetch(request),
+		bindings: Object.fromEntries(
+			Object.entries(options.connectBindings ?? {}).map((
+				[name, binding],
+			): [string, ConnectFetch] => [name, (request) => platformCall(() => binding(request))]),
+		),
+		fallback: (request) => platformCall(() => fetch(request)),
 	}, problems)
 	const configs = browserConfigs(artifact, options.environment, {
 		dsn: operations === null ? null : (options.environment.framework['FABRIKA_OPERATIONS_DSN'] ?? '').trim(),
@@ -859,6 +874,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						facilities: siteFacilities(facilitiesOf(artifact, row), bound.declaration),
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
+						...egressOf(bound),
 						...(bound.declaration?.then == null ? {} : { then: bound.declaration.then }),
 						...bindsOf(id, bound.declaration, artifact, problems),
 						...admissionOf(id, artifact, options, problems),
@@ -903,7 +919,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	for (const [id, served] of files?.endpoints(rows, problems) ?? []) {
 		endpoints.set(id, served)
 	}
-	const membership = options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId)
+	const membership = membershipRpc === undefined ? null : new IamMembership(membershipRpc, variables.iamAppId)
 	const jobs = bindJobs({
 		artifact,
 		handlers,
@@ -977,6 +993,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					facilities: NO_FACILITIES,
 					readOnly: true,
 					site: servedSite('query', bound),
+					...egressOf(bound),
 					...admissionOf(id, artifact, options, problems),
 				})
 			}

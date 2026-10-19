@@ -96,7 +96,13 @@ export const staff = app.group({ callers: ['human'] }, (r) => ({
 }))
 
 /** A newsletter of one message, whose one-click unsubscribe link carries a signed token. */
-export const newsletter = app.cron('0 6 * * 1', { actions: ['mail.read'], scope: 'app', mailer: 'installation', signs: ['unsubscribe'] }).handle(
+export const newsletter = app.cron('0 6 * * 1', {
+	actions: ['mail.read'],
+	scope: 'app',
+	mailer: 'installation',
+	signs: ['unsubscribe'],
+	egress: ['https://lists.example.com'],
+}).handle(
 	async ({ ctx }) => {
 		const t = ctx.tokens.sign('unsubscribe', { email: 'reader@example.com', campaign: 'weekly' }, { days: 400 })
 		await ctx.mail.send({
