@@ -28,6 +28,7 @@ export const SERVER_FAULTS = {
 	attachment_rows: 'the handler returned more rows than its attachment declares (maxRows)',
 	attachment_cell: 'a cell of the attachment is longer than one cell may hold',
 	attachment_size: 'the encoded attachment is larger than it declares (maxBytes); no body was sent',
+	redirect_refused: "the handler redirected to a target that is neither its own origin's path nor an origin its redirect() lists",
 } as const
 
 export type ServerFaultReason = keyof typeof SERVER_FAULTS

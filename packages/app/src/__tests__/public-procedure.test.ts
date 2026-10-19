@@ -73,6 +73,17 @@ describe('the artifact of a public procedure', () => {
 		expect(artifact.procedures?.['api.staff.addProduct']?.rate.perCaller).toBe(3)
 	})
 
+	test('carries the HTTP shape: a GET query reads its URL, a POST its urlencoded body and its query, a redirect its origins', () => {
+		expect(artifact.endpoints.find((row) => row.id === 'api.catalog.search')).toMatchObject({ method: 'GET', admission: null })
+		const subscribe = artifact.endpoints.find((row) => row.id === 'api.intake.subscribe')
+		expect(subscribe).toMatchObject({
+			method: 'POST',
+			admission: { contentTypes: ['application/x-www-form-urlencoded'] },
+			output: { type: 'redirect', origins: ['https://partner.example'] },
+		})
+		expect(artifact.procedures?.['api.intake.subscribe']?.query).toMatchObject({ type: 'object' })
+	})
+
 	test('compiles into a proxy row the strict manifest parser accepts', () => {
 		const table = contractProxyTable(artifact)
 		expect(table.endpoints.find((row) => row.id === 'api.intake.register')).toMatchObject({ kind: 'public', callers: [], delegation: null })
@@ -169,6 +180,41 @@ if (postgres !== null) {
 			const access = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, postgres)
 			expect(await access.anyone('api.intake.register', { name: 'generated', website: '' })).toEqual({ answered: true })
 			expect(await access.anyone('api.intake.undeclared', {})).toEqual({ answered: false, status: 500 })
+		})
+
+		test('a GET query reads its input from canonical URL parameters, and refuses a duplicate or an unknown one', async () => {
+			await kit.browser(reader)('/api/staff.addProduct', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"name":"Desk"}' })
+			const get = (query: string) => kit.fetch(`/api/catalog.search?${query}`)
+			const found = await get('name=Desk&limit=50&exact=true')
+			expect(found.status).toBe(200)
+			expect((await found.json()).result.items).toEqual([{ name: 'Desk' }])
+			expect((await get('name=Desk&name=Lamp')).status).toBe(400)
+			expect((await get('name=Desk&limit=05')).status).toBe(400)
+			expect((await get('name=Desk&color=red')).status).toBe(400)
+			expect((await kit.fetch('/api/catalog.search', { method: 'POST', body: '{}' })).status).toBe(403)
+		})
+
+		test('a native form posts urlencoded fields with a query, and is redirected to its own path or a listed origin only', async () => {
+			const submit = (next: string, body = 'name=Ann&adult=true') =>
+				kit.fetch(`/api/intake.subscribe?next=${next}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: kit.origin },
+					body,
+					redirect: 'manual',
+				})
+			const own = await submit('own')
+			expect(own.status).toBe(303)
+			expect(own.headers.get('Location')).toBe('/thanks')
+			const partner = await submit('partner')
+			expect(partner.headers.get('Location')).toBe('https://partner.example/welcome')
+			expect((await submit('elsewhere')).status).toBe(500)
+			expect((await submit('own', 'name=Ann&adult=yes')).status).toBe(400)
+			const stranger = await kit.fetch('/api/intake.subscribe?next=own', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://stranger.example' },
+				body: 'name=Ann&adult=true',
+			})
+			expect(stranger.status).toBe(403)
 		})
 
 		test('a body past its limit is refused', async () => {

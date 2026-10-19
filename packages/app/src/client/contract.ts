@@ -84,6 +84,8 @@ type OptionsFor<C, M> = SurfaceOf<C>[M & keyof SurfaceOf<C>] extends { readonly 
 interface CallTarget {
 	readonly id: string
 	readonly url: string
+	/** `GET` for a procedure whose `http` says so: its input travels in the URL. */
+	readonly method: 'GET' | 'POST'
 	readonly type: ProcedureType
 	readonly input: Schema | null
 	readonly output: Schema
@@ -108,6 +110,17 @@ export function clientNodeOf(value: unknown): ClientNode | null {
 }
 
 /** The request of one procedure call: its input as JSON, with the key as a bearer or the page's session. */
+/** A GET call: its input travels in the URL, its credential as a POST's does. */
+function getRequestOf(options: ClientOptions): () => RequestInit {
+	return () => {
+		const headers = new Headers()
+		if (options.key !== undefined) {
+			headers.set('Authorization', `Bearer ${options.key}`)
+		}
+		return { method: 'GET', credentials: options.key === undefined ? 'same-origin' : 'omit', headers }
+	}
+}
+
 function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 	return () => {
 		const headers = new Headers({ 'Content-Type': 'application/json' })
@@ -118,9 +131,21 @@ function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 	}
 }
 
+/** A GET's input as the URL's parameters: each scalar field in its canonical spelling; an absent one left out. */
+function withParams(url: string, input: unknown): string {
+	const params = new URLSearchParams()
+	for (const [name, value] of Object.entries(typeof input === 'object' && input !== null ? input : {})) {
+		if (value !== undefined) params.set(name, value === null ? 'null' : String(value))
+	}
+	const query = params.toString()
+	return query === '' ? url : `${url}?${query}`
+}
+
 function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: BounceConfig | null) {
 	const call = async (input?: unknown): Promise<unknown> => {
-		const result = await exchange(options.fetch ?? fetch, target.url, requestOf(options, input), bounce)
+		const result = target.method === 'GET'
+			? await exchange(options.fetch ?? fetch, withParams(target.url, input), getRequestOf(options), bounce)
+			: await exchange(options.fetch ?? fetch, target.url, requestOf(options, input), bounce)
 		const parsed = z.safeParse(target.output, result)
 		if (!parsed.success) {
 			throw new RpcError({ type: 'invalid-response', message: `'${target.id}' answered a value its output schema refuses`, httpStatus: 200 })
@@ -130,6 +155,11 @@ function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: 
 	Object.defineProperty(call, 'output', { value: target.output, enumerable: true })
 	clientNodes.set(call, { mount: at.mount, path: at.path, procedure: { type: target.type, input: target.input } })
 	return call
+}
+
+/** The method a procedure's `http` declares: `GET` only where written, `POST` otherwise. */
+function httpMethodOf(http: unknown): 'GET' | 'POST' {
+	return typeof http === 'object' && http !== null && Reflect.get(http, 'method') === 'GET' ? 'GET' : 'POST'
 }
 
 interface TreeAt {
@@ -149,7 +179,14 @@ function clientTree(
 	for (const [name, node] of Object.entries(tree)) {
 		const path = at.path === '' ? name : `${at.path}.${name}`
 		client[name] = isProcedure(node)
-			? make({ id: `${at.mount}.${path}`, url: `${at.origin}${joinPath(at.base, path)}`, type: node.type, input: node.input, output: node.output }, {
+			? make({
+				id: `${at.mount}.${path}`,
+				url: `${at.origin}${joinPath(at.base, path)}`,
+				method: httpMethodOf(node.http),
+				type: node.type,
+				input: node.input,
+				output: node.output,
+			}, {
 				...at,
 				path,
 			})

@@ -74,6 +74,8 @@ export interface ProcedureArtifact {
 	readonly challenge: FormChallenge | null
 	/** How long the handler may run after the last body byte, in ms. */
 	readonly timeoutMs: number
+	/** A POST's flat schema of the URL's parameters, the handler's `query`; absent without one, so digests stay. */
+	readonly query?: SchemaShape
 }
 
 /**
@@ -248,8 +250,30 @@ export type SchemaShape =
 	| { readonly type: 'nullable'; readonly inner: SchemaShape }
 	| { readonly type: 'union'; readonly options: readonly SchemaShape[] }
 
-/** What a procedure answers: a JSON value of a schema, or a file of rows (`attachment()` of `@fabrika/app/contract`). */
-export type OutputShape = SchemaShape | AttachmentShape
+/**
+ * What a procedure answers: a JSON value of a schema, a file of rows (`attachment()` of `@fabrika/app/contract`), or a
+ * redirect (`redirect()`).
+ */
+export type OutputShape = SchemaShape | AttachmentShape | RedirectShape
+
+/**
+ * A procedure whose handler returns `{ to }` and whose answer is a redirect there: 303 after a POST, 302 after a GET.
+ * A target is a path of the application's own origin or a URL of one of `origins`; anything else fails the invocation.
+ */
+export interface RedirectShape {
+	readonly type: 'redirect'
+	/** Exact `https://` origins a target may name, besides the application's own. */
+	readonly origins: readonly string[]
+}
+
+export function isRedirectShape(shape: OutputShape): shape is RedirectShape {
+	return shape.type === 'redirect'
+}
+
+/** An output answered as JSON of a schema: neither a file nor a redirect. */
+export function isSchemaOutput(shape: OutputShape): shape is SchemaShape {
+	return shape.type !== 'attachment' && shape.type !== 'redirect'
+}
 
 /**
  * A procedure whose handler returns rows and whose answer is a file the framework encodes from them. The columns are

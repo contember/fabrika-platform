@@ -187,6 +187,13 @@ export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends Opt
 	 * `output` is the array of rows the handler returns.
 	 */
 	readonly attachment?: AttachmentDeclaration
+	/** Set by `describeContract` when the output is a `redirect()`: the procedure answers a redirect to `{ to }`. */
+	readonly redirect?: RedirectDeclaration
+}
+
+/** The origins a `redirect()` output lists, as written; `buildArtifact` checks each. */
+export interface RedirectDeclaration {
+	readonly origins: readonly string[]
 }
 
 /**

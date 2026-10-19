@@ -72,6 +72,21 @@ describe('a public procedure in the approval diff', () => {
 		])
 	})
 
+	test('a redirect output says where anyone who calls it may be sent, and a new origin widens', () => {
+		const redirecting = (origins: readonly string[]): EndpointRow => ({ ...CTA, output: { type: 'redirect', origins } })
+		expect(classifyAccess(snapshot(null, null), snapshot(DEFAULT_RULES, redirecting(['https://partner.example']))).changes[0]).toEqual({
+			effect: 'widens',
+			line:
+				'New endpoint `api.stats.cta` (POST /api/stats.cta) for anyone, without signing in, answering a redirect to its own origin or `https://partner.example`',
+			review: 'closer',
+		})
+		expect(classifyAccess(snapshot(DEFAULT_RULES, redirecting([])), snapshot(DEFAULT_RULES, redirecting(['https://partner.example']))).changes).toEqual(
+			[
+				{ effect: 'widens', line: 'Endpoint `api.stats.cta` redirect may go to `https://partner.example`' },
+			],
+		)
+	})
+
 	test('an older release records no rules: the same contract compares as before', () => {
 		expect(classifyAccess(snapshot(null), snapshot(null))).toEqual({ outcome: 'none', changes: [] })
 	})

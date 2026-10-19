@@ -152,6 +152,9 @@ export type EndpointDef<I, O, Acc, S, U, Cn, Is, Ix extends AnyDbIndex> =
 	}
 	& DeclaredFields<S, U, Cn, Is, Ix>
 
+/** A group procedure's HTTP shape, its `query` schema inferred: what its handler then reads as `query`. */
+type HttpField<Q> = { readonly http?: HttpOption<Q & NoInfer<NotLoose<Q>>> }
+
 type Returned<F> = F extends (args: never) => infer R ? Awaited<R> : never
 
 /** The last member of a union, in the order the compiler holds it. */
@@ -187,8 +190,21 @@ export type HandlerReturn<F, O extends Schema> = [Returned<F>] extends [z.input<
 	: [Returned<F>] extends [RowShaped<z.input<O>>] ? RowShaped<z.input<O>>
 	: z.input<O>
 
-/** A kit endpoint's handler, returning `R`. */
-export type KitHandler<In, Ctx, R> = (args: { readonly input: In; readonly ctx: Ctx }) => R | Promise<R>
+/** A kit endpoint's handler, returning `R`; `X` adds what its HTTP shape reads beside the input (`query`). */
+export type KitHandler<In, Ctx, R, X = unknown> = (args: { readonly input: In; readonly ctx: Ctx } & X) => R | Promise<R>
+
+/** What a handler reads beside its input: the URL's `query` of a POST that declares `http.query`. */
+export type QueryArgs<Q> = [Q] extends [never] ? unknown : Q extends InputSchema ? { readonly query: z.output<Q> } : unknown
+
+/**
+ * The wire of a procedure: `POST` with a JSON body by default; a query may be `GET`, its input then flat scalar URL
+ * parameters; a POST may read a flat `query` from the URL and take a native form's `urlencoded` body.
+ */
+export interface HttpOption<Q> {
+	readonly method?: 'GET' | 'POST'
+	readonly query?: Q
+	readonly body?: 'json' | 'urlencoded'
+}
 
 /**
  * What `.handle` answers: the endpoint, or a message the group refuses at the endpoint's line — when the handler
@@ -211,9 +227,11 @@ export interface Endpoint<T extends ProcedureType, I extends InputSchema | null,
 }
 
 /** An endpoint before `.handle`: a group refuses it. */
-export interface EndpointBuilder<T extends ProcedureType, I extends InputSchema | null, O extends Schema, Acc, D, Ctx> extends PendingEndpoint {
+export interface EndpointBuilder<T extends ProcedureType, I extends InputSchema | null, O extends Schema, Acc, D, Ctx, X = unknown>
+	extends PendingEndpoint
+{
 	/** The endpoint's handler, typed by its access form and declaration; it may return only the output's fields. */
-	handle<const F extends KitHandler<HandlerInput<I, Acc>, Ctx, HandlerReturn<F, O>>>(handler: F): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
+	handle<const F extends KitHandler<HandlerInput<I, Acc>, Ctx, HandlerReturn<F, O>, X>>(handler: F): ExactReturn<F, O, Endpoint<T, I, O, Acc, D>>
 }
 
 /** What every endpoint builder has and no handled endpoint has. */
@@ -235,9 +253,18 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Cn extends readonly ImportOf<K>[] = never,
 		const Is extends string = never,
 		const Acts extends readonly K['action'][] = never,
+		Q extends InputSchema = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & NoKick,
-	): EndpointBuilder<'query', I, O, Acc, Declared<S, U, Cn, Is>, ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>>>
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & HttpField<Q> & NoKick,
+	): EndpointBuilder<
+		'query',
+		I,
+		O,
+		Acc,
+		Declared<S, U, Cn, Is>,
+		ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>>,
+		QueryArgs<Q>
+	>
 	mutation<
 		const Acc extends GroupAccess<Caller, MutationAccess<K['action'], K['dimension'], K['creatable'], InputOf<I>>>,
 		O extends Schema,
@@ -248,9 +275,18 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Is extends string = never,
 		const Th extends string = never,
 		const Acts extends readonly K['action'][] = never,
+		Q extends InputSchema = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & KickField<Th>,
-	): EndpointBuilder<'mutation', I, O, Acc, Declared<S, U, Cn, Is>, ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>>>
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & HttpField<Q> & KickField<Th>,
+	): EndpointBuilder<
+		'mutation',
+		I,
+		O,
+		Acc,
+		Declared<S, U, Cn, Is>,
+		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>>,
+		QueryArgs<Q>
+	>
 }
 
 /** Any handled endpoint. */

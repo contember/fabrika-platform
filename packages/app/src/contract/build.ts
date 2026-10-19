@@ -28,6 +28,7 @@ import {
 	type EndpointSource,
 	type ExportArtifact,
 	type FileCollectionArtifact,
+	FORM_URLENCODED_TYPE,
 	type FormChallenge,
 	type FormFileArtifact,
 	type FormMountArtifact,
@@ -871,11 +872,10 @@ class ArtifactBuilder {
 					id,
 					source: { kind: 'mount', name },
 					kind: procedure.type,
-					method: 'POST',
 					path: joinPath(api, path),
 					callers: ['link'],
 					requirement,
-					admission: rules === null ? JSON_ADMISSION : { contentTypes: ['application/json'], maxBytes: rules.maxBytes },
+					...rowWire(rules),
 					input: procedure.input,
 					output: this.#output(`procedure '${id}'`, procedure),
 				})
@@ -915,6 +915,9 @@ class ArtifactBuilder {
 		if (procedure.actions !== undefined) {
 			this.#problem(where, 'declares actions, which only a public procedure holds (its handler runs as its own workload); remove them')
 		}
+		if (source.kind === 'export' && (procedure.redirect !== undefined || procedure.http !== undefined)) {
+			this.#problem(where, 'is an export procedure, which answers JSON to a POST: it declares no http and no redirect()')
+		}
 		const requirement = this.#requirement(where, procedure)
 		const rules = this.#rules(id, procedure, 'credentialed')
 		const crossOrigin = source.kind === 'mount'
@@ -936,11 +939,10 @@ class ArtifactBuilder {
 				id,
 				source,
 				kind: procedure.type,
-				method: 'POST',
 				path,
 				callers,
 				requirement,
-				admission: rules === null ? JSON_ADMISSION : { contentTypes: ['application/json'], maxBytes: rules.maxBytes },
+				...rowWire(rules),
 				input: procedure.input,
 				output: this.#output(where, procedure),
 				...crossOrigin,
@@ -978,11 +980,10 @@ class ArtifactBuilder {
 			id,
 			source,
 			kind: 'public',
-			method: 'POST',
 			path,
 			callers: [],
 			requirement: null,
-			admission: { contentTypes: ['application/json'], maxBytes: rules.maxBytes },
+			...rowWire(rules),
 			input: procedure.input,
 			output: this.#output(where, procedure),
 			...origins,
@@ -1030,13 +1031,80 @@ class ArtifactBuilder {
 			}
 			return null
 		}
-		if (procedure.http !== undefined) {
-			this.#problem(where, 'declares http, which this release does not serve yet (allowed: no http; every procedure is POST with a JSON body)')
-		}
 		const limits = this.#limits(where, procedure.limits)
 		const admission = this.#admission(id, procedure, kind)
-		this.#procedureRules[id] = { rate: admission.rate, challenge: admission.challenge, timeoutMs: limits.timeoutMs }
-		return { maxBytes: limits.maxBytes, origins: admission.origins }
+		const http = this.#http(where, procedure)
+		this.#procedureRules[id] = {
+			rate: admission.rate,
+			challenge: admission.challenge,
+			timeoutMs: limits.timeoutMs,
+			...(http.query === null ? {} : { query: http.query }),
+		}
+		return { maxBytes: limits.maxBytes, origins: admission.origins, method: http.method, body: http.body }
+	}
+
+	/**
+	 * A procedure's HTTP shape (`http: { method?, query?, body? }`): `POST` with a JSON body by default. A query may be
+	 * `GET`, its input then read from flat scalar URL parameters; a POST may read a flat `query` from the URL beside its
+	 * body, and take a native form's `urlencoded` body of flat scalar fields. A `GET` mutation and `cache` wait for
+	 * signed tokens and caching, a later step of this release.
+	 */
+	#http(
+		where: string,
+		procedure: ProcedureDeclaration<SchemaShape, unknown>,
+	): { readonly method: 'GET' | 'POST'; readonly body: 'json' | 'urlencoded' | null; readonly query: SchemaShape | null } {
+		const fallback = { method: 'POST' as const, body: 'json' as const, query: null }
+		const value = procedure.http
+		if (value === undefined) {
+			return fallback
+		}
+		const allowed = "http: { method?: 'GET' | 'POST', query?: z.strictObject({ … }), body?: 'json' | 'urlencoded' }"
+		if (!isRecord(value)) {
+			this.#problem(where, `http is not an object (allowed: ${allowed})`)
+			return fallback
+		}
+		this.#keys(`${where} http`, value, ['method', 'query', 'body', 'cache'])
+		if (value['cache'] !== undefined) {
+			this.#problem(where, 'declares http.cache, which this release does not serve yet (allowed: no cache; every answer is no-store)')
+		}
+		const method = value['method'] ?? 'POST'
+		if (method !== 'GET' && method !== 'POST') {
+			this.#problem(where, `http.method ${JSON.stringify(method)} is not a method (allowed: 'GET' or 'POST')`)
+			return fallback
+		}
+		const body = value['body'] ?? (method === 'GET' ? null : 'json')
+		const flat = (shape: SchemaShape | null) => shape === null || (shape.type === 'object' && Object.values(shape.fields).every(isCell))
+		if (method === 'GET') {
+			if (procedure.type === 'mutation') {
+				this.#problem(
+					where,
+					'is a GET mutation, which needs a public procedure with a signedToken in its input; this release does not verify signed tokens yet (allowed: POST)',
+				)
+			}
+			if (value['query'] !== undefined || value['body'] !== undefined) {
+				this.#problem(where, 'is GET, which reads its input from the URL: it declares no http.query and no http.body')
+			}
+			if (!flat(procedure.input)) {
+				this.#problem(where, 'is GET, so its input is flat scalar fields the URL carries (allowed: strings, numbers, booleans, enums, literals, null)')
+			}
+			return { method, body: null, query: null }
+		}
+		if (body !== 'json' && body !== 'urlencoded') {
+			this.#problem(where, `http.body ${JSON.stringify(body)} is not a body codec (allowed: 'json' or 'urlencoded')`)
+			return fallback
+		}
+		if (body === 'urlencoded' && !flat(procedure.input)) {
+			this.#problem(where, "takes a urlencoded body, so its input is flat scalar fields (allowed: http.body: 'json' for anything else)")
+		}
+		const query = value['query']
+		if (query === undefined) {
+			return { method, body, query: null }
+		}
+		if (!isSchemaShape(query) || query.type !== 'object' || !flat(query)) {
+			this.#problem(where, 'http.query is not a strict object of flat scalar fields (allowed: z.strictObject({ t: z.string() }))')
+			return { method, body, query: null }
+		}
+		return { method, body, query }
 	}
 
 	#limits(where: string, value: unknown): { readonly maxBytes: number; readonly timeoutMs: number } {
@@ -1166,6 +1234,9 @@ class ArtifactBuilder {
 	 * scalar cell, the name is fixed and safe in a header, and each limit is within `ATTACHMENT_LIMITS`.
 	 */
 	#output(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>): OutputShape {
+		if (procedure.redirect !== undefined) {
+			return this.#redirect(where, procedure.redirect.origins)
+		}
 		const attachment = procedure.attachment
 		if (attachment === undefined) {
 			return procedure.output
@@ -1197,6 +1268,17 @@ class ArtifactBuilder {
 			}
 		}
 		return { type: 'attachment', format, filename: attachment.filename, maxBytes, maxRows, columns }
+	}
+
+	/** A redirect's listed origins: exact `https://` origins, each once; the application's own needs none. */
+	#redirect(where: string, origins: readonly string[]): OutputShape {
+		this.#unique(where, 'redirect origins', origins)
+		for (const origin of origins) {
+			if (!isPolicyOrigin(origin)) {
+				this.#problem(where, `redirect origin '${origin}' is not an exact https origin (allowed: 'https://shop.example')`)
+			}
+		}
+		return { type: 'redirect', origins: [...origins] }
 	}
 
 	#attachmentLimit(where: string, field: string, value: number, ceiling: number): number {
@@ -2304,11 +2386,33 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 /** What a procedure's row takes from its rules: the body limit and the origin rule. */
 interface ProcedureRules {
+	readonly method: 'GET' | 'POST'
+	/** `null` for a GET, which takes no body. */
+	readonly body: 'json' | 'urlencoded' | null
 	readonly maxBytes: number
 	readonly origins: AdmissionOrigins
 }
 
 type AdmissionOrigins = 'same-origin' | 'listed' | 'any'
+
+/** The method and body admission of a procedure's row: POST with a JSON body, unlimited, for a `defineContract` one. */
+function rowWire(rules: ProcedureRules | null): Pick<EndpointRow, 'method' | 'admission'> {
+	if (rules === null) {
+		return { method: 'POST', admission: JSON_ADMISSION }
+	}
+	if (rules.body === null) {
+		return { method: rules.method, admission: null }
+	}
+	return {
+		method: rules.method,
+		admission: { contentTypes: [rules.body === 'urlencoded' ? FORM_URLENCODED_TYPE : 'application/json'], maxBytes: rules.maxBytes },
+	}
+}
+
+/** A described schema: what `describeContract` and the reader leave where a contract wrote one. */
+function isSchemaShape(value: unknown): value is SchemaShape {
+	return isRecord(value) && typeof value['type'] === 'string'
+}
 
 function nonEmpty<T>(list: readonly T[]): readonly [T, ...T[]] | null {
 	const [first, ...rest] = list

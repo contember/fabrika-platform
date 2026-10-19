@@ -56,6 +56,8 @@ export type LiteralValue =
 	| { readonly kind: 'kit-contract'; readonly app: AppValue; readonly args: readonly LiteralValue[]; readonly at: Located }
 	/** `attachment({ … })`, with its argument read; `surface.ts` builds the output schema the evaluated module holds. */
 	| { readonly kind: 'attachment'; readonly args: readonly LiteralValue[]; readonly at: Located }
+	/** `redirect({ … })`, with its argument read; `surface.ts` builds the output schema the evaluated module holds. */
+	| { readonly kind: 'redirect'; readonly args: readonly LiteralValue[]; readonly at: Located }
 	/** A builder callback: its parameter is only ever a kit, so its body is read once, as a value. */
 	| { readonly kind: 'callback'; readonly result: LiteralValue; readonly at: Located }
 
@@ -326,6 +328,8 @@ export class ValueReader {
 				return null
 			case 'attachment':
 				return this.#attachmentCall(located, links, scope)
+			case 'redirect':
+				return this.#redirectCall(located, links, scope)
 			default:
 				if (this.#isConstName(located.module, rootName) && links[0]?.kind === 'member') {
 					return this.#schemaMethods(located, root, links, scope)
@@ -464,6 +468,16 @@ export class ValueReader {
 		}
 		const args = this.#arguments(located.module, call.node, scope, () => null)
 		return args === null ? null : { kind: 'attachment', args, at: located }
+	}
+
+	#redirectCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		if (call?.kind !== 'call' || links.length !== 1) {
+			this.#problems.add(located, 'redirect used other than as one call', "redirect() or redirect({ origins: ['https://…'] })")
+			return null
+		}
+		const args = this.#arguments(located.module, call.node, scope, () => null)
+		return args === null ? null : { kind: 'redirect', args, at: located }
 	}
 
 	#contractCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
@@ -641,4 +655,6 @@ export const describeKind = (
 		? 'app.contract(…)'
 		: value.kind === 'attachment'
 		? 'attachment(…)'
+		: value.kind === 'redirect'
+		? 'redirect(…)'
 		: value.kind

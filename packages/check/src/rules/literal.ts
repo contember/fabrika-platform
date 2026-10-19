@@ -8,12 +8,29 @@ import { isRelativeSpecifier } from '../layout'
  * `defineApp`, `kit` a const it returned, `shell` the parameter of `app.contract`'s callback and `endpoints` that of
  * a group's, a link's or an export's; `attachment` is the output `attachment({ … })`.
  */
-export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surface' | 'app' | 'kit' | 'shell' | 'endpoints' | 'attachment'
+export type BuilderKind =
+	| 'zod'
+	| 'contract'
+	| 'vocabulary'
+	| 'tables'
+	| 'surface'
+	| 'app'
+	| 'kit'
+	| 'shell'
+	| 'endpoints'
+	| 'attachment'
+	| 'redirect'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
-	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary', defineApp: 'app', attachment: 'attachment' },
+	'@fabrika/app/contract': {
+		defineContract: 'contract',
+		defineVocabulary: 'vocabulary',
+		defineApp: 'app',
+		attachment: 'attachment',
+		redirect: 'redirect',
+	},
 	'@fabrika/db/tables': { defineTables: 'tables' },
 }
 
@@ -320,6 +337,10 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 			return links.length === 1 && calls === 1
 				? undefined
 				: { node: root, message: 'attachment used other than as one call', allowed: "attachment({ format: 'csv', filename, row, maxBytes })" }
+		case 'redirect':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'redirect used other than as one call', allowed: "redirect() or redirect({ origins: ['https://…'] })" }
 		case 'tables':
 			return calls === links.length && (calls === 1 || calls === 2)
 				? undefined

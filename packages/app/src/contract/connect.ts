@@ -9,7 +9,7 @@ import {
 	type ExportDescription,
 	exportDigest,
 	type ExportProcedureDescription,
-	isAttachmentShape,
+	isSchemaOutput,
 	type SchemaShape,
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
@@ -49,10 +49,8 @@ export function exportDescription(artifact: ContractArtifact, name: string): Exp
 	const prefix = `${exportBase(name, declaration.version)}.`
 	const procedures: Record<string, ExportProcedureDescription> = {}
 	for (const row of artifact.endpoints) {
-		// The build refuses an attachment on an export, so an export row's output is a schema.
-		if (
-			row.source.kind === 'export' && row.source.name === name && row.id.startsWith(prefix) && row.output !== null && !isAttachmentShape(row.output)
-		) {
+		// The build refuses an attachment and a redirect on an export, so an export row's output is a schema.
+		if (row.source.kind === 'export' && row.source.name === name && row.id.startsWith(prefix) && row.output !== null && isSchemaOutput(row.output)) {
 			procedures[row.id.slice(prefix.length)] = { input: row.input, output: row.output }
 		}
 	}

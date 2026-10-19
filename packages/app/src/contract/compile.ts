@@ -3,6 +3,7 @@
 
 import type { ContractArtifact, SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
 import { inboxColumns, isTables, tablePolicies, type Tables } from '@fabrika/db/tables'
+import { z } from 'zod/v4'
 import { attachmentOf } from './attachment'
 import { buildArtifact } from './build'
 import {
@@ -13,11 +14,13 @@ import {
 	type MountDeclaration,
 	type ProcedureDeclaration,
 	type ProcedureTreeDeclaration,
+	type RedirectDeclaration,
 	SURFACE_SECTIONS,
 	type SurfaceSection,
 } from './declaration'
 import type { AnyContract, AnyMount, Schema, Surface } from './define'
 import { Problems } from './problems'
+import { redirectOf } from './redirect'
 import { describeSchema } from './schema-shape'
 
 /**
@@ -118,6 +121,7 @@ class SchemaReader {
 					...node,
 					input: node.input === null ? null : this.schema(`${at} input`, node.input),
 					...this.output(`${at} output`, node.output),
+					...(node.http === undefined ? {} : { http: this.http(`${at} http.query`, node.http) }),
 				}
 			} else {
 				described[name] = this.tree(where, node, path)
@@ -126,8 +130,27 @@ class SchemaReader {
 		return described
 	}
 
-	/** An `attachment()` output is described as the rows' array, its declaration carried beside it. */
-	output(where: string, schema: Schema): { readonly output: SchemaShape; readonly attachment?: AttachmentDeclaration } {
+	/** `http` as written, its `query` schema described; `buildArtifact` checks the rest. */
+	http(where: string, http: unknown): unknown {
+		if (typeof http !== 'object' || http === null) {
+			return http
+		}
+		const query: unknown = Reflect.get(http, 'query')
+		return isSchema(query) ? { ...http, query: this.schema(where, query) } : http
+	}
+
+	/**
+	 * An `attachment()` output is described as the rows' array, its declaration carried beside it; a `redirect()` as its
+	 * `{ to }` schema, its origins beside it.
+	 */
+	output(
+		where: string,
+		schema: Schema,
+	): { readonly output: SchemaShape; readonly attachment?: AttachmentDeclaration; readonly redirect?: RedirectDeclaration } {
+		const target = redirectOf(schema)
+		if (target !== null) {
+			return { output: this.schema(where, schema), redirect: { origins: [...target.origins] } }
+		}
 		const mark = attachmentOf(schema)
 		if (mark === null) {
 			return { output: this.schema(where, schema) }
@@ -140,4 +163,9 @@ class SchemaReader {
 	schema(where: string, schema: Schema): SchemaShape {
 		return describeSchema(schema, where, this.#problems) ?? { type: 'null' }
 	}
+}
+
+/** Whether `value` is a zod schema: what a contract writes where a schema stands. */
+function isSchema(value: unknown): value is Schema {
+	return value instanceof z.ZodType
 }

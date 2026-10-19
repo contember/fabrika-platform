@@ -44,6 +44,7 @@ import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, 
 import { exportBase, FORM_CHALLENGE_FIELD, FORM_FILE_LIMITS, FORM_LIMITS, spaPrefixRowId } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
+import { schemaFromShape } from '../contract/schema-from-shape'
 import type { RequestExecutionContext } from '../fetch'
 import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, type FileCollections, fileCollections } from '../files/collections'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
@@ -60,6 +61,7 @@ import {
 	type Facilities,
 	type FormAdmission,
 	NO_FACILITIES,
+	type ProcedureQuery,
 	proxySecretDigest,
 	type ServedEndpoint,
 	type ServedSite,
@@ -603,6 +605,12 @@ function formAdmission(
 	})
 }
 
+/** A POST procedure's `http.query`, as the field its served endpoint carries: parsed by the approved shape. */
+function queryOf(id: string, artifact: ContractArtifact): { readonly query?: ProcedureQuery } {
+	const shape = artifact.procedures !== undefined && Object.hasOwn(artifact.procedures, id) ? artifact.procedures[id]?.query : undefined
+	return shape === undefined ? {} : { query: { schema: schemaFromShape(shape), shape } }
+}
+
 /** A procedure's admission, as the field its served endpoint carries; none after a problem. */
 function admissionOf(id: string, artifact: ContractArtifact, options: BootOptions, problems: string[]): { readonly admission?: ProcedureAdmission } {
 	const admission = procedureAdmission(id, artifact, admissionOptions(options), problems)
@@ -652,6 +660,7 @@ function publicEndpoint(
 		credential,
 		admission,
 		site,
+		...queryOf(row.id, artifact),
 	}
 }
 
@@ -817,6 +826,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						site: servedSite(procedure.type, bound),
 						...(bound.declaration?.then == null ? {} : { then: bound.declaration.then }),
 						...admissionOf(id, artifact, options, problems),
+						...queryOf(id, artifact),
 					})
 				}
 			}

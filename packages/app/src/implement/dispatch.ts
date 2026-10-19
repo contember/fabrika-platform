@@ -14,8 +14,10 @@ import {
 	type EndpointPlan,
 	type EndpointRow,
 	type ExportDescription,
+	FORM_URLENCODED_TYPE,
 	type FormFileArtifact,
 	isAttachmentShape,
+	isRedirectShape,
 	type LinkTokenClaims,
 	parseEndpointHeader,
 	type PermissionEntry,
@@ -24,7 +26,9 @@ import {
 	PROXY_SECRET_HEADER,
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
+	type RedirectShape,
 	satisfies,
+	type SchemaShape,
 	scopedValues,
 	sha256Hex,
 } from '@fabrika/auth-core'
@@ -59,7 +63,16 @@ import {
 import type { RequestExecutionContext } from '../fetch'
 import type { FileCollections, ReceivedFormFile } from '../files/collections'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
-import { abortedBody, bodyDeadlineMs, bootstrapPath, bootstrapResponse, githubAccounts, readBoundedBody, verifyGithubSignature, withBootstrap } from './anonymous'
+import {
+	abortedBody,
+	bodyDeadlineMs,
+	bootstrapPath,
+	bootstrapResponse,
+	githubAccounts,
+	readBoundedBody,
+	verifyGithubSignature,
+	withBootstrap,
+} from './anonymous'
 import { attachmentResponse } from './attachment'
 import { handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
@@ -92,6 +105,7 @@ import {
 	type ReadDirectory,
 } from './membership'
 import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
+import { paramsObject, urlParams } from './params'
 import { pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
@@ -135,7 +149,7 @@ export type ServedEndpoint =
 		readonly row: CredentialedEndpoint
 		readonly input: Schema | null
 		readonly output: Schema
-		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }) => unknown
+		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object; readonly query?: unknown }) => unknown
 		readonly facilities: Facilities
 		/** An export procedure: its request may only read. */
 		readonly readOnly?: true
@@ -147,6 +161,8 @@ export type ServedEndpoint =
 		readonly then?: string
 		/** Its buckets and time limit; without them (a generated endpoint) no bucket and the request budget. */
 		readonly admission?: ProcedureAdmission
+		/** A POST's `query`, parsed from the URL beside the body: its schema and its shape. */
+		readonly query?: ProcedureQuery
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -184,8 +200,9 @@ export type ServedEndpoint =
 		readonly row: EndpointRow
 		readonly input: Schema | null
 		readonly output: Schema
-		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }) => unknown
+		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object; readonly query?: unknown }) => unknown
 		readonly actions: readonly string[]
+		readonly query?: ProcedureQuery
 		/** The endpoint's key: `ctx.app` mints only what IAM signs for it. */
 		readonly credential: WorkloadCredential
 		readonly admission: ProcedureAdmission
@@ -204,6 +221,12 @@ export type ServedEndpoint =
 		/** A staged-kit webhook's declaration: its delivery runs in one transaction, through `ctx.db`. */
 		readonly site?: SiteDeclaration
 	}
+
+/** A POST procedure's `http.query`: the schema it is parsed with, and its described shape, which reads the parameters. */
+export interface ProcedureQuery {
+	readonly schema: Schema
+	readonly shape: SchemaShape
+}
 
 /** A form's file fields and the collections they land in: such a form reads `multipart/form-data`. */
 export interface FormFileAdmission {
@@ -516,6 +539,7 @@ export class ContractRuntime {
 		const admission = served.admission ?? DEFAULT_ADMISSION
 		await this.#admit(served.row.id, admission, request, caller.subject)
 		const input = await readInput(served, request)
+		const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
 		const site = served.site
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
@@ -544,12 +568,12 @@ export class ContractRuntime {
 							? {}
 							: { files: this.#files(served.row.id, frame, invocation, site.kind) }),
 					})
-					return await served.handler({ input: access.input, ctx })
+					return await served.handler({ input: access.input, ctx, ...(query === undefined ? {} : { query }) })
 				})
 			} finally {
 				frame.end()
 			}
-			const answer = this.#answerOf(served, result)
+			const answer = this.#answerOf(served, result, request)
 			await invocation?.commit(signal)
 			if (served.then !== undefined) {
 				// Without an execution context the kick runs detached; it never rejects.
@@ -566,16 +590,12 @@ export class ContractRuntime {
 	 * The output as JSON, projected and validated whole; or an attachment's file, whose rows are projected, validated
 	 * and encoded one at a time, so a result over a limit stops before it is copied.
 	 */
-	#answerOf(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown): Response {
+	#answerOf(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown, request: Request): Response {
 		const file = served.row.output !== null && isAttachmentShape(served.row.output) ? served.row.output : null
 		if (file !== null) {
 			return attachmentResponse(served.row.id, file, served.output, result)
 		}
-		const output = z.safeParse(served.output, projectOutput(served, result))
-		if (!output.success) {
-			throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
-		}
-		return jsonResponse({ result: output.data }, 200)
+		return outputResponse(served.row, served.output, result, request)
 	}
 
 	/** `ctx.files` of a staged-kit site, in its invocation's transaction. */
@@ -1068,7 +1088,8 @@ export class ContractRuntime {
 					403,
 				)
 			}
-			return await this.#publicInvocation(served, request, input, authority.perms)
+			const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
+			return await this.#publicInvocation(served, request, input, query, authority.perms)
 		} finally {
 			release()
 		}
@@ -1090,6 +1111,7 @@ export class ContractRuntime {
 		served: Extract<ServedEndpoint, { kind: 'public' }>,
 		request: Request,
 		input: Readonly<Record<string, unknown>>,
+		query: Readonly<Record<string, unknown>> | undefined,
 		perms: readonly PermissionEntry[],
 	): Promise<Response> {
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.site.kind === 'query', endpoint: served.row.id })
@@ -1121,17 +1143,14 @@ export class ContractRuntime {
 						app,
 						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
 					})
-					return await served.handler({ input, ctx })
+					return await served.handler({ input, ctx, ...(query === undefined ? {} : { query }) })
 				})
 			} finally {
 				frame.end()
 			}
-			const output = z.safeParse(served.output, projectSchema(served.row.id, served.output, result))
-			if (!output.success) {
-				throw new ServerFault('output_refused', `'${served.row.id}' returned a value its output schema refuses`)
-			}
+			const answer = outputResponse(served.row, served.output, result, request)
 			await invocation.commit(signal)
-			return jsonResponse({ result: output.data }, 200)
+			return answer
 		} finally {
 			await invocation.rollback()
 		}
@@ -1275,8 +1294,16 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
 	return scopes.some(([type, scope]) => permits(perms, action, { type, value: scope }))
 }
 
-function projectOutput(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown): unknown {
-	return projectSchema(served.row.id, served.output, result)
+/** The output, projected and validated whole: JSON, or a redirect to its validated target. */
+function outputResponse(row: EndpointRow, schema: Schema, result: unknown, request: Request): Response {
+	const output = z.safeParse(schema, projectSchema(row.id, schema, result))
+	if (!output.success) {
+		throw new ServerFault('output_refused', `'${row.id}' returned a value its output schema refuses`)
+	}
+	if (row.output !== null && isRedirectShape(row.output)) {
+		return redirectResponse(row, row.output, output.data, request)
+	}
+	return jsonResponse({ result: output.data }, 200)
 }
 
 function projectSchema(endpoint: string, output: Schema, result: unknown): unknown {
@@ -1427,20 +1454,30 @@ function nulAt(value: unknown, path: readonly string[]): readonly string[] | nul
 }
 
 /** The strictly parsed input; a procedure without input takes an empty body or `{}`. */
+/**
+ * A procedure's input: a GET's from the URL's flat parameters; a POST's from its body, JSON or a native form's
+ * urlencoded fields, within the row's body limit and deadline.
+ */
 async function readInput(
 	served: { readonly row: EndpointRow; readonly input: Schema | null },
 	request: Request,
 ): Promise<Readonly<Record<string, unknown>>> {
-	const limit = served.row.admission?.maxBytes ?? null
-	const text = limit === null
-		? await request.text()
-		: new TextDecoder().decode(await readBoundedBody(request, limit, AbortSignal.timeout(bodyDeadlineMs(limit))))
 	let body: unknown = {}
-	if (text.trim() !== '') {
-		try {
-			body = JSON.parse(text)
-		} catch {
-			throw new BadRequestError('The body is not JSON')
+	if (served.row.method === 'GET') {
+		body = paramsObject(urlParams(request), served.row.input)
+	} else {
+		const limit = served.row.admission?.maxBytes ?? null
+		const text = limit === null
+			? await request.text()
+			: new TextDecoder().decode(await readBoundedBody(request, limit, AbortSignal.timeout(bodyDeadlineMs(limit))))
+		if (mediaType(request.headers.get('Content-Type')) === FORM_URLENCODED_TYPE) {
+			body = paramsObject(new URLSearchParams(text), served.row.input)
+		} else if (text.trim() !== '') {
+			try {
+				body = JSON.parse(text)
+			} catch {
+				throw new BadRequestError('The body is not JSON')
+			}
 		}
 	}
 	if (served.input === null) {
@@ -1450,6 +1487,38 @@ async function readInput(
 		return {}
 	}
 	return strictInput(served.row, served.input, body)
+}
+
+/** A POST's `query`: the URL's flat parameters, parsed strictly by the declared schema; `undefined` without one. */
+function readQuery(
+	row: EndpointRow,
+	query: Schema | undefined,
+	shape: SchemaShape | undefined,
+	request: Request,
+): Readonly<Record<string, unknown>> | undefined {
+	return query === undefined ? undefined : strictInput(row, query, paramsObject(urlParams(request), shape ?? null))
+}
+
+/**
+ * A redirect's answer: 303 after a POST, 302 after a GET, to a path of the application's own origin or a URL of an
+ * origin the output lists. Any other target fails the invocation, so the procedure is never an open redirect.
+ */
+function redirectResponse(row: EndpointRow, shape: RedirectShape, output: unknown, request: Request): Response {
+	const to = isRecord(output) && typeof output['to'] === 'string' ? output['to'] : ''
+	const own = to.startsWith('/') && !to.startsWith('//') && !to.includes('\\')
+	let listed = false
+	if (!own) {
+		try {
+			const url = new URL(to)
+			listed = url.protocol === 'https:' && shape.origins.includes(url.origin)
+		} catch {
+			listed = false
+		}
+	}
+	if (!own && !listed) {
+		throw new ServerFault('redirect_refused', `'${row.id}' redirected to a target that is neither its own origin's path nor a listed origin's URL`)
+	}
+	return new Response(null, { status: request.method === 'GET' ? 302 : 303, headers: { Location: to } })
 }
 
 /** A canonical path's segments all decode; a value that does not is no id of anything. */

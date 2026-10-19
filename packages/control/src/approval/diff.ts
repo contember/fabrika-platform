@@ -23,6 +23,8 @@ import {
 	type FormChallenge,
 	type FormMountArtifact,
 	isAttachmentShape,
+	isRedirectShape,
+	isSchemaOutput,
 	JOB_SITE_PREFIX,
 	type JobMailer,
 	LOCALES,
@@ -32,6 +34,7 @@ import {
 	type OutputShape,
 	planEndpoint,
 	type ProcedureArtifact,
+	type RedirectShape,
 	type RoleArtifact,
 	type SchemaShape,
 	type StringShape,
@@ -278,7 +281,8 @@ function procedureChanges(name: string, from: ProcedureArtifact, to: ProcedureAr
 	const time = from.timeoutMs === to.timeoutMs
 		? []
 		: [(to.timeoutMs > from.timeoutMs ? widening : narrowing)(`${name} time limit changes from ${seconds(from.timeoutMs)} to ${seconds(to.timeoutMs)}`)]
-	return [...buckets, ...challenge, ...time]
+	const query = schemaChanges({ endpoint: `${name} URL query`, side: 'input', path: '' }, from.query ?? null, to.query ?? null)
+	return [...buckets, ...challenge, ...time, ...query]
 }
 
 // ── Member directories ──────────────────────────────────────────────────────────────────────────
@@ -791,6 +795,7 @@ function crossOriginChanges(name: string, from: CrossOriginForm | undefined, to:
 
 /** `, answering the file …` for an endpoint whose output is an attachment: the approver sees that data leaves as a file. */
 function answersFile(row: EndpointRow): string {
+	if (row.output !== null && isRedirectShape(row.output)) return `, answering ${redirectReach(row.output)}`
 	const file = attachmentName(row)
 	return file === null ? '' : `, answering ${file}`
 }
@@ -808,7 +813,11 @@ function outputChanges(name: string, from: OutputShape | null, to: OutputShape |
 	if (from !== null && isAttachmentShape(from) && to !== null && isAttachmentShape(to)) {
 		return attachmentChanges(name, from, to)
 	}
-	if ((from === null || !isAttachmentShape(from)) && (to === null || !isAttachmentShape(to))) {
+	if (from !== null && isRedirectShape(from) && to !== null && isRedirectShape(to)) {
+		// A redirect may go to more places: an added origin widens, a dropped one narrows.
+		return setChanges(`${name} redirect`, from.origins, to.origins, 'may go to', 'no longer goes to')
+	}
+	if ((from === null || isSchemaOutput(from)) && (to === null || isSchemaOutput(to))) {
 		return schemaChanges({ endpoint: name, side: 'output', path: '' }, from, to)
 	}
 	return [widening(`${name} output changes from ${outputKind(from)} to ${outputKind(to)}`)]
@@ -816,7 +825,13 @@ function outputChanges(name: string, from: OutputShape | null, to: OutputShape |
 
 function outputKind(shape: OutputShape | null): string {
 	if (shape === null) return 'none'
+	if (isRedirectShape(shape)) return redirectReach(shape)
 	return isAttachmentShape(shape) ? `the ${shape.format.toUpperCase()} file \`${shape.filename}\`` : 'JSON'
+}
+
+/** `a redirect to its own origin` or `… or https://partner.example`: where anyone who calls it may be sent. */
+function redirectReach(shape: RedirectShape): string {
+	return shape.origins.length === 0 ? 'a redirect to its own origin' : `a redirect to its own origin or ${listOf(shape.origins, '')}`
 }
 
 function attachmentChanges(name: string, from: AttachmentShape, to: AttachmentShape): AccessChange[] {

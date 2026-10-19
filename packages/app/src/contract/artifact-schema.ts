@@ -103,7 +103,9 @@ const attachmentShape: z.ZodType<AttachmentShape> = z.strictObject({
 })
 
 /** What a procedure answers: a schema shape, or an attachment's file. */
-export const outputShapeSchema: z.ZodType<OutputShape> = z.union([schemaShapeSchema, attachmentShape])
+const redirectShape = z.strictObject({ type: z.literal('redirect'), origins: z.array(z.string().startsWith('https://')) })
+
+export const outputShapeSchema: z.ZodType<OutputShape> = z.union([schemaShapeSchema, attachmentShape, redirectShape])
 
 const caller = z.union([z.enum(['human', 'machine', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
 const rpcCaller = z.enum(['human', 'machine'])
@@ -164,7 +166,6 @@ const endpointRow: z.ZodType<EndpointRow> = z.union([
 		...rowBase,
 		kind: z.literal('public'),
 		source: z.strictObject({ kind: z.literal('mount'), name }),
-		admission: rowBase.admission.unwrap(),
 		output: outputShapeSchema,
 		callers: z.tuple([]),
 		requirement: z.null(),
@@ -366,6 +367,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		}),
 		challenge: challenge.nullable(),
 		timeoutMs: z.int().positive().max(PROCEDURE_LIMITS.maxTimeoutMs),
+		query: schemaShapeSchema.optional(),
 	})).optional(),
 }).superRefine((artifact, context) => {
 	for (const row of artifact.endpoints) {

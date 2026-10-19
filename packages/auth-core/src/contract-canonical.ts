@@ -67,7 +67,11 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		...(artifact.mail === undefined ? {} : { mail: artifact.mail }),
 		...(artifact.members === undefined ? {} : { members: artifact.members }),
 		...(artifact.directory === undefined ? {} : { directory: artifact.directory }),
-		...(artifact.procedures === undefined ? {} : { procedures: artifact.procedures }),
+		...(artifact.procedures === undefined
+			? {}
+			: {
+				procedures: mapValues(artifact.procedures, (rules) => rules.query === undefined ? rules : { ...rules, query: canonicalShape(rules.query) }),
+			}),
 	}
 }
 
@@ -158,6 +162,9 @@ export function canonicalAdmission(admission: BodyAdmission): BodyAdmission {
 
 /** An output shape: an attachment keeps its column order, which is the file's; each column's shape is canonical. */
 export function canonicalOutput(shape: OutputShape): OutputShape {
+	if (shape.type === 'redirect') {
+		return { type: 'redirect', origins: sorted(shape.origins) }
+	}
 	if (shape.type !== 'attachment') {
 		return canonicalShape(shape)
 	}

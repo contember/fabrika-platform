@@ -25,6 +25,7 @@ import {
 	type ProcedureDeclaration,
 	type ProcedureType,
 	type QueryTree,
+	redirect,
 	type RoleDef,
 	type Schema,
 	type SpaAccessDeclaration,
@@ -163,6 +164,12 @@ class SurfaceReader {
 
 	/** A procedure's output: a schema, or `attachment({ … })`, built as `@fabrika/app`'s `attachment` builds it. */
 	#output(value: LiteralValue | undefined, owner: BuilderValue): Schema {
+		if (value?.kind === 'redirect') {
+			const [definition] = args(value, 'redirect', 0, 1)
+			const options = definition === undefined ? new Map<string, LiteralValue>() : builderOptions(definition, value, 'redirect')
+			const origins = options.get('origins')
+			return redirect(origins === undefined ? {} : { origins: texts(origins, value, 'origins') })
+		}
 		if (value?.kind !== 'attachment') {
 			return this.#schema(value, owner, 'output')
 		}
@@ -547,6 +554,17 @@ class SurfaceReader {
 		return tree
 	}
 
+	/** `http` as the kit holds it: its `query` a schema, every other field a plain value; `buildArtifact` checks them. */
+	#http(value: LiteralValue | undefined, owner: BuilderValue): { readonly http?: unknown } {
+		if (value === undefined) return {}
+		if (value.kind !== 'object') return { http: plain(value) }
+		const http: Record<string, unknown> = {}
+		for (const [key, entry] of value.entries) {
+			http[key] = key === 'query' ? this.#schema(entry, owner, 'http.query') : plain(entry)
+		}
+		return { http }
+	}
+
 	#procedure<Access>(
 		builder: BuilderValue,
 		kit: Kit,
@@ -567,7 +585,8 @@ class SurfaceReader {
 			output: this.#output(options.get('output'), builder),
 			access: access(options.get('access'), builder),
 			...crossOriginOption(options.get('crossOrigin')),
-			...plainOptions(options, ['actions', 'admission', 'limits', 'http']),
+			...plainOptions(options, ['actions', 'admission', 'limits']),
+			...this.#http(options.get('http'), builder),
 			...(kit === 'endpoints'
 				? { declared: declared(options), unknownOptions: kitOptionKeys(options, 'procedure') }
 				: { unknownOptions: optionKeys(options, 'procedure') }),
@@ -694,7 +713,7 @@ function surfaceBuilder<const Name extends string>(
 }
 
 function args(
-	builder: BuilderValue | Extract<LiteralValue, { kind: 'contract' | 'kit-contract' | 'attachment' }>,
+	builder: BuilderValue | Extract<LiteralValue, { kind: 'contract' | 'kit-contract' | 'attachment' | 'redirect' }>,
 	call: string,
 	min: number,
 	max: number,
