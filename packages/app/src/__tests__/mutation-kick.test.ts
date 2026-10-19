@@ -272,17 +272,22 @@ function problemsOf(build: () => unknown): readonly string[] {
 }
 
 describe('the kick edges a contract declares', () => {
-	const job = (kicks: readonly string[]) => outboxKit.cron('0 * * * *', { actions: ['outbox.read'], scope: 'app', kicks }).handle(() => {})
+	const options = { actions: ['outbox.read'], scope: 'app' } as const
 
 	test('a kick names a cron job of the contract', () => {
-		const contract = outboxKit.contract(() => ({ jobs: { sweep: job(['delivr']) } }))
+		const sweep = outboxKit.cron('0 * * * *', { ...options, kicks: ['delivr'] }).handle(() => {})
+		const contract = outboxKit.contract(() => ({ jobs: { sweep } }))
 		expect(problemsOf(() => compileContract(contract, tables))).toEqual([
 			"job 'sweep': kicks 'delivr' is not a job of the contract (jobs: sweep)",
 		])
 	})
 
 	test('the edges between jobs are acyclic', () => {
-		const contract = outboxKit.contract(() => ({ jobs: { a: job(['b']), b: job(['c']), c: job(['a']), d: job(['a']) } }))
+		const a = outboxKit.cron('0 * * * *', { ...options, kicks: ['b'] }).handle(() => {})
+		const b = outboxKit.cron('0 * * * *', { ...options, kicks: ['c'] }).handle(() => {})
+		const c = outboxKit.cron('0 * * * *', { ...options, kicks: ['a'] }).handle(() => {})
+		const d = outboxKit.cron('0 * * * *', { ...options, kicks: ['a'] }).handle(() => {})
+		const contract = outboxKit.contract(() => ({ jobs: { a, b, c, d } }))
 		expect(problemsOf(() => compileContract(contract, tables))).toEqual(["job 'a': kicks itself around the cycle a → b → c → a"])
 	})
 })
