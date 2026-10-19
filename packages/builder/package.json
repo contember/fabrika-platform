@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/builder",
-	"version": "0.5.4",
+	"version": "0.5.5",
 	"type": "module",
 	"description": "Local-first guided application design and agent-assisted implementation.",
 	"license": "MIT",
