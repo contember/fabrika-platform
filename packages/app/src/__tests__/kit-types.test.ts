@@ -70,6 +70,9 @@ const EXPECTED: Readonly<Record<string, string>> = {
 		'the inbox registrations has no column selfie: each input and file field is named like its column (columns: ',
 	'52-app-capability-in-a-bound-webhook.ts': 'a webhook bound to a dimension acts on its bound value: use ctx.refs and ctx.db.on(ref)',
 	'53-target-of-several-capabilities.ts': 'an endpoint of several capabilities binds each: ctx.db.on(ctx.capabilities.<name>), .in or .over',
+	'54-kick-an-undeclared-job.ts': `Argument of type '"digest"' is not assignable to parameter of type '"close"'`,
+	'55-kick-without-kicks.ts': "declare kicks: ['<cron job>'] on this site to kick a job after its commit",
+	'56-kicks-on-a-query.ts': 'a query kicks no job: declare kicks on a mutation',
 }
 
 /**

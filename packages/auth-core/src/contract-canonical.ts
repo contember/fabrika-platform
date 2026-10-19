@@ -59,6 +59,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 					...reach,
 					connect: sorted(reach.connect),
 					...(reach.actions === undefined ? {} : { actions: sorted(reach.actions) }),
+					...(reach.kicks === undefined ? {} : { kicks: sorted(reach.kicks) }),
 				})),
 			}),
 		...(artifact.directories === undefined ? {} : { directories: artifact.directories }),

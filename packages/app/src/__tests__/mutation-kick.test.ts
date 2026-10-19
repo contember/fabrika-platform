@@ -9,7 +9,7 @@ import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { compileContract } from '../contract'
+import { compileContract, ContractError } from '../contract'
 import type { RequestExecutionContext } from '../fetch'
 import { testKit } from '../testing'
 import {
@@ -26,6 +26,7 @@ import {
 import { contract } from './fixtures/mutation-kick/fabrika.contract'
 import { migration } from './fixtures/mutation-kick/migration'
 import { outboxApp } from './fixtures/mutation-kick/src/app'
+import { app as outboxKit } from './fixtures/mutation-kick/src/app-kit'
 import { tables } from './fixtures/mutation-kick/src/db/tables'
 import type { OutboxWorld } from './fixtures/mutation-kick/src/world'
 
@@ -142,7 +143,7 @@ interface Running {
 	readonly exchanged: string[]
 	/** Holds the next exchange of a workload key until the test opens it. */
 	holdExchange: Gate | null
-	call(path: '/api/outbox.enqueue' | '/api/outbox.refuse' | '/api/outbox.peek', body: unknown): Promise<Answer>
+	call(path: '/api/outbox.enqueue' | '/api/outbox.refuse' | '/api/outbox.post' | '/api/outbox.peek', body: unknown): Promise<Answer>
 	/** Resolves once every kick the requests started has ended. */
 	settled(): Promise<void>
 }
@@ -251,6 +252,68 @@ describe('a mutation with then in the artifact', () => {
 		expect(declared['api.outbox.enqueue']?.then).toBe('deliver')
 		expect(declared['api.outbox.refuse']?.then).toBe('deliver')
 		expect(declared['api.outbox.peek']).toEqual({ sql: 'read', unscoped: {}, connect: [], issues: null })
+	})
+
+	test('kicks names the jobs a site may kick, under the endpoint and under the job', () => {
+		const declared = compileContract(contract, tables).declared ?? {}
+		expect(declared['api.outbox.post']?.kicks).toEqual(['deliver'])
+		expect(declared['job:sweep']).toEqual({ sql: null, unscoped: {}, connect: [], issues: null, kicks: ['deliver'] })
+	})
+})
+
+function problemsOf(build: () => unknown): readonly string[] {
+	try {
+		build()
+	} catch (error) {
+		if (error instanceof ContractError) return error.problems
+		throw error
+	}
+	return []
+}
+
+describe('the kick edges a contract declares', () => {
+	const job = (kicks: readonly string[]) => outboxKit.cron('0 * * * *', { actions: ['outbox.read'], scope: 'app', kicks }).handle(() => {})
+
+	test('a kick names a cron job of the contract', () => {
+		const contract = outboxKit.contract(() => ({ jobs: { sweep: job(['delivr']) } }))
+		expect(problemsOf(() => compileContract(contract, tables))).toEqual([
+			"job 'sweep': kicks 'delivr' is not a job of the contract (jobs: sweep)",
+		])
+	})
+
+	test('the edges between jobs are acyclic', () => {
+		const contract = outboxKit.contract(() => ({ jobs: { a: job(['b']), b: job(['c']), c: job(['a']), d: job(['a']) } }))
+		expect(problemsOf(() => compileContract(contract, tables))).toEqual(["job 'a': kicks itself around the cycle a → b → c → a"])
+	})
+})
+
+describe.skipIf(!hasPostgres)('a site with kicks kicks a job when its handler asks', () => {
+	test('ctx.kick starts a run after the commit; a declared kick the handler does not send starts none', async () => {
+		const running = start()
+		expect((await running.call('/api/outbox.post', { body: 'later' })).status).toBe(200)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect((await running.call('/api/outbox.post', { body: 'now' })).status).toBe(200)
+		await running.settled()
+		expect(running.world.runs.map((run) => run.principal)).toEqual(['job:deliver'])
+		expect([...running.world.deliveredBodies].sort()).toEqual(['later', 'now'])
+	})
+
+	test('a kick the handler sent before it threw is dropped with its transaction', async () => {
+		const running = start()
+		expect((await running.call('/api/outbox.post', { body: 'refused' })).status).toBe(409)
+		await running.settled()
+		expect(running.world.runs).toEqual([])
+		expect(await leaseOf()).toBeUndefined()
+	})
+
+	test("a job's kick starts the kicked job once its own run succeeded", async () => {
+		const running = start()
+		expect((await running.call('/api/outbox.post', { body: 'later too' })).status).toBe(200)
+		expect(await running.app.jobs.run('sweep')).toEqual({ status: 'succeeded', attempts: 1 })
+		await running.settled()
+		expect(running.world.runs.map((run) => run.principal)).toEqual(['job:deliver'])
+		expect(running.world.deliveredBodies).toEqual(['later too'])
 	})
 })
 

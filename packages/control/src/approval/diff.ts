@@ -358,6 +358,7 @@ function compareDeclared(
 	for (const site of union(Object.keys(sites), Object.keys(after))) {
 		changes.add(...reachChanges(site, sites[site] ?? NO_REACH, after[site] ?? NO_REACH))
 		changes.add(...endpointKickChange(site, sites[site]?.then, after[site]?.then))
+		changes.add(...kicksChanges(site, sites[site]?.kicks ?? [], after[site] ?? NO_REACH))
 		changes.add(...workloadActionChanges(site, sites[site]?.actions ?? [], after[site]?.actions ?? []))
 	}
 }
@@ -418,6 +419,24 @@ function endpointKickChange(site: string, before: string | undefined, after: str
 		? `${name} no longer starts job \`${before}\` after a call`
 		: `${name} starts job \`${after}\` after each committed call, beside its schedule`
 	return [neutral(line)]
+}
+
+/**
+ * The jobs a site kicks after its commit (`kicks`). A job runs under its own approved actions, so a kick widens nothing,
+ * except from a public procedure: anyone who calls it then decides when the job runs, which widens with closer review.
+ */
+function kicksChanges(site: string, from: readonly string[], to: DeclaredReach): AccessChange[] {
+	const name = siteName(site)
+	const kicks = to.kicks ?? []
+	return union(from, kicks).flatMap((job) => {
+		if (!from.includes(job)) {
+			return to.actions === undefined
+				? [neutral(`${name} starts job \`${job}\` after each committed run, beside its schedule`)]
+				: [closerWidening(`${name} starts job \`${job}\` whenever anyone calls it`)]
+		}
+		if (!kicks.includes(job)) return [narrowing(`${name} no longer starts job \`${job}\``)]
+		return []
+	})
 }
 
 /** `null` is undeclared; `write` reaches more than `read`. */

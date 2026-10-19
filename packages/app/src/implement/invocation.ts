@@ -29,6 +29,8 @@ export interface SiteDeclaration {
 	readonly issues: string | null
 	readonly then: string | null
 	readonly mailer: JobMailer | null
+	/** The cron jobs `ctx.kick` may name. */
+	readonly kicks: readonly string[]
 }
 
 export type SiteFunction = (args: { readonly input?: unknown; readonly ctx: object }) => unknown
@@ -63,6 +65,7 @@ const NO_DECLARATION: SiteDeclaration = Object.freeze({
 	issues: null,
 	then: null,
 	mailer: null,
+	kicks: Object.freeze([]),
 })
 
 function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -140,6 +143,11 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 	if (mailerField !== undefined && mailer === null) {
 		problems.push(`${where}: mailer is not 'installation' or 'own'`)
 	}
+	const kicksField = ownField(declared, 'kicks')
+	const kicks = Array.isArray(kicksField) ? kicksField.filter((name): name is string => typeof name === 'string') : []
+	if (kicksField !== undefined && (!Array.isArray(kicksField) || kicks.length !== kicksField.length)) {
+		problems.push(`${where}: kicks is not a list of job names`)
+	}
 	return Object.freeze({
 		sql: sql === 'read' || sql === 'write' ? sql : null,
 		unscoped: Object.freeze(unscoped),
@@ -147,6 +155,7 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 		issues: typeof issues === 'string' ? issues : null,
 		then: typeof then === 'string' ? then : null,
 		mailer,
+		kicks: Object.freeze([...new Set(kicks)].sort()),
 	})
 }
 
@@ -189,6 +198,7 @@ export function approvedReach(site: string, artifact: ContractArtifact): SiteDec
 			issues: reach.issues,
 			then: reach.then ?? null,
 			mailer: reach.mailer ?? null,
+			kicks: Object.freeze([...(reach.kicks ?? [])]),
 		})
 }
 
@@ -205,6 +215,7 @@ function describeDeclaration(declaration: SiteDeclaration): string {
 		issues: declaration.issues,
 		...(declaration.then === null ? {} : { then: declaration.then }),
 		...(declaration.mailer === null ? {} : { mailer: declaration.mailer }),
+		...(declaration.kicks.length === 0 ? {} : { kicks: declaration.kicks }),
 	})
 }
 
@@ -415,4 +426,24 @@ export function noFileCollections(where: string): (collection: string) => never 
 /** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */
 export function jobSql(frame: RequestFrame, data: DataAccess, mode: SqlMode, session: Session, ended: () => boolean): SqlTag {
 	return data.sql({ mode, check: boundTo(frame, ended, 'tx.sql'), session: async () => session, fail: () => session.fail() })
+}
+
+/**
+ * `ctx.kick` of one invocation: it names only a declared job, and records it; the dispatcher sends each recorded job once,
+ * after the commit, and nothing on a rollback.
+ */
+export function kickRecorder(
+	site: string,
+	declared: readonly string[],
+): { readonly kick: (job: string) => void; readonly kicked: () => readonly string[] } {
+	const kicked = new Set<string>()
+	return {
+		kick: (job: string) => {
+			if (!declared.includes(job)) {
+				throw new CapabilityRefusedError('undeclared_kick', `${site} does not declare kicks: ['${String(job)}']`)
+			}
+			kicked.add(job)
+		},
+		kicked: () => [...kicked],
+	}
 }

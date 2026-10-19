@@ -555,8 +555,13 @@ export interface DeclaredReach {
 	readonly unscoped: Readonly<Record<string, 'read' | 'write'>>
 	readonly connect: readonly string[]
 	readonly issues: string | null
-	/** The cron job this mutation kicks after its commit; absent unless declared, so the digest stays. */
+	/** The cron job this mutation kicks after its commit (an older release's form); absent unless declared, so the digest stays. */
 	readonly then?: string
+	/**
+	 * The cron jobs this site may kick (`ctx.kick`), sorted: a mutation, a webhook or a job. Absent unless declared, so
+	 * the digest stays. A contract's kick edges between jobs are acyclic.
+	 */
+	readonly kicks?: readonly string[]
 	/** The mail transport this job reaches: the installation's or its own; absent unless declared. */
 	readonly mailer?: JobMailer
 	/**

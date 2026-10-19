@@ -409,6 +409,15 @@ export type PublicContext<K extends KitTypes, Kind extends DataKind, Acts extend
 	}
 	& NoMail
 
+/**
+ * `ctx.kick('<job>')` of a site that declares `kicks`: the job runs in the background after the site's transaction
+ * committed, once however often it is kicked, and not at all on a rollback.
+ */
+export type KickContext<Ks> = [Ks] extends [never]
+	? { readonly kick: Unavailable<"declare kicks: ['<cron job>'] on this site to kick a job after its commit"> }
+	: Ks extends readonly (infer N extends string)[] ? { kick(job: N): void }
+	: never
+
 /** A link procedure acts on the one object its key is bound to. */
 export type LinkContext<
 	K extends KitTypes,

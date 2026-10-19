@@ -753,6 +753,7 @@ function declared(options: Entries): DeclaredDeclaration {
 		issues: plain(options.get('issues')),
 		then: plain(options.get('then')),
 		mailer: plain(options.get('mailer')),
+		kicks: plain(options.get('kicks')),
 	})
 }
 
@@ -793,7 +794,7 @@ function plain(value: LiteralValue | undefined): unknown {
 }
 
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own'"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>']"
 
 /** A builder of the kit read as the `defineContract` builder of the same name, which builds the same declaration. */
 const asSurface = (builder: BuilderValue): LiteralValue => ({

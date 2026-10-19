@@ -93,7 +93,16 @@ import { ServerFault } from './faults'
 import { ACCEPTED_BUCKET, clientBucket, type Submission, type SubmissionFields, submissionOf } from './form-admission'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { boundWebhookApp, endpointData, Invocation, noFileCollections, siteData, type SiteDeclaration, undeclaredSql } from './invocation'
+import {
+	boundWebhookApp,
+	endpointData,
+	Invocation,
+	kickRecorder,
+	noFileCollections,
+	siteData,
+	type SiteDeclaration,
+	undeclaredSql,
+} from './invocation'
 import {
 	applicationDirectory,
 	createScope,
@@ -395,9 +404,9 @@ export class ContractRuntime {
 				case 'form':
 					return await this.#form(served, request, exec)
 				case 'public':
-					return await this.#public(served, request)
+					return await this.#public(served, request, exec)
 				case 'webhook':
-					return await this.#webhook(served, request, plan.params)
+					return await this.#webhook(served, request, plan.params, exec)
 				case 'description':
 					await this.#authorize(served.row, request)
 					await readInput({ row: served.row, input: null }, request)
@@ -545,6 +554,7 @@ export class ContractRuntime {
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
 		// The handler's time starts after the last body byte, so a slow upload does not eat it.
 		const signal = handlerSignal(request, admission.timeoutMs)
+		const kicks = kickRecorder(`'${served.row.id}'`, site?.declaration.kicks ?? [])
 		try {
 			let result: unknown
 			try {
@@ -567,6 +577,7 @@ export class ContractRuntime {
 						...(site === undefined || invocation === null || served.readOnly === true
 							? {}
 							: { files: this.#files(served.row.id, frame, invocation, site.kind) }),
+						kick: kicks.kick,
 					})
 					return await served.handler({ input: access.input, ctx, ...(query === undefined ? {} : { query }) })
 				})
@@ -575,11 +586,7 @@ export class ContractRuntime {
 			}
 			const answer = this.#answerOf(served, result, request)
 			await invocation?.commit(signal)
-			if (served.then !== undefined) {
-				// Without an execution context the kick runs detached; it never rejects.
-				const kicked = this.#parts.kick(served.then)
-				exec?.waitUntil(kicked)
-			}
+			this.#kickAll([...(served.then === undefined ? [] : [served.then]), ...kicks.kicked()], exec)
 			return answer
 		} finally {
 			await invocation?.rollback()
@@ -1063,7 +1070,7 @@ export class ContractRuntime {
 	 * strict input (413, 400); the workload token, before a challenge spends its token (503); the challenge (403); then
 	 * the handler in one transaction, the output and the commit. The handler's time starts after the last body byte.
 	 */
-	async #public(served: Extract<ServedEndpoint, { kind: 'public' }>, request: Request): Promise<Response> {
+	async #public(served: Extract<ServedEndpoint, { kind: 'public' }>, request: Request, exec: RequestExecutionContext | undefined): Promise<Response> {
 		admitContentType(served.row, request)
 		const release = this.#parts.publicShare.enter()
 		if (release === null) {
@@ -1089,9 +1096,19 @@ export class ContractRuntime {
 				)
 			}
 			const query = readQuery(served.row, served.query?.schema, served.query?.shape, request)
-			return await this.#publicInvocation(served, request, input, query, authority.perms)
+			return await this.#publicInvocation(served, request, input, query, authority.perms, exec)
 		} finally {
 			release()
+		}
+	}
+
+	/**
+	 * Sends each job once, after the commit: in the background, never awaited and never rejecting. Without an execution
+	 * context a kick runs detached.
+	 */
+	#kickAll(jobs: readonly string[], exec: RequestExecutionContext | undefined): void {
+		for (const job of new Set(jobs)) {
+			exec?.waitUntil(this.#parts.kick(job))
 		}
 	}
 
@@ -1113,7 +1130,9 @@ export class ContractRuntime {
 		input: Readonly<Record<string, unknown>>,
 		query: Readonly<Record<string, unknown>> | undefined,
 		perms: readonly PermissionEntry[],
+		exec: RequestExecutionContext | undefined,
 	): Promise<Response> {
+		const kicks = kickRecorder(`'${served.row.id}'`, served.site.declaration.kicks)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.site.kind === 'query', endpoint: served.row.id })
 		const invocation = new Invocation(frame, this.#data(), served.site.kind === 'query')
 		const signal = handlerSignal(request, served.admission.timeoutMs)
@@ -1142,6 +1161,7 @@ export class ContractRuntime {
 						client: requestClient(request, this.#parts.clientVouched),
 						app,
 						db: Object.freeze({ app: (action: string) => handles.app(app(action)) }),
+						kick: kicks.kick,
 					})
 					return await served.handler({ input, ctx, ...(query === undefined ? {} : { query }) })
 				})
@@ -1150,6 +1170,7 @@ export class ContractRuntime {
 			}
 			const answer = outputResponse(served.row, served.output, result, request)
 			await invocation.commit(signal)
+			this.#kickAll(kicks.kicked(), exec)
 			return answer
 		} finally {
 			await invocation.rollback()
@@ -1162,7 +1183,12 @@ export class ContractRuntime {
 	 * signed body, so a replay is ignored whatever its unsigned headers say. The handler gets a `Ref` of the bound
 	 * value for each declared action and the key, and runs at least once: a failed run is forgotten and redelivered.
 	 */
-	async #webhook(served: Extract<ServedEndpoint, { kind: 'webhook' }>, request: Request, params: Readonly<Record<string, string>>): Promise<Response> {
+	async #webhook(
+		served: Extract<ServedEndpoint, { kind: 'webhook' }>,
+		request: Request,
+		params: Readonly<Record<string, string>>,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response> {
 		admitContentType(served.row, request)
 		const body = await readBoundedBody(request, maxBytesOf(served.row))
 		const tables = this.#framework().webhooks
@@ -1207,6 +1233,7 @@ export class ContractRuntime {
 		const site = served.site
 		// A staged-kit delivery is one transaction; the delivery record above stays outside it, so a failure forgets it.
 		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), false)
+		const kicks = kickRecorder(`webhook '${served.webhook}'`, site?.kicks ?? [])
 		try {
 			try {
 				await runInRequest(frame, async () => {
@@ -1227,12 +1254,16 @@ export class ContractRuntime {
 						}
 					const signal = handlerSignal(request)
 					const client = requestClient(request, this.#parts.clientVouched)
-					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, signal, client, refs, delivery, app, ...data }) })
+					await served.handler({
+						input,
+						ctx: Object.freeze({ principal, requestId: frame.id, signal, client, refs, delivery, app, kick: kicks.kick, ...data }),
+					})
 				})
 			} finally {
 				frame.end()
 			}
 			await invocation?.commit(null)
+			this.#kickAll(kicks.kicked(), exec)
 		} catch (error) {
 			await invocation?.rollback()
 			// The provider redelivers a failed delivery; forgetting its key lets the redelivery run. The unsigned

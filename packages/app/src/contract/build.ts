@@ -132,7 +132,7 @@ const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'used
 /** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
 const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
 const DECLARED_ALLOWED =
-	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own'"
+	"sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>', then: '<cron job>', mailer: 'installation' | 'own', kicks: ['<cron job>']"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors', 'scriptSrc', 'frameSrc', 'styleSrc', 'fontSrc']
 /** An environment variable an application reads; a form's challenge names its secret by one. */
 const APPLICATION_VARIABLE = /^[A-Z][A-Z0-9_]*$/
@@ -282,6 +282,7 @@ class ArtifactBuilder {
 		const tables = this.#checkTables()
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'files') ? FILES_PREFIX : null)
 		this.#reserve(this.#endpoints.some((row) => row.source.kind === 'export') ? CONNECT_PREFIX : null)
+		this.#checkKickCycles()
 		const directories = this.#directories(dimensions)
 		const locale = this.#locale()
 		const displayName = this.#displayName()
@@ -597,18 +598,18 @@ class ArtifactBuilder {
 		}
 	}
 
-	/** The job a form or a mutation kicks: a cron job of this contract. */
-	#kickedJob(where: string, then: string): string {
+	/** The job a form, a mutation, a webhook or a job kicks: a cron job of this contract. */
+	#kickedJob(where: string, then: string, field: 'then' | 'kicks' = 'then'): string {
 		const jobs = this.#contract.jobs
 		const job: { readonly kind: string } | undefined = Object.hasOwn(jobs, then) ? jobs[then] : undefined
 		if (job === undefined) {
 			const names = Object.keys(jobs)
 			this.#problem(
 				where,
-				`then '${then}' is not a job of the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})${suggestion(then, names)}`,
+				`${field} '${then}' is not a job of the contract (jobs: ${names.length === 0 ? 'none' : names.join(', ')})${suggestion(then, names)}`,
 			)
 		} else if (job.kind !== 'cron') {
-			this.#problem(where, `then '${then}' is not a cron job (allowed: a job c.cron declares)`)
+			this.#problem(where, `${field} '${then}' is not a cron job (allowed: a job c.cron declares)`)
 		}
 		return then
 	}
@@ -1987,6 +1988,7 @@ class ArtifactBuilder {
 		}
 		const then = this.#then(where, value['then'], place)
 		const mailer = this.#mailer(where, value['mailer'], place)
+		const kicks = this.#kicks(where, value['kicks'], place)
 		const reach: DeclaredReach = {
 			sql: this.#sqlMode(where, value['sql'], place.readOnly),
 			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
@@ -1999,6 +2001,7 @@ class ArtifactBuilder {
 			...(then === undefined ? {} : { then }),
 			...(mailer === undefined ? {} : { mailer }),
 			...(workload === null || workload.length === 0 ? {} : { actions: workload }),
+			...(kicks.length === 0 ? {} : { kicks }),
 		}
 		if (place.kind !== 'rpc') {
 			this.#rpcOnly(where, 'connect', value['connect'])
@@ -2008,7 +2011,7 @@ class ArtifactBuilder {
 		}
 		if (
 			reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null || reach.then !== undefined
-			|| reach.mailer !== undefined || reach.actions !== undefined
+			|| reach.mailer !== undefined || reach.actions !== undefined || reach.kicks !== undefined
 		) {
 			this.#declared[site] = reach
 		}
@@ -2155,6 +2158,58 @@ class ArtifactBuilder {
 			return undefined
 		}
 		return this.#kickedJob(where, value)
+	}
+
+	/**
+	 * The cron jobs a site may kick (`ctx.kick`): a mutation of an RPC or link mount, a webhook or a job, never a site
+	 * that runs read-only. Each names a cron job of the contract, once; `[]` when it declares none or after a problem.
+	 */
+	#kicks(where: string, value: unknown, place: DeclaringSite): string[] {
+		if (value === undefined) {
+			return []
+		}
+		if (place.kind === 'export' || place.readOnly) {
+			this.#problem(where, 'declares kicks, and it runs read-only: only a mutation, a webhook or a job kicks a job')
+			return []
+		}
+		if (!Array.isArray(value) || value.length === 0 || !value.every((name) => typeof name === 'string')) {
+			this.#problem(where, "kicks is not a list of cron jobs (allowed: kicks: ['<cron job>'])")
+			return []
+		}
+		const names: string[] = value.filter((name) => typeof name === 'string')
+		this.#unique(where, 'kicks', names)
+		for (const name of names) {
+			this.#kickedJob(where, name, 'kicks')
+		}
+		return [...new Set(names)]
+	}
+
+	/**
+	 * The kick edges between jobs are acyclic: a job never kicks itself, directly or around a cycle, so one run never
+	 * starts an unbounded chain of runs.
+	 */
+	#checkKickCycles(): void {
+		const edges = new Map<string, readonly string[]>()
+		for (const [site, reach] of Object.entries(this.#declared)) {
+			if (site.startsWith(JOB_SITE_PREFIX) && reach.kicks !== undefined) {
+				edges.set(site.slice(JOB_SITE_PREFIX.length), reach.kicks)
+			}
+		}
+		const done = new Set<string>()
+		const visit = (job: string, path: readonly string[]): void => {
+			if (path.includes(job)) {
+				this.#problem(`job '${job}'`, `kicks itself around the cycle ${[...path.slice(path.indexOf(job)), job].join(' → ')}`)
+				return
+			}
+			if (done.has(job)) return
+			for (const next of edges.get(job) ?? []) {
+				visit(next, [...path, job])
+			}
+			done.add(job)
+		}
+		for (const job of [...edges.keys()].sort()) {
+			visit(job, [])
+		}
 	}
 
 	/** The mail transport a cron job reaches; `undefined` when it declares none or after a problem. */

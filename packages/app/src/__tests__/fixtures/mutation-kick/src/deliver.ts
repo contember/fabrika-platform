@@ -11,3 +11,8 @@ export const deliver = app.cron('* * * * *', { actions: ['outbox.read'], scope: 
 	const delivered = await ctx.transaction((tx) => tx.sql(Delivered)`delete from outbox returning body`)
 	world.delivered(delivered.map((row) => row.body))
 })
+
+/** Kicks `deliver` once its own run succeeded, so a job edge starts the drain without waiting for its schedule. */
+export const sweep = app.cron('0 * * * *', { actions: ['outbox.read'], scope: 'app', kicks: ['deliver'] }).handle(({ ctx }) => {
+	ctx.kick('deliver')
+})

@@ -14,6 +14,15 @@ export const outbox = app.group({ callers: ['human'] }, (r) => ({
 			await ctx.sql(Queued)`insert into outbox (id, body) values (${Bun.randomUUIDv7()}, ${input.body}) returning id`
 			throw new ConflictError('the message is refused after its insert')
 		}),
+	post: r.mutation({ input: Message, output: Queued, access: { action: 'outbox.write', app: true }, sql: 'write', kicks: ['deliver'] })
+		.handle(async ({ input, ctx }) => {
+			const id = Bun.randomUUIDv7()
+			await ctx.sql(Queued)`insert into outbox (id, body) values (${id}, ${input.body}) returning id`
+			if (input.body.startsWith('later')) return { id }
+			ctx.kick('deliver')
+			if (input.body === 'refused') throw new ConflictError('the message is refused after its kick')
+			return { id }
+		}),
 	peek: r.query({ output: Waiting, access: { action: 'outbox.read', app: true }, sql: 'read' })
 		.handle(async ({ ctx }) => {
 			const [row] = await ctx.sql(Waiting)`select count(*)::int as waiting from outbox`

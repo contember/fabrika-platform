@@ -32,6 +32,7 @@ import {
 	jobHandles,
 	jobSql,
 	jobSqlOutsideTransaction,
+	kickRecorder,
 	noFileCollections,
 	siteData,
 	type SiteDeclaration,
@@ -181,6 +182,8 @@ interface RunnerContext {
 	readonly containers: ReadonlyMap<string, readonly string[]>
 	readonly revealHandlerErrors: HandlerErrorSink | null
 	readonly mail: MailTransports
+	/** Kicks a contract job in the background: what a job's own `ctx.kick` sends once its run succeeded. */
+	readonly kick: (name: string) => Promise<void>
 }
 
 /** Where `fabrika app dev` shows what a handler threw, on the developer's own machine; nothing else sets one. */
@@ -326,6 +329,8 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		containers: input.containers,
 		revealHandlerErrors: input.revealHandlerErrors ?? null,
 		mail: input.mail,
+		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
+		kick: (name: string) => kick(name),
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -542,7 +547,9 @@ async function runLeased(
 	await pendingTaken(job, context)
 	const attempts = job.artifact.retries + 1
 	progress.attempts = 1
-	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context, stop)
+	// The jobs the succeeding attempt kicked; a failed attempt's kicks are dropped with its writes.
+	const kicked: string[] = []
+	let outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, stop)
 	while (outcome !== null && outcome.code !== 'stopped' && !outcome.final && progress.attempts < attempts) {
 		console.error(`fabrika: job '${job.name}' attempt ${progress.attempts} of ${attempts} failed: ${describeFailure(outcome)}`)
 		const delay = backoffMs(progress.attempts, clock.random())
@@ -554,10 +561,12 @@ async function runLeased(
 		fence = next
 		await clock.wait(delay, stop ?? new AbortController().signal)
 		progress.attempts++
-		outcome = await attemptOnce(job, fence, progress.attempts, clock, context, stop)
+		outcome = await attemptOnce(job, fence, progress.attempts, clock, context, kicked, stop)
 	}
 	if (outcome === null) {
 		if (await leases.finish(fence, 'succeeded')) {
+			// After the lease is released, so a job that kicks another never waits on its own lease; a kick never rejects.
+			await Promise.all(kicked.map((name) => context.kick(name)))
 			return { status: 'succeeded', attempts: progress.attempts }
 		}
 		return failed(job, progress.attempts, failure('lease_lost'), context.reporter)
@@ -664,8 +673,10 @@ async function attemptOnce(
 	attempt: number,
 	clock: JobClock,
 	context: RunnerContext,
+	kicked: string[],
 	stop?: AbortSignal,
 ): Promise<JobFailure | null> {
+	kicked.length = 0
 	if (isStopped(stop)) {
 		return failure('stopped')
 	}
@@ -681,10 +692,12 @@ async function attemptOnce(
 	const cancel = new AbortController()
 	const timer = new AbortController()
 	const signal = stop === undefined ? cancel.signal : AbortSignal.any([cancel.signal, stop])
-	const ctx = jobContext(job, frame, attempt, signal, context, authority.perms)
+	const kicks = kickRecorder(`job '${job.name}'`, job.site?.kicks ?? [])
+	const ctx = { ...jobContext(job, frame, attempt, signal, context, authority.perms), kick: kicks.kick }
 	try {
 		const ran = runInRequest(frame, async () => {
 			await job.handler({ ctx })
+			kicked.push(...kicks.kicked())
 		}).then(() => null, (error: unknown) => {
 			const failed = failureOf(error, job.mailer === null ? null : (context.mail[job.mailer]?.sender.capabilities ?? null))
 			if (failed.code === 'handler_failed') context.revealHandlerErrors?.(`job '${job.name}' attempt ${attempt}`, error)

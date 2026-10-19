@@ -6,7 +6,7 @@
 import type { JobMailer, RpcCaller } from '@fabrika/auth-core'
 import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
-import type { Declared, JobKitContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
+import type { Declared, JobKitContext, KickContext, KitImports, KitTypes, NoTablesIndex, SqlMode, WebhookKitContext } from './context'
 import {
 	type AccessDeclaration,
 	type CronDeclaration,
@@ -52,7 +52,19 @@ import {
 	surfaceKit,
 	type WebhookMount,
 } from './define'
-import type { DeclaredFields, Endpoint, ExportKit, Group, GroupBuild, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
+import type {
+	DeclaredFields,
+	Endpoint,
+	ExportKit,
+	Group,
+	GroupBuild,
+	GroupInput,
+	GroupKit,
+	KicksField,
+	LinkGroupKit,
+	ListOf,
+	PendingIn,
+} from './group'
 import { withHandler, withKitOrigin, withSnapshots } from './handled'
 import { ContractError } from './problems'
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
@@ -74,11 +86,12 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 	}
 	: never
 
-export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never> =
+export type CronOptions<Acts, Sc, S, U, Is, Ix extends AnyDbIndex, M = never, Ks = never> =
 	& Owned<'kind' | 'schedule'>
 	& { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number }
 	& DeclaredFields<S, U, never, Is, Ix>
 	& MailerField<M>
+	& KicksField<Ks>
 
 /** The mail transport a job reaches, inferred from its optional field and then required, like a declared field. */
 type MailerField<M> =
@@ -99,11 +112,12 @@ export interface CronBuilder<
 	Acts extends string,
 	Sc extends string,
 	D extends Declared<SqlMode, unknown, never, string, JobMailer>,
+	Ks = never,
 > {
-	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
+	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> & KickContext<Ks> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
 }
 
-export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex> =
+export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex, Ks = never> =
 	& Owned<'kind' | 'path'>
 	& {
 		readonly scheme: 'github-sha256'
@@ -113,6 +127,7 @@ export type WebhookOptions<B, Acts, I, S, U, Ix extends AnyDbIndex> =
 		readonly maxBytes?: number
 	}
 	& DeclaredFields<S, U, never, never, Ix>
+	& KicksField<Ks>
 
 /** A webhook of the kit, handled. */
 export interface KitWebhook<B extends string, Acts extends string, I extends Schema, D> extends WebhookMount<B, Acts, I> {
@@ -126,9 +141,10 @@ export interface WebhookBuilder<
 	Acts extends string,
 	I extends InputSchema,
 	D extends Declared<SqlMode, unknown, never, never>,
+	Ks = never,
 > {
 	handle(
-		handler: (args: { readonly input: z.output<I>; readonly ctx: WebhookKitContext<K, B, Acts, D> }) => void | Promise<void>,
+		handler: (args: { readonly input: z.output<I>; readonly ctx: WebhookKitContext<K, B, Acts, D> & KickContext<Ks> }) => void | Promise<void>,
 	): KitWebhook<B, Acts, I, D>
 }
 
@@ -266,7 +282,11 @@ export interface App<K extends KitTypes> {
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
 		const Is extends string = never,
 		const M extends JobMailer = never,
-	>(schedule: string, options: CronOptions<Acts, Sc, S, U, Is, K['index'], M>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>>
+		const Ks extends readonly string[] = never,
+	>(
+		schedule: string,
+		options: CronOptions<Acts, Sc, S, U, Is, K['index'], M, Ks>,
+	): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, Is, M>, Ks>
 	/** A GitHub webhook bound per value of `boundTo`; the contract mounts it by name. */
 	webhook<
 		const B extends K['dimension'],
@@ -274,7 +294,11 @@ export interface App<K extends KitTypes> {
 		I extends InputSchema,
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
-	>(path: Path, options: WebhookOptions<B, Acts, I, S, U, K['index']>): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>>
+		const Ks extends readonly string[] = never,
+	>(
+		path: Path,
+		options: WebhookOptions<B, Acts, I, S, U, K['index'], Ks>,
+	): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>, Ks>
 	/** A share SPA under `prefix` and its procedures under `<prefix>/api`, for an anonymous key bound to one object. */
 	link<
 		const LD extends K['dimension'],

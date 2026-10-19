@@ -8,7 +8,18 @@ import type { z } from 'zod/v4'
 import type { Snake } from '../from-row'
 import type { ExtraKeys, HandlerInput, IsAny } from '../implement/types'
 import type { AttachmentBrand } from './attachment'
-import type { CheckedAccess, Declared, EndpointContext, ExportContext, ImportOf, KitTypes, LinkContext, PublicContext, SqlMode } from './context'
+import type {
+	CheckedAccess,
+	Declared,
+	EndpointContext,
+	ExportContext,
+	ImportOf,
+	KickContext,
+	KitTypes,
+	LinkContext,
+	PublicContext,
+	SqlMode,
+} from './context'
 import type { ProcedureType } from './declaration'
 import type {
 	AppAccess,
@@ -84,7 +95,15 @@ type KickField<Th> =
 	& ([Th] extends [never] ? unknown : { readonly then: Th & NoInfer<OneJob<Th>> })
 
 /** A query writes nothing, so it has nothing to kick a job for. */
-type NoKick = { readonly then?: Unavailable<'a query kicks no job: declare then on a mutation'> }
+type NoKick = {
+	readonly then?: Unavailable<'a query kicks no job: declare then on a mutation'>
+	readonly kicks?: Unavailable<'a query kicks no job: declare kicks on a mutation'>
+}
+
+/** The jobs a mutation may kick (`ctx.kick`), inferred from its optional field and then required, as a literal list. */
+export type KicksField<Ks> =
+	& { readonly kicks?: Ks }
+	& ([Ks] extends [never] ? unknown : { readonly kicks: Ks & NoInfer<LiteralList<Ks>> })
 
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
@@ -133,7 +152,10 @@ export type ProcedureContext<
 	Acc,
 	Acts extends readonly string[],
 	D extends Declared<SqlMode, unknown, readonly string[], string>,
-> = [Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]> : EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D>
+	Ks = never,
+> =
+	& ([Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]> : EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D>)
+	& KickContext<Ks>
 
 /** A group without callers holds public procedures only; any other group may hold both. */
 export type GroupAccess<Caller extends RpcCaller, Acc> = [Caller] extends [never] ? PublicAccess : Acc | PublicAccess
@@ -276,15 +298,16 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Th extends string = never,
 		const Acts extends readonly K['action'][] = never,
 		Q extends InputSchema = never,
+		const Ks extends readonly string[] = never,
 	>(
-		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & HttpField<Q> & KickField<Th>,
+		def: EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']> & PublicFields<Acc, Acts> & HttpField<Q> & KickField<Th> & KicksField<Ks>,
 	): EndpointBuilder<
 		'mutation',
 		I,
 		O,
 		Acc,
 		Declared<S, U, Cn, Is>,
-		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>>,
+		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks>,
 		QueryArgs<Q>
 	>
 }

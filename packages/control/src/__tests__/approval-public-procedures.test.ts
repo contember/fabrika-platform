@@ -87,6 +87,27 @@ describe('a public procedure in the approval diff', () => {
 		)
 	})
 
+	test('a kick from a public procedure widens with closer review; from any other site it is shown and widens nothing', () => {
+		const kicking = (site: string, kicks: readonly string[], actions?: readonly string[]): AccessSnapshot => {
+			const contract: ContractArtifact = {
+				...notesArtifact,
+				endpoints: [...notesArtifact.endpoints, CTA],
+				declared: { [site]: { ...reach, kicks, ...(actions === undefined ? {} : { actions }) } },
+				procedures: { [CTA.id]: DEFAULT_RULES },
+			}
+			return { version: 1, contract, migrations: [], checker: '0.0.0' }
+		}
+		expect(classifyAccess(kicking('api.stats.cta', [], ['notes.write']), kicking('api.stats.cta', ['digest'], ['notes.write'])).changes).toEqual([
+			{ effect: 'widens', line: 'Endpoint `api.stats.cta` starts job `digest` whenever anyone calls it', review: 'closer' },
+		])
+		expect(classifyAccess(kicking('job:sweep', []), kicking('job:sweep', ['digest'])).changes).toEqual([
+			{ effect: 'neutral', line: 'Job `sweep` starts job `digest` after each committed run, beside its schedule' },
+		])
+		expect(classifyAccess(kicking('job:sweep', ['digest']), kicking('job:sweep', [])).changes).toEqual([
+			{ effect: 'narrows', line: 'Job `sweep` no longer starts job `digest`' },
+		])
+	})
+
 	test('an older release records no rules: the same contract compares as before', () => {
 		expect(classifyAccess(snapshot(null), snapshot(null))).toEqual({ outcome: 'none', changes: [] })
 	})

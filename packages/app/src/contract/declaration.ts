@@ -69,7 +69,7 @@ export function unknownOptions(options: object, builder: Builder): string[] {
  * The off-road fields a site of the staged kit declares beside its builder's options. The kit copies them into
  * `declared`; `buildArtifact` checks which of them the site may carry.
  */
-export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'then', 'mailer'] as const
+export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'then', 'mailer', 'kicks'] as const
 
 /** The keys of a kit site's `options` that are neither `builder`'s option fields nor a declared field. */
 export function kitUnknownOptions(options: object, builder: Builder): string[] {
@@ -87,6 +87,7 @@ export interface DeclaredDeclaration {
 	readonly issues?: unknown
 	readonly then?: unknown
 	readonly mailer?: unknown
+	readonly kicks?: unknown
 }
 
 /** The declared fields of a kit site's options, each one only when the options carry it. */
@@ -98,6 +99,7 @@ export function declaredOf(options: DeclaredDeclaration): DeclaredDeclaration {
 		...(options.issues === undefined ? {} : { issues: options.issues }),
 		...(options.then === undefined ? {} : { then: options.then }),
 		...(options.mailer === undefined ? {} : { mailer: options.mailer }),
+		...(options.kicks === undefined ? {} : { kicks: options.kicks }),
 	}
 }
 
