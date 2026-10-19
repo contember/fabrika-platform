@@ -16,6 +16,7 @@ import {
 	JoinNode,
 	LimitNode,
 	OffsetNode,
+	type OnConflictNode,
 	type OperationNode,
 	OperatorNode,
 	OrderByItemNode,
@@ -228,14 +229,26 @@ export function aggregateNode(
 	return Object.freeze(node)
 }
 
-/** `answer` is `undefined` only for an inbox append, which answers nothing. */
-export function insertNode(table: string, values: ReadonlyMap<string, Primitive | null>, answer: ReturningNode | undefined): InsertQueryNode {
+/**
+ * `answer` is `undefined` only for an inbox append, which answers nothing. `conflict` names the columns of a unique
+ * index the insert does nothing on: `on conflict (<columns>) do nothing`.
+ */
+export function insertNode(
+	table: string,
+	values: ReadonlyMap<string, Primitive | null>,
+	answer: ReturningNode | undefined,
+	conflict?: readonly string[],
+): InsertQueryNode {
 	const names = [...values.keys()]
+	const onConflict: OnConflictNode | undefined = conflict === undefined
+		? undefined
+		: Object.freeze({ kind: 'OnConflictNode', columns: conflict.map((name) => ColumnNode.create(name)), doNothing: true })
 	const node: InsertQueryNode = {
 		kind: 'InsertQueryNode',
 		into: TableNode.create(table),
 		columns: names.map((name) => ColumnNode.create(name)),
 		values: ValuesNode.create([ValueListNode.create(names.map((name) => ValueNode.create(values.get(name) ?? null)))]),
+		...(onConflict === undefined ? {} : { onConflict }),
 		...(answer === undefined ? {} : { returning: answer }),
 	}
 	return Object.freeze(node)
@@ -329,6 +342,28 @@ export function withCursorColumns(node: SelectQueryNode, table: string, columns:
 		SelectionNode.create(AliasNode.create(CastNode.create(column(table, name), DataTypeNode.create('text')), IdentifierNode.create(cursorAlias(index))))
 	)
 	return Object.freeze({ ...node, selections: [...(node.selections ?? []), ...cursor] })
+}
+
+/**
+ * A queue claim's lease: `select <columns> from table where (<conditions> and (<due> is not null and <due> <= $now and
+ * <attempts> < $max)) and scope order by <due>, <key> limit $n for update skip locked`. A row another claim holds is
+ * skipped, never waited for.
+ */
+export function claimNode(
+	state: SelectState,
+	columns: readonly string[],
+	due: { readonly due: string; readonly attempts: string; readonly now: Date; readonly maxAttempts: number },
+	scope: OperationNode,
+	days: NameSet,
+): SelectQueryNode {
+	const table = state.table
+	const waiting = allOf([
+		BinaryOperationNode.create(column(table, due.due), OperatorNode.create('is not'), ValueNode.createImmediate(null)),
+		BinaryOperationNode.create(column(table, due.due), OperatorNode.create('<='), ValueNode.create(due.now)),
+		BinaryOperationNode.create(column(table, due.attempts), OperatorNode.create('<'), ValueNode.create(due.maxAttempts)),
+	])
+	const node = selectNode(state, columns, scope, waiting, days)
+	return Object.freeze({ ...node, endModifiers: [SelectModifierNode.create('ForUpdate'), SelectModifierNode.create('SkipLocked')] })
 }
 
 /** `select <columns> from table where scope for update`: a mutation's precondition read of its own target. */

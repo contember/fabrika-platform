@@ -15,6 +15,8 @@ import {
 	MAX_WITHIN_VALUES,
 	type Ref as RefCapability,
 	type RefGrant,
+	type RowGrant,
+	type RowRef as RowRefCapability,
 	type Within as WithinCapability,
 	type WithinGrant,
 } from '@fabrika/db/capability'
@@ -173,6 +175,7 @@ interface Bound {
 let readRef: (value: unknown) => Bound | undefined = () => undefined
 let readWithin: (value: unknown) => Bound | undefined = () => undefined
 let readApp: (value: unknown) => Bound | undefined = () => undefined
+let readRow: (value: unknown) => Bound | undefined = () => undefined
 
 /** One authorized object for one action, in one request. `chain` holds the containers the object lies in. */
 export class Ref<D extends string, A extends string> implements RefCapability<D, A> {
@@ -344,10 +347,70 @@ export class AppCapability<A extends string> implements AppCapabilityType<A> {
 	}
 }
 
+interface RowFacts {
+	readonly table: string
+	readonly action: string
+	readonly principal: string
+	readonly id: string
+	readonly chain: Chain
+}
+
+/**
+ * One row a claim leased, for one action, in one job attempt: `row.ref`, which `tx.db.on(row.ref)` finishes the row
+ * through. `chain` holds the row's containment columns as it was claimed.
+ */
+export class RowRef<T extends string, A extends string> implements RowRefCapability<T, A> {
+	declare readonly '~capability': { readonly kind: 'row'; readonly table: T; readonly action: A }
+	readonly #facts: RowFacts
+	readonly #frame: RequestFrame
+	readonly #issuer: object
+
+	constructor(token: typeof MINT, issuer: object, frame: RequestFrame, grant: Omit<RowGrant, 'kind'>) {
+		if (token !== MINT) {
+			throw new CapabilityRefusedError('not_minted', 'a row capability is minted by the framework only: claim the row')
+		}
+		this.#facts = freeze({ table: grant.table, action: grant.action, principal: grant.principal, id: grant.id, chain: chainOf(grant.chain) })
+		this.#frame = frame
+		this.#issuer = issuer
+	}
+
+	get table(): string {
+		return this.#facts.table
+	}
+
+	get action(): string {
+		return this.#facts.action
+	}
+
+	/** The row's key. */
+	get value(): string {
+		return this.#facts.id
+	}
+
+	static {
+		readRow = (value) => {
+			if (typeof value !== 'object' || value === null || !(#facts in value)) {
+				return undefined
+			}
+			const facts = value.#facts
+			const grant: RowGrant = freeze({
+				kind: 'row',
+				table: facts.table,
+				action: facts.action,
+				principal: facts.principal,
+				id: facts.id,
+				chain: mapOf(facts.chain),
+			})
+			return { grant, frame: value.#frame, issuer: value.#issuer }
+		}
+	}
+}
+
 // Application code could otherwise redefine a getter that the framework or a handler reads.
 freeze(Ref.prototype)
 freeze(Within.prototype)
 freeze(AppCapability.prototype)
+freeze(RowRef.prototype)
 
 /** Makes the capabilities one authority accepts; a runtime's is held by the `boot` call that made it alone. */
 export interface CapabilityMint {
@@ -410,7 +473,7 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 	})
 	const authority: CapabilityAuthority = freeze({
 		resolve(capability: unknown): CapabilityGrant {
-			const bound = readRef(capability) ?? readWithin(capability) ?? readApp(capability)
+			const bound = readRef(capability) ?? readWithin(capability) ?? readApp(capability) ?? readRow(capability)
 			if (bound === undefined || bound.issuer !== issuer) {
 				throw new CapabilityRefusedError('not_minted', 'not a capability the framework minted: pass the ctx.target or ctx.within of this request')
 			}
@@ -429,6 +492,14 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 				)
 			}
 			return grant
+		},
+
+		row(grant: Omit<RowGrant, 'kind'>): RowRef<string, string> {
+			const frame = currentRequest.getStore()
+			if (frame === undefined || frame.ended) {
+				throw new CapabilityRefusedError('ended', 'a claimed row is minted only inside the job attempt that claims it')
+			}
+			return new RowRef(MINT, issuer, frame, grant)
 		},
 
 		fence(): LeaseFence | null {

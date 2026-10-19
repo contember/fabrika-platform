@@ -21,7 +21,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `capability.ts`        | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                                               |
 | `policy.ts`            | `defineTables` / `readTables`: the table policies, containment derived from the vocabulary, checked against the column list; row types.                        |
 | `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.                           |
-| `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`; `dataAccess`.                            |
+| `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`, queue claims; `dataAccess`.              |
 | `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                                           |
 | `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), each inbox's columns (`inboxColumns`), `readTables`, `isTables`.                   |
 | `temporal.ts`          | Days and timestamps at the boundary: a read's `YYYY-MM-DD` (`answerDays`), a write's strict day and ISO 8601 text (`dayInput`, `timestampInput`).              |
@@ -229,7 +229,8 @@ and the target `Ref`, so no handler can call it.
 - **The lease and admission statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath
   exports): they need `now()`, `set_config`, `pg_backend_pid()`, `on conflict` and `skip locked`, which the guard
   refuses on purpose. Only `job-leases.ts` and `form-admissions.ts` call it, with constant texts and scalar parameters;
-  never build a text from a value.
+  never build a text from a value. `databaseNow` (`job-leases.ts`) is the database's clock a queue claim and a requeue
+  bind as a value.
 - **A form bucket is taken in one statement** (`take`: an upsert whose update only runs below the limit), so
   concurrent instances never admit past it; never read a counter and then write it. Every take and every challenge
   record also prunes up to 32 expired rows with `for update skip locked` (no wait, so no deadlock), never the row it
@@ -272,8 +273,24 @@ and the target `Ref`, so no handler can call it.
   matched on the destination `Ref`'s whole chain, in the mutation's transaction; `lockDestination`), when a
   table owns the destination dimension. A
   stale destination is 404 and nothing is written. The guard admits that lock only with `GuardContext.lock: 'share'`,
-  and a handle's `getForUpdate` (`FOR UPDATE` of its own target in a mutation) only with `lock: 'update'`; it admits
-  no other lock, no `NOWAIT`, `SKIP LOCKED` or `OF`.
+  and a handle's `getForUpdate` (`FOR UPDATE` of its own target in a mutation) only with `lock: 'update'`, and a queue
+  claim's `FOR UPDATE SKIP LOCKED` only with `lock: 'claim'`; it admits no other lock, no `NOWAIT` and no `OF`. An
+  insert carries `ON CONFLICT (<columns>) DO NOTHING` only with `onConflict: 'nothing'`, and never `DO UPDATE`.
+- **A table action is one action or a list of them; any one allows the operation** (`ActionModel` holds lists, `includes`
+  reads them). With several read actions a column's own read action hides it from the others, so `visible` is what
+  every read action reads and a handle reads the columns of its capability's own action (`visibleFor`). The artifact
+  keeps a single action as its text, so a policy that names one keeps its digest.
+- **A queue claim is a lease committed on its own** (`claimRows` in `orm.ts`). Only a job outside `ctx.transaction`
+  claims (`claim_site` otherwise): inside one a failure would roll the lease back and retry the row at once. It runs in
+  `fencedWork` under the attempt's fence, compares `due` with `databaseNow`, takes rows `FOR UPDATE SKIP LOCKED`, and
+  in the same transaction adds one attempt and moves `due` by the job's tick doubled per earlier claim (at most 30
+  days). Each row answers the columns its action reads, its new version and `ref`: a `RowGrant` the authority mints
+  (`CapabilityAuthority.row`), bound to the row's key and the containment it had when claimed. `tx.db.on(row.ref)`
+  updates (`done: true` clears `due` in the same statement), removes with the delete action, or requeues. Never add a
+  claim that waits for a lock or runs inside the work's transaction.
+- **An insert's `onConflict` writes in SQL only `DO NOTHING`** (`insertOnConflict` in `store.ts`). `'update'` is a
+  second statement in the same transaction: the table's update columns, by the conflict columns, within the insert's own
+  containment, by a capability that also holds the update action. A conflicting row out of that reach is a 409.
 - **Mutations answer `{ id, version }` (and `move` the new chain), never row data.** A capability reads its row only
   through a handle's own-target read (`orm.ts`, `visibleFor`): a `Ref` of any action the table names gets the row
   without every column that declares a read action other than exactly its own, the same columns `RowFor` omits from

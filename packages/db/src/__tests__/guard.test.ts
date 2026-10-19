@@ -40,6 +40,7 @@ import {
 	acknowledgement,
 	allOf,
 	anyOf,
+	claimNode,
 	column,
 	deleteNode,
 	equals,
@@ -78,7 +79,7 @@ const commentsShape: TableShape = { table: 'note_comments', visible: nameSet(['i
 const notesShape: TableShape = {
 	table: 'notes',
 	visible: nameSet(['id', 'title', 'workspace_id']),
-	joinable: { note_comments: { shape: commentsShape, readAction: 'notes.read', on: foreignKey } },
+	joinable: { note_comments: { shape: commentsShape, readActions: ['notes.read'], on: foreignKey } },
 	dates: nameSet([]),
 }
 
@@ -363,6 +364,45 @@ describe('row locks', () => {
 		}
 		const of = { ...existsNode('notes', 'id', scope), endModifiers: base().forUpdate(['notes']).toOperationNode().endModifiers }
 		refuses(of, updateContext, 'row locks are not allowed')
+	})
+})
+
+describe("a queue claim's lock and an insert's conflict", () => {
+	const claimContext: GuardContext = { ...selectContext, joins: {}, lock: 'claim' }
+	const claim = () => {
+		const start = startSelect(notesShape)
+		const state = finishSelect(start, start)
+		return claimNode(state, ['id', 'title'], { due: 'title', attempts: 'id', now: new Date(0), maxAttempts: 10 }, scope, nameSet([]))
+	}
+
+	test('a claim passes only with the claim flag, and compiles to for update skip locked', () => {
+		expect(() => assertAllowedTree(claim(), claimContext)).not.toThrow()
+		expect(compiler.compileQuery(claim(), { queryId: 'q' }).sql).toEndWith('for update skip locked')
+		refuses(claim(), { ...claimContext, lock: 'update' }, 'row locks are not allowed')
+		refuses(claim(), selectContext, 'is not allowed')
+		for (const builder of [base().forUpdate(), base().forUpdate().noWait(), base().forShare().skipLocked(), base().forUpdate(['notes']).skipLocked()]) {
+			const node = { ...existsNode('notes', 'id', scope), endModifiers: builder.toOperationNode().endModifiers }
+			refuses(node, claimContext)
+		}
+	})
+
+	test('on conflict (columns) do nothing passes only with the conflict flag; do update never', () => {
+		const values = new Map([['id', 'n1'], ['title', 'x']])
+		const node = insertNode('notes', values, acknowledgement('notes', 'id', undefined), ['title'])
+		const conflictContext: GuardContext = { ...insertContext, onConflict: 'nothing' }
+		expect(() => assertAllowedTree(node, conflictContext)).not.toThrow()
+		expect(compiler.compileQuery(node, { queryId: 'q' }).sql).toContain('on conflict ("title") do nothing')
+		refuses(node, insertContext, 'is not allowed')
+		const update =
+			k.insertInto('notes').values({ id: 'n1', workspace_id: 'w1', title: 'x', word_count: 1, data: { a: 'b' } }).onConflict((oc) =>
+				oc.column('id').doUpdateSet({ title: 'y' })
+			).toOperationNode().onConflict
+		refuses(legitInsert({ onConflict: update }), conflictContext, 'an insert admits only on conflict (columns) do nothing')
+		const constraint =
+			k.insertInto('notes').values({ id: 'n1', workspace_id: 'w1', title: 'x', word_count: 1, data: { a: 'b' } }).onConflict((oc) =>
+				oc.constraint('notes_pkey').doNothing()
+			).toOperationNode().onConflict
+		refuses(legitInsert({ onConflict: constraint }), conflictContext, 'an insert admits only on conflict (columns) do nothing')
 	})
 })
 

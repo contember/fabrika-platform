@@ -59,6 +59,18 @@ describe('the policies as data', () => {
 		})
 	})
 
+	test('one action stays its text in the artifact, so a 0.5 policy keeps its digest; several are a list', () => {
+		const policies = {
+			notes: { ...notes, actions: { read: ['notes.read', 'notes.export'], insert: 'notes.write', delete: ['notes.delete'] } },
+		}
+		const noteVocabulary = {
+			dimensions: { workspace: {}, note: { in: 'workspace' } },
+			actions: { 'notes.read': 'Read', 'notes.export': 'Export', 'notes.write': 'Write', 'notes.delete': 'Delete' },
+		}
+		const artifact = tablePolicies(readTables(noteColumns, policies, noteVocabulary))
+		expect(artifact['notes']?.actions).toEqual({ read: ['notes.read', 'notes.export'], insert: 'notes.write', update: null, delete: 'notes.delete' })
+	})
+
 	test('readTables over the same values gives the same policies', () => {
 		const fromValues = readTables(JSON.parse(JSON.stringify(columns)), JSON.parse(JSON.stringify(policiesOf())), JSON.parse(JSON.stringify(vocabulary)))
 		expect(tablePolicies(fromValues)).toEqual(tablePolicies(tables))

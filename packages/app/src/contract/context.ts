@@ -3,9 +3,11 @@
 // so a group in any module types itself without importing `fabrika.contract.ts`.
 
 import type { JobMailer, RpcCaller } from '@fabrika/auth-core'
+import type { RowRef } from '@fabrika/db/capability'
 import type {
 	AnyDbIndex,
 	ApplicationTables,
+	ClaimedRowHandle,
 	DataKind,
 	FragmentTable,
 	NoUnscoped,
@@ -223,7 +225,12 @@ type Target<Ix extends AnyDbIndex, D extends string, A extends string, K extends
 	'target'
 >
 
-type WithinData<Ix extends AnyDbIndex, D extends string, A extends string> = Reaching<Ix, WithinTables<Ix, D, A>, `over: '${D}'`, 'over'>
+type WithinData<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind> = Reaching<
+	Ix,
+	WithinTables<Ix, D, A, K>,
+	`over: '${D}'`,
+	'over'
+>
 
 type AppData<Ix extends AnyDbIndex, A extends string, K extends DataKind> = Reaching<Ix, ApplicationTables<Ix, A, K>, 'app: true', 'over'>
 
@@ -246,7 +253,7 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 			readonly target: Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>
 		}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
-			readonly within: WithinData<Ix, D, A>
+			readonly within: WithinData<Ix, D, A, K>
 			readonly app: ScopedAppData<Ix, A>
 			readonly target: Unavailable<'an over endpoint lists through ctx.db.within: declare access with on or in for ctx.db.target'>
 		}
@@ -384,8 +391,10 @@ export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', un
  */
 export interface CapabilityData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string> {
 	on<const D extends string, const A extends Acts>(ref: Ref<D, A>): Target<Ix, D, A, Kind, 'on'>
+	/** A row a claim leased (`row.ref`), finished inside `ctx.transaction`. */
+	on<const T extends TableName<Ix>, const A extends Acts>(ref: RowRef<T, A>): ClaimedRowHandle<T, Ix['tables'][T], A, Kind>
 	in<const D extends string, const A extends Acts>(ref: Ref<D, A>): Target<Ix, D, A, Kind, 'in'>
-	over<const D extends string, const A extends Acts>(within: Within<D, A>): WithinData<Ix, D, A>
+	over<const D extends string, const A extends Acts>(within: Within<D, A>): WithinData<Ix, D, A, Kind>
 }
 
 type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string, U> =
@@ -449,7 +458,7 @@ type IndexOf<A> = A extends App<infer K> ? K['index'] : never
  */
 export type DbHandle<A, F extends TargetForm | 'over', D extends string, Act extends string, K extends DataKind = 'query'> = F extends TargetForm
 	? Target<IndexOf<A>, D, Act, K, F>
-	: WithinData<IndexOf<A>, D, Act>
+	: WithinData<IndexOf<A>, D, Act, K>
 
 /**
  * The type of `ctx.db.app` of an `app` endpoint, for a function of `src/<slice>/queries.ts` that takes it:

@@ -63,7 +63,8 @@ export interface TableShape {
 
 export interface JoinShape {
 	readonly shape: TableShape
-	readonly readAction: string
+	/** The child's read actions: a select of the parent joins it only with one of them. */
+	readonly readActions: readonly string[]
 	/** The composite foreign key: child column = parent column, for each pair. */
 	readonly on: readonly { readonly childColumn: string; readonly parentColumn: string }[]
 }

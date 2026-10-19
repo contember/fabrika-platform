@@ -30,8 +30,8 @@ type Policies = typeof sparse extends Tables<DB, infer P> ? P : never
 type Index = DbIndex<DB, Policies, typeof vocabulary>
 
 export type SparseTypes = [
-	Expect<Equal<keyof WithinTables<Index, 'org', 'tasks.read'>, 'tasks'>>,
-	Expect<Equal<keyof WithinTables<Index, 'workspace', 'tasks.read'>, 'tasks'>>,
+	Expect<Equal<keyof WithinTables<Index, 'org', 'tasks.read', 'query'>, 'tasks'>>,
+	Expect<Equal<keyof WithinTables<Index, 'workspace', 'tasks.read', 'query'>, 'tasks'>>,
 	Expect<Equal<Index['tables']['tasks']['chain'], 'workspace_id' | 'org_id'>>,
 	Expect<Equal<keyof UnscopedInsert<Index['tables']['tasks']>, 'title' | 'workspace_id' | 'org_id'>>,
 ]

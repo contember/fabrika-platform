@@ -331,7 +331,10 @@ export function siteData(handles: DataHandles): object {
 	})
 }
 
-/** The handles of a job attempt, outside its fenced transaction (`'job'`, each read on its own) or inside it. */
+/**
+ * The handles of a job attempt, outside its fenced transaction (`'job'`, each read on its own) or inside it. `tickMs`,
+ * the job's schedule period, is a queue claim's first backoff.
+ */
 export function jobHandles(
 	frame: RequestFrame,
 	data: DataAccess,
@@ -340,8 +343,16 @@ export function jobHandles(
 	kind: 'job' | 'mutation',
 	session: () => Promise<Session>,
 	ended: () => boolean,
+	tickMs?: number,
 ): DataHandles {
-	return data.handles({ kind, unscoped: declaration.unscoped, principal, check: boundTo(frame, ended), session })
+	return data.handles({
+		kind,
+		unscoped: declaration.unscoped,
+		principal,
+		check: boundTo(frame, ended),
+		session,
+		...(tickMs === undefined ? {} : { tickMs }),
+	})
 }
 
 /**

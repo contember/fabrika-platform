@@ -1,8 +1,9 @@
 // @fabrika/db/tables — the table policies of `src/db/tables.ts` as data. Browser- and Worker-safe: no Bun API and no
 // driver, so `@fabrika/app/contract` and the static contract reader in `@fabrika/check` import it.
 
-import type { ColumnPolicyArtifact, TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
+import type { ColumnPolicyArtifact, TableActionArtifact, TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
 import { freeze, namesOf, ownEntry, ownKeys, setOwn } from './builtins'
+import { PolicyError } from './errors'
 import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
 export { PolicyError } from './errors'
@@ -12,12 +13,17 @@ export type {
 	ApplicationTables,
 	AppRecordRows,
 	ChildRows,
+	ClaimedRow,
+	ClaimedRowHandle,
+	ClaimOptions,
 	ContainedRows,
 	CountOptions,
 	DataKind,
 	DbIndex,
 	FragmentTable,
 	IndexedTable,
+	InsertConflict,
+	InsertMethod,
 	ListOptions,
 	ListPage,
 	NoUnscoped,
@@ -58,10 +64,12 @@ export {
 	type InboxPolicy,
 	type InboxScope,
 	isTables,
+	type QueuePolicy,
 	readTables,
 	type RecordActions,
 	type ReferencePolicy,
 	type ReferenceScope,
+	type TableAction,
 	type TableActions,
 	type TableInsert,
 	Tables,
@@ -131,10 +139,10 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 	return {
 		scope: scopeOf(model.scope),
 		actions: {
-			read: model.actions.read,
-			insert: model.actions.insert ?? null,
-			update: model.actions.update ?? null,
-			delete: model.actions.delete ?? null,
+			read: actionArtifact(model.actions.read) ?? noReadAction(model.name),
+			insert: actionArtifact(model.actions.insert),
+			update: actionArtifact(model.actions.update),
+			delete: actionArtifact(model.actions.delete),
 			...(model.actions.appRead.length === 0 ? {} : { appRead: [...model.actions.appRead] }),
 			...(model.actions.appCount.length === 0 ? {} : { appCount: [...model.actions.appCount] }),
 		},
@@ -144,6 +152,19 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 		createdBy: model.createdBy ?? null,
 		columns,
 	}
+}
+
+/** One action as its text, so a single-action policy keeps the artifact and digest it had; several as a list; none as `null`. */
+function actionArtifact(actions: readonly string[]): TableActionArtifact | null {
+	const [first] = actions
+	if (first === undefined) {
+		return null
+	}
+	return actions.length === 1 ? first : [...actions]
+}
+
+function noReadAction(table: string): never {
+	throw new PolicyError(`${table}: the policy needs a read action`)
 }
 
 function scopeOf(scope: ScopeModel): TableScope {

@@ -21,9 +21,11 @@ export interface GuardContext {
 	readonly scope: OperationNode | undefined
 	/**
 	 * A select that locks its rows: `share` is the layer's check of a mutation's destination, `update` a mutation's
-	 * `getForUpdate` of its own target. No other lock is admitted.
+	 * `getForUpdate` of its own target, `claim` a queue claim's `for update skip locked`. No other lock is admitted.
 	 */
-	readonly lock?: 'share' | 'update'
+	readonly lock?: 'share' | 'update' | 'claim'
+	/** An insert that does nothing on a conflict of its listed columns: `on conflict (columns) do nothing`, and no other. */
+	readonly onConflict?: 'nothing'
 }
 
 function lookup(...names: string[]): NameSet {
@@ -72,8 +74,10 @@ const NODE_KINDS = lookup(
 	'ReturningNode',
 	// Only as an orderBy direction; checked below.
 	'RawNode',
-	// Only as the one lock of a destination check or a getForUpdate; checked below.
+	// Only as the one lock of a destination check or a getForUpdate, or a claim's two; checked below.
 	'SelectModifierNode',
+	// Only as an insert's `on conflict (columns) do nothing`; checked below.
+	'OnConflictNode',
 	// Only as a selected own column's text, the exact position a keyset page continues from; checked below.
 	'CastNode',
 	'DataTypeNode',
@@ -99,7 +103,8 @@ export function assertAllowedTree(root: OperationNode, context: GuardContext): v
 	for (let index = 0; index < keys.length; index++) {
 		const key = keys[index] ?? ''
 		const lockModifier = key === 'endModifiers' && context.lock !== undefined && context.root === 'SelectQueryNode'
-		if (read(root, key) !== undefined && !inSet(allowed, key) && !lockModifier) {
+		const conflict = key === 'onConflict' && context.onConflict === 'nothing' && context.root === 'InsertQueryNode'
+		if (read(root, key) !== undefined && !inSet(allowed, key) && !lockModifier && !conflict) {
 			throw new QueryRefusedError('statement_shape', `${context.root}.${key} is not allowed`)
 		}
 	}
@@ -236,6 +241,8 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			return checkRaw(node, parent)
 		case 'SelectModifierNode':
 			return checkLock(node, parent, context)
+		case 'OnConflictNode':
+			return checkConflict(node, parent, context)
 		case 'CastNode':
 			return checkCast(node, parent, context)
 		case 'DataTypeNode':
@@ -265,7 +272,8 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 		case 'ColumnNode':
 			if (
 				parent === undefined
-				|| !(parent.node.kind === 'ReferenceNode' || parent.node.kind === 'InsertQueryNode' || parent.node.kind === 'ColumnUpdateNode')
+				|| !(parent.node.kind === 'ReferenceNode' || parent.node.kind === 'InsertQueryNode' || parent.node.kind === 'ColumnUpdateNode'
+					|| parent.node.kind === 'OnConflictNode')
 			) {
 				throw new QueryRefusedError('statement_shape', 'unqualified column')
 			}
@@ -320,14 +328,40 @@ function checkValue(node: OperationNode): void {
 	}
 }
 
+/** The lock modifiers each lock kind admits, in the order the compiler prints them. */
+const LOCKS: Readonly<Record<'share' | 'update' | 'claim', readonly string[]>> = freeze({
+	share: freeze(['ForShare']),
+	update: freeze(['ForUpdate']),
+	claim: freeze(['ForUpdate', 'SkipLocked']),
+})
+
 function checkLock(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
 	const modifiers = parent === undefined ? undefined : read(parent.node, 'endModifiers')
-	const onRoot = parent !== undefined && parent.up === undefined && parent.key === 'endModifiers' && isArray(modifiers) && modifiers.length === 1
-	const expected = context.lock === 'share' ? 'ForShare' : context.lock === 'update' ? 'ForUpdate' : undefined
-	const plain = expected !== undefined && read(node, 'modifier') === expected && read(node, 'of') === undefined
+	const expected = context.lock === undefined ? [] : LOCKS[context.lock]
+	const onRoot = parent !== undefined && parent.up === undefined && parent.key === 'endModifiers' && isArray(modifiers)
+		&& modifiers.length === expected.length
+	let position = -1
+	for (let index = 0; onRoot && index < modifiers.length; index++) {
+		if (modifiers[index] === node) {
+			position = index
+		}
+	}
+	const plain = position !== -1 && read(node, 'modifier') === expected[position] && read(node, 'of') === undefined
 		&& read(node, 'rawModifier') === undefined
 	if (!onRoot || !plain) {
 		throw new QueryRefusedError('statement_shape', 'row locks are not allowed')
+	}
+}
+
+/** `on conflict (<columns>) do nothing` on the root insert: no constraint name, index expression, WHERE or update. */
+function checkConflict(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
+	const columns = read(node, 'columns')
+	const onRoot = parent !== undefined && parent.up === undefined && parent.key === 'onConflict' && context.onConflict === 'nothing'
+	const plain = read(node, 'doNothing') === true && isArray(columns) && columns.length > 0 && read(node, 'constraint') === undefined
+		&& read(node, 'indexExpression') === undefined && read(node, 'indexWhere') === undefined && read(node, 'updates') === undefined
+		&& read(node, 'updateWhere') === undefined
+	if (!onRoot || !plain) {
+		throw new QueryRefusedError('statement_shape', 'an insert admits only on conflict (columns) do nothing')
 	}
 }
 

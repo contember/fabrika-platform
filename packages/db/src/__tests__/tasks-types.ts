@@ -33,9 +33,9 @@ export type TaskTypes = [
 		>
 	>,
 	// over: every table whose containment chain holds the dimension.
-	Expect<Equal<keyof WithinTables<Index, 'org', 'tasks.read'>, 'projects' | 'tasks' | 'task_comments'>>,
-	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read'>, 'tasks' | 'task_comments'>>,
-	Expect<Equal<keyof WithinTables<Index, 'task', 'tasks.read'>, 'task_comments'>>,
+	Expect<Equal<keyof WithinTables<Index, 'org', 'tasks.read', 'query'>, 'projects' | 'tasks' | 'task_comments'>>,
+	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read', 'query'>, 'tasks' | 'task_comments'>>,
+	Expect<Equal<keyof WithinTables<Index, 'task', 'tasks.read', 'query'>, 'task_comments'>>,
 	// A column's own write action scopes an UPDATE of its table on a 'write' site, and reads nothing.
 	Expect<Equal<FragmentTable<Index, Within<'project', 'tasks.assign'>, 'write'>, 'tasks' | 'task_comments'>>,
 	Expect<

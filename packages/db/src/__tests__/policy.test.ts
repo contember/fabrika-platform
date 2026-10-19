@@ -296,7 +296,7 @@ describe('the parsed model', () => {
 		const models = tableModels(tables)
 		expect(modelOf(models, 'countries')?.scope).toEqual({ mode: 'reference', reason: 'read-only lookup data' })
 		expect(modelOf(models, 'contact_messages')?.scope).toEqual({ mode: 'inbox', form: 'contact' })
-		expect(modelOf(models, 'contact_messages')?.actions.read).toBe('contact.read')
+		expect(modelOf(models, 'contact_messages')?.actions.read).toEqual(['contact.read'])
 	})
 })
 
@@ -317,10 +317,10 @@ describe('an application table', () => {
 		expect(model?.scope).toEqual({ mode: 'app', reason: 'settings an administrator edits', key: 'id' })
 		expect(model?.chain).toEqual([])
 		expect(model?.actions).toEqual({
-			read: 'notes.read',
-			insert: 'notes.admin',
-			update: 'notes.admin',
-			delete: 'notes.admin',
+			read: ['notes.read'],
+			insert: ['notes.admin'],
+			update: ['notes.admin'],
+			delete: ['notes.admin'],
 			appRead: [],
 			appCount: [],
 		})
@@ -391,4 +391,97 @@ test('an application table takes neither: its read action reads every row app-wi
 	expect(() => define({ ...columns, settings: ['id', 'name'] }, { notes, note_comments: comments, countries, settings })).toThrow(
 		'settings: actions.appRead is for a dimension or child table; an application table takes none',
 	)
+})
+
+describe('a list of actions per table action', () => {
+	const withNotes = (notesActions: unknown, extra: object = {}) =>
+		define(columns, { notes: { ...notes, actions: notesActions, ...extra }, note_comments: comments, countries })
+
+	test('each operation takes one action or a list of them; any one of them allows it', () => {
+		const model = modelOf(
+			tableModels(withNotes({ read: ['notes.read', 'notes.admin'], insert: 'notes.write', update: ['notes.write', 'notes.admin'] })),
+			'notes',
+		)
+		expect(model?.actions).toMatchObject({
+			read: ['notes.read', 'notes.admin'],
+			insert: ['notes.write'],
+			update: ['notes.write', 'notes.admin'],
+			delete: [],
+		})
+	})
+
+	test('a list is non-empty, of distinct actions of the vocabulary', () => {
+		expect(() => withNotes({ read: [] })).toThrow('notes: actions.read lists no action; leave it out')
+		expect(() => withNotes({ read: ['notes.read', 'notes.read'] })).toThrow('notes: actions.read names notes.read twice')
+		expect(() => withNotes({ read: ['notes.read', 'notes.raed'] })).toThrow(
+			'notes: actions.read names notes.raed, which is not an action of the vocabulary',
+		)
+		expect(() => withNotes({ read: 'notes.read', update: ['notes.write', ''] })).toThrow('notes: actions.update must be a non-empty string')
+	})
+
+	test('with several read actions, a column of one of them is hidden from every read', () => {
+		const model = modelOf(
+			tableModels(withNotes({ read: ['notes.read', 'notes.admin'], insert: 'notes.write', update: 'notes.write' }, {
+				columns: { title: { read: 'notes.admin' } },
+			})),
+			'notes',
+		)
+		expect(model?.visible).not.toContain('title')
+	})
+
+	test("a column's own write action is none of the update actions", () => {
+		expect(() =>
+			withNotes({ read: 'notes.read', update: ['notes.write', 'notes.admin'] }, { update: [], columns: { title: { write: 'notes.admin' } } })
+		)
+			.toThrow("notes: columns.title.write names notes.admin, the table's update action; list title in update instead")
+	})
+})
+
+describe('a queue table', () => {
+	const outboxColumns = { columns: ['id', 'recipient', 'attempts', 'due_at', 'version'], foreignKeys: [], timestamps: ['due_at'] }
+	const outbox = {
+		scope: { app: 'mail goes out through one job' },
+		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.admin' },
+		insert: ['recipient', 'due_at'],
+		queue: { attempts: 'attempts', due: 'due_at' },
+		version: 'version',
+	}
+	const withOutbox = (policy: unknown, list: object = outboxColumns) =>
+		readTables({ ...listOf(columns, keys), outbox: list }, { notes, note_comments: comments, countries, outbox: policy }, vocabulary)
+
+	test('names its attempts and due columns; maxAttempts defaults to 10', () => {
+		expect(modelOf(tableModels(withOutbox(outbox)), 'outbox')?.queue).toEqual({ attempts: 'attempts', due: 'due_at', maxAttempts: 10 })
+		const capped = { ...outbox, queue: { ...outbox.queue, maxAttempts: 3 } }
+		expect(modelOf(tableModels(withOutbox(capped)), 'outbox')?.queue?.maxAttempts).toBe(3)
+	})
+
+	test('needs a version column, an update action, and a timestamp due', () => {
+		const { version: _, ...unversioned } = outbox
+		expect(() => withOutbox(unversioned)).toThrow('outbox: a queue table needs a version column')
+		expect(() => withOutbox({ ...outbox, actions: { read: 'notes.read', insert: 'notes.write' } })).toThrow(
+			'outbox: a queue table needs an update action',
+		)
+		expect(() => withOutbox(outbox, { ...outboxColumns, timestamps: [] })).toThrow('outbox: queue.due names due_at, which is not a timestamp column')
+	})
+
+	test('the layer writes its columns: attempts is never written by a handler, due only by an insert', () => {
+		expect(() => withOutbox({ ...outbox, insert: ['recipient', 'attempts'] })).toThrow('outbox: attempts is stamped by the layer')
+		expect(() => withOutbox({ ...outbox, update: ['due_at'] })).toThrow('outbox: due_at is queue.due, which the layer writes')
+		expect(() => withOutbox({ ...outbox, queue: { attempts: 'attempts', due: 'attempts' } })).toThrow(
+			'outbox: queue.attempts and queue.due name one column, attempts; they need two',
+		)
+		expect(() => withOutbox({ ...outbox, queue: { ...outbox.queue, maxAttempts: 0 } })).toThrow('outbox: queue.maxAttempts must be a positive integer')
+		expect(() => withOutbox({ ...outbox, queue: { ...outbox.queue, retries: 3 } })).toThrow('outbox: queue: retries is not a field here')
+	})
+
+	test('a claimed row carries version and ref beside its columns, so the table has no other column of either name', () => {
+		const list = { ...outboxColumns, columns: [...outboxColumns.columns, 'ref'] }
+		expect(() => withOutbox(outbox, list)).toThrow('outbox: a queue table has no column named ref')
+	})
+
+	test('a reference table takes no queue', () => {
+		expect(() => define(columns, { notes, note_comments: comments, countries: { ...countries, queue: { attempts: 'code', due: 'name' } } })).toThrow(
+			'countries: a reference table is never written by a handler',
+		)
+	})
 })

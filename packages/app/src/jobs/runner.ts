@@ -770,7 +770,9 @@ function jobContext(
 		runId: frame.id,
 		attempt,
 		signal,
-		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id, ref)),
+		...(job.site === null || context.data === null
+			? {}
+			: kitJobContext(frame, context.data, context.files, job.name, job.site, principal.id, ref, periodAt(job.schedule, new Date()) ?? undefined)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
@@ -843,8 +845,9 @@ function kitJobContext(
 	site: SiteDeclaration,
 	principal: string,
 	ref: (action: string, dimension: string, id: string, using: Session) => Promise<Ref<string, string>>,
+	tickMs: number | undefined,
 ): Readonly<Record<string, unknown>> {
-	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false)
+	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false, tickMs)
 	const job = `job '${name}'`
 	return {
 		db: siteData(reads),

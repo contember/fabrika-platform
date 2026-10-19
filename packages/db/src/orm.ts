@@ -10,8 +10,24 @@ import { type CapabilityGrant, describeGrant, type RefGrant } from './capability
 import type { InvocationTransaction, Session } from './database'
 import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
 import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } from './errors'
+import { databaseNow } from './job-leases'
 import { linksPredicate, linkValues } from './links'
-import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
+import {
+	aggregateNode,
+	allOf,
+	anyOf,
+	claimNode,
+	column,
+	cursorAlias,
+	equals,
+	everything,
+	inList,
+	lockedSelectNode,
+	scopedWhere,
+	selectNode,
+	updateNode,
+	withCursorColumns,
+} from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
 import { modelOf, namesAction, type TableModels, updatableBy, visibleFor } from './policy'
 import { type SqlSite, type SqlTag, sqlTag } from './sql'
@@ -19,21 +35,26 @@ import {
 	actionShape,
 	aggregateRows,
 	type AggregateSpec,
+	answer,
 	appKeyPredicate,
 	appListPredicate,
 	appRecordPredicate,
 	appRowPredicate,
 	childObjectPredicate,
 	childScope,
+	claimedRowPredicate,
+	claimScope,
 	type DataLayerRuntime,
-	insertIntoApplication,
-	insertIntoChild,
-	insertIntoDimension,
+	heldAction,
+	insertPrepared,
 	insertRow,
 	keyOf,
 	objectPredicate,
 	ownerOf,
 	parentPredicate,
+	prepareApplicationInsert,
+	prepareChildInsert,
+	prepareDimensionInsert,
 	reachColumn,
 	reachPredicate,
 	readValues,
@@ -50,7 +71,7 @@ import {
 	updatingRef,
 	versionArgument,
 } from './store'
-import { answerDays } from './temporal'
+import { answerDays, timestampInput } from './temporal'
 
 /** A list page holds this many rows unless the caller asks for fewer, and never more than `MAX_LIST_LIMIT`. */
 export const DEFAULT_LIST_LIMIT = 50
@@ -67,6 +88,8 @@ export interface DataSite {
 	readonly unscoped: Readonly<Record<string, UnscopedMode>>
 	/** Who an unscoped insert is stamped with (`createdBy`): no capability carries a principal for it. */
 	readonly principal: string
+	/** A job's schedule period, in ms: a queue claim's first backoff, doubled at each later claim of the row. */
+	readonly tickMs?: number
 	/** Throws unless the work running now is the invocation these handles were made for. */
 	check(): void
 	/** The session every statement of the site runs in. */
@@ -234,6 +257,9 @@ function addTable(handle: Record<string, unknown>, table: string, rows: object):
 
 function scopeTarget(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown, form: TargetForm): object {
 	const grant = resolved(parts, capability)
+	if (grant.kind === 'row' && form === 'on') {
+		return claimedRow(parts.contextOf(grant.table), site, run, capability)
+	}
 	if (grant.kind !== 'ref') {
 		throw new CapabilityError('wrong_capability', 'ctx.db.target is built from a Ref; an over endpoint lists through ctx.db.within')
 	}
@@ -336,7 +362,11 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 			const scope = allOf([equals(context.model.name, key, id), parentPredicate(context, grant)])
 			return selectOne(context, run, scope, visibleFor(context.model, grant.action))
 		}),
-		insert: writing(site, 'insert', async (values: unknown) => insertIntoChild(context, run, capability, values)),
+		insert: writing(
+			site,
+			'insert',
+			async (values: unknown, options?: unknown) => insertPrepared(context, run, prepareChildInsert(context, capability, values, options)),
+		),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			if (typeof id !== 'string' || id.length === 0) {
 				throw new QueryRefusedError('row_address', `a ${context.model.name} row is addressed by its parent Ref and its ${key}`)
@@ -360,13 +390,23 @@ function containedRows(context: TableContext, site: DataSite, run: Runner, capab
 			const scope = linksPredicate(context.model.name, linkValues(context.model.name, context.model.chain, grant))
 			return listRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)])
 		}),
-		insert: writing(site, 'insert', async (values: unknown) => insertIntoDimension(context, run, capability, values)),
+		insert: writing(
+			site,
+			'insert',
+			async (values: unknown, options?: unknown) => insertPrepared(context, run, prepareDimensionInsert(context, capability, values, options)),
+		),
 	})
 }
 
 /** A top-level scope's own row, keyed by the scope's value: what an `in` or `creates` endpoint inserts. */
 function ownerRow(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
-	return freeze({ insert: writing(site, 'insert', async (values: unknown) => insertIntoDimension(context, run, capability, values)) })
+	return freeze({
+		insert: writing(
+			site,
+			'insert',
+			async (values: unknown, options?: unknown) => insertPrepared(context, run, prepareDimensionInsert(context, capability, values, options)),
+		),
+	})
 }
 
 function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capability: unknown): object {
@@ -381,20 +421,40 @@ function withinTables(parts: DataLayerParts, site: DataSite, run: Runner, capabi
 		const listable = model?.scope.mode === 'dimension' || model?.scope.mode === 'child'
 		if (model !== undefined && listable && reachColumn(model, grant.dimension) !== undefined) {
 			const context = parts.contextOf(model.name)
-			setOwn(handle, model.name, listedRows(context, site, run, () => reachPredicate(context, capability)))
+			setOwn(handle, model.name, listedRows(parts, context, site, run, capability, () => reachPredicate(context, capability)))
 		}
 	}
 	return freeze(handle)
 }
 
-/** A table read through a `Within` by its read action: `undefined` from `scope` is an empty `Within`, which reads nothing. */
-function listedRows(context: TableContext, site: DataSite, run: Runner, scope: () => OperationNode | undefined): object {
-	const visible = context.model.visible
+/**
+ * A table read through a `Within` by one of its read actions, with the columns that action reads: `undefined` from
+ * `scope` is an empty `Within`, which reads nothing.
+ */
+function listedRows(
+	parts: DataLayerParts,
+	context: TableContext,
+	site: DataSite,
+	run: Runner,
+	capability: unknown,
+	scope: () => OperationNode | undefined,
+): object {
 	const key = [keyOf(context.model)]
+	const visible = () => visibleFor(context.model, heldAction(context, capability))
 	return freeze({
-		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key)),
-		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
-		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
+		claim: claiming(parts, context, site, capability),
+		list: bound(site, async (options?: unknown) => {
+			const predicate = scope()
+			return listRows(context, run, predicate, visible(), options, key)
+		}),
+		count: bound(site, async (options?: unknown) => {
+			const predicate = scope()
+			return countRows(context, run, predicate, visible(), options)
+		}),
+		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => {
+			const predicate = scope()
+			return aggregateRows(context, run, predicate, actionShape(context.model, visible()), spec)
+		}),
 	})
 }
 
@@ -412,7 +472,7 @@ function applicationTables(parts: DataLayerParts, site: DataSite, run: Runner, c
 		}
 		const context = parts.contextOf(model.name)
 		if (model.scope.mode === 'app') {
-			setOwn(handle, model.name, applicationRows(context, site, run, capability))
+			setOwn(handle, model.name, applicationRows(parts, context, site, run, capability))
 		} else if (model.scope.mode === 'dimension' || model.scope.mode === 'child') {
 			setOwn(handle, model.name, appRecordRows(context, site, run, capability, grant.action))
 		}
@@ -489,10 +549,10 @@ function namedApp(context: TableContext, capability: unknown): string {
  * An application table under an `app` capability: listed, counted and aggregated with its read action; one row read
  * (and locked) with any action it names; inserted, updated and removed with that operation's action.
  */
-function applicationRows(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
+function applicationRows(parts: DataLayerParts, context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
 	const model = context.model
 	const table = model.name
-	const visible = model.visible
+	const visible = () => visibleFor(model, heldAction(context, capability))
 	const key = [keyOf(model)]
 	const getForUpdate = site.kind === 'job'
 		? refused(site, 'read_only', 'a job writes inside ctx.transaction((tx) => …): use tx.db there')
@@ -509,18 +569,23 @@ function applicationRows(context: TableContext, site: DataSite, run: Runner, cap
 			return row
 		})
 	return freeze({
-		list: bound(site, async (options?: unknown) => listRows(context, run, appListPredicate(context, capability), visible, options, key)),
-		count: bound(site, async (options?: unknown) => countRows(context, run, appListPredicate(context, capability), visible, options)),
+		list: bound(site, async (options?: unknown) => listRows(context, run, appListPredicate(context, capability), visible(), options, key)),
+		count: bound(site, async (options?: unknown) => countRows(context, run, appListPredicate(context, capability), visible(), options)),
 		aggregate: bound(
 			site,
-			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appListPredicate(context, capability), context.shape, spec),
+			async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, appListPredicate(context, capability), actionShape(model, visible()), spec),
 		),
 		get: bound(site, async (id: unknown) => {
 			const action = namedApp(context, capability)
 			return selectOne(context, run, appKeyPredicate(model, id), visibleFor(model, action))
 		}),
 		getForUpdate,
-		insert: writing(site, 'insert', async (values: unknown) => insertIntoApplication(context, run, capability, values)),
+		claim: claiming(parts, context, site, capability),
+		insert: writing(
+			site,
+			'insert',
+			async (values: unknown, options?: unknown) => insertPrepared(context, run, prepareApplicationInsert(context, capability, values, options)),
+		),
 		update: writing(site, 'update', async (id: unknown, values: unknown, ...options: unknown[]) => {
 			const grant = updatingApp(context, capability)
 			const changes = readValues(values, updatableBy(model, grant.action), 'update', model)
@@ -530,6 +595,192 @@ function applicationRows(context: TableContext, site: DataSite, run: Runner, cap
 			await removeRow(context, run, { scope: appRowPredicate(context, capability, id, 'delete') }, versionArgument(context, options))
 		}),
 	})
+}
+
+// ── Queues: a claim's lease, then each row finished through its row.ref ───────────────────────────────────────────────
+
+/** A claim's first backoff where the site names no schedule period: one minute, the shortest cron period. */
+const DEFAULT_TICK_MS = 60_000
+/** The longest backoff: past it the doubling stops, so a row with many attempts is still due within a month. */
+const MAX_BACKOFF_MS = 30 * 24 * 60 * 60_000
+
+/** The backoff after a row's `attempts`-th claim: one tick, doubling with each further claim. */
+function backoffMs(tickMs: number, attempts: number): number {
+	let backoff = tickMs
+	for (let claim = 1; claim < attempts && backoff < MAX_BACKOFF_MS; claim++) {
+		backoff *= 2
+	}
+	return Math.min(backoff, MAX_BACKOFF_MS)
+}
+
+/** `claim`, where the site may lease: a job outside its transaction. Inside one a failure would roll the lease back. */
+function claiming(parts: DataLayerParts, context: TableContext, site: DataSite, capability: unknown): (options?: unknown) => Promise<unknown> {
+	if (site.kind === 'query') {
+		return refused(site, 'claim_site', 'claim leases rows, so it runs only in a job')
+	}
+	if (site.kind === 'mutation') {
+		return refused(
+			site,
+			'claim_site',
+			'claim leases rows in a transaction of its own: a job calls it on ctx.db before ctx.transaction, never inside one or in a request',
+		)
+	}
+	return bound(site, (options?: unknown) => claimRows(parts, context, site, capability, options))
+}
+
+/**
+ * Leases up to `limit` due rows in a transaction of its own, fenced by the job attempt's lease: each claimed row's
+ * attempts grow by one and its `due` moves by the backoff, so a failure or a crash leaves it due again later. Answers
+ * each row with the columns the capability's action reads, its new version and attempts, and its `ref`.
+ */
+async function claimRows(
+	parts: DataLayerParts,
+	context: TableContext,
+	site: DataSite,
+	capability: unknown,
+	input: unknown,
+): Promise<readonly Readonly<Record<string, unknown>>[]> {
+	const model = context.model
+	const table = model.name
+	const { grant, scope } = claimScope(context, capability)
+	const queue = model.queue
+	const version = model.version
+	if (queue === undefined || version === undefined) {
+		throw new CapabilityError('undeclared_operation', `${table} is not a queue table: its policy declares no queue`)
+	}
+	const options = readOptions(input, ['limit', 'where'], 'claim')
+	if (options['limit'] === undefined) {
+		throw new QueryRefusedError('list_page', 'claim takes { limit }: attempts count claims, so claim only what the run will reach')
+	}
+	const limit = limitOf(options['limit'])
+	const visible = visibleFor(model, grant.action)
+	const conditions = conditionsOf(actionShape(model, visible), options['where'])
+	if (scope === undefined) {
+		return []
+	}
+	const key = keyOf(model)
+	const chain = model.chain.map((link) => link.column)
+	const selected = namesOf(nameSet([...visible, key, version, queue.attempts, ...chain]))
+	const tickMs = site.tickMs ?? DEFAULT_TICK_MS
+	const order = [{ column: queue.due, direction: 'asc' as const }, { column: key, direction: 'asc' as const }]
+	const leased = await parts.fenced(parts.runtime(), async (session) => {
+		const now = await databaseNow(session)
+		const node = claimNode(
+			rowState(table, conditions, order, limit),
+			selected,
+			{ due: queue.due, attempts: queue.attempts, now, maxAttempts: queue.maxAttempts },
+			scope,
+			model.dates,
+		)
+		const rows = await session.run<Readonly<Record<string, unknown>>>(node, { root: 'SelectQueryNode', table, joins: {}, scope, lock: 'claim' })
+		const byAttempts = new Map<number, string[]>()
+		for (const row of rows) {
+			const attempts = row[queue.attempts]
+			const id = row[key]
+			if (typeof attempts !== 'number' || !isSafeInteger(attempts) || typeof id !== 'string') {
+				throw new QueryRefusedError('unexpected_row', `${table}.${queue.attempts} must be an integer and ${table}.${key} text`)
+			}
+			byAttempts.set(attempts, [...(byAttempts.get(attempts) ?? []), id])
+		}
+		const claimed = new Map<string, { readonly version: number; readonly attempts: number; readonly due: Date }>()
+		for (const [attempts, ids] of byAttempts) {
+			const due = new Date(now.getTime() + backoffMs(tickMs, attempts + 1))
+			const changes = new Map<string, Primitive>([[queue.attempts, attempts + 1], [queue.due, due]])
+			const updated = await session.run<Readonly<Record<string, unknown>>>(
+				updateNode(table, changes, version, scopedWhere(inList(table, key, ids), scope), answer(context)),
+				{ root: 'UpdateQueryNode', table, joins: {}, scope },
+			)
+			for (const row of updated) {
+				const id = row['id']
+				const next = row['version']
+				if (typeof id !== 'string' || typeof next !== 'number' || !isSafeInteger(next)) {
+					throw new QueryRefusedError('unexpected_row', `${table}.${version} came back as ${typeof next}; a version column is INTEGER`)
+				}
+				claimed.set(id, { version: next, attempts: attempts + 1, due })
+			}
+		}
+		return { rows: answerDays(table, model.dates, rows), claimed }
+	})
+	return leased.rows.map((row) => {
+		const id = String(row[key])
+		const lease = leased.claimed.get(id)
+		if (lease === undefined) {
+			throw new QueryRefusedError('unexpected_row', `the claim of ${table} updated no row ${id}`)
+		}
+		const links = new Map<string, string>()
+		for (const name of chain) {
+			links.set(name, String(row[name]))
+		}
+		const ref = runtimeOf(context.connection).capabilities.row({ table, action: grant.action, principal: grant.principal, id, chain: links })
+		const answered: Record<string, unknown> = {}
+		for (const name of visible) {
+			setOwn(answered, name, row[name])
+		}
+		setOwn(answered, version, lease.version)
+		setOwn(answered, 'version', lease.version)
+		if (inSet(nameSet(visible), queue.attempts)) {
+			setOwn(answered, queue.attempts, lease.attempts)
+		}
+		if (inSet(nameSet(visible), queue.due)) {
+			setOwn(answered, queue.due, lease.due)
+		}
+		setOwn(answered, 'ref', ref)
+		return freeze(answered)
+	})
+}
+
+/**
+ * `tx.db.on(row.ref)`: the claimed row, finished in the job's transaction. `update(values, { expectVersion, done })`
+ * writes the columns of the claim's action and, with `done: true`, clears `due` in the same statement; `remove` deletes
+ * it with the table's delete action; `requeue({ at })` makes it due at `at` (now by default) with no attempts.
+ */
+function claimedRow(context: TableContext, site: DataSite, run: Runner, capability: unknown): object {
+	const model = context.model
+	const queue = model.queue
+	if (queue === undefined) {
+		throw new CapabilityError('undeclared_operation', `${model.name} is not a queue table: its policy declares no queue`)
+	}
+	return freeze({
+		update: writing(site, 'update', async (values: unknown, input?: unknown) => {
+			const scope = claimedRowPredicate(context, capability, 'update')
+			const options = readOptions(input, ['expectVersion', 'done'], 'update')
+			const done = options['done']
+			if (done !== undefined && typeof done !== 'boolean') {
+				throw new QueryRefusedError('invalid_argument', 'update takes done: true to finish the row, or no done')
+			}
+			const changes = readValues(values, updatableBy(model, heldAction(context, capability)), 'update', model)
+			if (done === true) {
+				changes.set(queue.due, null)
+			}
+			return updateRow(context, run, { scope }, changes, versionArgument(context, [options]))
+		}),
+		remove: writing(site, 'remove', async (input?: unknown) => {
+			const scope = claimedRowPredicate(context, capability, 'delete')
+			const options = readOptions(input, ['expectVersion'], 'remove')
+			await removeRow(context, run, { scope }, versionArgument(context, [options]))
+		}),
+		requeue: writing(site, 'update', async (input?: unknown) => {
+			const scope = claimedRowPredicate(context, capability, 'update')
+			const options = readOptions(input, ['at'], 'requeue')
+			const at = options['at'] === undefined ? await databaseNow(await run.read()) : dueTime(model.name, queue.due, options['at'])
+			const changes = new Map<string, Primitive>([[queue.due, at], [queue.attempts, 0]])
+			return updateRow(context, run, { scope }, changes, undefined)
+		}),
+	})
+}
+
+/** A requeue's time: a valid `Date`, or ISO 8601 text with an offset. */
+function dueTime(table: string, column: string, value: unknown): Date | string {
+	if (value instanceof Date) {
+		if (Number.isNaN(value.getTime())) {
+			throw new QueryRefusedError('invalid_value', `requeue takes at, a valid Date`)
+		}
+		return value
+	}
+	if (typeof value === 'string') {
+		return timestampInput(value, `${table}.${column}`)
+	}
+	throw new QueryRefusedError('invalid_argument', 'requeue takes { at?: Date | ISO 8601 text }')
 }
 
 function referenceTables(parts: DataLayerParts, site: DataSite, run: Runner): object {

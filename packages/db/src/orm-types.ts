@@ -3,6 +3,7 @@
 // may not call is an `Unavailable` tuple: calling it fails at the call, and the message names the fix.
 
 import type { Selectable, Updateable } from 'kysely'
+import type { RowRef } from './capability'
 import type { ConditionTuple } from './description'
 import type {
 	ActionOf,
@@ -101,6 +102,8 @@ export interface IndexedTable {
 	/** The dimensions whose `Within` lists the table: every dimension of its chain, and a top-level table's own. */
 	readonly reach: string
 	readonly versioned: boolean
+	/** A queue table: its rows are claimed and finished through `row.ref`. */
+	readonly queued: boolean
 }
 
 type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> = {
@@ -125,6 +128,7 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 	readonly refs: DimensionOf<P, T> | ChainDimensions<P, T, V>
 	readonly reach: ReachOf<P, T, V>
 	readonly versioned: PolicyOf<P, T> extends { readonly version: string } ? true : false
+	readonly queued: PolicyOf<P, T> extends { readonly queue: object } ? true : false
 }
 
 type OwnerTable<P, D> = { [K in keyof P]: P[K] extends { readonly scope: { readonly dimension: D } } ? K : never }[keyof P]
@@ -225,6 +229,66 @@ export type Saved<E extends IndexedTable> = E['versioned'] extends true ? { read
 /** A versioned table's update and remove take `{ expectVersion }`; another table's take nothing. */
 export type VersionArguments<E extends IndexedTable> = E['versioned'] extends true ? [options: { readonly expectVersion: number }] : []
 
+/** The values an insert takes: the columns of the table's `insert` list. */
+type InsertValuesOf<E extends IndexedTable> = { [C in keyof E['insert']]: E['insert'][C] }
+
+/** `onConflict` of an insert: the columns of a unique index the migrations create, and what a conflict does. */
+export interface InsertConflict<E extends IndexedTable, M extends 'nothing' | 'update'> {
+	readonly onConflict: { readonly columns: readonly (keyof E['row'] & string)[]; readonly do: M }
+}
+
+/**
+ * An insert: with `onConflict`, a conflict of its columns writes nothing (`'nothing'`, which answers `{ inserted: false }`)
+ * or updates the conflicting row's update columns (`'update'`, which also needs the table's update action).
+ */
+export interface InsertMethod<E extends IndexedTable> {
+	(values: InsertValuesOf<E>, options: InsertConflict<E, 'nothing'>): Promise<(Saved<E> & { readonly inserted: true }) | { readonly inserted: false }>
+	(values: InsertValuesOf<E>, options: InsertConflict<E, 'update'>): Promise<Saved<E> & { readonly inserted: boolean }>
+	// Last, so `Parameters` and `ReturnType`, which read the last signature, read the plain insert.
+	(values: InsertValuesOf<E>): Promise<Saved<E>>
+}
+
+/** What a claim takes: how many rows to lease, at most `MAX_LIST_LIMIT`, and conditions on the columns its action reads. */
+export interface ClaimOptions<Row> {
+	readonly limit: number
+	readonly where?: readonly ConditionTuple<Row>[]
+}
+
+/** A claimed row: the columns of the claim's action, its new `version`, and `ref`, which `tx.db.on(ref)` finishes it through. */
+export type ClaimedRow<T extends string, E extends IndexedTable, A extends string> =
+	& RowFor<E, A>
+	& { readonly version: number; readonly ref: RowRef<T, A> }
+
+type ClaimRefusal<K extends DataKind> = K extends 'query' ? 'claim leases rows, so it runs only in a job'
+	: 'claim leases rows in a transaction of its own: a job calls it on ctx.db before ctx.transaction, never inside one or in a request'
+
+/** `claim` of a queue table, in a job, for a capability of its update action. */
+type Claim<T extends string, E extends IndexedTable, A extends string, K extends DataKind> = K extends 'job'
+	? E['queued'] extends true ? [A] extends [E['actions']['update']] ? (options: ClaimOptions<RowFor<E, A>>) => Promise<ClaimedRow<T, E, A>[]>
+		: Unavailable<`a claim of ${T} needs its update action '${E['actions']['update'] & string}', and this capability holds '${A}'`>
+	: Unavailable<`${T} is not a queue table: declare queue: { attempts, due } in its policy`>
+	: Unavailable<ClaimRefusal<K>>
+
+type JobWrite = Unavailable<'a job writes inside ctx.transaction((tx) => …): use tx.db there'>
+
+/**
+ * `tx.db.on(row.ref)`: one claimed row, finished in the job's transaction. `update` writes the claim action's columns and,
+ * with `done: true`, clears `due`; `remove` needs the table's delete action; `requeue` makes the row due again at `at`
+ * (now by default) with no attempts.
+ */
+export interface ClaimedRowHandle<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
+	readonly update: K extends 'mutation' ? (
+			values: { [C in keyof UpdateValuesOf<E, A>]: UpdateValuesOf<E, A>[C] },
+			options: { readonly expectVersion: number; readonly done?: boolean },
+		) => Promise<Saved<E>>
+		: JobWrite
+	readonly remove: K extends 'mutation' ? [A] extends [E['actions']['delete']] ? (options: { readonly expectVersion: number }) => Promise<void>
+		: [E['actions']['delete']] extends [never] ? Unavailable<`${T} allows no remove: its policy declares no delete action`>
+		: Unavailable<`remove of a claimed ${T} row needs its delete action '${E['actions']['delete'] & string}', and this row was claimed with '${A}'`>
+		: JobWrite
+	readonly requeue: K extends 'mutation' ? (options?: { readonly at?: Date | string }) => Promise<Saved<E>> : JobWrite
+}
+
 /** The actions table `E` names: its read, insert, update and delete actions, and each column's own write action. */
 type NamedActions<E extends IndexedTable> = (E['actions'][keyof E['actions']] | keyof E['writes']) & string
 
@@ -305,7 +369,7 @@ export interface TargetRow<T extends string, E extends IndexedTable, A extends s
  * by the scope's value.
  */
 export interface OwnerRow<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
-	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
+	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
 }
 
 /** A dimension no table owns has no row of its own; its subtree tables are still reachable. */
@@ -320,7 +384,7 @@ export interface UnownedTarget<D extends string> {
 export interface ChildRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
 	readonly get: Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
-	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
+	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
 	readonly update: Update<
 		T,
 		E,
@@ -334,7 +398,7 @@ export interface ChildRows<T extends string, E extends IndexedTable, A extends s
 /** A dimension table the target contains: listed in it, and inserted into it by a mutation of its insert action. */
 export interface ContainedRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
-	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
+	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
 }
 
 type SubtreeTables<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind, F extends TargetForm> =
@@ -350,8 +414,9 @@ export type ScopeTarget<Ix extends AnyDbIndex, D extends string, A extends strin
 	& ([OwnerOf<Ix, D>] extends [never] ? UnownedTarget<D> : TargetRow<OwnerOf<Ix, D>, Ix['tables'][OwnerOf<Ix, D>], A, K, F>)
 	& SubtreeTables<Ix, D, A, K, F>
 
-/** A table listed in an `over` endpoint's dimension, read through its `Within`. */
-export interface WithinRows<T extends string, E extends IndexedTable, A extends string> {
+/** A table listed in an `over` endpoint's dimension, read through its `Within`; a job claims a queue table's rows through it. */
+export interface WithinRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
+	readonly claim: Claim<T, E, A, K>
 	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
 		: Unavailable<ListRefusal<T, E, A>>
 	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : Unavailable<ListRefusal<T, E, A>>
@@ -369,8 +434,8 @@ type ListRefusal<T extends string, E extends IndexedTable, A extends string> = `
  * `ctx.db.within` of an `over` endpoint: every table whose containment chain holds its dimension (tasks two levels
  * down through their stamped `org_id`), and a top-level table its own; child tables included.
  */
-export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends string> = {
-	readonly [T in WithinIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A>
+export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind> = {
+	readonly [T in WithinIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A, K>
 }
 
 /** An application table under the capability of an `app` endpoint of action `A`, in a site of kind `K`. */
@@ -387,7 +452,9 @@ export interface ApplicationRows<T extends string, E extends IndexedTable, A ext
 	readonly getForUpdate: K extends 'mutation' ? Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
 		: K extends 'job' ? Unavailable<'a job writes inside ctx.transaction((tx) => …): use tx.db there'>
 		: Unavailable<'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation'>
-	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
+	/** Leases due rows of a queue table: a job's drain, before its transactions. */
+	readonly claim: Claim<T, E, A, K>
+	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
 	readonly update: Update<
 		T,
 		E,

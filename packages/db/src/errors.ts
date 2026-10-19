@@ -56,6 +56,8 @@ export const QUERY_REFUSALS = {
 	sql_outside_transaction: 'a job runs ctx.sql only inside ctx.transaction((tx) => …), as tx.sql',
 	sql_scope: 'ctx.sql.scope(…) stands alone, joined by AND, in a WHERE or JOIN … ON clause of its own invocation',
 	file_scan: "a scan operation on a file collection without scan: true, or a scan verdict outside the scan job's lease",
+	claim_site: 'claim leases rows in a transaction of its own: a job calls it on ctx.db, never inside ctx.transaction or a request',
+	on_conflict: "an insert's onConflict names no column of the table, a column the insert leaves empty, or another action",
 } as const
 
 export type QueryRefusal = keyof typeof QUERY_REFUSALS

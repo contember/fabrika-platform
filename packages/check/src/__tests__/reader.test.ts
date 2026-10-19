@@ -499,7 +499,7 @@ export const tables = defineTables(vocabulary, columns)({
 
 	test('a policy the runtime refuses is refused from source, at the defineTables call', () => {
 		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", "insrt: ['title'],")))).toEqual([
-			'src/db/tables.ts:5:23 contract notes: the policy: insrt is not a field here (allowed: scope, actions, insert, update, version, createdBy, columns)',
+			'src/db/tables.ts:5:23 contract notes: the policy: insrt is not a field here (allowed: scope, actions, insert, update, version, createdBy, columns, queue)',
 		])
 		expect(tableRefusal(withTables(TABLES.replace("column: 'workspace_id'", "column: 'workspace'")))).toEqual([
 			'src/db/tables.ts:5:23 contract notes: scope.in.column names workspace, which is not a column (columns: id, workspace_id, title)',

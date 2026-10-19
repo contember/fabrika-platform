@@ -212,7 +212,7 @@ describe('every action is one of the vocabulary', () => {
 /** Each mistake, by its file under `derived-mistakes/`: the diagnostic on the line after its `// mistake:` marker. */
 const MISTAKES: Readonly<Record<string, string>> = {
 	// The compiler lists a union's members in no fixed order, so a union is held to its head.
-	'01-action-typo.ts': `Type '"notes.raed"' is not assignable to type '"notes.read" | "notes.write"'`,
+	'01-action-typo.ts': `Type '"notes.raed"' is not assignable to type 'TableAction<"notes.read" | "notes.write">'. Did you mean '"notes.read"'?`,
 	'02-dimension-typo.ts': `Type '"workspce"' is not assignable to type '"workspace" | "note" | "folder" | "tag"'. Did you mean '"workspace"'?`,
 	'03-child-parent-typo.ts': `Type '"nots"' is not assignable to type`,
 	'04-container-column-typo.ts': `Type '"spaceid"' is not assignable to type`,

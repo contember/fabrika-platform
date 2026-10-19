@@ -7,6 +7,8 @@ export type {
 	LeaseFence,
 	Ref,
 	RefGrant,
+	RowGrant,
+	RowRef,
 	Within,
 	WithinGrant,
 } from './capability'

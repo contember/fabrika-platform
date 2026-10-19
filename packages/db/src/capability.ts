@@ -20,6 +20,14 @@ export interface AppCapability<Action extends string> {
 	readonly '~capability': { readonly kind: 'app'; readonly action: Action }
 }
 
+/**
+ * One claimed row of one queue table, for one action: what a claim answers as `row.ref`, and what `tx.db.on(row.ref)`
+ * finishes the row through. Like a `Ref`, the member is type-only.
+ */
+export interface RowRef<Table extends string, Action extends string> {
+	readonly '~capability': { readonly kind: 'row'; readonly table: Table; readonly action: Action }
+}
+
 export interface RefGrant {
 	readonly kind: 'ref'
 	readonly dimension: string
@@ -63,11 +71,28 @@ export interface AppGrant {
 	readonly principal: string
 }
 
-export type CapabilityGrant = RefGrant | WithinGrant | AppGrant
+/** A row a claim leased: the table, its key, and the containment it had then, column by column. */
+export interface RowGrant {
+	readonly kind: 'row'
+	readonly table: string
+	readonly action: string
+	readonly principal: string
+	readonly id: string
+	/** The row's containment columns and their values when it was claimed: a row moved since is out of reach. */
+	readonly chain: ReadonlyMap<string, string>
+}
 
-/** How a refusal names a capability: `a Ref of note`, `a Within of workspace`, `an app capability`. */
+export type CapabilityGrant = RefGrant | WithinGrant | AppGrant | RowGrant
+
+/** How a refusal names a capability: `a Ref of note`, `a Within of workspace`, `an app capability`, `a row of outbox`. */
 export function describeGrant(grant: CapabilityGrant): string {
-	return grant.kind === 'app' ? 'an app capability' : `a ${grant.kind === 'ref' ? 'Ref' : 'Within'} of ${grant.dimension}`
+	if (grant.kind === 'app') {
+		return 'an app capability'
+	}
+	if (grant.kind === 'row') {
+		return `a row of ${grant.table}`
+	}
+	return `a ${grant.kind === 'ref' ? 'Ref' : 'Within'} of ${grant.dimension}`
 }
 
 /** One generation of a job's lease, held by one attempt. A write of the attempt commits only while it still holds it. */
@@ -85,6 +110,8 @@ export interface LeaseFence {
  */
 export interface CapabilityAuthority {
 	resolve(capability: unknown): CapabilityGrant
+	/** Mints the capability of one claimed row, bound to the work running now as every capability is. */
+	row(grant: Omit<RowGrant, 'kind'>): unknown
 	/**
 	 * The lease the work running now must still hold for a write to commit: the job attempt's, or `null` in a
 	 * request. Every mutation checks it inside its own transaction.

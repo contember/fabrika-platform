@@ -198,6 +198,9 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 				const grant = runtimeAuthority.resolve(capability)
 				return grant.kind === 'ref' ? { ...grant, chain: new Map([['workspace', 'w2']]) } : grant
 			},
+			row: () => {
+				throw new Error('the test claims no row')
+			},
 			fence: () => null,
 		}
 		const received: unknown[] = []
@@ -254,6 +257,9 @@ describe('boot binds the data layer once', () => {
 			database: connection,
 			capabilities: {
 				resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all', containers: [] }),
+				row: () => {
+					throw new Error('the test claims no row')
+				},
 				fence: () => null,
 			},
 		})

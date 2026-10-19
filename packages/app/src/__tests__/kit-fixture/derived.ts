@@ -32,7 +32,7 @@ export type Normalized = [
 	>,
 	Expect<Equal<Policies['deals']['scope']['in'], { readonly dimension: 'company'; readonly column: 'company_id' }>>,
 	Expect<Equal<Policies['deal_activities']['scope']['column'], 'deal_id'>>,
-	Expect<Equal<keyof WithinTables<K['index'], 'org', 'crm.read'>, 'orgs' | 'companies' | 'deals' | 'deal_activities'>>,
+	Expect<Equal<keyof WithinTables<K['index'], 'org', 'crm.read', 'query'>, 'orgs' | 'companies' | 'deals' | 'deal_activities'>>,
 	Expect<Equal<K['index']['tables']['deal_activities']['chain'], 'deal_id' | 'company_id' | 'org_id'>>,
 	Expect<Equal<'companies' extends keyof ScopeTarget<K['index'], 'org', 'crm.write', 'mutation', 'in'> ? true : false, true>>,
 ]

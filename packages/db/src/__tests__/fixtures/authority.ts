@@ -7,6 +7,8 @@ import type {
 	LeaseFence,
 	Ref,
 	RefGrant,
+	RowGrant,
+	RowRef,
 	Within,
 	WithinGrant,
 } from '../../capability'
@@ -57,6 +59,21 @@ class TestApp<A extends string> implements AppCapability<A> {
 	}
 }
 
+class TestRow<T extends string, A extends string> implements RowRef<T, A> {
+	declare readonly '~capability': { readonly kind: 'row'; readonly table: T; readonly action: A }
+	readonly #grant: RowGrant
+	readonly #issuer: TestAuthority
+
+	constructor(grant: RowGrant, issuer: TestAuthority) {
+		this.#grant = grant
+		this.#issuer = issuer
+	}
+
+	static read(value: unknown, issuer: TestAuthority): RowGrant | undefined {
+		return typeof value === 'object' && value !== null && #grant in value && value.#issuer === issuer ? value.#grant : undefined
+	}
+}
+
 /** Stands in for the framework: mints capabilities and resolves only its own. Request binding is not modelled. */
 export class TestAuthority implements CapabilityAuthority {
 	readonly #principal: string
@@ -89,8 +106,13 @@ export class TestAuthority implements CapabilityAuthority {
 		return new TestApp({ kind: 'app', action, principal: this.#principal }, this)
 	}
 
+	row(grant: Omit<RowGrant, 'kind'>): RowRef<string, string> {
+		return new TestRow({ kind: 'row', ...grant }, this)
+	}
+
 	resolve(capability: unknown): CapabilityGrant {
 		const grant = TestRef.read(capability, this) ?? TestWithin.read(capability, this) ?? TestApp.read(capability, this)
+			?? TestRow.read(capability, this)
 		if (grant === undefined) {
 			throw new CapabilityError('wrong_capability', 'not a capability of this request')
 		}

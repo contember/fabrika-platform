@@ -254,6 +254,17 @@ function refuseEnded(fence: LeaseFence): void {
 	}
 }
 
+const SQL_CLOCK = 'select clock_timestamp() as now'
+
+/**
+ * The database's clock inside `session`'s transaction: a queue claim compares and moves `due` by it, so no process
+ * clock decides when a row is due.
+ */
+export async function databaseNow(session: Session): Promise<Date> {
+	const [row] = await rows(session, SQL_CLOCK, [])
+	return requiredDate(row ?? {}, 'now')
+}
+
 const lost = (fence: LeaseFence): LeaseLostError =>
 	new LeaseLostError(`job '${fence.job}' lost its lease or its attempt's deadline (generation ${fence.generation}); nothing was written`)
 

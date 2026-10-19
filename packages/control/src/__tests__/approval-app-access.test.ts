@@ -72,6 +72,29 @@ describe('application-wide data in the approval diff', () => {
 		])
 	})
 
+	test('a read action a table gains in its list widens and one it loses narrows; a single action replaced reads as before', () => {
+		const files = fixture()
+		const tables = files.get(TABLES) ?? ''
+		const single = new Map(files)
+		single.set(TABLES, tables.replace(REACH, "actions: { read: 'candidates.read' }"))
+		const listed = new Map(files)
+		listed.set(TABLES, tables.replace(REACH, "actions: { read: ['candidates.read', 'audit.read'] }"))
+		const replaced = new Map(files)
+		replaced.set(TABLES, tables.replace(REACH, "actions: { read: 'audit.read' }"))
+		const gained = classifyAccess(snapshot(single), snapshot(listed))
+		expect(gained.outcome).toBe('widening')
+		expect(gained.changes).toEqual([{ effect: 'widens', line: 'Table `candidates` is read with `audit.read`' }])
+		const lost = classifyAccess(snapshot(listed), snapshot(single))
+		expect(lost.changes).toEqual([{ effect: 'narrows', line: 'Table `candidates` is no longer read with `audit.read`' }])
+		expect(classifyAccess(snapshot(single), snapshot(replaced)).changes).toEqual([
+			{ effect: 'widens', line: 'Table `candidates` read action changes from `"candidates.read"` to `"audit.read"`' },
+		])
+		expect(classifyAccess(snapshot(null), snapshot(listed)).changes).toContainEqual({
+			effect: 'widens',
+			line: 'New table policy `candidates` read with `audit.read` or `candidates.read`',
+		})
+	})
+
 	test('an endpoint whose requirement becomes the app form widens, and so does the way back', () => {
 		const files = fixture()
 		const over = new Map(files)

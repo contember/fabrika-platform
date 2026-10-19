@@ -4,6 +4,7 @@ import {
 	hasOwn,
 	inSet,
 	isArray,
+	isSafeInteger,
 	type NameSet,
 	nameSet,
 	namesOf,
@@ -51,11 +52,24 @@ export interface InboxScope<A extends string> {
 	readonly read: A
 }
 
+/** One action, or a list of them: a table that staff and a public procedure both read names both actions. */
+export type TableAction<A extends string> = A | readonly A[]
+
 export interface TableActions<A extends string> {
-	readonly read: A
-	readonly insert?: A
-	readonly update?: A
-	readonly delete?: A
+	readonly read: TableAction<A>
+	readonly insert?: TableAction<A>
+	readonly update?: TableAction<A>
+	readonly delete?: TableAction<A>
+}
+
+/**
+ * A queue table's columns (ADR-0060's drain): `due` is when a row is next claimed, `null` once it is done; `attempts`
+ * counts its claims, and a row with `maxAttempts` (default 10) of them is no longer claimed.
+ */
+export interface QueuePolicy<Col extends string> {
+	readonly attempts: Col
+	readonly due: Col
+	readonly maxAttempts?: number
 }
 
 /**
@@ -75,6 +89,8 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col, Ac
 	readonly version?: V
 	readonly createdBy?: Col
 	readonly columns?: ColumnPolicies<Col, A>
+	/** A queue table: its rows are claimed (`claim`) and finished through `row.ref`; it needs `version` and an update action. */
+	readonly queue?: QueuePolicy<Col>
 }
 
 /**
@@ -113,12 +129,13 @@ interface ReadOnlyPolicy<Col extends string, A extends string> {
 	readonly update?: never
 	readonly version?: never
 	readonly createdBy?: never
+	readonly queue?: never
 	readonly columns?: ColumnReadPolicies<Col, A>
 }
 
 export interface ReferencePolicy<Col extends string, A extends string> extends ReadOnlyPolicy<Col, A> {
 	readonly scope: ReferenceScope
-	readonly actions: { readonly read: A }
+	readonly actions: { readonly read: TableAction<A> }
 }
 
 export interface InboxPolicy<Col extends string, A extends string> extends ReadOnlyPolicy<Col, A> {
@@ -161,16 +178,26 @@ export type ScopeModel =
 	| { readonly mode: 'inbox'; readonly form: string }
 	| { readonly mode: 'app'; readonly reason: string; readonly key: string }
 
+/** Each operation's actions: any one of them allows it. `read` names at least one; an empty list allows no operation. */
 export interface ActionModel {
-	readonly read: string
-	readonly insert: string | undefined
-	readonly update: string | undefined
-	readonly delete: string | undefined
+	readonly read: readonly string[]
+	readonly insert: readonly string[]
+	readonly update: readonly string[]
+	readonly delete: readonly string[]
 	/** A dimension or child table's actions besides `read` with which an `app` endpoint reads every row, read-only. */
 	readonly appRead: readonly string[]
 	/** A dimension or child table's actions with which an `app` endpoint counts and aggregates every row, and reads none. */
 	readonly appCount: readonly string[]
 }
+
+export interface QueueModel {
+	readonly attempts: string
+	readonly due: string
+	readonly maxAttempts: number
+}
+
+/** How many claims a queue row takes before it is no longer claimed, unless its policy states `maxAttempts`. */
+export const DEFAULT_MAX_ATTEMPTS = 10
 
 /** One table's policy, checked against its column list. */
 export interface TableModel {
@@ -179,12 +206,13 @@ export interface TableModel {
 	readonly actions: ActionModel
 	/** Every column the table has. */
 	readonly columns: NameSet
-	/** The columns the table's read action reads, in column-list order. */
+	/** The columns every read action of the table reads, in column-list order. */
 	readonly visible: readonly string[]
 	readonly insert: NameSet
 	readonly update: NameSet
 	readonly version: string | undefined
 	readonly createdBy: string | undefined
+	readonly queue: QueueModel | undefined
 	/** The columns that declare their own read action, as declared (also those equal to the table's). */
 	readonly columnReads: Readonly<Record<string, string>>
 	/** The columns that declare their own write action: only a capability of it updates them. */
@@ -325,7 +353,8 @@ function parseVocabulary(input: unknown): VocabularyModel {
 
 const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys', 'dates', 'timestamps'])
 const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
-const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
+const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns', 'queue'])
+const QUEUE_FIELDS = nameSet(['attempts', 'due', 'maxAttempts'])
 const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete', 'appRead', 'appCount'])
 const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
 const CONTAINER_FIELDS = nameSet(['dimension', 'column'])
@@ -475,7 +504,8 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		if (readInput !== undefined) {
 			const read = action(readInput, `columns.${name}.read`)
 			setOwn(columnReads, name, read)
-			if (read !== actions.read) {
+			// With several read actions, a column of one of them is hidden from the others.
+			if (actions.read.length > 1 || !includes(actions.read, read)) {
 				restricted[restricted.length] = name
 			}
 		}
@@ -493,15 +523,19 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		throw new PolicyError(`${table}: the version ${version} takes no action of its own`)
 	}
 	const writable = scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app'
+	const queueInput = ownEntry(policy, 'queue')
 	if (
 		!writable
 		&& (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined
-			|| ownKeys(columnWrites).length > 0)
+			|| ownKeys(columnWrites).length > 0 || queueInput !== undefined)
 	) {
 		throw new PolicyError(`${table}: a ${scope.mode} table is never written by a handler`)
 	}
 	const dates = parseColumnSet(table, ownEntry(entry, 'dates'), column, 'dates')
 	const timestamps = parseColumnSet(table, ownEntry(entry, 'timestamps'), column, 'timestamps')
+	const queue = queueInput === undefined
+		? undefined
+		: parseQueue(table, queueInput, column, { columns, timestamps, version, actions, update, columnWrites })
 	const visible: string[] = []
 	for (let index = 0; index < columnNames.length; index++) {
 		const name = columnNames[index] ?? ''
@@ -519,6 +553,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		update,
 		version,
 		createdBy,
+		queue,
 		columnReads: freeze(columnReads),
 		columnWrites: freeze(columnWrites),
 		dates,
@@ -537,10 +572,61 @@ function columnWrite(table: string, name: string, write: string, actions: Action
 			`${table}: ${name} is in update, which the table's update action writes, and declares its own write action ${write}; remove it from update`,
 		)
 	}
-	if (write === actions.update) {
+	if (includes(actions.update, write)) {
 		throw new PolicyError(`${table}: columns.${name}.write names ${write}, the table's update action; list ${name} in update instead`)
 	}
 	return write
+}
+
+/**
+ * The queue's columns are written by the layer only: a claim counts `attempts` and moves `due`, `done: true` clears
+ * `due`, and `requeue` sets both. An insert may set `due` (a reminder's time); nothing else names either.
+ */
+function parseQueue(
+	table: string,
+	input: unknown,
+	column: (name: unknown, field: string) => string,
+	policy: {
+		readonly columns: NameSet
+		readonly timestamps: NameSet
+		readonly version: string | undefined
+		readonly actions: ActionModel
+		readonly update: NameSet
+		readonly columnWrites: Readonly<Record<string, string>>
+	},
+): QueueModel {
+	const queue = plainRecord(input, `${table}: queue`)
+	onlyFields(queue, QUEUE_FIELDS, `${table}: queue`)
+	const attempts = column(ownEntry(queue, 'attempts'), 'queue.attempts')
+	const due = column(ownEntry(queue, 'due'), 'queue.due')
+	if (attempts === due) {
+		throw new PolicyError(`${table}: queue.attempts and queue.due name one column, ${due}; they need two`)
+	}
+	if (!inSet(policy.timestamps, due)) {
+		throw new PolicyError(`${table}: queue.due names ${due}, which is not a timestamp column; a claim moves it by the backoff`)
+	}
+	const maxInput = ownEntry(queue, 'maxAttempts')
+	if (maxInput !== undefined && (typeof maxInput !== 'number' || !isSafeInteger(maxInput) || maxInput < 1)) {
+		throw new PolicyError(`${table}: queue.maxAttempts must be a positive integer`)
+	}
+	if (policy.version === undefined) {
+		throw new PolicyError(`${table}: a queue table needs a version column; a claimed row is finished with expectVersion`)
+	}
+	if (policy.actions.update.length === 0) {
+		throw new PolicyError(`${table}: a queue table needs an update action; claim and requeue need it`)
+	}
+	// A claimed row answers its new version as `version` and its capability as `ref`, beside its columns.
+	if (inSet(policy.columns, 'ref') || (inSet(policy.columns, 'version') && policy.version !== 'version')) {
+		throw new PolicyError(`${table}: a queue table has no column named ref, nor version unless it is the version column; a claimed row carries both`)
+	}
+	const owned: readonly (readonly [string, string])[] = [[attempts, 'queue.attempts'], [due, 'queue.due']]
+	for (let index = 0; index < owned.length; index++) {
+		const [name, field] = owned[index] ?? ['', '']
+		if (inSet(policy.update, name) || hasOwn(policy.columnWrites, name)) {
+			throw new PolicyError(`${table}: ${name} is ${field}, which the layer writes; remove it from update and its write action`)
+		}
+	}
+	return freeze({ attempts, due, maxAttempts: maxInput === undefined ? DEFAULT_MAX_ATTEMPTS : maxInput })
 }
 
 /** The column list's `date` (`dates`) or timestamp (`timestamps`) columns, each one of the table's. */
@@ -560,7 +646,7 @@ function parseColumnSet(table: string, input: unknown, column: (name: unknown, f
  * columns that declare it as their own write action for any other; none for an action that writes nothing here.
  */
 export function updatableBy(model: TableModel, action: string): NameSet {
-	if (action === model.actions.update) {
+	if (includes(model.actions.update, action)) {
 		return model.update
 	}
 	const names = ownKeys(model.columnWrites)
@@ -577,7 +663,7 @@ export function updatableBy(model: TableModel, action: string): NameSet {
 /** Whether the table names `action`: one of its table actions, or a column's own write action. */
 export function namesAction(model: TableModel, action: string): boolean {
 	const { read, insert, update, delete: remove } = model.actions
-	if (action === read || action === insert || action === update || action === remove) {
+	if (includes(read, action) || includes(insert, action) || includes(update, action) || includes(remove, action)) {
 		return true
 	}
 	const columns = ownKeys(model.columnWrites)
@@ -608,7 +694,10 @@ export function visibleFor(model: TableModel, action: string): readonly string[]
 
 /** Every action that updates a column of `model`: its update action and each column's own write action. */
 export function updateActions(model: TableModel): readonly string[] {
-	const actions: string[] = model.actions.update === undefined ? [] : [model.actions.update]
+	const actions: string[] = []
+	for (let index = 0; index < model.actions.update.length; index++) {
+		actions[actions.length] = model.actions.update[index] ?? ''
+	}
 	const names = ownKeys(model.columnWrites)
 	for (let index = 0; index < names.length; index++) {
 		const write = model.columnWrites[names[index] ?? '']
@@ -725,10 +814,10 @@ function parseActions(
 			throw new PolicyError(`${table}: an inbox table takes its read action as scope.read and no actions; only its form appends`)
 		}
 		return freeze({
-			read: action(ownEntry(scope, 'read'), 'scope.read'),
-			insert: undefined,
-			update: undefined,
-			delete: undefined,
+			read: freeze([action(ownEntry(scope, 'read'), 'scope.read')]),
+			insert: freeze([]),
+			update: freeze([]),
+			delete: freeze([]),
 			appRead: freeze([]),
 			appCount: freeze([]),
 		})
@@ -738,11 +827,17 @@ function parseActions(
 	}
 	const actions = plainRecord(actionsInput, `${table}: actions`)
 	onlyFields(actions, ACTION_FIELDS, `${table}: actions`)
-	const optional = (field: 'insert' | 'update' | 'delete') => {
+	const operation = (field: 'read' | 'insert' | 'update' | 'delete'): readonly string[] => {
 		const value = ownEntry(actions, field)
-		return value === undefined ? undefined : action(value, `actions.${field}`)
+		if (value === undefined && field !== 'read') {
+			return freeze([])
+		}
+		if (!isArray(value)) {
+			return freeze([action(value, `actions.${field}`)])
+		}
+		return distinctActions(table, value, `actions.${field}`, action)
 	}
-	const read = action(ownEntry(actions, 'read'), 'actions.read')
+	const read = operation('read')
 	const records = hasOwn(scope, 'dimension') || hasOwn(scope, 'child')
 	const kind = hasOwn(scope, 'app') ? 'an application table' : 'a reference table'
 	const reach = (field: 'appRead' | 'appCount'): readonly string[] => {
@@ -753,25 +848,17 @@ function parseActions(
 		if (!records) {
 			throw new PolicyError(`${table}: actions.${field} is for a dimension or child table; ${kind} takes none`)
 		}
-		const names = parseList(input, (value) => action(value, `actions.${field}`))
-		if (names === undefined) {
+		if (!isArray(input)) {
 			throw new PolicyError(`${table}: actions.${field} takes a plain array of actions`)
 		}
-		if (names.length === 0) {
-			throw new PolicyError(`${table}: actions.${field} lists no action; leave it out`)
-		}
+		const names = distinctActions(table, input, `actions.${field}`, action)
 		for (let index = 0; index < names.length; index++) {
 			const name = names[index] ?? ''
-			if (name === read) {
+			if (includes(read, name)) {
 				throw new PolicyError(`${table}: actions.${field} names ${name}, its read action, which reads every row app-wide already`)
 			}
-			for (let earlier = 0; earlier < index; earlier++) {
-				if (names[earlier] === name) {
-					throw new PolicyError(`${table}: actions.${field} names ${name} twice`)
-				}
-			}
 		}
-		return freeze(names)
+		return names
 	}
 	const appRead = reach('appRead')
 	const appCount = reach('appCount')
@@ -781,7 +868,26 @@ function parseActions(
 			throw new PolicyError(`${table}: actions.appRead and actions.appCount both name ${name}`)
 		}
 	}
-	return freeze({ read, insert: optional('insert'), update: optional('update'), delete: optional('delete'), appRead, appCount })
+	return freeze({ read, insert: operation('insert'), update: operation('update'), delete: operation('delete'), appRead, appCount })
+}
+
+/** A plain array of distinct actions of the vocabulary, at least one. */
+function distinctActions(table: string, input: unknown, field: string, action: (value: unknown, field: string) => string): readonly string[] {
+	const names = parseList(input, (value) => action(value, field))
+	if (names === undefined) {
+		throw new PolicyError(`${table}: ${field} takes an action or a plain array of actions`)
+	}
+	if (names.length === 0) {
+		throw new PolicyError(`${table}: ${field} lists no action; leave it out`)
+	}
+	for (let index = 0; index < names.length; index++) {
+		for (let earlier = 0; earlier < index; earlier++) {
+			if (names[earlier] === names[index]) {
+				throw new PolicyError(`${table}: ${field} names ${names[index]} twice`)
+			}
+		}
+	}
+	return freeze(names)
 }
 
 function nonEmpty(table: string, value: unknown, field: string): string {
@@ -794,6 +900,8 @@ function nonEmpty(table: string, value: unknown, field: string): string {
 interface Stamp {
 	readonly column: string
 	readonly role: string
+	/** An insert may set it: a queue row's first due time. */
+	readonly insertable?: true
 }
 
 /** The columns the layer writes itself: the key, every containment link, the version and the creator. */
@@ -813,6 +921,10 @@ function stampsOf(table: ParsedTable, chain: readonly Container[]): readonly Sta
 	}
 	if (table.createdBy !== undefined) {
 		stamps[stamps.length] = { column: table.createdBy, role: 'createdBy' }
+	}
+	if (table.queue !== undefined) {
+		stamps[stamps.length] = { column: table.queue.attempts, role: 'queue.attempts' }
+		stamps[stamps.length] = { column: table.queue.due, role: 'queue.due', insertable: true }
 	}
 	return stamps
 }
@@ -837,7 +949,7 @@ function checkStamps(table: ParsedTable, chain: readonly Container[]): void {
 				)
 			}
 		}
-		if (inSet(table.insert, stamp.column) || inSet(table.update, stamp.column)) {
+		if ((stamp.insertable !== true && inSet(table.insert, stamp.column)) || inSet(table.update, stamp.column)) {
 			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; remove it from insert and update`)
 		}
 		if (hasOwn(table.columnWrites, stamp.column)) {
@@ -857,7 +969,8 @@ function prepend(first: Container, rest: readonly Container[]): readonly Contain
 	return freeze(chain)
 }
 
-function includes(names: readonly string[], name: string): boolean {
+/** Whether `names` holds `name`: an operation's actions, the one way a policy check reads a list. */
+export function includes(names: readonly string[], name: unknown): boolean {
 	for (let index = 0; index < names.length; index++) {
 		if (names[index] === name) {
 			return true
@@ -1132,8 +1245,9 @@ type ScopeOf<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S : ne
 
 export type Operation = 'read' | 'insert' | 'update' | 'delete'
 
+/** The action, or the union of the actions, of operation `Op` on table `T`; `never` when the policy names none. */
 export type ActionOf<P, T, Op extends Operation> = PolicyOf<P, T> extends { readonly actions: infer Acts }
-	? Acts extends { readonly [K in Op]: infer A extends string } ? A
+	? Acts extends { readonly [K in Op]: infer A } ? A extends string ? A : A extends readonly (infer L extends string)[] ? L : never
 	: never
 	: never
 
@@ -1158,7 +1272,8 @@ type TableReadAction<P, T> = PolicyOf<P, T> extends { readonly scope: { readonly
 /** Columns whose own read action is not the table's: no read by the table's read action returns them. */
 type RestrictedColumns<P, T> = [ColumnPoliciesOf<P, T>] extends [never] ? never
 	: {
-		[K in keyof ColumnPoliciesOf<P, T>]: ColumnPoliciesOf<P, T>[K] extends { readonly read: infer R } ? (R extends TableReadAction<P, T> ? never : K)
+		[K in keyof ColumnPoliciesOf<P, T>]: ColumnPoliciesOf<P, T>[K] extends { readonly read: infer R }
+			? ([TableReadAction<P, T>] extends [R] ? never : K)
 			: never
 	}[keyof ColumnPoliciesOf<P, T>]
 
